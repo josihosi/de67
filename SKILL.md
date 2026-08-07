@@ -1,289 +1,126 @@
 ---
 name: de67
-description: Explicit-call functional-specification design and permission-gated coordination kernel. Use only when the user invokes `$de67` to let a front agent draft one authoritative functional/technical specification and, after new explicit approval, launch one xhigh coordinator to finalize the specification, write a bounded ledger, and route implementation workers by complexity. The call alone never authorizes coordinator or subagent launch.
+description: Explicit-call two-gate functional-specification and coordination kernel. Use only when the user invokes `$de67` to have the user-facing Codex collect a brief, then—with explicit consent—launch an xhigh specification author to create and freeze the authoritative functional/technical specification, and—with fresh explicit consent—launch a new xhigh coordinator to run a bounded window of atomic implementation tasks.
 ---
 
-# DE67 — Specification Design and Coordination
+# DE67
 
-Draft v0.4. Produce one traceable contract, then offer permission-gated coordination without
-becoming an implementer.
+v0.4. Turn a request into one held specification, then into small proved work.
 
-## Invocation and launch boundary
-
-Activate this workflow only through the explicit callmark `$de67`. The call authorizes:
-
-- loading this skill and task-relevant evidence;
-- discussing, drafting, writing, or refining the named functional specification;
-- updating the specification's authorized Git/GitHub trace artifacts.
-
-Treat each invocation's wording as the specification mutation boundary. Preserve unrelated files
-and existing user changes. Implementation, builds, tests, coordinator launch, and subagent launch
-remain outside that authority.
-
-Use this state transition:
+## Graph
 
 ```text
-idle --$de67--> specification
-specification --checkpoint ready--> awaiting_launch_consent
-awaiting_launch_consent --new explicit approval--> coordination
+user <-> F : dialogue, evidence, brief B, consent
+B --consent_S--> Q_S{xhigh} : create + hold + freeze S
+S --consent_C--> Q_C{xhigh} : hold S + write L{atomic, open<=10} + route W
+W_i : one worker, one atomic slot, one proof
 ```
 
-At the specification checkpoint:
+`F` is the user-facing Codex conversation, not a worker model. `Q_S` and `Q_C` are fresh xhigh
+calls. The `$de67` call opens only `F -> B`; each arrow marked `consent` requires a new explicit
+user approval bound to the displayed configuration.
 
-1. Identify the exact specification revision and open red claims.
-2. Present the proposed repository/worktree/branch, coordinator model and effort, Prompt A version,
-   ten-slot ceiling, and initial owner lanes.
-3. Ask a direct conversational question: "May I start this coordinator?"
-4. Stop and wait for the user's new explicit affirmative response.
+## Gate S: create the specification
 
-Treat launch permission as one-shot and bound to that stated configuration. A material change to
-the specification revision, repository/worktree/branch, coordinator profile, prompt, or execution
-contract returns the state to `awaiting_launch_consent`. Only the new affirmative response crosses
-the gate; the `$de67` invocation and earlier general permission leave it closed.
-
-## Roles
+Have `F` inspect task-relevant evidence and write only a non-normative brief:
 
 ```text
-user <-> F{Luna|Terra}: dialogue, evidence intake, propose dS, consent gate, reports
-consent -> Q{xhigh}: holds S, validates/writes dS, freezes S, writes L{atomic,open<=10}, routes/inspects W
-W{Luna|Terra|Sol}: implement one ledger slot at the weakest sufficient profile
+B = (goal, current evidence, proposed worktree/branch, unknown owner choices)
 ```
 
-Before consent, `F` may write the requested draft and trace only. After consent, `Q` owns the
-normative `S`: any specification mutation is its accepted `dS`, and `F` remains the user relay.
+Display the exact `Q_S` model/effort and ask: “May I start the xhigh specification author?” Stop
+until approved.
 
-## State model
-
-Represent the work as:
-
-```text
-S = (C, E, D, O, A, R)
-```
-
-- `C`: requested outcomes and scope
-- `E`: inspected evidence and current-state facts
-- `D`: decisions and explicit assumptions
-- `O`: authoritative owner graph
-- `A`: acceptance checks and their required evidence
-- `R`: unresolved claims, each with a stable red ID
-
-A claim belongs in `R` exactly when deleting it leaves `C` unmet or unproved. Maintain one normative
-specification; roadmaps, queues, tests, and GitHub records reference it rather than restating it.
-
-## Phase 1 — Design or refine the specification
-
-### 1. Reconstruct the real workflow
-
-Inspect the request, conversation, existing specifications, source, tests, issues, and runtime
-evidence that materially constrain the outcome. Imagine the normal user path and the edge case that
-would make an apparently complete result feel false.
-
-Before mutating the normative specification, bind:
+Have `Q_S` create and hold normative `S`. Before every material `dS`, bind:
 
 ```text
 I = (why_now, intended_workflow, real_user_path, fake_or_broken, decisive_edge)
 ```
 
-If `I` exposes a material owner choice, `Q` sends `F` one recommended question with 2–3 disjoint
-options; `F` asks the user through structured input when available and relays the answer. Otherwise
-record the smallest consistent assumption. Never let a subagent manufacture owner consent.
+If `I` exposes an owner choice, send `F` one recommended question with two or three disjoint
+options. Let `F` ask through structured input when available and relay the answer.
 
-Bind:
-
-```text
-C = goal + requirements + acceptance + failure cases + smallest useful vertical slice
-```
-
-For ambiguous attended work, ask the owner. For unattended work, use the smallest reading consistent
-with stated intent and record it in `D`.
-
-### 2. Separate desired behavior from present evidence
-
-Classify each relevant claim as:
-
-- specified and proved;
-- specified but unproved;
-- contradicted by current evidence;
-- scaffolding without a production path;
-- historical context only.
-
-Tests prove only the path they exercise. A structure or helper without a production caller remains
-red.
-
-### 3. Write one normative specification
-
-Use only sections needed by the domain. Prefer this order:
-
-1. purpose and user-visible contract;
-2. scope and supersession;
-3. lifecycle or state model;
-4. functional behavior;
-5. authoritative owners and override precedence;
-6. persistence, performance, and platform behavior;
-7. conformance against current evidence;
-8. red acceptance ledger.
-
-Give unresolved claims stable IDs such as `R1`, `R2`. Use `- [ ] 🔴` while open and `- [x]` when the
-named acceptance evidence closes them. Preserve IDs across refinements.
-
-When several AI systems consume common primitives, specify the primitive once and keep each
-consumer's policy, memory, and movement owner separate. A useful concurrency model is:
+Write one specification containing only needed sections:
 
 ```text
-parallel(i,j) iff W_i ∩ W_j = ∅ and O_i ∩ O_j = ∅ and P_i ∩ P_j = ∅
+S = (C, E, D, O, A, R)
+C = contract; E = inspected facts; D = decisions; O = authoritative owners;
+A = acceptance/proof; R = stable unresolved claims
 ```
 
-where `W` is the likely write set, `O` the authoritative state owners, and `P` mutable proof
-artifacts. Unknown intersections serialize.
-
-### 4. Put proof logic inside the specification
-
-Attach an evidence contract to every red claim:
+Give every red claim an ID. Attach its proof route:
 
 ```text
-proof(R_i) = (preconditions, causal boundary, real route, expected transition,
-              positive and negative controls, artifact identity, pass, failure)
+proof(R_i) = preconditions -> production owner -> transition -> artifact -> pass/failure
 ```
 
-Name which setup may be staged and where staged control ends. Distinguish unit/helper evidence,
-changed-executable integration, live interaction, persistence, performance, and platform proof.
-Specify the smallest observer or harness visibility needed to see the subject while keeping the
-gameplay owner authoritative. Define failure as the first reproducible seam that prevents the
-expected transition, so remediation has a concrete input.
+Commit or trace accepted `S` revisions when the project contract calls for it. End with the frozen
+specification revision and proposed `Q_C` configuration; do not dispatch implementation.
 
-### 5. Maintain one compact Git/GitHub trace
+## Gate C: coordinate the specification
 
-Commit each accepted specification revision. When an issue or PR is already in scope, maintain one
-trace thread or section instead of creating a stream of planning comments. Otherwise prepare the
-trace block for the owner and use the Git commit as the durable local record.
+Have `F` display the frozen `S` revision, worktree/branch, `Q_C` model/effort, Prompt A, and the
+initial current window. Ask: “May I start the xhigh coordinator for this specification?” Stop until
+approved.
 
-```markdown
-### Specification trace — <revision>
-- Spec: <path + commit>
-- Inputs: <issues, discussion, source/runtime evidence>
-- Contract delta: <what changed>
-- Decisions: <stable IDs and rationale>
-- Evidence: <what is proved>
-- Red claims: <open IDs>
-- Ledger: <task slots and current owners>
-```
+Have fresh `Q_C` reread and hold `S`. Accept `dS` only when new evidence breaks `S`; return material
+owner choices through `F`.
 
-Record rejected expansions in one line when they matter to the owner. Keep secrets, raw private
-conversation, and unnecessary transcripts out of GitHub.
-
-## Phase 2 — Coordinate implementation
-
-Enter this phase only after crossing `awaiting_launch_consent` with the explicit approval described
-above. Record the approved configuration in the trace before launch.
-
-Use an **xhigh contract-first coordinator (Prompt A)**. Its role is to partition, assign, inspect
-evidence, update the trace, and halt. Subagents implement.
-
-### Execution kernel
-
-For each task slot, bind its covered red claims and merge proof as the local contract:
+Preflight the actual executor before dispatch:
 
 ```text
-K(T_i) = covered_red_ids + required_merge_proof
-
-while exists claim c where deleting c leaves K(T_i) unmet or unproved:
-    do the smallest reliable act for c
-    prove c at its specified evidence class
-halt and report
+H = (source, binary, fixture, profile, credential/provider, harness/tool route)
 ```
 
-Plans, implementation ideas, tests, reviews, and discovered defects enter as claims rather than
-automatic work. A closed claim stays closed unless changed evidence reopens its contract. Apply the
-project's review-round fuse when present; after its final round, report remaining contract gaps
-instead of growing a new remediation loop.
+Dispatch only when `H` can reach the claimed route. Otherwise report the first named infrastructure
+blocker and preserve the slot; do not spend a worker proving around an unavailable runtime.
 
-### Ledger fuse
-
-Select only the red claims necessary for the current roadmap seam, `R_A subseteq R`, then partition
-that current window into owner-level work packages `T` such that:
+Choose current red claims `R_A` from the active roadmap seam, not from the whole specification.
+Write a current ledger `L` of zero to ten open slots:
 
 ```text
-union coverage(T) = R_A
-primary_owner(T_i) is unique
-|open(T)| <= 10
+T_i = (R_i, O_i, W_i, P_i, proof_i)
+atomic(T_i) = one owner transition + one merge proof
+open(L) <= 10
 ```
 
-- Ten open task slots are a ceiling for the current window, never a goal or a decomposition of the
-  whole specification.
-- One slot is one primary owner transition plus its merge proof; an end-to-end feature or lifecycle
-  is not a slot.
-- Assign one subagent to each slot.
-- Send remediation and follow-up to that same subagent and slot.
-- Fold tests, review findings, and discovered defects into the task owning the affected contract.
-- Do not add task eleven while ten slots remain open. When evidence closes or moves `R_A`, derive a
-  fresh current window rather than retaining a speculative whole-FS ledger.
-- Keep the current critical path and only proven-disjoint lanes active.
-- Remove finished detail from the live queue while retaining the Git/GitHub trace.
+The ceiling limits the current window; it is neither a target nor a whole-FS partition. When new
+evidence closes or moves `R_A`, derive the next window from current `S`.
 
-### Assignment palette
+Run slots in parallel only when their likely write sets `W`, authoritative owners `O`, and mutable
+proof artifacts `P` are disjoint. Unknown intersections serialize.
 
-Choose one profile when the slot starts:
+Select the weakest sufficient worker:
 
-| Profile | Fit |
+| Profile | Use for |
 |---|---|
-| Luna medium | Mechanical, narrow, well-specified work |
-| Luna high | Tricky bounded proof, fixtures, or platform validation |
-| Terra medium | Multi-file implementation behind a frozen interface |
-| Terra high | State ownership, new interfaces, or coupled production wiring |
-| Sol medium | Ambiguous owner arbitration, cross-boundary persistence, or final adversarial review |
+| Luna medium | narrow mechanical change |
+| Luna high | tricky focused proof or fixture |
+| Terra medium | multi-file change behind a frozen interface |
+| Terra high | coupled production ownership or wiring |
+| Sol medium | unresolved owner arbitration or final adversarial review |
 
-Scale later slots down after earlier slots remove uncertainty. Keep Sol medium exceptional because
-its breadth is useful precisely where the owner graph is unclear.
+## Execute and prove
 
-### Prompt A table
-
-The xhigh coordinator reads the normative specification and outputs at most ten compact rows:
-
-| Slot / dependency | Red IDs covered | Assigned subagent job | AI profile | Parallel condition | Merge proof |
-|---|---|---|---|---|---|
-
-Each red ID has one primary slot. Group claims only when they share the production owner and honest
-proof route. Preserve the vertical dependency chain; separate consumer policies after their shared
-interface is stable.
-
-### Execution transition
-
-For each active slot:
+Use the same worker for its slot’s remediation:
 
 ```text
-assign -> receipt -> implement -> return(diff, evidence) -> Q evaluates
-       -> same-slot remediation, or close red IDs and advance
+assign -> receipt -> diff + evidence -> Q_C gate -> remediate | close
 ```
 
-The coordinator accepts evidence only when it covers the specified route and changed artifact. It
-updates the specification, ledger, and trace at a real state boundary. It starts another lane only
-after re-evaluating `parallel(i,j)`.
-
-Admit a test or review only when deleting it leaves its slot contract unproved. Close a slot only
-when:
+Admit an action, test, or review finding only when deleting it leaves the slot contract unmet or
+unproved. Close only when:
 
 ```text
-G = exact(source,binary,fixture) and setup_before_claim and authoritative_route
-    and discriminating_control and not manufactured_outcome and not test_only_gameplay
+G = exact(source,binary,fixture) ∧ setup_before_claim ∧ authoritative_route
+    ∧ discriminating_control ∧ production_provenance ∧ not_test_only_credit
 ```
 
-Apply MSW to integrity findings: reopen only when deleting the finding would leave the contract
-falsely green. Run `G` per slot and once across the final integrated task.
+Apply `G` per slot and to the integrated result. A `G` failure returns the same slot; it does not
+create a detached test program or speculative new lane.
 
-Halt when every `R` is closed, when the ten-slot representation is insufficient, or when authority
-outside the task is required.
+## Benchmark record
 
-## Evaluation hooks
-
-For prompt and coordinator experiments, record per run:
-
-- specification revision and prompt version;
-- coordinator model/effort and worker profile per slot;
-- task count, concurrent lanes, and task growth;
-- coordinator and worker tokens;
-- elapsed time, commits, red claims closed, and remediation cycles;
-- production-path proofs versus helper-only proofs;
-- stop reason.
-
-Compare runs by contract coverage, evidence quality, progress per token, rework, and whether the
-ledger stayed finite. Change one prompt variable per experiment when practical.
+For a benchmark, report start/dispatch/end timestamps, model profiles, concrete milestones,
+diff/commit identities, proofs run, remediation cycles, loop evidence, and token use only when the
+runtime exposes it. Report unavailable measurements as unavailable.

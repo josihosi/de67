@@ -66,6 +66,21 @@ approved.
 Have fresh `Q_C` reread and hold `S`. Accept `dS` only when new evidence breaks `S`; return material
 owner choices through `F`.
 
+Before runtime preflight, perform a tooling sufficiency check for the current slot:
+
+```text
+U = (observe, stimulate, discriminate, capture)
+```
+
+For each required proof, name the smallest existing harness/debug capability that can observe the
+authoritative transition, provide any legitimate stimulus, distinguish success from setup noise,
+and capture bounded evidence. If a component of `U` is missing, add only the smallest reusable
+adapter needed for this slot, then trace it through the changed executable to real game state and
+prove the adapter separately. An adapter may expose or observe state; it must not directly set the
+claimed gameplay outcome or replace the production route. If `U` cannot be completed without
+inventing a generic debug system or bypassing authority, preserve the slot and report the exact
+tooling blocker before dispatching a worker.
+
 Preflight the actual executor before dispatch:
 
 ```text

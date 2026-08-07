@@ -1,7 +1,7 @@
 interface:
   display_name: "DE67 Specification Coordinator"
-  short_description: "Draft specs, then gate an xhigh coordinator"
-  default_prompt: "Use $de67 to draft the traceable functional specification, ask before launch, then let one xhigh coordinator finalize it and route bounded workers."
+  short_description: "Two-gate xhigh specification coordination"
+  default_prompt: "Use $de67 to prepare a brief, ask before an xhigh author creates the specification, then ask again before a coordinator dispatches atomic work."
 
 policy:
   allow_implicit_invocation: false

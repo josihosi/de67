@@ -44,13 +44,13 @@ the gate; the `$de67` invocation and earlier general permission leave it closed.
 ## Roles
 
 ```text
-user <-> F{Luna|Terra}: dialogue, evidence intake, draft S, consent gate, reports
-consent -> Q{xhigh}: finalize/freeze S, write L, route/inspect W, never implement
+user <-> F{Luna|Terra}: dialogue, evidence intake, propose dS, consent gate, reports
+consent -> Q{xhigh}: holds S, validates/writes dS, freezes S, writes L, routes/inspects W
 W{Luna|Terra|Sol}: implement one ledger slot at the weakest sufficient profile
 ```
 
-Before consent, `F` may write the requested specification and trace only. After consent, `Q` owns
-remaining specification refinement and coordination. Keep the user-facing conversation with `F`.
+Before consent, `F` may write the requested draft and trace only. After consent, `Q` owns the
+normative `S`: any specification mutation is its accepted `dS`, and `F` remains the user relay.
 
 ## State model
 

@@ -5,7 +5,7 @@ description: Explicit-call functional-specification design and permission-gated 
 
 # DE67 — Specification Design and Coordination
 
-Draft v0.3. Produce one traceable contract, then offer permission-gated coordination without
+Draft v0.4. Produce one traceable contract, then offer permission-gated coordination without
 becoming an implementer.
 
 ## Invocation and launch boundary
@@ -45,7 +45,7 @@ the gate; the `$de67` invocation and earlier general permission leave it closed.
 
 ```text
 user <-> F{Luna|Terra}: dialogue, evidence intake, propose dS, consent gate, reports
-consent -> Q{xhigh}: holds S, validates/writes dS, freezes S, writes L, routes/inspects W
+consent -> Q{xhigh}: holds S, validates/writes dS, freezes S, writes L{atomic,open<=10}, routes/inspects W
 W{Luna|Terra|Sol}: implement one ledger slot at the weakest sufficient profile
 ```
 
@@ -199,19 +199,24 @@ instead of growing a new remediation loop.
 
 ### Ledger fuse
 
-Partition `R` into owner-level work packages `T` such that:
+Select only the red claims necessary for the current roadmap seam, `R_A subseteq R`, then partition
+that current window into owner-level work packages `T` such that:
 
 ```text
-union coverage(T) = R
+union coverage(T) = R_A
 primary_owner(T_i) is unique
-|T| <= 10
+|open(T)| <= 10
 ```
 
-- Ten task slots are a ceiling.
+- Ten open task slots are a ceiling for the current window, never a goal or a decomposition of the
+  whole specification.
+- One slot is one primary owner transition plus its merge proof; an end-to-end feature or lifecycle
+  is not a slot.
 - Assign one subagent to each slot.
 - Send remediation and follow-up to that same subagent and slot.
 - Fold tests, review findings, and discovered defects into the task owning the affected contract.
-- Once ten slots exist, complete them or halt with the unrepresentable claims; create no task 11.
+- Do not add task eleven while ten slots remain open. When evidence closes or moves `R_A`, derive a
+  fresh current window rather than retaining a speculative whole-FS ledger.
 - Keep the current critical path and only proven-disjoint lanes active.
 - Remove finished detail from the live queue while retaining the Git/GitHub trace.
 

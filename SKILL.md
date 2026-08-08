@@ -138,11 +138,13 @@ Use the same worker for its slot’s remediation:
 assign -> receipt -> diff + evidence -> Q_C gate -> remediate | close
 ```
 
-Keep coordination logs receipt-first. The worker returns a compact receipt containing status,
-changed paths, proof references, and the next blocker. `Q_C` reads that receipt, the scoped diff,
-and bounded artifacts by default; it does not ingest a full worker transcript or unbounded log.
-Expand a raw log only for a named failing claim, using a bounded extraction, and record that
-expansion in the benchmark. Log volume is not evidence of progress.
+Keep coordination logs receipt-first as an efficiency default, not a ritual. The worker returns a
+compact receipt containing status, changed paths, proof references, and the next blocker. For
+routine work, `Q_C` may read ordinary bounded command output or logs when that is the cheapest
+sufficient evidence; no special expansion ceremony is required. It must not ingest a full worker
+transcript or unbounded log by default. Expand raw logs only when they are useful for a named claim
+or blocker, use a bounded extraction, and record unusually broad expansion in the benchmark. Log
+volume is not evidence of progress.
 
 Admit an action, test, or review finding only when deleting it leaves the slot contract unmet or
 unproved. Close only when:

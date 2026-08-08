@@ -66,6 +66,21 @@ approved.
 Have fresh `Q_C` reread and hold `S`. Accept `dS` only when new evidence breaks `S`; return material
 owner choices through `F`.
 
+Implementation-phase refinement is permitted when a proved failure exposes a missing contract
+invariant, acceptance condition, or proof route:
+
+```text
+failure_evidence -> minimal_dS -> MSW_test -> proof(R_new) -> continue
+```
+
+`Q_C` may draft and record the smallest amendment when deleting it would leave the failure
+unclassified or the contract unproved. The amendment must preserve the requested outcome, carry a
+new stable claim ID and proof route, and state whether it changes behavior or only makes an
+invariant explicit. A material product or owner choice returns through `F` for fresh consent;
+otherwise the coordinator may apply the evidence-bound refinement and continue the same slot.
+Never use refinement to widen scope, justify speculative mechanics, or repair a merely inconvenient
+implementation by changing the contract.
+
 Before runtime preflight, perform a tooling sufficiency check for the current slot:
 
 ```text

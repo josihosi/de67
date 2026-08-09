@@ -7,10 +7,11 @@ the accepted parent, never by its candidate.
 
 ```text
 K = (S, FSA, X, H, M, B)
-P = (P1, P3)
+P = (P1, P2, P3)
 K intersect P = empty
 
 P1 = orchestration policy
+P2 = proof-conformance policy
 P3 = broader execution policy
 ```
 
@@ -45,6 +46,13 @@ dS intersect dP = empty
 policy while holding `S` and the accepted product frontier fixed. A mutation candidate may emit a
 specification-gap receipt, but it cannot author `dS`. The accepted coordinator routes that receipt
 through the delegated non-material clarification path or the material user-consent path above.
+
+The semantic functional-specification core remains frozen. The first lineage window seals proof
+presence, the semantic manifest, accepted product frontier, and authoritative owner route; every
+later window must match. A closed concrete plan maps every condition and negative control to exact
+source/binary/fixture/test artifacts. Its seed and coordinates may change under MSW, but each plan
+requires a separately appended independent review receipt before dispatch. This ledger refinement
+is not a `P2` mutation.
 
 Specification authoring is outside the MSW deletion domain. After `S` freezes, apply MSW only to
 candidate execution work:
@@ -96,7 +104,7 @@ cannot erase or weaken these predicates.
 
 ## Mutable-policy vocabulary
 
-`P1` and `P3` are closed JSON configurations validated by the accepted parent. Their values select
+`P1`, `P2`, and `P3` are closed JSON configurations validated by the accepted parent. Their values select
 among these strategies; they cannot introduce prose, permissions, acts, owners, tests, or proof
 rules.
 
@@ -123,6 +131,9 @@ P1.tooling_route:
 P1.progress_route:
     terminal_receipt | milestone_then_terminal_receipt
 
+P2.conformance_route:
+    minimal_authoritative_conformance | authoritative_owner_then_live_conformance
+
 P3.preflight_route:
     identity_owner_discriminator | owner_discriminator_identity
 P3.evidence_route:
@@ -142,6 +153,18 @@ P3.harness_route:
 Every strategy is subordinate to `S.A` and the execution-integrity predicates above. New
 primitives require an explicit owner-authorized kernel revision; automatic mutation may only select
 or combine already-authorized primitives.
+
+Before proof-plan dispatch, the harness validates the separately appended review against the frozen
+contract hash, closed plan hash, artifact hash, and exact condition/control mapping hashes. The
+permit binds that review and an intended worker; plan author, reviewer, and worker are distinct, and
+the terminal worker must match. Helper/mock-only evidence, direct outcome setting, stale reviews,
+omitted mappings, or a changed core/contract blocks dispatch. A proof-plan failure counts toward
+`P2` only when its assessment binds the reviewed permit and the real `task_failed` that consumed it;
+the harness derives its causal fingerprint from the authoritative causal class and frozen owner
+facts. `minimal_authoritative_conformance` requires the independent authoritative review receipt;
+`authoritative_owner_then_live_conformance` additionally requires authoritative-owner and live
+conformance receipts. The exact selected route is sealed through review, permit, terminal, damage,
+and benchmark provenance. Zero-dispatch and accepted executions cannot qualify.
 
 Every proposed delta declares an efficiency hypothesis:
 
@@ -190,16 +213,23 @@ mu_1(K, P1, f_worker) = (K, P1 + delta_1)
 domain(delta_1) subseteq P1
 
 N = count(distinct failed windows in lineage)
+N_proof = count(causally distinct proof_plan-owned failed windows in lineage)
 
 N < 3  => domain(delta) subseteq P1
 N >= 3 => review by fresh Sol xhigh;
           domain(delta_3) subseteq (P1 union P3)
+
+N_proof >= 3 and the same fresh external review
+       => domain(delta_proof) subseteq P2
 
 for every mutation: K' = K
 ```
 
 The value three and the ledger ceiling ten are requester-authorized design constraints. A renamed
 claim, replacement worker, or repeated attempt in one sealed window does not increment `N`.
+For `N_proof`, duplicate, renamed, or retried symptoms with one causal fingerprint count once.
+Successes do not reset the cumulative count. Product- and harness-owned failures do not qualify and
+an authoritative causal fingerprint cannot be relabeled.
 
 Every candidate begins from the last accepted parent. Rejected candidates have no descendants.
 Incident facts stay in receipts and benchmarks; they do not become skill addenda. The mutation

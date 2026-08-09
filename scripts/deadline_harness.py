@@ -27,6 +27,7 @@ EVENT_KINDS = {
     "progress",
     "task_accepted",
     "task_failed",
+    "proof_reviewed",
     "preflight_blocked",
     "coordinator_review_completed",
     "damage_assessment",
@@ -148,11 +149,115 @@ def validate_benchmark_binding(binding: Any) -> None:
         raise HarnessError("benchmark_binding mutation policy keys must be unique and sorted")
 
 
+PROOF_ARTIFACT_KINDS = {"source", "binary", "fixture", "test"}
+
+
+def manifest_ids(items: Any, label: str) -> list[str]:
+    if not isinstance(items, list) or not items:
+        raise HarnessError(f"proof.semantic_manifest.{label} must be non-empty")
+    ids: list[str] = []
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {"id", "requirement"}:
+            raise HarnessError(f"Each proof {label} entry requires only id and requirement")
+        if not non_empty_text(item.get("id")) or not non_empty_text(item.get("requirement")):
+            raise HarnessError(f"Each proof {label} entry requires id and requirement")
+        ids.append(item["id"])
+    if ids != sorted(set(ids)):
+        raise HarnessError(f"proof {label} ids must be unique and sorted")
+    return ids
+
+
+def validate_proof_contract(contract: Any) -> None:
+    if not isinstance(contract, dict) or set(contract) != {
+        "semantic_manifest", "accepted_product_frontier", "authoritative_owner_route"
+    }:
+        raise HarnessError("proof contract has an incomplete or open shape")
+    manifest = contract["semantic_manifest"]
+    if not isinstance(manifest, dict) or set(manifest) != {"conditions", "negative_controls"}:
+        raise HarnessError("proof contract semantic_manifest requires conditions and negative_controls")
+    manifest_ids(manifest["conditions"], "conditions")
+    manifest_ids(manifest["negative_controls"], "negative_controls")
+    frontier = contract["accepted_product_frontier"]
+    if not isinstance(frontier, dict) or not non_empty_text(frontier.get("repository")):
+        raise HarnessError("proof accepted product frontier requires repository")
+    for field in ("commit", "tree"):
+        if not valid_git_object_id(frontier.get(field)):
+            raise HarnessError(f"proof accepted product frontier requires Git {field}")
+    if not non_empty_text(contract["authoritative_owner_route"]):
+        raise HarnessError("proof contract requires authoritative_owner_route")
+
+
+def validate_proof_plan(plan: Any, contract: dict[str, Any]) -> None:
+    required = {
+        "version", "author_identity", "seed", "coordinates", "artifacts",
+        "condition_artifacts", "negative_control_artifacts",
+    }
+    if not isinstance(plan, dict) or set(plan) != required:
+        raise HarnessError("proof plan has an incomplete or open shape")
+    if plan.get("version") != 1 or not non_empty_text(plan.get("author_identity")):
+        raise HarnessError("proof plan requires version=1 and author_identity")
+    seed = plan.get("seed")
+    if isinstance(seed, bool) or not isinstance(seed, (str, int)) or (isinstance(seed, str) and not seed.strip()):
+        raise HarnessError("proof plan seed must be a non-empty string or integer")
+    coordinates = plan.get("coordinates")
+    if (
+        not isinstance(coordinates, list)
+        or len(coordinates) != 2
+        or any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in coordinates)
+    ):
+        raise HarnessError("proof plan coordinates must contain two finite numbers")
+    artifacts = plan.get("artifacts")
+    if not isinstance(artifacts, dict) or set(artifacts) != PROOF_ARTIFACT_KINDS:
+        raise HarnessError("proof plan requires exact source/binary/fixture/test artifacts")
+    for kind, bindings in artifacts.items():
+        if not isinstance(bindings, dict) or not bindings:
+            raise HarnessError(f"proof plan {kind} artifacts must be non-empty")
+        if not all(non_empty_text(path) and valid_sha256(value) for path, value in bindings.items()):
+            raise HarnessError(f"proof plan {kind} artifacts require path to SHA-256 bindings")
+    artifact_paths = {path for bindings in artifacts.values() for path in bindings}
+    manifest = contract["semantic_manifest"]
+    expected_mappings = {
+        "condition_artifacts": manifest_ids(manifest["conditions"], "conditions"),
+        "negative_control_artifacts": manifest_ids(
+            manifest["negative_controls"], "negative_controls"
+        ),
+    }
+    for field, identifiers in expected_mappings.items():
+        mappings = plan[field]
+        if not isinstance(mappings, dict) or sorted(mappings) != identifiers:
+            raise HarnessError(f"proof plan {field} must exactly cover the frozen manifest")
+        for identifier, references in mappings.items():
+            if (
+                not isinstance(references, list)
+                or not references
+                or references != sorted(set(references))
+                or any(reference not in artifact_paths for reference in references)
+            ):
+                raise HarnessError(
+                    f"proof plan {field}.{identifier} must reference exact bound artifacts"
+                )
+
+
+def validate_proof_shape(proof: Any) -> None:
+    if not isinstance(proof, dict) or set(proof) != {"contract", "plan"}:
+        raise HarnessError("proof requires exactly contract and plan")
+    validate_proof_contract(proof["contract"])
+    validate_proof_plan(proof["plan"], proof["contract"])
+
+
+def proof_contract(ledger: dict[str, Any]) -> dict[str, Any] | None:
+    proof = ledger.get("proof")
+    return proof["contract"] if isinstance(proof, dict) else None
+
+
 def benchmark_definition_hash(ledger: dict[str, Any]) -> str:
     normalized = json.loads(canonical(ledger))
     binding = normalized.get("benchmark_binding")
     if isinstance(binding, dict):
         binding.pop("git", None)
+    proof = normalized.get("proof")
+    if isinstance(proof, dict):
+        proof.pop("plan", None)
     return digest_json(normalized)
 
 
@@ -245,6 +350,16 @@ def validate_ledger(ledger: dict[str, Any], ceiling: int = WINDOW_CEILING) -> di
         raise HarnessError("reserve_provenance must state the source of reserve_seconds")
     if "benchmark_binding" in ledger:
         validate_benchmark_binding(ledger["benchmark_binding"])
+    if "proof" in ledger:
+        validate_proof_shape(ledger["proof"])
+    if "benchmark_binding" in ledger and "proof" in ledger:
+        if (
+            ledger["benchmark_binding"]["product_frontier"]
+            != ledger["proof"]["contract"]["accepted_product_frontier"]
+        ):
+            raise HarnessError(
+                "benchmark_binding and proof must name the same accepted product frontier"
+            )
 
     visiting: set[str] = set()
     memo: dict[str, float] = {}
@@ -378,6 +493,8 @@ def connect(db_path: Path) -> sqlite3.Connection:
             policy_hash TEXT NOT NULL,
             kernel_hash TEXT NOT NULL,
             skill_root TEXT NOT NULL,
+            proof_contract_hash TEXT,
+            proof_contract_json TEXT,
             created_utc TEXT NOT NULL
         );
 
@@ -436,6 +553,12 @@ def connect(db_path: Path) -> sqlite3.Connection:
         END;
         """
     )
+    lineage_columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(lineages)").fetchall()
+    }
+    for column in ("proof_contract_hash", "proof_contract_json"):
+        if column not in lineage_columns:
+            connection.execute(f"ALTER TABLE lineages ADD COLUMN {column} TEXT")
     return connection
 
 
@@ -447,6 +570,7 @@ def bind_lineage(
     fs_root: Path,
     skill_root: Path,
     authority: dict[str, str],
+    proof_contract_value: dict[str, Any] | None,
     now: datetime,
 ) -> None:
     row = connection.execute(
@@ -461,14 +585,17 @@ def bind_lineage(
         "policy_hash": authority["policy_hash"],
         "kernel_hash": authority["kernel_hash"],
         "skill_root": str(skill_root.resolve()),
+        "proof_contract_hash": digest_json(proof_contract_value),
+        "proof_contract_json": canonical(proof_contract_value),
     }
     if row is None:
         connection.execute(
             """
             INSERT INTO lineages
               (lineage_id, fs_root_hash, fs_root_path, frozen_hash, harness_hash,
-               guard_hash, policy_hash, kernel_hash, skill_root, created_utc)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               guard_hash, policy_hash, kernel_hash, skill_root, proof_contract_hash,
+               proof_contract_json, created_utc)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 lineage_id,
@@ -480,6 +607,8 @@ def bind_lineage(
                 expected["policy_hash"],
                 expected["kernel_hash"],
                 expected["skill_root"],
+                expected["proof_contract_hash"],
+                expected["proof_contract_json"],
                 iso(now),
             ),
         )
@@ -670,6 +799,14 @@ def append_event(
         validate_coordinator_review(
             connection, lineage_id, run_id, window_id, payload, event_at
         )
+    elif kind == "damage_assessment":
+        validate_damage_assessment(
+            connection, lineage_id, run_id, window_id, payload, rows
+        )
+    elif kind == "proof_reviewed":
+        validate_proof_review(
+            connection, lineage_id, run_id, window_id, payload, rows
+        )
     elif kind == "completed":
         validate_completion_event(
             connection, lineage_id, run_id, window_id, payload, rows
@@ -807,6 +944,7 @@ def open_window(
             fs_root=fs_root,
             skill_root=skill_root,
             authority=authority,
+            proof_contract_value=proof_contract(ledger),
             now=started,
         )
     except Exception:
@@ -856,6 +994,8 @@ def open_window(
         "harness_deployed": deployed,
         "frozen_authority_hash": authority["frozen_hash"],
     }
+    if isinstance(ledger.get("proof"), dict):
+        opened["proof_conformance_route"] = proof_policy_route(skill_root)
     append_event(connection, lineage_id, run_id, window_id, "window_opened", opened, started)
     watcher_pid = None
     if start_watcher:
@@ -1125,6 +1265,138 @@ def verify_file_hash(path_text: Any, expected: Any, label: str) -> None:
         raise HarnessError(f"{label} hash mismatch: {path}")
 
 
+def proof_runtime_binding(ledger: dict[str, Any]) -> dict[str, Any]:
+    proof = ledger["proof"]
+    contract = proof["contract"]
+    plan = proof["plan"]
+    return {
+        "contract_hash": digest_json(contract),
+        "plan_hash": digest_json(plan),
+        "artifacts_hash": digest_json(plan["artifacts"]),
+        "condition_mapping_hash": digest_json(plan["condition_artifacts"]),
+        "negative_control_mapping_hash": digest_json(plan["negative_control_artifacts"]),
+        "authoritative_owner_route": contract["authoritative_owner_route"],
+    }
+
+
+def proof_policy_route(skill_root: Path) -> str:
+    policy_path = skill_root / "policy" / "proof.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    route = policy.get("conformance_route")
+    if route not in {
+        "minimal_authoritative_conformance",
+        "authoritative_owner_then_live_conformance",
+    }:
+        raise HarnessError("Accepted proof policy route is outside the closed vocabulary")
+    return route
+
+
+def accepted_proof_route(prior_rows: list[sqlite3.Row]) -> str:
+    opened = next((row for row in prior_rows if row["kind"] == "window_opened"), None)
+    if opened is None:
+        raise HarnessError("Proof review requires a sealed window route")
+    route = event_payload(opened).get("proof_conformance_route")
+    if route not in {
+        "minimal_authoritative_conformance",
+        "authoritative_owner_then_live_conformance",
+    }:
+        raise HarnessError("Sealed proof policy route is outside the closed vocabulary")
+    return route
+
+
+def validate_proof_review(
+    connection: sqlite3.Connection,
+    lineage_id: str,
+    run_id: str,
+    window_id: str,
+    payload: dict[str, Any],
+    prior_rows: list[sqlite3.Row],
+) -> None:
+    common = {
+        "contract_hash", "plan_hash", "artifacts_hash", "condition_mapping_hash",
+        "negative_control_mapping_hash", "authoritative_owner_route", "reviewer_identity",
+        "helper_or_mock_only", "direct_outcome_setting", "receipt_path", "receipt_sha256",
+        "conformance_route",
+    }
+    route = accepted_proof_route(prior_rows)
+    required = set(common)
+    if route == "authoritative_owner_then_live_conformance":
+        required.update(
+            {
+                "owner_identity", "owner_receipt_path", "owner_receipt_sha256",
+                "live_receipt_path", "live_receipt_sha256", "live_conformance",
+            }
+        )
+    if set(payload) != required:
+        raise HarnessError("Proof review has an incomplete or open shape")
+    if payload.get("conformance_route") != route:
+        raise HarnessError("Proof review route differs from the accepted P2 policy")
+    window = get_window(connection, lineage_id, run_id, window_id)
+    ledger = effective_ledger(window, prior_rows)
+    proof = ledger.get("proof")
+    if not isinstance(proof, dict):
+        raise HarnessError("Proof review requires a sealed proof contract and plan")
+    expected = proof_runtime_binding(ledger)
+    for field, value in expected.items():
+        if payload.get(field) != value:
+            raise HarnessError(f"Proof review changed or omitted {field}")
+    reviewer = payload.get("reviewer_identity")
+    author = proof["plan"]["author_identity"]
+    if not non_empty_text(reviewer) or reviewer == author:
+        raise HarnessError("Proof reviewer must be distinct from the plan author")
+    if payload.get("helper_or_mock_only") is not False:
+        raise HarnessError("Proof review rejects helper- or mock-only evidence")
+    if payload.get("direct_outcome_setting") is not False:
+        raise HarnessError("Proof review rejects direct outcome setting")
+    for kind, bindings in proof["plan"]["artifacts"].items():
+        for path, value in bindings.items():
+            verify_file_hash(path, value, f"Proof {kind} artifact")
+    verify_file_hash(
+        payload.get("receipt_path"), payload.get("receipt_sha256"), "Proof review receipt"
+    )
+    try:
+        receipt = json.loads(Path(payload["receipt_path"]).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise HarnessError("Proof review receipt is not readable JSON") from error
+    if not isinstance(receipt, dict) or receipt.get("conformance_route") != route:
+        raise HarnessError("Proof review receipt does not bind the accepted conformance route")
+    if route == "authoritative_owner_then_live_conformance":
+        if not non_empty_text(payload.get("owner_identity")):
+            raise HarnessError("Owner-then-live proof review requires owner_identity")
+        if payload.get("live_conformance") is not True:
+            raise HarnessError("Owner-then-live proof review requires live_conformance=true")
+        verify_file_hash(
+            payload.get("owner_receipt_path"), payload.get("owner_receipt_sha256"),
+            "Authoritative owner receipt",
+        )
+        verify_file_hash(
+            payload.get("live_receipt_path"), payload.get("live_receipt_sha256"),
+            "Live conformance receipt",
+        )
+
+
+def matching_proof_review(
+    connection: sqlite3.Connection,
+    lineage_id: str,
+    run_id: str,
+    window_id: str,
+    ledger: dict[str, Any],
+    rows: list[sqlite3.Row],
+) -> sqlite3.Row:
+    expected = proof_runtime_binding(ledger)
+    for row in reversed(rows):
+        if row["kind"] != "proof_reviewed":
+            continue
+        payload = event_payload(row)
+        if all(payload.get(field) == value for field, value in expected.items()):
+            review_index = rows.index(row)
+            validate_proof_review(
+                connection, lineage_id, run_id, window_id, payload, rows[:review_index]
+            )
+            return row
+    raise HarnessError("Dispatch denied: current proof plan lacks a separate authoritative review")
+
+
 def validate_dispatch_event(
     connection: sqlite3.Connection,
     lineage_id: str,
@@ -1151,6 +1423,33 @@ def validate_dispatch_event(
     binding = task_obligation(task)
     if payload.get("obligation_digest") != binding["obligation_digest"]:
         raise HarnessError("Dispatch denied: stable task obligation mismatch")
+    proof = ledger.get("proof")
+    if isinstance(proof, dict):
+        lineage = connection.execute(
+            "SELECT * FROM lineages WHERE lineage_id=?", (lineage_id,)
+        ).fetchone()
+        if specification_hash(Path(lineage["fs_root_path"])) != lineage["fs_root_hash"]:
+            raise HarnessError("Dispatch denied: proof semantic core changed after lineage seal")
+        if digest_json(proof["contract"]) != lineage["proof_contract_hash"]:
+            raise HarnessError("Dispatch denied: proof contract differs from the sealed lineage")
+        review = matching_proof_review(
+            connection, lineage_id, run_id, window_id, ledger, rows
+        )
+        review_payload = event_payload(review)
+        worker = payload.get("worker_identity")
+        identities = {
+            proof["plan"]["author_identity"], review_payload["reviewer_identity"], worker
+        }
+        if not non_empty_text(worker) or len(identities) != 3:
+            raise HarnessError("Proof author, reviewer, and intended worker must be distinct")
+        expected_proof = {
+            **proof_runtime_binding(ledger),
+            "proof_review_event_hash": review["event_hash"],
+            "conformance_route": review_payload["conformance_route"],
+        }
+        for field, value in expected_proof.items():
+            if payload.get(field) != value:
+                raise HarnessError(f"Dispatch denied: proof permit changed {field}")
     accepted_slots = {
         event_payload(row).get("slot_id")
         for row in rows
@@ -1208,6 +1507,116 @@ def validate_preflight_blocker(
         payload.get("receipt_sha256")
     ):
         raise HarnessError("Preflight blocker requires a bound receipt path and SHA-256")
+
+
+def validate_damage_assessment(
+    connection: sqlite3.Connection,
+    lineage_id: str,
+    run_id: str,
+    window_id: str,
+    payload: dict[str, Any],
+    prior_rows: list[sqlite3.Row],
+) -> None:
+    if any(row["kind"] == "damage_assessment" for row in prior_rows):
+        raise HarnessError("A failed window permits one authoritative damage assessment")
+    misses = [row for row in prior_rows if row["kind"] == "deadline_missed"]
+    if len(misses) != 1 or payload.get("miss_event_hash") != misses[0]["event_hash"]:
+        raise HarnessError("Damage assessment must bind this window's sealed deadline miss")
+    owner = payload.get("failure_owner")
+    if owner not in {"proof_plan", "product", "harness"}:
+        raise HarnessError("Damage assessment failure_owner is outside the closed vocabulary")
+    if not non_empty_text(payload.get("assessor_identity")):
+        raise HarnessError("Damage assessment requires assessor_identity")
+    window = get_window(connection, lineage_id, run_id, window_id)
+    ledger = effective_ledger(window, prior_rows)
+    if owner == "proof_plan":
+        required = {
+            "miss_event_hash", "failure_owner", "permit_event_hash", "task_failed_event_hash",
+            "contract_hash", "plan_hash", "causal_class", "causal_fingerprint",
+            "assessor_identity", "receipt_path", "receipt_sha256", "conformance_route",
+        }
+        if set(payload) != required:
+            raise HarnessError("Proof-plan damage assessment has an incomplete or open shape")
+        proof = ledger.get("proof")
+        if not isinstance(proof, dict):
+            raise HarnessError("A proof_plan-owned failure requires a sealed proof contract")
+        permit = next(
+            (
+                row for row in prior_rows
+                if row["kind"] == "dispatch_permitted"
+                and row["event_hash"] == payload.get("permit_event_hash")
+            ),
+            None,
+        )
+        failed = next(
+            (
+                row for row in prior_rows
+                if row["kind"] == "task_failed"
+                and row["event_hash"] == payload.get("task_failed_event_hash")
+            ),
+            None,
+        )
+        if permit is None or failed is None:
+            raise HarnessError(
+                "Proof-plan damage assessment requires a reviewed permit and real task_failed"
+            )
+        permit_payload = event_payload(permit)
+        failed_payload = event_payload(failed)
+        if failed_payload.get("permit_event_hash") != permit["event_hash"]:
+            raise HarnessError("Proof-plan assessment task_failed did not consume its permit")
+        validate_terminal_task_event(
+            connection,
+            lineage_id,
+            run_id,
+            window_id,
+            "task_failed",
+            failed_payload,
+            current_event_hash=failed["event_hash"],
+        )
+        binding = proof_runtime_binding(ledger)
+        if (
+            payload.get("contract_hash") != binding["contract_hash"]
+            or payload.get("plan_hash") != binding["plan_hash"]
+            or permit_payload.get("contract_hash") != binding["contract_hash"]
+            or permit_payload.get("plan_hash") != binding["plan_hash"]
+            or not valid_sha256(permit_payload.get("proof_review_event_hash"))
+            or payload.get("conformance_route") != permit_payload.get("conformance_route")
+        ):
+            raise HarnessError("Proof-plan assessment changed contract, plan, or reviewed permit")
+        causal_class = payload.get("causal_class")
+        if not non_empty_text(causal_class):
+            raise HarnessError("Proof-plan assessment requires an authoritative causal_class")
+        fingerprint = digest_json(
+            {
+                "causal_class": causal_class,
+                "contract_hash": binding["contract_hash"],
+                "authoritative_owner_route": binding["authoritative_owner_route"],
+            }
+        )
+        if payload.get("causal_fingerprint") != fingerprint:
+            raise HarnessError("Proof-plan causal fingerprint must be harness-derived")
+        if payload["assessor_identity"] == permit_payload.get("worker_identity"):
+            raise HarnessError("Damage assessment cannot be self-classified by the worker")
+    else:
+        fingerprint = payload.get("causal_fingerprint")
+        if not valid_sha256(fingerprint):
+            raise HarnessError("Damage assessment requires a causal fingerprint SHA-256")
+        if not non_empty_text(payload.get("authoritative_route")):
+            raise HarnessError("Damage assessment requires authoritative_route")
+    existing = connection.execute(
+        "SELECT payload_json FROM events WHERE lineage_id=? AND kind='damage_assessment'",
+        (lineage_id,),
+    ).fetchall()
+    for row in existing:
+        prior = json.loads(row["payload_json"])
+        if (
+            prior.get("causal_fingerprint") == fingerprint
+            and prior.get("failure_owner") != owner
+        ):
+            raise HarnessError("A causal fingerprint cannot be relabeled across failure owners")
+    verify_file_hash(
+        payload.get("receipt_path"), payload.get("receipt_sha256"), "Damage assessment receipt"
+    )
 
 
 def validate_coordinator_review(
@@ -1283,6 +1692,12 @@ def validate_terminal_task_event(
         raise HarnessError("Terminal task permit is not bound to the stable obligation")
     if not isinstance(payload.get("worker_identity"), str) or not payload["worker_identity"].strip():
         raise HarnessError("Terminal task event requires an observed worker identity")
+    intended_worker = permit_payload.get("worker_identity")
+    if non_empty_text(intended_worker) and payload["worker_identity"] != intended_worker:
+        raise HarnessError("Terminal task worker identity differs from its dispatch permit")
+    permit_route = permit_payload.get("conformance_route")
+    if non_empty_text(permit_route) and payload.get("conformance_route") != permit_route:
+        raise HarnessError("Terminal task conformance route differs from its proof permit")
     if payload.get("test_completed") is not True:
         raise HarnessError("Terminal task event requires a completed test")
     expected_result = "passed" if kind == "task_accepted" else "failed"
@@ -1466,6 +1881,24 @@ def export_benchmark(
         result["provenance"]["git"] = benchmark_binding["git"]
         result["provenance"]["product_frontier"] = benchmark_binding["product_frontier"]
         result["mutation"] = completed_payload["mutation"]
+    proof = ledger.get("proof")
+    if isinstance(proof, dict):
+        result["provenance"]["semantic_condition_manifest_hash"] = digest_json(
+            proof["contract"]["semantic_manifest"]
+        )
+        result["provenance"]["proof_plan_hash"] = digest_json(proof["plan"])
+        result["provenance"]["product_frontier"] = proof["contract"][
+            "accepted_product_frontier"
+        ]
+        proof_routes = {
+            payload.get("conformance_route")
+            for payload in permits.values()
+            if non_empty_text(payload.get("proof_review_event_hash"))
+        }
+        if len(proof_routes) != 1:
+            connection.close()
+            raise HarnessError("Proof benchmark requires one exercised conformance route")
+        result["provenance"]["conformance_route"] = next(iter(proof_routes))
     connection.close()
     return result
 
@@ -1487,6 +1920,18 @@ def revise_ledger(
     if current_ledger.get("benchmark_binding") != ledger.get("benchmark_binding"):
         connection.close()
         raise HarnessError("Ledger revision cannot change the sealed benchmark binding")
+    current_proof = current_ledger.get("proof")
+    revised_proof = ledger.get("proof")
+    if (current_proof is None) != (revised_proof is None):
+        connection.close()
+        raise HarnessError("Ledger revision cannot add or remove the proof surface")
+    if (
+        isinstance(current_proof, dict)
+        and isinstance(revised_proof, dict)
+        and current_proof["contract"] != revised_proof["contract"]
+    ):
+        connection.close()
+        raise HarnessError("Ledger revision cannot change the frozen proof contract")
     current_obligations = obligation_map(current_ledger)
     revised_obligations = obligation_map(ledger)
     missing_claims = sorted(set(current_obligations) - set(revised_obligations))
@@ -1560,6 +2005,7 @@ def permit_dispatch(
     window_id: str,
     slot_id: str,
     worker_profile: str,
+    worker_identity: str | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     connection = connect(db_path)
@@ -1588,6 +2034,28 @@ def permit_dispatch(
     if task["worker_profile"] != worker_profile:
         connection.close()
         raise HarnessError("Dispatch denied: worker profile differs from the sealed ledger")
+    permit_payload = {
+        "slot_id": slot_id,
+        "worker_profile": worker_profile,
+        "ledger_hash": digest_json(ledger),
+        "obligation_digest": task_obligation(task)["obligation_digest"],
+    }
+    if worker_identity is not None:
+        permit_payload["worker_identity"] = worker_identity
+    if isinstance(ledger.get("proof"), dict):
+        if not non_empty_text(worker_identity):
+            connection.close()
+            raise HarnessError("Proof dispatch requires an intended worker identity")
+        try:
+            review = matching_proof_review(
+                connection, lineage_id, run_id, window_id, ledger, rows
+            )
+        except Exception:
+            connection.close()
+            raise
+        permit_payload.update(proof_runtime_binding(ledger))
+        permit_payload["proof_review_event_hash"] = review["event_hash"]
+        permit_payload["conformance_route"] = event_payload(review)["conformance_route"]
     try:
         event_hash = append_event(
             connection,
@@ -1595,12 +2063,7 @@ def permit_dispatch(
             run_id,
             window_id,
             "dispatch_permitted",
-            {
-                "slot_id": slot_id,
-                "worker_profile": worker_profile,
-                "ledger_hash": digest_json(ledger),
-                "obligation_digest": task_obligation(task)["obligation_digest"],
-            },
+            permit_payload,
             now,
         )
     finally:
@@ -1684,6 +2147,7 @@ def build_parser() -> argparse.ArgumentParser:
     common_identity(permit)
     permit.add_argument("--slot-id", required=True)
     permit.add_argument("--worker-profile", required=True)
+    permit.add_argument("--worker-identity")
     permit.add_argument("--install-root", type=Path, default=default_install_root())
 
     export = subparsers.add_parser("export-benchmark", help="Derive a benchmark receipt from events")
@@ -1758,6 +2222,7 @@ def main() -> int:
                 window_id=arguments.window_id,
                 slot_id=arguments.slot_id,
                 worker_profile=arguments.worker_profile,
+                worker_identity=arguments.worker_identity,
             )
         elif arguments.command == "export-benchmark":
             result = export_benchmark(

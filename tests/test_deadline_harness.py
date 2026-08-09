@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import shutil
 import tempfile
@@ -57,7 +58,613 @@ def accepted_payload(root: Path, slot_id: str, permit_hash: str) -> dict:
     }
 
 
+def proof_binding(root: Path, fs_root: Path, *, seed: int = 7, coordinates=(10, 20)) -> dict:
+    artifacts = {}
+    for kind in sorted(harness.PROOF_ARTIFACT_KINDS):
+        path = root / f"proof-{kind}.dat"
+        path.write_text(f"authoritative {kind}\n", encoding="utf-8")
+        artifacts[kind] = {str(path): harness.digest_bytes(path.read_bytes())}
+    manifest = {
+        "conditions": [
+            {"id": "condition:feature", "requirement": "feature transition is observed"},
+            {"id": "condition:owner", "requirement": "authoritative owner performs transition"},
+        ],
+        "negative_controls": [
+            {"id": "control:no-direct-set", "requirement": "outcome is not set directly"},
+            {"id": "control:no-helper", "requirement": "helper-only evidence does not pass"},
+        ],
+    }
+    frontier = {"repository": "product/example", "commit": "a" * 40, "tree": "b" * 40}
+    artifact_paths = sorted(path for bindings in artifacts.values() for path in bindings)
+    condition_ids = [item["id"] for item in manifest["conditions"]]
+    control_ids = [item["id"] for item in manifest["negative_controls"]]
+    plan = {
+        "version": 1,
+        "author_identity": "plan-author/xhigh",
+        "artifacts": artifacts,
+        "seed": seed,
+        "coordinates": list(coordinates),
+        "condition_artifacts": {identifier: artifact_paths for identifier in condition_ids},
+        "negative_control_artifacts": {identifier: artifact_paths for identifier in control_ids},
+    }
+    return {
+        "contract": {
+            "semantic_manifest": manifest,
+            "accepted_product_frontier": frontier,
+            "authoritative_owner_route": "product owner live conformance",
+        },
+        "plan": plan,
+    }
+
+
+def proof_review_payload(
+    root: Path,
+    proof: dict,
+    *,
+    reviewer="independent-referee/sol",
+    conformance_route="minimal_authoritative_conformance",
+) -> dict:
+    binding = harness.proof_runtime_binding({"proof": proof})
+    receipt = root / f"proof-review-{binding['plan_hash'][:12]}.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "reviewer": reviewer,
+                "binding": binding,
+                "conformance_route": conformance_route,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    payload = {
+        **binding,
+        "reviewer_identity": reviewer,
+        "conformance_route": conformance_route,
+        "helper_or_mock_only": False,
+        "direct_outcome_setting": False,
+        "receipt_path": str(receipt),
+        "receipt_sha256": harness.digest_bytes(receipt.read_bytes()),
+    }
+    if conformance_route == "authoritative_owner_then_live_conformance":
+        owner_receipt = root / f"owner-review-{binding['plan_hash'][:12]}.json"
+        live_receipt = root / f"live-review-{binding['plan_hash'][:12]}.json"
+        owner_receipt.write_text('{"owner":"approved"}\n', encoding="utf-8")
+        live_receipt.write_text('{"live":"passed"}\n', encoding="utf-8")
+        payload.update(
+            {
+                "owner_identity": "authoritative-owner/product",
+                "owner_receipt_path": str(owner_receipt),
+                "owner_receipt_sha256": harness.digest_bytes(owner_receipt.read_bytes()),
+                "live_receipt_path": str(live_receipt),
+                "live_receipt_sha256": harness.digest_bytes(live_receipt.read_bytes()),
+                "live_conformance": True,
+            }
+        )
+    return payload
+
+
+def proof_damage_payload(
+    root: Path,
+    proof: dict,
+    miss_hash: str,
+    permit_hash: str,
+    failed_hash: str,
+    *,
+    causal_class: str = "selector overfit",
+    conformance_route: str = "minimal_authoritative_conformance",
+) -> dict:
+    binding = harness.proof_runtime_binding({"proof": proof})
+    fingerprint = harness.digest_json(
+        {
+            "causal_class": causal_class,
+            "contract_hash": binding["contract_hash"],
+            "authoritative_owner_route": binding["authoritative_owner_route"],
+        }
+    )
+    receipt = root / f"damage-{permit_hash[:12]}.json"
+    receipt.write_text(json.dumps({"causal_class": causal_class}), encoding="utf-8")
+    return {
+        "miss_event_hash": miss_hash,
+        "failure_owner": "proof_plan",
+        "permit_event_hash": permit_hash,
+        "task_failed_event_hash": failed_hash,
+        "contract_hash": binding["contract_hash"],
+        "plan_hash": binding["plan_hash"],
+        "causal_class": causal_class,
+        "causal_fingerprint": fingerprint,
+        "assessor_identity": "independent/damage-referee",
+        "conformance_route": conformance_route,
+        "receipt_path": str(receipt),
+        "receipt_sha256": harness.digest_bytes(receipt.read_bytes()),
+    }
+
+
 class DeadlineHarnessTests(unittest.TestCase):
+    def test_both_conformance_routes_require_distinct_evidence_and_execute(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            routes = (
+                "minimal_authoritative_conformance",
+                "authoritative_owner_then_live_conformance",
+            )
+            for index, route in enumerate(routes):
+                case_root = root / str(index)
+                skill_root = case_root / "skill"
+                shutil.copytree(
+                    ROOT,
+                    skill_root,
+                    ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache"),
+                )
+                proof_policy = skill_root / "policy" / "proof.json"
+                policy = json.loads(proof_policy.read_text(encoding="utf-8"))
+                policy["conformance_route"] = route
+                proof_policy.write_text(json.dumps(policy), encoding="utf-8")
+                fs_root = specification(case_root)
+                proof = proof_binding(case_root, fs_root)
+                db = case_root / "state.sqlite3"
+                harness.open_window(
+                    db_path=db, install_root=case_root / "install",
+                    source_script=skill_root / "scripts" / "deadline_harness.py",
+                    lineage_id="L", run_id="R", window_id="W", fs_root=fs_root,
+                    ledger={"tasks": [task("T", 20)], "proof": proof},
+                    now=started, start_watcher=False,
+                )
+
+                other_route = routes[1 - index]
+                policy["conformance_route"] = other_route
+                proof_policy.write_text(json.dumps(policy), encoding="utf-8")
+                with self.assertRaisesRegex(harness.HarnessError, "route|shape"):
+                    harness.record_event(
+                        db_path=db, install_root=case_root / "install", lineage_id="L",
+                        run_id="R", window_id="W", kind="proof_reviewed",
+                        payload=proof_review_payload(
+                            case_root, proof, conformance_route=other_route
+                        ),
+                        now=started + timedelta(seconds=1),
+                    )
+                policy["conformance_route"] = route
+                proof_policy.write_text(json.dumps(policy), encoding="utf-8")
+                valid_review = proof_review_payload(
+                    case_root, proof, conformance_route=route
+                )
+                receipt_path = Path(valid_review["receipt_path"])
+                receipt_value = json.loads(receipt_path.read_text(encoding="utf-8"))
+                receipt_value["conformance_route"] = other_route
+                receipt_path.write_text(json.dumps(receipt_value), encoding="utf-8")
+                mismatched_receipt = dict(
+                    valid_review,
+                    receipt_sha256=harness.digest_bytes(receipt_path.read_bytes()),
+                )
+                with self.assertRaisesRegex(harness.HarnessError, "receipt does not bind"):
+                    harness.record_event(
+                        db_path=db, install_root=case_root / "install", lineage_id="L",
+                        run_id="R", window_id="W", kind="proof_reviewed",
+                        payload=mismatched_receipt, now=started + timedelta(seconds=1),
+                    )
+                valid_review = proof_review_payload(
+                    case_root, proof, conformance_route=route
+                )
+                if route == "authoritative_owner_then_live_conformance":
+                    incomplete = dict(valid_review)
+                    incomplete.pop("live_receipt_sha256")
+                    with self.assertRaisesRegex(harness.HarnessError, "shape"):
+                        harness.record_event(
+                            db_path=db, install_root=case_root / "install", lineage_id="L",
+                            run_id="R", window_id="W", kind="proof_reviewed",
+                            payload=incomplete, now=started + timedelta(seconds=1),
+                        )
+                harness.record_event(
+                    db_path=db, install_root=case_root / "install", lineage_id="L",
+                    run_id="R", window_id="W", kind="proof_reviewed",
+                    payload=valid_review, now=started + timedelta(seconds=1),
+                )
+                permit = harness.permit_dispatch(
+                    db_path=db, install_root=case_root / "install", lineage_id="L",
+                    run_id="R", window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="worker/T", now=started + timedelta(seconds=2),
+                )
+                connection = harness.connect(db)
+                try:
+                    rows = harness.events_for(connection, "L", "R", "W")
+                    permit_payload = harness.event_payload(rows[-1])
+                    tampered = dict(permit_payload, conformance_route=other_route)
+                    with self.assertRaisesRegex(harness.HarnessError, "conformance_route"):
+                        harness.validate_dispatch_event(
+                            connection, "L", "R", "W", tampered, rows,
+                            started + timedelta(seconds=3),
+                        )
+                finally:
+                    connection.close()
+                terminal = accepted_payload(case_root, "T", permit["permit_event_hash"])
+                terminal["conformance_route"] = route
+                harness.record_event(
+                    db_path=db, install_root=case_root / "install", lineage_id="L",
+                    run_id="R", window_id="W", kind="task_accepted", payload=terminal,
+                    now=started + timedelta(seconds=4),
+                )
+                harness.record_event(
+                    db_path=db, install_root=case_root / "install", lineage_id="L",
+                    run_id="R", window_id="W", kind="completed", payload={},
+                    now=started + timedelta(seconds=5),
+                )
+                result = harness.export_benchmark(
+                    db_path=db, lineage_id="L", run_id="R", window_id="W"
+                )
+                self.assertEqual(result["provenance"]["conformance_route"], route)
+
+    def test_authoritative_overfit_proof_plan_replacement_is_dispatchable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fs_root = specification(root)
+            db = root / "state.sqlite3"
+            install = root / "install"
+            started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            original = {"tasks": [task("T", 20)], "proof": proof_binding(root, fs_root)}
+            harness.open_window(
+                db_path=db, install_root=install, source_script=SOURCE,
+                lineage_id="L", run_id="R", window_id="W", fs_root=fs_root,
+                ledger=original, now=started, start_watcher=False,
+            )
+            replacement = {
+                "tasks": [task("T", 20)],
+                "proof": proof_binding(root, fs_root, seed=991, coordinates=(77, 12)),
+            }
+            revision = harness.revise_ledger(
+                db_path=db, lineage_id="L", run_id="R", window_id="W",
+                ledger=replacement, now=started + timedelta(seconds=1),
+            )
+            harness.record_event(
+                db_path=db, install_root=install, lineage_id="L", run_id="R",
+                window_id="W", kind="proof_reviewed",
+                payload=proof_review_payload(root, replacement["proof"]),
+                now=started + timedelta(seconds=2),
+            )
+            permit = harness.permit_dispatch(
+                db_path=db, install_root=install, lineage_id="L", run_id="R",
+                window_id="W", slot_id="T", worker_profile="terra-high",
+                worker_identity="proof-worker/terra",
+                now=started + timedelta(seconds=3),
+            )
+            self.assertTrue(permit["permitted"])
+            self.assertEqual(revision["ledger_hash"], harness.digest_json(replacement))
+            self.assertEqual(
+                harness.benchmark_definition_hash(original),
+                harness.benchmark_definition_hash(replacement),
+            )
+
+    def test_proof_revision_freezes_manifest_frontier_and_presence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fs_root = specification(root)
+            db = root / "state.sqlite3"
+            install = root / "install"
+            started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            original = {"tasks": [task("T", 20)], "proof": proof_binding(root, fs_root)}
+            harness.open_window(
+                db_path=db, install_root=install, source_script=SOURCE,
+                lineage_id="L", run_id="R", window_id="W", fs_root=fs_root,
+                ledger=original, now=started, start_watcher=False,
+            )
+
+            weakened = proof_binding(root, fs_root)
+            weakened["contract"]["semantic_manifest"]["conditions"][0]["requirement"] = "weaker"
+            removed_control = proof_binding(root, fs_root)
+            removed = removed_control["contract"]["semantic_manifest"]["negative_controls"].pop()
+            removed_control["plan"]["negative_control_artifacts"].pop(removed["id"])
+            moved_frontier = proof_binding(root, fs_root)
+            moved_frontier["contract"]["accepted_product_frontier"]["commit"] = "c" * 40
+
+            for revised, message in (
+                ({"tasks": [task("T", 20)], "proof": weakened}, "proof contract"),
+                ({"tasks": [task("T", 20)], "proof": removed_control}, "proof contract"),
+                ({"tasks": [task("T", 20)]}, "proof surface"),
+                ({"tasks": [task("T", 20)], "proof": moved_frontier}, "proof contract"),
+            ):
+                with self.assertRaisesRegex(harness.HarnessError, message):
+                    harness.revise_ledger(
+                        db_path=db, lineage_id="L", run_id="R", window_id="W",
+                        ledger=revised, now=started + timedelta(seconds=1),
+                    )
+
+            second_db = root / "second.sqlite3"
+            harness.open_window(
+                db_path=second_db, install_root=install, source_script=SOURCE,
+                lineage_id="without-proof", run_id="R", window_id="W", fs_root=fs_root,
+                ledger={"tasks": [task("T", 20)]}, now=started, start_watcher=False,
+            )
+            with self.assertRaisesRegex(harness.HarnessError, "proof surface"):
+                harness.revise_ledger(
+                    db_path=second_db, lineage_id="without-proof", run_id="R", window_id="W",
+                    ledger=original, now=started + timedelta(seconds=1),
+                )
+
+    def test_later_lineage_window_cannot_drop_or_change_proof_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fs_root = specification(root)
+            db = root / "state.sqlite3"
+            install = root / "install"
+            started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            original_proof = proof_binding(root, fs_root)
+            harness.open_window(
+                db_path=db, install_root=install, source_script=SOURCE,
+                lineage_id="L", run_id="R1", window_id="W", fs_root=fs_root,
+                ledger={"tasks": [task("T", 20)], "proof": original_proof},
+                now=started, start_watcher=False,
+            )
+            changed = proof_binding(root, fs_root)
+            changed["contract"]["authoritative_owner_route"] = "invented owner route"
+            for run_id, ledger in (
+                ("R2", {"tasks": [task("T", 20)]}),
+                ("R3", {"tasks": [task("T", 20)], "proof": changed}),
+            ):
+                with self.assertRaisesRegex(harness.HarnessError, "proof_contract"):
+                    harness.open_window(
+                        db_path=db, install_root=install, source_script=SOURCE,
+                        lineage_id="L", run_id=run_id, window_id="W", fs_root=fs_root,
+                        ledger=ledger, now=started + timedelta(seconds=1),
+                        start_watcher=False,
+                    )
+
+    def test_proof_and_benchmark_binding_require_one_frontier(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fs_root = specification(root)
+            proof = proof_binding(root, fs_root)
+            binding = {
+                "git": {
+                    "worktree": str(root), "branch": "refs/heads/candidate",
+                    "commit": "1" * 40, "tree": "2" * 40,
+                },
+                "product_frontier": {
+                    "repository": "product/example", "commit": "c" * 40, "tree": "b" * 40,
+                },
+                "mutation": {
+                    "target_failure_id": "failure", "changed_policy_keys": ["policy/proof.json.conformance_route"],
+                    "expected_reduction": "repeated_work",
+                },
+            }
+            with self.assertRaisesRegex(harness.HarnessError, "same accepted product frontier"):
+                harness.validate_ledger(
+                    {"tasks": [task("T", 20)], "proof": proof, "benchmark_binding": binding}
+                )
+
+    def test_closed_proof_plan_rejects_omitted_condition_or_control_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fs_root = specification(root)
+            for field in ("condition_artifacts", "negative_control_artifacts"):
+                proof = proof_binding(root, fs_root)
+                proof["plan"][field].pop(next(iter(proof["plan"][field])))
+                with self.assertRaises(harness.HarnessError):
+                    harness.validate_ledger({"tasks": [task("T", 1)], "proof": proof})
+
+    def test_proof_dispatch_requires_closed_plan_separate_review_and_distinct_identities(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fs_root = specification(root)
+            proof = proof_binding(root, fs_root)
+            ledger = {"tasks": [task("T", 10)], "proof": proof}
+            started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            db = root / "state.sqlite3"
+            install = root / "install"
+            harness.open_window(
+                db_path=db, install_root=install, source_script=SOURCE,
+                lineage_id="L", run_id="R", window_id="W", fs_root=fs_root,
+                ledger=ledger, now=started, start_watcher=False,
+            )
+            with self.assertRaisesRegex(harness.HarnessError, "separate authoritative review"):
+                harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="proof-worker/terra", now=started,
+                )
+
+            open_plan = proof_binding(root, fs_root)
+            open_plan["plan"]["force_pass"] = True
+            with self.assertRaisesRegex(harness.HarnessError, "open shape"):
+                harness.validate_ledger({"tasks": [task("T", 1)], "proof": open_plan})
+
+            for field, value, message in (
+                ("helper_or_mock_only", True, "mock-only"),
+                ("direct_outcome_setting", True, "direct outcome"),
+                ("reviewer_identity", "plan-author/xhigh", "distinct"),
+            ):
+                review = proof_review_payload(root, proof)
+                review[field] = value
+                with self.assertRaisesRegex(harness.HarnessError, message):
+                    harness.record_event(
+                        db_path=db, install_root=install, lineage_id="L", run_id="R",
+                        window_id="W", kind="proof_reviewed", payload=review,
+                        now=started + timedelta(seconds=1),
+                    )
+
+            harness.record_event(
+                db_path=db, install_root=install, lineage_id="L", run_id="R",
+                window_id="W", kind="proof_reviewed", payload=proof_review_payload(root, proof),
+                now=started + timedelta(seconds=1),
+            )
+            with self.assertRaisesRegex(harness.HarnessError, "distinct"):
+                harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="plan-author/xhigh", now=started + timedelta(seconds=2),
+                )
+
+    def test_proof_dispatch_rejects_changed_core_or_frontier(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fs_root = specification(root)
+            proof = proof_binding(root, fs_root)
+            started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            db = root / "state.sqlite3"
+            install = root / "install"
+            harness.open_window(
+                db_path=db, install_root=install, source_script=SOURCE,
+                lineage_id="L", run_id="R", window_id="W", fs_root=fs_root,
+                ledger={"tasks": [task("T", 10)], "proof": proof},
+                now=started, start_watcher=False,
+            )
+            harness.record_event(
+                db_path=db, install_root=install, lineage_id="L", run_id="R",
+                window_id="W", kind="proof_reviewed", payload=proof_review_payload(root, proof),
+                now=started,
+            )
+            fs_root.write_text("# changed semantic core\n", encoding="utf-8")
+            with self.assertRaisesRegex(harness.HarnessError, "semantic core"):
+                harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="proof-worker/terra", now=started,
+                )
+
+            fs_root.write_text("# Frozen functional specification\n", encoding="utf-8")
+            changed = proof_binding(root, fs_root)
+            changed["contract"]["accepted_product_frontier"]["commit"] = "c" * 40
+            with self.assertRaisesRegex(harness.HarnessError, "proof contract"):
+                harness.revise_ledger(
+                    db_path=db, lineage_id="L", run_id="R", window_id="W",
+                    ledger={"tasks": [task("T", 10)], "proof": changed}, now=started,
+                )
+
+    def test_zero_dispatch_and_accepted_execution_cannot_qualify_as_proof_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fs_root = specification(root)
+            db = root / "state.sqlite3"
+            install = root / "install"
+            epoch = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            proof = proof_binding(root, fs_root)
+            harness.open_window(
+                db_path=db, install_root=install, source_script=SOURCE,
+                lineage_id="L", run_id="zero", window_id="W", fs_root=fs_root,
+                ledger={"tasks": [task("T", 1)], "proof": proof},
+                now=epoch, start_watcher=False,
+            )
+            connection = harness.connect(db)
+            harness.expire_window(
+                connection=connection, install_root=install, lineage_id="L",
+                run_id="zero", window_id="W", now=epoch + timedelta(seconds=2),
+            )
+            zero_miss = harness.lineage_miss_rows(connection, "L")[-1]["event_hash"]
+            connection.close()
+            zero_payload = proof_damage_payload(
+                root, proof, zero_miss, "1" * 64, "2" * 64
+            )
+            with self.assertRaisesRegex(harness.HarnessError, "reviewed permit and real task_failed"):
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L", run_id="zero",
+                    window_id="W", kind="damage_assessment", payload=zero_payload,
+                    now=epoch + timedelta(seconds=3),
+                )
+
+            started = epoch + timedelta(seconds=10)
+            harness.open_window(
+                db_path=db, install_root=install, source_script=SOURCE,
+                lineage_id="L", run_id="accepted", window_id="W", fs_root=fs_root,
+                ledger={"tasks": [task("T", 1)], "proof": proof},
+                now=started, start_watcher=False,
+            )
+            harness.record_event(
+                db_path=db, install_root=install, lineage_id="L", run_id="accepted",
+                window_id="W", kind="proof_reviewed", payload=proof_review_payload(root, proof),
+                now=started,
+            )
+            permit = harness.permit_dispatch(
+                db_path=db, install_root=install, lineage_id="L", run_id="accepted",
+                window_id="W", slot_id="T", worker_profile="terra-high",
+                worker_identity="worker/T", now=started,
+            )
+            connection = harness.connect(db)
+            harness.expire_window(
+                connection=connection, install_root=install, lineage_id="L",
+                run_id="accepted", window_id="W", now=started + timedelta(seconds=2),
+            )
+            accepted_miss = harness.lineage_miss_rows(connection, "L")[-1]["event_hash"]
+            connection.close()
+            accepted_task = accepted_payload(root, "T", permit["permit_event_hash"])
+            accepted_task["conformance_route"] = "minimal_authoritative_conformance"
+            accepted = harness.record_event(
+                db_path=db, install_root=install, lineage_id="L", run_id="accepted",
+                window_id="W", kind="task_accepted",
+                payload=accepted_task,
+                now=started + timedelta(seconds=3),
+            )
+            accepted_damage = proof_damage_payload(
+                root, proof, accepted_miss, permit["permit_event_hash"], accepted["event_hash"]
+            )
+            with self.assertRaisesRegex(harness.HarnessError, "real task_failed"):
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L", run_id="accepted",
+                    window_id="W", kind="damage_assessment", payload=accepted_damage,
+                    now=started + timedelta(seconds=4),
+                )
+
+    def test_reviewed_failed_proof_execution_gets_derived_assessment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fs_root = specification(root)
+            db = root / "state.sqlite3"
+            install = root / "install"
+            started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            proof = proof_binding(root, fs_root)
+            harness.open_window(
+                db_path=db, install_root=install, source_script=SOURCE,
+                lineage_id="L", run_id="R", window_id="W", fs_root=fs_root,
+                ledger={"tasks": [task("T", 1)], "proof": proof},
+                now=started, start_watcher=False,
+            )
+            harness.record_event(
+                db_path=db, install_root=install, lineage_id="L", run_id="R", window_id="W",
+                kind="proof_reviewed", payload=proof_review_payload(root, proof), now=started,
+            )
+            permit = harness.permit_dispatch(
+                db_path=db, install_root=install, lineage_id="L", run_id="R", window_id="W",
+                slot_id="T", worker_profile="terra-high", worker_identity="worker/T", now=started,
+            )
+            connection = harness.connect(db)
+            harness.expire_window(
+                connection=connection, install_root=install, lineage_id="L", run_id="R",
+                window_id="W", now=started + timedelta(seconds=2),
+            )
+            miss_hash = harness.lineage_miss_rows(connection, "L")[-1]["event_hash"]
+            connection.close()
+            failure = accepted_payload(root, "T", permit["permit_event_hash"])
+            failure["test_result"] = "failed"
+            failure["conformance_route"] = "minimal_authoritative_conformance"
+            wrong_worker = dict(failure, worker_identity="different-worker")
+            with self.assertRaisesRegex(harness.HarnessError, "identity differs"):
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L", run_id="R",
+                    window_id="W", kind="task_failed", payload=wrong_worker,
+                    now=started + timedelta(seconds=3),
+                )
+            failed = harness.record_event(
+                db_path=db, install_root=install, lineage_id="L", run_id="R", window_id="W",
+                kind="task_failed", payload=failure, now=started + timedelta(seconds=3),
+            )
+            damage = proof_damage_payload(
+                root, proof, miss_hash, permit["permit_event_hash"], failed["event_hash"]
+            )
+            recorded = harness.record_event(
+                db_path=db, install_root=install, lineage_id="L", run_id="R", window_id="W",
+                kind="damage_assessment", payload=damage, now=started + timedelta(seconds=4),
+            )
+            self.assertTrue(harness.valid_sha256(recorded["event_hash"]))
+
+            forged = dict(damage, causal_fingerprint="f" * 64)
+            connection = harness.connect(db)
+            try:
+                rows = harness.events_for(connection, "L", "R", "W")
+                with self.assertRaises(harness.HarnessError):
+                    harness.validate_damage_assessment(
+                        connection, "L", "R", "W", forged, rows[:-1]
+                    )
+            finally:
+                connection.close()
+
     def test_critical_path_uses_parallel_max_and_serial_sum(self) -> None:
         ledger = {
             "tasks": [task("A", 10), task("B", 20), task("C", 5, ["A"])],

@@ -307,6 +307,34 @@ def validate_coordinator_evidence(evidence: dict[str, Any], threshold: int) -> N
         raise GuardError("Fresh review does not exactly cover the sealed failed windows")
 
 
+def validate_proof_policy_evidence(evidence: dict[str, Any], threshold: int) -> None:
+    failures = evidence.get("proof_plan_failures")
+    if not isinstance(failures, list):
+        raise GuardError("P2 mutation requires proof_plan-owned failed windows")
+    fingerprints: set[str] = set()
+    identities: set[str] = set()
+    for failure in failures:
+        if not isinstance(failure, dict) or failure.get("failure_owner") != "proof_plan":
+            raise GuardError("Product and harness failures cannot qualify for P2 mutation")
+        fingerprint = failure.get("causal_fingerprint")
+        if not valid_sha256(fingerprint):
+            raise GuardError("P2 failure requires a causal fingerprint")
+        if fingerprint in fingerprints:
+            raise GuardError("Duplicate proof-plan causal fingerprints count once")
+        fingerprints.add(fingerprint)
+        identity = failure.get("deadline_id")
+        if not isinstance(identity, str) or not identity.strip() or identity in identities:
+            raise GuardError("P2 mutation requires distinct failed windows")
+        identities.add(identity)
+        if not valid_sha256(failure.get("assessment_event_hash")):
+            raise GuardError("P2 failure requires a sealed authoritative assessment")
+    if len(fingerprints) < threshold:
+        raise GuardError(
+            f"P2 mutation requires {threshold} causally distinct proof-plan failures; "
+            f"found {len(fingerprints)}"
+        )
+
+
 def evidence_failure_ids(evidence: dict[str, Any]) -> set[str]:
     if evidence.get("kind") == "worker_failure":
         return {evidence["deadline_id"]}
@@ -460,13 +488,65 @@ def evidence_from_harness(
     except (GuardError, sqlite3.Error, json.JSONDecodeError):
         connection.close()
         raise
-    connection.close()
     if review_row is None:
+        connection.close()
         raise GuardError("Coordinator mutation requires a sealed coordinator_review_completed event")
     if review_row["sequence"] <= max(row["sequence"] for row in distinct.values()):
+        connection.close()
         raise GuardError("Coordinator review predates one or more sealed failed windows")
     review_payload = json.loads(review_row["payload_json"])
     review_payload["review_event_hash"] = review_row["event_hash"]
+    all_events = connection.execute(
+        "SELECT * FROM events WHERE lineage_id=? ORDER BY sequence", (lineage_id,)
+    ).fetchall()
+    assessments = [row for row in all_events if row["kind"] == "damage_assessment"]
+    qualified: list[dict[str, Any]] = []
+    fingerprints: set[str] = set()
+    for assessment in assessments:
+        if assessment["sequence"] >= review_row["sequence"]:
+            continue
+        payload = json.loads(assessment["payload_json"])
+        if payload.get("failure_owner") != "proof_plan":
+            continue
+        assessment_rows = connection.execute(
+            """
+            SELECT * FROM events WHERE lineage_id=? AND run_id=? AND window_id=?
+            ORDER BY sequence
+            """,
+            (lineage_id, assessment["run_id"], assessment["window_id"]),
+        ).fetchall()
+        verify_event_chain(assessment_rows)
+        assessment_index = next(
+            index for index, row in enumerate(assessment_rows)
+            if row["event_hash"] == assessment["event_hash"]
+        )
+        try:
+            deadline_harness.validate_damage_assessment(
+                connection,
+                lineage_id,
+                assessment["run_id"],
+                assessment["window_id"],
+                payload,
+                assessment_rows[:assessment_index],
+            )
+        except deadline_harness.HarnessError as error:
+            connection.close()
+            raise GuardError(f"Invalid proof-plan damage assessment: {error}") from error
+        fingerprint = payload.get("causal_fingerprint")
+        if fingerprint in fingerprints:
+            continue
+        fingerprints.add(fingerprint)
+        qualified.append(
+            {
+                "deadline_id": (
+                    f"{lineage_id}/{assessment['run_id']}/{assessment['window_id']}"
+                ),
+                "failure_owner": "proof_plan",
+                "causal_fingerprint": fingerprint,
+                "assessment_event_hash": assessment["event_hash"],
+            }
+        )
+    connection.close()
     return {
         "kind": "coordinator_review",
         "window_failures": [
@@ -477,6 +557,7 @@ def evidence_from_harness(
             }
             for row in distinct.values()
         ],
+        "proof_plan_failures": qualified,
         "fresh_review": review_payload,
     }
 
@@ -502,6 +583,14 @@ def validate_mutation(
     validate_policy_files(candidate, policy)
     policy_keys = validate_intent(intent, base, candidate, policy)
     validate_target_binding(intent, evidence)
+    changes_proof_policy = any(key.startswith("policy/proof.json.") for key in policy_keys)
+    if changes_proof_policy:
+        validate_proof_policy_evidence(evidence, int(policy["coordinator_review_threshold"]))
+        proof_failure_ids = {
+            failure["deadline_id"] for failure in evidence["proof_plan_failures"]
+        }
+        if intent.get("target_failure_id") not in proof_failure_ids:
+            raise GuardError("P2 mutation target is not a qualifying proof-plan failure")
     changes = changed_paths(base, candidate)
     if not changes:
         raise GuardError("Candidate contains no mutation")
@@ -509,13 +598,21 @@ def validate_mutation(
     illegal = [path for path in changes if not matches_any(path, allowed)]
     if illegal:
         raise GuardError(f"Mutation crosses frozen boundary: {', '.join(illegal)}")
-    return {
+    result = {
         "scope": scope,
         "changed_paths": changes,
         "changed_policy_keys": policy_keys,
         "expected_reduction": intent["expected_reduction"],
         "allowed_paths": allowed,
     }
+    if changes_proof_policy:
+        result["parent_conformance_route"] = read_json(
+            base / "policy" / "proof.json"
+        )["conformance_route"]
+        result["candidate_conformance_route"] = read_json(
+            candidate / "policy" / "proof.json"
+        )["conformance_route"]
+    return result
 
 
 def valid_git_oid(value: Any) -> bool:
@@ -655,6 +752,26 @@ def validate_benchmark_provenance(baseline: dict[str, Any], candidate: dict[str,
                 raise GuardError(f"Benchmark provenance requires SHA-256 {field}")
     for field in ("definition_hash", "fs_hash", "comparison_epoch"):
         if baseline_source[field] != candidate_source[field]:
+            raise GuardError(f"Benchmark comparison changed {field}")
+    for source in (baseline_source, candidate_source):
+        proof_plan_hash = source.get("proof_plan_hash")
+        if proof_plan_hash is not None and not valid_sha256(proof_plan_hash):
+            raise GuardError("Benchmark provenance proof_plan_hash must be a SHA-256")
+        route = source.get("conformance_route")
+        if route is not None and route not in {
+            "minimal_authoritative_conformance",
+            "authoritative_owner_then_live_conformance",
+        }:
+            raise GuardError("Benchmark provenance conformance_route is outside the closed vocabulary")
+    for field in ("semantic_condition_manifest_hash", "product_frontier"):
+        baseline_value = baseline_source.get(field)
+        candidate_value = candidate_source.get(field)
+        if (baseline_value is None) != (candidate_value is None):
+            label = "product frontier provenance" if field == "product_frontier" else field
+            raise GuardError(f"Benchmark comparison changed availability of {label}")
+        if baseline_value is not None and baseline_value != candidate_value:
+            if field == "product_frontier":
+                raise GuardError("Benchmark product frontier differs between compared results")
             raise GuardError(f"Benchmark comparison changed {field}")
 
 
@@ -812,6 +929,27 @@ def validate_bound_benchmark_provenance(
     validate_benchmark_identity(candidate, child, frontier, required=True)
     validate_effective_plan_receipt(baseline)
     validate_effective_plan_receipt(candidate)
+    if any(
+        key.startswith("policy/proof.json.")
+        for key in validation["mutation"]["changed_policy_keys"]
+    ):
+        expected_routes = (
+            validation["mutation"].get("parent_conformance_route"),
+            validation["mutation"].get("candidate_conformance_route"),
+        )
+        for result, expected_route in zip((baseline, candidate), expected_routes):
+            provenance = result["provenance"]
+            for field in ("semantic_condition_manifest_hash", "proof_plan_hash"):
+                if not valid_sha256(provenance.get(field)):
+                    raise GuardError(
+                        f"P2 benchmark requires proof-window provenance {field}"
+                    )
+            if provenance.get("product_frontier") != frontier:
+                raise GuardError("P2 benchmark requires the exact accepted product frontier")
+            if provenance.get("conformance_route") != expected_route:
+                raise GuardError(
+                    "P2 benchmark did not execute the conformance route selected by its policy"
+                )
 
 
 def compare_validated_candidate(

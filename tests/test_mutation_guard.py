@@ -79,6 +79,20 @@ def coordinator_evidence() -> dict:
     }
 
 
+def proof_policy_evidence() -> dict:
+    evidence = coordinator_evidence()
+    evidence["proof_plan_failures"] = [
+        {
+            "deadline_id": failure["deadline_id"],
+            "failure_owner": "proof_plan",
+            "causal_fingerprint": f"{number + 11:064x}",
+            "assessment_event_hash": f"{number + 21:064x}",
+        }
+        for number, failure in enumerate(evidence["window_failures"])
+    ]
+    return evidence
+
+
 def intent(*changed_keys: str) -> dict:
     return {
         "kind": "efficiency_mutation",
@@ -154,6 +168,144 @@ def benchmark_binding(skill_root: Path) -> dict:
 
 
 class MutationGuardTests(unittest.TestCase):
+    def test_three_adjacent_distinct_proof_plan_misses_allow_p2(self) -> None:
+        self.set_policy(
+            "policy/proof.json", "conformance_route",
+            "authoritative_owner_then_live_conformance",
+        )
+        result = guard.validate_mutation(
+            base=self.base, candidate=self.candidate, scope="coordinator",
+            evidence=proof_policy_evidence(),
+            intent=intent("policy/proof.json.conformance_route"), policy=POLICY,
+        )
+        self.assertEqual(result["changed_paths"], ["policy/proof.json"])
+
+    def test_successful_windows_do_not_reset_cumulative_p2_failures(self) -> None:
+        self.set_policy(
+            "policy/proof.json", "conformance_route",
+            "authoritative_owner_then_live_conformance",
+        )
+        evidence = proof_policy_evidence()
+        evidence["successful_window_ids"] = ["lineage/success-1", "lineage/success-2"]
+        result = guard.validate_mutation(
+            base=self.base, candidate=self.candidate, scope="coordinator",
+            evidence=evidence, intent=intent("policy/proof.json.conformance_route"),
+            policy=POLICY,
+        )
+        self.assertEqual(result["changed_paths"], ["policy/proof.json"])
+
+    def test_duplicate_proof_fingerprints_do_not_qualify_p2(self) -> None:
+        self.set_policy(
+            "policy/proof.json", "conformance_route",
+            "authoritative_owner_then_live_conformance",
+        )
+        evidence = proof_policy_evidence()
+        evidence["proof_plan_failures"][2]["causal_fingerprint"] = (
+            evidence["proof_plan_failures"][1]["causal_fingerprint"]
+        )
+        with self.assertRaisesRegex(guard.GuardError, "Duplicate"):
+            guard.validate_mutation(
+                base=self.base, candidate=self.candidate, scope="coordinator",
+                evidence=evidence, intent=intent("policy/proof.json.conformance_route"),
+                policy=POLICY,
+            )
+
+    def test_product_or_harness_failures_cannot_qualify_or_be_relabelled(self) -> None:
+        self.set_policy(
+            "policy/proof.json", "conformance_route",
+            "authoritative_owner_then_live_conformance",
+        )
+        for owner in ("product", "harness"):
+            evidence = proof_policy_evidence()
+            evidence["proof_plan_failures"][1]["failure_owner"] = owner
+            with self.assertRaisesRegex(guard.GuardError, "Product and harness"):
+                guard.validate_mutation(
+                    base=self.base, candidate=self.candidate, scope="coordinator",
+                    evidence=evidence, intent=intent("policy/proof.json.conformance_route"),
+                    policy=POLICY,
+                )
+
+    def test_worker_scope_remains_p1_only(self) -> None:
+        self.set_policy(
+            "policy/proof.json", "conformance_route",
+            "authoritative_owner_then_live_conformance",
+        )
+        with self.assertRaises(guard.GuardError):
+            guard.validate_mutation(
+                base=self.base, candidate=self.candidate, scope="worker",
+                evidence=worker_evidence(), intent=intent("policy/proof.json.conformance_route"),
+                policy=POLICY,
+            )
+
+    def test_same_core_and_frontier_compare_across_different_proof_plans(self) -> None:
+        baseline = benchmark(misses=1, elapsed=120, tokens=1000, size=5000)
+        candidate = benchmark(misses=0, elapsed=90, tokens=900, size=5100)
+        frontier = product_frontier()
+        for result, plan_hash in ((baseline, "6" * 64), (candidate, "7" * 64)):
+            result["provenance"]["semantic_condition_manifest_hash"] = "8" * 64
+            result["provenance"]["proof_plan_hash"] = plan_hash
+            result["provenance"]["product_frontier"] = frontier
+        compared = guard.compare_benchmark(baseline, candidate, POLICY["quality_predicates"])
+        self.assertTrue(compared["promotable"])
+
+        changed_frontier = json.loads(json.dumps(candidate))
+        changed_frontier["provenance"]["product_frontier"]["commit"] = "c" * 40
+        with self.assertRaisesRegex(guard.GuardError, "product frontier"):
+            guard.compare_benchmark(baseline, changed_frontier, POLICY["quality_predicates"])
+
+        changed_core = json.loads(json.dumps(candidate))
+        changed_core["provenance"]["fs_hash"] = "9" * 64
+        with self.assertRaisesRegex(guard.GuardError, "fs_hash"):
+            guard.compare_benchmark(baseline, changed_core, POLICY["quality_predicates"])
+
+    def test_p2_validated_comparison_requires_and_accepts_proof_window_provenance(self) -> None:
+        _, candidate, baseline, result, validation = self.p2_validated_benchmarks()
+        self.assertEqual(
+            validation["mutation"]["parent_conformance_route"],
+            "minimal_authoritative_conformance",
+        )
+        self.assertEqual(
+            validation["mutation"]["candidate_conformance_route"],
+            "authoritative_owner_then_live_conformance",
+        )
+        comparison = guard.compare_validated_candidate(
+            validation_receipt=validation,
+            baseline=baseline,
+            candidate=result,
+            candidate_root=candidate,
+            predicates=POLICY["quality_predicates"],
+        )
+        self.assertEqual(comparison["decision"], "promotable")
+
+    def test_p2_validated_comparison_rejects_inert_or_mismatched_route(self) -> None:
+        _, candidate, baseline, result, validation = self.p2_validated_benchmarks()
+        result["provenance"]["conformance_route"] = (
+            "minimal_authoritative_conformance"
+        )
+        comparison = guard.compare_validated_candidate(
+            validation_receipt=validation,
+            baseline=baseline,
+            candidate=result,
+            candidate_root=candidate,
+            predicates=POLICY["quality_predicates"],
+        )
+        self.assertEqual(comparison["decision"], "rejected")
+        self.assertIn("did not execute the conformance route", comparison["error"])
+
+    def test_p2_validated_comparison_rejects_generic_nonproof_benchmark(self) -> None:
+        _, candidate, baseline, result, validation = self.p2_validated_benchmarks(
+            include_proof_provenance=False
+        )
+        comparison = guard.compare_validated_candidate(
+            validation_receipt=validation,
+            baseline=baseline,
+            candidate=result,
+            candidate_root=candidate,
+            predicates=POLICY["quality_predicates"],
+        )
+        self.assertEqual(comparison["decision"], "rejected")
+        self.assertIn("P2 benchmark requires proof-window provenance", comparison["error"])
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         temporary_root = Path(self.temporary.name)
@@ -173,7 +325,12 @@ class MutationGuardTests(unittest.TestCase):
         policy[key] = value
         path.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
 
-    def git_pair(self) -> tuple[Path, Path]:
+    def git_pair(
+        self,
+        relative: str = "policy/orchestration.json",
+        key: str = "ready_order",
+        value: object = "fs_order",
+    ) -> tuple[Path, Path]:
         admin = Path(self.temporary.name) / "git-admin"
         parent = Path(self.temporary.name) / "git-parent"
         candidate = Path(self.temporary.name) / "git-candidate"
@@ -187,11 +344,11 @@ class MutationGuardTests(unittest.TestCase):
         run_git(admin, "switch", "--detach")
         run_git(admin, "worktree", "add", str(parent), "main")
         run_git(parent, "worktree", "add", "-b", "candidate", str(candidate), "main")
-        policy_path = candidate / "policy" / "orchestration.json"
-        value = json.loads(policy_path.read_text(encoding="utf-8"))
-        value["ready_order"] = "fs_order"
-        policy_path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-        run_git(candidate, "add", "policy/orchestration.json")
+        policy_path = candidate / relative
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy[key] = value
+        policy_path.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+        run_git(candidate, "add", relative)
         run_git(candidate, "commit", "-m", "candidate mutation")
         return parent, candidate
 
@@ -220,6 +377,47 @@ class MutationGuardTests(unittest.TestCase):
             "observed_reductions": ["repeated_work"],
         }
         return baseline, result
+
+    def p2_validated_benchmarks(
+        self, *, include_proof_provenance: bool = True
+    ) -> tuple[Path, Path, dict, dict, dict]:
+        parent, candidate = self.git_pair(
+            "policy/proof.json",
+            "conformance_route",
+            "authoritative_owner_then_live_conformance",
+        )
+        baseline, result = self.secure_benchmarks(parent, candidate)
+        if include_proof_provenance:
+            for benchmark_result, plan_hash, route in (
+                (baseline, "6" * 64, "minimal_authoritative_conformance"),
+                (result, "7" * 64, "authoritative_owner_then_live_conformance"),
+            ):
+                benchmark_result["provenance"]["semantic_condition_manifest_hash"] = "8" * 64
+                benchmark_result["provenance"]["proof_plan_hash"] = plan_hash
+                benchmark_result["provenance"]["conformance_route"] = route
+        p2_intent = intent("policy/proof.json.conformance_route")
+        result["mutation"] = {
+            "target_failure_id": p2_intent["target_failure_id"],
+            "changed_policy_keys": p2_intent["changed_policy_keys"],
+            "expected_reduction": p2_intent["expected_reduction"],
+            "observed_reductions": [p2_intent["expected_reduction"]],
+        }
+        evidence = proof_policy_evidence()
+        evidence["fresh_review"]["reviewed_parent_skill_hash"] = guard.git_identity(parent)[
+            "skill_hash"
+        ]
+        validation = guard.create_validation_receipt(
+            base=parent,
+            candidate=candidate,
+            accepted_ref="main",
+            scope="coordinator",
+            evidence=evidence,
+            intent=p2_intent,
+            policy=POLICY,
+            product_frontier=product_frontier(),
+            baseline_benchmark=baseline,
+        )
+        return parent, candidate, baseline, result, validation
 
     def validation_receipt(self, parent: Path, candidate: Path, baseline: dict) -> dict:
         return guard.create_validation_receipt(

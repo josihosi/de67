@@ -27,7 +27,8 @@
     "coordinator": {
       "allowed_paths": [
         "policy/orchestration.json",
-        "policy/execution.json"
+        "policy/execution.json",
+        "policy/proof.json"
       ],
       "evidence_kind": "coordinator_review"
     }
@@ -69,6 +70,10 @@
       "live_route": ["cheapest_remaining", "final_integration_only"],
       "build_route": ["smallest_owner_test_first", "targeted_compile_then_owner_test"],
       "harness_route": ["observer_before_live", "focused_adapter_before_live"]
+    },
+    "policy/proof.json": {
+      "version": [1],
+      "conformance_route": ["minimal_authoritative_conformance", "authoritative_owner_then_live_conformance"]
     }
   }
 }

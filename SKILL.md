@@ -5,12 +5,13 @@ description: Explicit-call laboratory for evolving DE67 coordination under immut
 
 # DE67 Lab
 
-Use a frozen constitution around two bounded policy surfaces. Read all three references before any
+Use a frozen constitution around three bounded policy surfaces. Read all four references before any
 lab act:
 
 1. `references/kernel.md` — immutable specification, integrity, clock, mutation, and promotion law.
 2. `policy/orchestration.json` — `P1`, the single-worker-failure mutation surface.
-3. `policy/execution.json` — `P3`, the additional three-window-failure mutation surface.
+3. `policy/proof.json` — `P2`, the proof-conformance mutation surface.
+4. `policy/execution.json` — `P3`, the additional three-window-failure mutation surface.
 
 Treat `contracts/mutation-policy.json`, both scripts, tests, this file, agent metadata, and the
 kernel as frozen. A candidate never evaluates its own mutation boundary; run
@@ -31,8 +32,19 @@ accepted parent V_n
 
 For `worker`, require one identity-bound worker failure and permit changes only to
 `policy/orchestration.json`. For `coordinator`, require three distinct failed ledger windows in
-the same lineage and permit changes to both mutable references. Neither scope may change the
-kernel or its enforcement tools.
+the same lineage for `P1`/`P3`; permit `P2` mutation only after three causally distinct cumulative
+proof-plan-owned failed windows and the same fresh external review. Successes do not reset this
+count. Neither scope may change the kernel or its enforcement tools.
+
+Concrete proof plans are liquid ledger data, not `P2`. The lineage seals proof presence, semantic
+manifest, accepted frontier, and authoritative owner route. A closed plan maps every condition and
+control to exact source/binary/fixture/test artifacts. Append an independent `proof_reviewed` event,
+then permit proof dispatch with `--worker-identity`; author, reviewer, and worker must differ. Only a
+reviewed permit consumed by a real `task_failed` can receive a harness-derived proof-plan causal
+fingerprint. `minimal_authoritative_conformance` requires that independent authoritative receipt;
+`authoritative_owner_then_live_conformance` additionally requires bound owner and live-conformance
+receipts. The selected route follows review, permit, terminal, damage, and benchmark provenance. A
+truthful preflight blocker stays zero-dispatch.
 
 Do not repair a rejected candidate. Discard it, retain its compact benchmark receipt, identify a
 different causal direction, and derive the next candidate from the last accepted parent.
@@ -70,8 +82,11 @@ separate specification and coordination consent gates.
 python scripts/deadline_harness.py open-window --lineage-id ... --run-id ... \
   --window-id ... --fs-root /absolute/path/to/specification --ledger ledger.json
 
+python scripts/deadline_harness.py record --lineage-id ... --run-id ... \
+  --window-id ... --kind proof_reviewed --payload proof-review.json
+
 python scripts/deadline_harness.py permit-dispatch --lineage-id ... --run-id ... \
-  --window-id ... --slot-id ... --worker-profile ...
+  --window-id ... --slot-id ... --worker-profile ... --worker-identity ...
 
 python scripts/deadline_harness.py status --lineage-id ... --run-id ... --window-id ...
 

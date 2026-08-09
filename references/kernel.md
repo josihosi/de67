@@ -102,6 +102,14 @@ The coordinator writes slots, assigns workers, gates receipts, and advances acce
 worker performs implementation, builds, tests, and live proof. A mutation may alter routing but
 cannot erase or weaken these predicates.
 
+A coordinator may repair only a rejected receipt hash without rerunning the worker or test. First
+append one `receipt_rejected` event whose independently validated terminal evidence binds the
+still-active permit and whose claimed receipt hash genuinely mismatches the existing receipt file.
+Then append one `receipt_resealed` event bound to that exact rejection and the corrected receipt
+path/hash. The corrected terminal may differ only in that receipt path/hash and must bind the reseal
+before acceptance. A permit permits at most one rejection and reseal; an accepted or failed
+terminal consumes it permanently.
+
 ## Mutable-policy vocabulary
 
 `P1`, `P2`, and `P3` are closed JSON configurations validated by the accepted parent. Their values select
@@ -153,6 +161,13 @@ P3.harness_route:
 Every strategy is subordinate to `S.A` and the execution-integrity predicates above. New
 primitives require an explicit owner-authorized kernel revision; automatic mutation may only select
 or combine already-authorized primitives.
+
+The harness seals `P1.retry_route` with each window. After two terminal failures with the same
+stable obligation, worker, receipt semantics, and artifact content hashes, it denies a third
+equivalent dispatch before execution. Paths and semantically irrelevant receipt whitespace do not
+change that identity. `same_worker_changed_evidence` permits a materially changed causal retry only
+with the same worker. `replace_worker_changed_owner` permits it only with a replacement worker and
+a changed receipt-bound owner. Both prior failures remain append-only evidence.
 
 Before proof-plan dispatch, the harness validates the separately appended review against the frozen
 contract hash, closed plan hash, artifact hash, and exact condition/control mapping hashes. The

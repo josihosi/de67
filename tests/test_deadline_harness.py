@@ -181,6 +181,317 @@ def proof_damage_payload(
 
 
 class DeadlineHarnessTests(unittest.TestCase):
+    def test_receipt_reseal_is_single_use_receipt_only_and_terminal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            db = root / "state.sqlite3"
+            install = root / "install"
+            started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            harness.open_window(
+                db_path=db, install_root=install, source_script=SOURCE,
+                lineage_id="L7", run_id="R", window_id="W",
+                fs_root=specification(root), ledger={"tasks": [task("T", 30)]},
+                now=started, start_watcher=False,
+            )
+            permit = harness.permit_dispatch(
+                db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                window_id="W", slot_id="T", worker_profile="terra-high",
+                worker_identity="worker/T", now=started + timedelta(seconds=1),
+            )
+            rejected = accepted_payload(root, "T", permit["permit_event_hash"])
+            rejected["receipt_sha256"] = "0" * 64
+            corrected_hash = harness.digest_bytes(Path(rejected["receipt_path"]).read_bytes())
+            rejection = harness.record_event(
+                db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                window_id="W", kind="receipt_rejected", payload=rejected,
+                now=started + timedelta(seconds=2),
+            )
+            reseal_payload = {
+                "rejected_event_hash": rejection["event_hash"],
+                "corrected_receipt_path": rejected["receipt_path"],
+                "corrected_receipt_sha256": corrected_hash,
+            }
+            reseal = harness.record_event(
+                db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                window_id="W", kind="receipt_resealed", payload=reseal_payload,
+                now=started + timedelta(seconds=3),
+            )
+            with self.assertRaisesRegex(harness.HarnessError, "already has a receipt reseal"):
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                    window_id="W", kind="receipt_resealed", payload=reseal_payload,
+                    now=started + timedelta(seconds=4),
+                )
+            accepted = dict(
+                rejected,
+                receipt_sha256=corrected_hash,
+                receipt_reseal_event_hash=reseal["event_hash"],
+            )
+            harness.record_event(
+                db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                window_id="W", kind="task_accepted", payload=accepted,
+                now=started + timedelta(seconds=4),
+            )
+            harness.record_event(
+                db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                window_id="W", kind="completed", payload={},
+                now=started + timedelta(seconds=5),
+            )
+            connection = harness.connect(db)
+            try:
+                rows = harness.events_for(connection, "L7", "R", "W")
+            finally:
+                connection.close()
+            self.assertEqual(
+                [row["kind"] for row in rows],
+                [
+                    "window_opened", "dispatch_permitted", "receipt_rejected",
+                    "receipt_resealed", "task_accepted", "completed",
+                ],
+            )
+
+    def test_receipt_reseal_rejects_fake_changed_evidence_and_consumed_permit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            db = root / "state.sqlite3"
+            install = root / "install"
+            started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            harness.open_window(
+                db_path=db, install_root=install, source_script=SOURCE,
+                lineage_id="L7", run_id="R", window_id="W",
+                fs_root=specification(root), ledger={"tasks": [task("T", 30)]},
+                now=started, start_watcher=False,
+            )
+            permit = harness.permit_dispatch(
+                db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                window_id="W", slot_id="T", worker_profile="terra-high",
+                worker_identity="worker/T", now=started + timedelta(seconds=1),
+            )
+            terminal = accepted_payload(root, "T", permit["permit_event_hash"])
+            direct_reseal = {
+                "rejected_event_hash": permit["permit_event_hash"],
+                "corrected_receipt_path": terminal["receipt_path"],
+                "corrected_receipt_sha256": terminal["receipt_sha256"],
+            }
+            with self.assertRaisesRegex(harness.HarnessError, "no sealed rejected receipt"):
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                    window_id="W", kind="receipt_resealed", payload=direct_reseal,
+                    now=started + timedelta(seconds=2),
+                )
+            with self.assertRaisesRegex(harness.HarnessError, "genuine receipt hash mismatch"):
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                    window_id="W", kind="receipt_rejected", payload=terminal,
+                    now=started + timedelta(seconds=2),
+                )
+            rejected = dict(terminal, receipt_sha256="0" * 64)
+            rejection = harness.record_event(
+                db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                window_id="W", kind="receipt_rejected", payload=rejected,
+                now=started + timedelta(seconds=2),
+            )
+            with self.assertRaisesRegex(harness.HarnessError, "already has a rejected receipt"):
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                    window_id="W", kind="receipt_rejected", payload=rejected,
+                    now=started + timedelta(seconds=3),
+                )
+            reseal_payload = dict(
+                rejected_event_hash=rejection["event_hash"],
+                corrected_receipt_path=terminal["receipt_path"],
+                corrected_receipt_sha256=terminal["receipt_sha256"],
+            )
+            altered = dict(reseal_payload, rejected_terminal=rejected)
+            with self.assertRaisesRegex(harness.HarnessError, "incomplete or open shape"):
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                    window_id="W", kind="receipt_resealed", payload=altered,
+                    now=started + timedelta(seconds=3),
+                )
+            reseal = harness.record_event(
+                db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                window_id="W", kind="receipt_resealed", payload=reseal_payload,
+                now=started + timedelta(seconds=3),
+            )
+            changed_artifact = root / "changed-artifact.json"
+            changed_artifact.write_text('{"proof":"changed"}\n', encoding="utf-8")
+            changed = dict(
+                terminal,
+                worker_identity="worker/other",
+                artifact_hashes={str(changed_artifact): harness.digest_bytes(changed_artifact.read_bytes())},
+                receipt_reseal_event_hash=reseal["event_hash"],
+            )
+            with self.assertRaises(harness.HarnessError):
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                    window_id="W", kind="task_accepted", payload=changed,
+                    now=started + timedelta(seconds=4),
+                )
+            terminal["receipt_reseal_event_hash"] = reseal["event_hash"]
+            harness.record_event(
+                db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                window_id="W", kind="task_accepted", payload=terminal,
+                now=started + timedelta(seconds=4),
+            )
+            with self.assertRaisesRegex(harness.HarnessError, "already consumed"):
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L7", run_id="R",
+                    window_id="W", kind="receipt_resealed", payload=reseal_payload,
+                    now=started + timedelta(seconds=5),
+                )
+
+    def test_third_equivalent_failure_is_denied_but_changed_cause_is_permitted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            db = root / "state.sqlite3"
+            install = root / "install"
+            started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            harness.open_window(
+                db_path=db, install_root=install, source_script=SOURCE,
+                lineage_id="L8", run_id="R", window_id="W",
+                fs_root=specification(root), ledger={"tasks": [task("T", 60)]},
+                now=started, start_watcher=False,
+            )
+            receipt = root / "receipt.json"
+            artifact = root / "artifact.json"
+            receipt.write_text('{"causal_class":"missing-tool"}\n', encoding="utf-8")
+            artifact.write_text('{"failure":"missing-tool"}\n', encoding="utf-8")
+            for attempt in range(2):
+                permit = harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L8", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="worker/T", now=started + timedelta(seconds=attempt * 2 + 1),
+                )
+                failed = {
+                    "slot_id": "T", "worker_profile": "terra-high",
+                    "worker_identity": "worker/T", "test_completed": True,
+                    "test_result": "failed", "permit_event_hash": permit["permit_event_hash"],
+                    "receipt_path": str(receipt),
+                    "receipt_sha256": harness.digest_bytes(receipt.read_bytes()),
+                    "artifact_hashes": {str(artifact): harness.digest_bytes(artifact.read_bytes())},
+                }
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L8", run_id="R",
+                    window_id="W", kind="task_failed", payload=failed,
+                    now=started + timedelta(seconds=attempt * 2 + 2),
+                )
+            with self.assertRaisesRegex(harness.HarnessError, "unchanged equivalent retry"):
+                harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L8", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="worker/T", now=started + timedelta(seconds=5),
+                )
+            alternate_receipt = root / "elsewhere" / "receipt.json"
+            alternate_artifact = root / "elsewhere" / "artifact.json"
+            alternate_receipt.parent.mkdir()
+            alternate_receipt.write_text('{  "causal_class" : "missing-tool"  }\n', encoding="utf-8")
+            alternate_artifact.write_bytes(artifact.read_bytes())
+            cosmetic = harness.causal_evidence_binding(
+                alternate_receipt,
+                {str(alternate_artifact): harness.digest_bytes(alternate_artifact.read_bytes())},
+            )
+            with self.assertRaisesRegex(harness.HarnessError, "unchanged equivalent retry"):
+                harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L8", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="worker/T", causal_evidence=cosmetic,
+                    now=started + timedelta(seconds=5),
+                )
+            changed_receipt = root / "changed-receipt.json"
+            changed_artifact = root / "changed-artifact.json"
+            changed_receipt.write_text('{"causal_class":"installed-tool"}\n', encoding="utf-8")
+            changed_artifact.write_text('{"failure":"new-exit"}\n', encoding="utf-8")
+            changed_evidence = harness.causal_evidence_binding(
+                changed_receipt,
+                {str(changed_artifact): harness.digest_bytes(changed_artifact.read_bytes())},
+            )
+            changed = harness.permit_dispatch(
+                db_path=db, install_root=install, lineage_id="L8", run_id="R",
+                window_id="W", slot_id="T", worker_profile="terra-high",
+                worker_identity="worker/T", causal_evidence=changed_evidence,
+                now=started + timedelta(seconds=5),
+            )
+            self.assertTrue(changed["permitted"])
+
+    def test_each_repeated_causal_group_fuses_and_a_new_group_remains_possible(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            db = root / "state.sqlite3"
+            install = root / "install"
+            started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            harness.open_window(
+                db_path=db, install_root=install, source_script=SOURCE,
+                lineage_id="L8-groups", run_id="R", window_id="W",
+                fs_root=specification(root), ledger={"tasks": [task("T", 60)]},
+                now=started, start_watcher=False,
+            )
+            receipt = root / "receipt.json"
+            artifact = root / "artifact.json"
+
+            def write_cause(label: str) -> dict:
+                receipt.write_text(json.dumps({"causal_class": label}) + "\n", encoding="utf-8")
+                artifact.write_text(json.dumps({"failure": label}) + "\n", encoding="utf-8")
+                return harness.causal_evidence_binding(
+                    receipt, {str(artifact): harness.digest_bytes(artifact.read_bytes())}
+                )
+
+            def fail(permit: dict, second: int) -> None:
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L8-groups", run_id="R",
+                    window_id="W", kind="task_failed",
+                    payload={
+                        "slot_id": "T", "worker_profile": "terra-high",
+                        "worker_identity": "worker/T", "test_completed": True,
+                        "test_result": "failed", "permit_event_hash": permit["permit_event_hash"],
+                        "receipt_path": str(receipt),
+                        "receipt_sha256": harness.digest_bytes(receipt.read_bytes()),
+                        "artifact_hashes": {
+                            str(artifact): harness.digest_bytes(artifact.read_bytes())
+                        },
+                    },
+                    now=started + timedelta(seconds=second),
+                )
+
+            write_cause("A")
+            for second in (1, 3):
+                permit = harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L8-groups", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="worker/T", now=started + timedelta(seconds=second),
+                )
+                fail(permit, second + 1)
+
+            evidence_b = write_cause("B")
+            permit_b1 = harness.permit_dispatch(
+                db_path=db, install_root=install, lineage_id="L8-groups", run_id="R",
+                window_id="W", slot_id="T", worker_profile="terra-high",
+                worker_identity="worker/T", causal_evidence=evidence_b,
+                now=started + timedelta(seconds=5),
+            )
+            fail(permit_b1, 6)
+            permit_b2 = harness.permit_dispatch(
+                db_path=db, install_root=install, lineage_id="L8-groups", run_id="R",
+                window_id="W", slot_id="T", worker_profile="terra-high",
+                worker_identity="worker/T", now=started + timedelta(seconds=7),
+            )
+            fail(permit_b2, 8)
+            with self.assertRaisesRegex(harness.HarnessError, "unchanged equivalent retry"):
+                harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L8-groups", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="worker/T", now=started + timedelta(seconds=9),
+                )
+
+            evidence_c = write_cause("C")
+            permit_c = harness.permit_dispatch(
+                db_path=db, install_root=install, lineage_id="L8-groups", run_id="R",
+                window_id="W", slot_id="T", worker_profile="terra-high",
+                worker_identity="worker/T", causal_evidence=evidence_c,
+                now=started + timedelta(seconds=9),
+            )
+            self.assertTrue(permit_c["permitted"])
+
     def test_both_conformance_routes_require_distinct_evidence_and_execute(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1137,7 +1448,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             self.assertTrue(result["target_failure_resolved"])
             self.assertEqual(result["deadline"]["elapsed_seconds"], 5)
             self.assertEqual(result["usage"]["tokens"], 123)
-            self.assertEqual(result["provenance"]["producer"], "de67-deadline-harness/0.1.0")
+            self.assertEqual(result["provenance"]["producer"], "de67-deadline-harness/0.2.0")
             self.assertEqual(result["provenance"]["state_db"], str(db.resolve()))
             self.assertEqual(
                 result["provenance"]["definition_hash"],

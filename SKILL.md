@@ -62,6 +62,17 @@ Each task must bind `id`, `claim_id`, `intended_task`, `pass_test`, `owner`, `wo
 `reserve_provenance`. Keep stable claims and their obligations unchanged across ledger revisions;
 only scheduling details may move.
 
+If a valid worker/test/artifact result is rejected only because its receipt hash is wrong, append
+the rejected terminal payload as one `receipt_rejected` event. The harness must prove that hash
+mismatches the existing receipt file. Append one `receipt_resealed` event bound to that rejection
+event hash and corrected receipt path/hash, then submit the otherwise unchanged `task_accepted`
+payload with the reseal event hash. Do not issue another worker permit or rerun the test.
+
+After two equivalent terminal failures, the harness rejects a third unchanged dispatch. For a
+materially changed causal retry, pass a pre-execution causal-evidence JSON binding receipt semantics
+and sorted artifact content hashes with `permit-dispatch --causal-evidence`; the sealed P1
+`retry_route` determines whether the same or a replacement worker is admissible.
+
 If the authoritative subject or preconditions are absent before dispatch, record one
 `preflight_blocked` event and complete the zero-dispatch window honestly. After three distinct
 deadline misses in a lineage, stop opening windows or issuing permits until a fresh external

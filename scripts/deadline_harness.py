@@ -19,12 +19,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 ZERO_HASH = "0" * 64
 WINDOW_CEILING = 10
 COORDINATOR_REVIEW_THRESHOLD = 3
 EVENT_KINDS = {
     "progress",
+    "receipt_rejected",
+    "receipt_resealed",
     "task_accepted",
     "task_failed",
     "proof_reviewed",
@@ -64,6 +66,38 @@ def digest_bytes(value: bytes) -> str:
 
 def digest_json(value: Any) -> str:
     return digest_bytes(canonical(value).encode("utf-8"))
+
+
+def receipt_semantics(path: Any) -> Any:
+    if not isinstance(path, (str, os.PathLike)) or not str(path).strip():
+        raise HarnessError("Causal evidence requires a receipt path")
+    data = Path(path).read_bytes()
+    try:
+        return json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"normalized_text_sha256": digest_bytes(b" ".join(data.split()))}
+
+
+def causal_evidence_binding(receipt_path: Any, artifact_hashes: Any) -> dict[str, Any]:
+    if not isinstance(artifact_hashes, dict) or not artifact_hashes:
+        raise HarnessError("Causal evidence requires artifact hashes")
+    hashes = sorted(artifact_hashes.values())
+    if not all(valid_sha256(value) for value in hashes):
+        raise HarnessError("Causal evidence requires artifact SHA-256s")
+    return {"receipt": receipt_semantics(receipt_path), "artifact_sha256s": hashes}
+
+
+def validate_causal_evidence_binding(value: Any) -> None:
+    if not isinstance(value, dict) or set(value) != {"receipt", "artifact_sha256s"}:
+        raise HarnessError("Retry causal evidence has an incomplete or open shape")
+    hashes = value["artifact_sha256s"]
+    if (
+        not isinstance(hashes, list)
+        or not hashes
+        or hashes != sorted(hashes)
+        or not all(valid_sha256(item) for item in hashes)
+    ):
+        raise HarnessError("Retry causal evidence requires sorted artifact SHA-256s")
 
 
 def default_install_root() -> Path:
@@ -787,10 +821,23 @@ def append_event(
         validate_dispatch_event(
             connection, lineage_id, run_id, window_id, payload, rows, event_at
         )
+    elif kind == "receipt_rejected":
+        validate_receipt_rejected(
+            connection, lineage_id, run_id, window_id, payload, rows
+        )
+    elif kind == "receipt_resealed":
+        validate_receipt_resealed(
+            connection, lineage_id, run_id, window_id, payload, rows
+        )
     elif kind in {"task_accepted", "task_failed"}:
-        validate_terminal_task_event(
+        causal_fingerprint = validate_terminal_task_event(
             connection, lineage_id, run_id, window_id, kind, payload
         )
+        if kind == "task_failed":
+            payload["causal_evidence"] = causal_evidence_binding(
+                payload.get("receipt_path"), payload.get("artifact_hashes")
+            )
+            payload["causal_fingerprint"] = causal_fingerprint
     elif kind == "preflight_blocked":
         validate_preflight_blocker(
             connection, lineage_id, run_id, window_id, payload, rows
@@ -993,6 +1040,7 @@ def open_window(
         "deadline_utc": iso(deadline),
         "harness_deployed": deployed,
         "frozen_authority_hash": authority["frozen_hash"],
+        "retry_route": orchestration_retry_route(skill_root),
     }
     if isinstance(ledger.get("proof"), dict):
         opened["proof_conformance_route"] = proof_policy_route(skill_root)
@@ -1288,6 +1336,22 @@ def proof_policy_route(skill_root: Path) -> str:
         "authoritative_owner_then_live_conformance",
     }:
         raise HarnessError("Accepted proof policy route is outside the closed vocabulary")
+    return route
+
+
+def orchestration_retry_route(skill_root: Path) -> str:
+    policy = json.loads((skill_root / "policy" / "orchestration.json").read_text(encoding="utf-8"))
+    route = policy.get("retry_route")
+    if route not in {"same_worker_changed_evidence", "replace_worker_changed_owner"}:
+        raise HarnessError("Accepted orchestration retry route is outside the closed vocabulary")
+    return route
+
+
+def accepted_retry_route(rows: list[sqlite3.Row]) -> str:
+    opened = next((row for row in rows if row["kind"] == "window_opened"), None)
+    route = event_payload(opened).get("retry_route") if opened is not None else None
+    if route not in {"same_worker_changed_evidence", "replace_worker_changed_owner"}:
+        raise HarnessError("Sealed orchestration retry route is outside the closed vocabulary")
     return route
 
 
@@ -1654,6 +1718,89 @@ def validate_coordinator_review(
     verify_file_hash(payload.get("receipt_path"), payload.get("receipt_sha256"), "Review receipt")
 
 
+def validate_receipt_rejected(
+    connection: sqlite3.Connection,
+    lineage_id: str,
+    run_id: str,
+    window_id: str,
+    payload: dict[str, Any],
+    prior_rows: list[sqlite3.Row],
+) -> None:
+    permit_hash = payload.get("permit_event_hash")
+    if any(
+        row["kind"] == "receipt_rejected"
+        and event_payload(row).get("permit_event_hash") == permit_hash
+        for row in prior_rows
+    ):
+        raise HarnessError("Dispatch permit already has a rejected receipt event")
+    if any(
+        row["kind"] in {"task_accepted", "task_failed"}
+        and event_payload(row).get("permit_event_hash") == permit_hash
+        for row in prior_rows
+    ):
+        raise HarnessError("Receipt rejection denied: dispatch permit was already consumed")
+    validate_terminal_task_event(
+        connection, lineage_id, run_id, window_id, "task_accepted", payload,
+        verify_files=False,
+    )
+    receipt_path = Path(payload["receipt_path"])
+    actual_hash = digest_bytes(receipt_path.read_bytes())
+    if payload["receipt_sha256"] == actual_hash:
+        raise HarnessError("Receipt rejection requires a genuine receipt hash mismatch")
+    for artifact_path, artifact_hash in payload["artifact_hashes"].items():
+        verify_file_hash(artifact_path, artifact_hash, "Artifact")
+
+
+def validate_receipt_resealed(
+    connection: sqlite3.Connection,
+    lineage_id: str,
+    run_id: str,
+    window_id: str,
+    payload: dict[str, Any],
+    prior_rows: list[sqlite3.Row],
+) -> None:
+    if set(payload) != {
+        "rejected_event_hash", "corrected_receipt_path", "corrected_receipt_sha256",
+    }:
+        raise HarnessError("Receipt reseal has an incomplete or open shape")
+    rejected_event_hash = payload.get("rejected_event_hash")
+    if not valid_sha256(rejected_event_hash):
+        raise HarnessError("Receipt reseal requires a rejected receipt event hash")
+    rejected_row = next(
+        (
+            row for row in prior_rows
+            if row["kind"] == "receipt_rejected" and row["event_hash"] == rejected_event_hash
+        ),
+        None,
+    )
+    if rejected_row is None:
+        raise HarnessError("Receipt reseal references no sealed rejected receipt event")
+    rejected = event_payload(rejected_row)
+    permit_hash = rejected.get("permit_event_hash")
+    if any(
+        row["kind"] in {"task_accepted", "task_failed"}
+        and event_payload(row).get("permit_event_hash") == permit_hash
+        for row in prior_rows
+    ):
+        raise HarnessError("Receipt reseal denied: dispatch permit was already consumed")
+    if any(
+        row["kind"] == "receipt_resealed"
+        and event_payload(row).get("rejected_event_hash") == rejected_event_hash
+        for row in prior_rows
+    ):
+        raise HarnessError("Dispatch permit already has a receipt reseal")
+    corrected_path = payload.get("corrected_receipt_path")
+    corrected_hash = payload.get("corrected_receipt_sha256")
+    if not non_empty_text(corrected_path) or not valid_sha256(corrected_hash):
+        raise HarnessError("Receipt reseal requires the corrected receipt path and SHA-256")
+    if rejected.get("receipt_sha256") == corrected_hash:
+        raise HarnessError("Receipt reseal requires a genuinely rejected receipt hash")
+    corrected = dict(rejected, receipt_path=corrected_path, receipt_sha256=corrected_hash)
+    validate_terminal_task_event(
+        connection, lineage_id, run_id, window_id, "task_accepted", corrected
+    )
+
+
 def validate_terminal_task_event(
     connection: sqlite3.Connection,
     lineage_id: str,
@@ -1663,7 +1810,7 @@ def validate_terminal_task_event(
     payload: dict[str, Any],
     current_event_hash: str | None = None,
     verify_files: bool = True,
-) -> None:
+) -> str:
     permit_hash = payload.get("permit_event_hash")
     if not valid_sha256(permit_hash):
         raise HarnessError("Terminal task event requires a dispatch permit event hash")
@@ -1718,6 +1865,52 @@ def validate_terminal_task_event(
         elif not non_empty_text(artifact_path) or not valid_sha256(artifact_hash):
             raise HarnessError("Terminal task event requires bound artifact paths and SHA-256s")
 
+    evidence = causal_evidence_binding(payload.get("receipt_path"), artifacts)
+    supplied_evidence = payload.get("causal_evidence")
+    if supplied_evidence is not None and supplied_evidence != evidence:
+        raise HarnessError("Terminal task causal evidence must be harness-derived")
+    sealed_evidence = permit_payload.get("causal_evidence")
+    if sealed_evidence is not None and sealed_evidence != evidence:
+        raise HarnessError("Terminal task causal evidence differs from its retry permit")
+
+    all_rows = events_for(connection, lineage_id, run_id, window_id)
+    rejection_hashes = {
+        row["event_hash"] for row in all_rows
+        if row["kind"] == "receipt_rejected"
+        and event_payload(row).get("permit_event_hash") == permit_hash
+    }
+    reseals = [
+        row for row in all_rows
+        if row["kind"] == "receipt_resealed"
+        and event_payload(row).get("rejected_event_hash") in rejection_hashes
+    ]
+    reseal_hash = payload.get("receipt_reseal_event_hash")
+    if reseals:
+        if len(reseals) != 1 or reseal_hash != reseals[0]["event_hash"]:
+            raise HarnessError("Terminal acceptance must bind its single receipt reseal")
+        reseal = event_payload(reseals[0])
+        rejected_row = next(
+            (
+                row for row in events_for(connection, lineage_id, run_id, window_id)
+                if row["kind"] == "receipt_rejected"
+                and row["event_hash"] == reseal["rejected_event_hash"]
+            ),
+            None,
+        )
+        if rejected_row is None:
+            raise HarnessError("Receipt reseal lost its rejected receipt event")
+        corrected = dict(
+            event_payload(rejected_row),
+            receipt_path=reseal["corrected_receipt_path"],
+            receipt_sha256=reseal["corrected_receipt_sha256"],
+        )
+        expected = dict(payload)
+        expected.pop("receipt_reseal_event_hash", None)
+        if kind != "task_accepted" or corrected != expected:
+            raise HarnessError("Terminal acceptance changed resealed worker, test, or artifact evidence")
+    elif reseal_hash is not None:
+        raise HarnessError("Terminal task references no sealed receipt reseal")
+
     for row in events_for(connection, lineage_id, run_id, window_id):
         if current_event_hash is not None and row["event_hash"] == current_event_hash:
             continue
@@ -1728,6 +1921,17 @@ def validate_terminal_task_event(
             raise HarnessError("Dispatch permit was already consumed by a terminal task event")
         if kind == "task_accepted" and prior.get("slot_id") == payload.get("slot_id") and row["kind"] == kind:
             raise HarnessError("Task already has an accepted terminal event")
+    fingerprint = digest_json(
+        {
+            "obligation_digest": permit_payload["obligation_digest"],
+            "worker_identity": payload["worker_identity"],
+            "causal_evidence": evidence,
+        }
+    )
+    supplied = payload.get("causal_fingerprint")
+    if supplied is not None and supplied != fingerprint:
+        raise HarnessError("Terminal task causal fingerprint must be harness-derived")
+    return fingerprint
 
 
 def export_benchmark(
@@ -2006,6 +2210,7 @@ def permit_dispatch(
     slot_id: str,
     worker_profile: str,
     worker_identity: str | None = None,
+    causal_evidence: dict[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     connection = connect(db_path)
@@ -2042,6 +2247,54 @@ def permit_dispatch(
     }
     if worker_identity is not None:
         permit_payload["worker_identity"] = worker_identity
+    prior_failures = [
+        event_payload(row) for row in rows
+        if row["kind"] == "task_failed" and event_payload(row).get("slot_id") == slot_id
+    ]
+    if prior_failures:
+        candidate_evidence = causal_evidence or prior_failures[-1]["causal_evidence"]
+        validate_causal_evidence_binding(candidate_evidence)
+        permit_payload["causal_evidence"] = candidate_evidence
+        candidate_fingerprint = digest_json(
+            {
+                "obligation_digest": permit_payload["obligation_digest"],
+                "worker_identity": worker_identity,
+                "causal_evidence": candidate_evidence,
+            }
+        )
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for failure in prior_failures:
+            groups.setdefault(failure.get("causal_fingerprint", ""), []).append(failure)
+        repeated_fingerprints = {
+            fingerprint for fingerprint, group in groups.items() if len(group) >= 2
+        }
+        if repeated_fingerprints:
+            route = accepted_retry_route(rows)
+            latest_failure = prior_failures[-1]
+            prior_worker = latest_failure.get("worker_identity")
+            if candidate_fingerprint in repeated_fingerprints:
+                connection.close()
+                raise HarnessError(
+                    "Dispatch denied: unchanged equivalent retry already failed twice"
+                )
+            if route == "same_worker_changed_evidence" and worker_identity != prior_worker:
+                connection.close()
+                raise HarnessError(
+                    "Dispatch denied: retry route requires the same worker with changed evidence"
+                )
+            receipt = (
+                candidate_evidence.get("receipt") if isinstance(candidate_evidence, dict) else None
+            )
+            prior_receipt = latest_failure.get("causal_evidence", {}).get("receipt")
+            owner = receipt.get("owner") if isinstance(receipt, dict) else None
+            prior_owner = prior_receipt.get("owner") if isinstance(prior_receipt, dict) else None
+            if route == "replace_worker_changed_owner" and (
+                worker_identity == prior_worker or not non_empty_text(owner) or owner == prior_owner
+            ):
+                connection.close()
+                raise HarnessError(
+                    "Dispatch denied: retry route requires a replacement worker and changed owner"
+                )
     if isinstance(ledger.get("proof"), dict):
         if not non_empty_text(worker_identity):
             connection.close()
@@ -2148,6 +2401,7 @@ def build_parser() -> argparse.ArgumentParser:
     permit.add_argument("--slot-id", required=True)
     permit.add_argument("--worker-profile", required=True)
     permit.add_argument("--worker-identity")
+    permit.add_argument("--causal-evidence", type=Path)
     permit.add_argument("--install-root", type=Path, default=default_install_root())
 
     export = subparsers.add_parser("export-benchmark", help="Derive a benchmark receipt from events")
@@ -2223,6 +2477,9 @@ def main() -> int:
                 slot_id=arguments.slot_id,
                 worker_profile=arguments.worker_profile,
                 worker_identity=arguments.worker_identity,
+                causal_evidence=(
+                    read_json(arguments.causal_evidence) if arguments.causal_evidence else None
+                ),
             )
         elif arguments.command == "export-benchmark":
             result = export_benchmark(

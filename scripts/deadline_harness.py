@@ -1313,6 +1313,15 @@ def verify_file_hash(path_text: Any, expected: Any, label: str) -> None:
         raise HarnessError(f"{label} hash mismatch: {path}")
 
 
+def verify_proof_artifacts(ledger: dict[str, Any]) -> None:
+    proof = ledger.get("proof")
+    if not isinstance(proof, dict):
+        return
+    for kind, bindings in proof["plan"]["artifacts"].items():
+        for path, value in bindings.items():
+            verify_file_hash(path, value, f"Proof {kind} artifact")
+
+
 def proof_runtime_binding(ledger: dict[str, Any]) -> dict[str, Any]:
     proof = ledger["proof"]
     contract = proof["contract"]
@@ -1412,9 +1421,7 @@ def validate_proof_review(
         raise HarnessError("Proof review rejects helper- or mock-only evidence")
     if payload.get("direct_outcome_setting") is not False:
         raise HarnessError("Proof review rejects direct outcome setting")
-    for kind, bindings in proof["plan"]["artifacts"].items():
-        for path, value in bindings.items():
-            verify_file_hash(path, value, f"Proof {kind} artifact")
+    verify_proof_artifacts(ledger)
     verify_file_hash(
         payload.get("receipt_path"), payload.get("receipt_sha256"), "Proof review receipt"
     )
@@ -1834,6 +1841,8 @@ def validate_terminal_task_event(
     task = next((item for item in ledger["tasks"] if item["id"] == payload.get("slot_id")), None)
     if task is None:
         raise HarnessError("Terminal task is absent from the effective ledger")
+    if kind == "task_accepted":
+        verify_proof_artifacts(ledger)
     binding = task_obligation(task)
     if permit_payload.get("obligation_digest") != binding["obligation_digest"]:
         raise HarnessError("Terminal task permit is not bound to the stable obligation")
@@ -1950,6 +1959,11 @@ def export_benchmark(
         connection.close()
         raise HarnessError("Functional specification changed after lineage seal")
     ledger = effective_ledger(window, rows)
+    try:
+        verify_proof_artifacts(ledger)
+    except HarnessError:
+        connection.close()
+        raise
     effective_plan_hash = digest_json(ledger)
     definition_hash = benchmark_definition_hash(ledger)
     required_slots = {task["id"] for task in ledger["tasks"]}

@@ -840,6 +840,131 @@ class DeadlineHarnessTests(unittest.TestCase):
                     ledger={"tasks": [task("T", 10)], "proof": changed}, now=started,
                 )
 
+    def test_reviewed_proof_artifact_mutation_is_rejected_at_terminal_acceptance(self) -> None:
+        for kind in sorted(harness.PROOF_ARTIFACT_KINDS):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                fs_root = specification(root)
+                proof = proof_binding(root, fs_root)
+                started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+                db = root / "state.sqlite3"
+                install = root / "install"
+                harness.open_window(
+                    db_path=db, install_root=install, source_script=SOURCE,
+                    lineage_id="L", run_id="R", window_id="W", fs_root=fs_root,
+                    ledger={"tasks": [task("T", 10)], "proof": proof},
+                    now=started, start_watcher=False,
+                )
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L", run_id="R",
+                    window_id="W", kind="proof_reviewed",
+                    payload=proof_review_payload(root, proof), now=started,
+                )
+                permit = harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="worker/T", now=started + timedelta(seconds=1),
+                )
+                artifact = Path(next(iter(proof["plan"]["artifacts"][kind])))
+                artifact.write_bytes(artifact.read_bytes() + b"changed\n")
+                terminal = accepted_payload(root, "T", permit["permit_event_hash"])
+                terminal["conformance_route"] = "minimal_authoritative_conformance"
+                with self.assertRaisesRegex(
+                    harness.HarnessError, f"Proof {kind} artifact hash mismatch"
+                ):
+                    harness.record_event(
+                        db_path=db, install_root=install, lineage_id="L", run_id="R",
+                        window_id="W", kind="task_accepted", payload=terminal,
+                        now=started + timedelta(seconds=2),
+                    )
+
+    def test_terminal_proof_artifact_mutation_is_rejected_at_benchmark_export(self) -> None:
+        for kind in sorted(harness.PROOF_ARTIFACT_KINDS):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                fs_root = specification(root)
+                proof = proof_binding(root, fs_root)
+                started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+                db = root / "state.sqlite3"
+                install = root / "install"
+                harness.open_window(
+                    db_path=db, install_root=install, source_script=SOURCE,
+                    lineage_id="L", run_id="R", window_id="W", fs_root=fs_root,
+                    ledger={"tasks": [task("T", 10)], "proof": proof},
+                    now=started, start_watcher=False,
+                )
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L", run_id="R",
+                    window_id="W", kind="proof_reviewed",
+                    payload=proof_review_payload(root, proof), now=started,
+                )
+                permit = harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="worker/T", now=started + timedelta(seconds=1),
+                )
+                terminal = accepted_payload(root, "T", permit["permit_event_hash"])
+                terminal["conformance_route"] = "minimal_authoritative_conformance"
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L", run_id="R",
+                    window_id="W", kind="task_accepted", payload=terminal,
+                    now=started + timedelta(seconds=2),
+                )
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L", run_id="R",
+                    window_id="W", kind="completed", payload={},
+                    now=started + timedelta(seconds=3),
+                )
+                artifact = Path(next(iter(proof["plan"]["artifacts"][kind])))
+                artifact.write_bytes(artifact.read_bytes() + b"changed\n")
+                with self.assertRaisesRegex(
+                    harness.HarnessError, f"Proof {kind} artifact hash mismatch"
+                ):
+                    harness.export_benchmark(
+                        db_path=db, lineage_id="L", run_id="R", window_id="W"
+                    )
+
+    def test_unchanged_reviewed_proof_artifacts_pass_terminal_and_export(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fs_root = specification(root)
+            proof = proof_binding(root, fs_root)
+            started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            db = root / "state.sqlite3"
+            install = root / "install"
+            harness.open_window(
+                db_path=db, install_root=install, source_script=SOURCE,
+                lineage_id="L", run_id="R", window_id="W", fs_root=fs_root,
+                ledger={"tasks": [task("T", 10)], "proof": proof},
+                now=started, start_watcher=False,
+            )
+            harness.record_event(
+                db_path=db, install_root=install, lineage_id="L", run_id="R",
+                window_id="W", kind="proof_reviewed",
+                payload=proof_review_payload(root, proof), now=started,
+            )
+            permit = harness.permit_dispatch(
+                db_path=db, install_root=install, lineage_id="L", run_id="R",
+                window_id="W", slot_id="T", worker_profile="terra-high",
+                worker_identity="worker/T", now=started + timedelta(seconds=1),
+            )
+            terminal = accepted_payload(root, "T", permit["permit_event_hash"])
+            terminal["conformance_route"] = "minimal_authoritative_conformance"
+            harness.record_event(
+                db_path=db, install_root=install, lineage_id="L", run_id="R",
+                window_id="W", kind="task_accepted", payload=terminal,
+                now=started + timedelta(seconds=2),
+            )
+            harness.record_event(
+                db_path=db, install_root=install, lineage_id="L", run_id="R",
+                window_id="W", kind="completed", payload={},
+                now=started + timedelta(seconds=3),
+            )
+            result = harness.export_benchmark(
+                db_path=db, lineage_id="L", run_id="R", window_id="W"
+            )
+            self.assertTrue(all(result["quality"].values()))
+
     def test_zero_dispatch_and_accepted_execution_cannot_qualify_as_proof_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

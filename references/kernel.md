@@ -37,6 +37,21 @@ Only the specification author may author or refreeze a material change through t
 consent path. Coordination may record a non-material evidence-bound clarification only when its
 delegated authority is explicit in `S.A`.
 
+Specification authoring is outside the MSW deletion domain. After `S` freezes, apply MSW only to
+candidate execution work:
+
+```text
+D_MSW = ledger slots + implementation acts + tests + tooling + review findings
+
+admit(x) <=> deleting x leaves an assigned R_i unmet or unproven
+close(x) => do not admit x again unless changed evidence invalidates its proof
+```
+
+The coordinator applies this test when composing and revising a ledger. Each worker applies it
+within its assigned slot. A verifier applies it to proposed remediation and findings. MSW may
+delete candidate work; it may not delete, weaken, reinterpret, or silently close `S`, `A`, `R`, a
+slot pass test, or required evidence. A failed evidence route remains an unmet claim, not success.
+
 ## Non-bypassable execution integrity
 
 For every ledger slot `T`:

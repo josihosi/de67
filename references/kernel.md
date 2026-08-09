@@ -245,3 +245,18 @@ return the tradeoff to the user instead of inventing weights.
 The accepted parent and its stored result remain the rollback point. Re-baseline the parent only
 when the model, harness, platform, or benchmark definition changes enough to create a new comparison
 epoch.
+
+## Git promotion law
+
+Bind every candidate to the exact accepted `main` commit in a dedicated branch and worktree. A
+candidate may be promoted only when its benchmark passes and `main` still names that parent:
+
+```text
+candidate.base = main = V_n
+accept(candidate) => fast-forward main to V_n+1
+main != candidate.base => stale candidate; rederive and rebenchmark
+```
+
+Never merge a rejected candidate or derive descendants from it. Retain its compact receipt outside
+the accepted skill tree, then delete or quarantine the branch. Product changes remain in their
+product repository; a DE67 mutation branch owns coordination policy only.

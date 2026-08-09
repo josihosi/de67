@@ -921,6 +921,7 @@ def export_benchmark(
             "comparison_epoch": lineage["frozen_hash"],
             "skill_hash": window["skill_hash"],
             "event_chain_hash": rows[-1]["event_hash"],
+            "state_db": str(db_path.resolve()),
         },
         "quality": quality,
         "deadline": {"misses": deadline_misses, "elapsed_seconds": elapsed},

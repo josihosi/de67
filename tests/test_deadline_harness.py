@@ -446,6 +446,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             self.assertEqual(result["deadline"]["elapsed_seconds"], 5)
             self.assertEqual(result["usage"]["tokens"], 123)
             self.assertEqual(result["provenance"]["producer"], "de67-deadline-harness/0.1.0")
+            self.assertEqual(result["provenance"]["state_db"], str(db.resolve()))
 
     def test_detached_watcher_acknowledges_and_expires(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

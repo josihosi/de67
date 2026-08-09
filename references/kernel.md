@@ -227,8 +227,10 @@ that crossed its deadline without satisfying all required slot gates.
 mu_1(K, P1, f_worker) = (K, P1 + delta_1)
 domain(delta_1) subseteq P1
 
-N = count(distinct failed windows in lineage)
-N_proof = count(causally distinct proof_plan-owned failed windows in lineage)
+N_total = count(distinct failed windows in lineage)
+W_review = sequence of latest valid fresh review, or 0
+N = count(distinct failed windows after W_review)
+N_proof = count(causally distinct proof_plan-owned failed windows after W_review)
 
 N < 3  => domain(delta) subseteq P1
 N >= 3 => review by fresh Sol xhigh;
@@ -243,8 +245,12 @@ for every mutation: K' = K
 The value three and the ledger ceiling ten are requester-authorized design constraints. A renamed
 claim, replacement worker, or repeated attempt in one sealed window does not increment `N`.
 For `N_proof`, duplicate, renamed, or retried symptoms with one causal fingerprint count once.
-Successes do not reset the cumulative count. Product- and harness-owned failures do not qualify and
-an authoritative causal fingerprint cannot be relabeled.
+Successes do not change `N`. A valid review binds the complete current unreviewed miss set, advances
+`W_review`, and therefore resets `N` and `N_proof` to zero without deleting `N_total` or any event.
+The next review is due only after three additional distinct misses. Product- and harness-owned
+failures do not qualify for mutation and an authoritative causal fingerprint cannot be relabeled.
+Mutation evidence is limited to the batch consumed by its review; reviewed failures cannot be
+reused in a later mutation batch.
 
 Every candidate begins from the last accepted parent. Rejected candidates have no descendants.
 Incident facts stay in receipts and benchmarks; they do not become skill addenda. The mutation

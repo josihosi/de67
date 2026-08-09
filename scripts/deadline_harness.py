@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 ZERO_HASH = "0" * 64
 WINDOW_CEILING = 10
 COORDINATOR_REVIEW_THRESHOLD = 3
@@ -1099,51 +1099,78 @@ def lineage_miss_rows(connection: sqlite3.Connection, lineage_id: str) -> list[s
     return list(distinct.values())
 
 
-def lineage_review_state(connection: sqlite3.Connection, lineage_id: str) -> dict[str, Any]:
+def valid_lineage_review_batches(
+    connection: sqlite3.Connection, lineage_id: str
+) -> list[tuple[sqlite3.Row, list[sqlite3.Row]]]:
     misses = lineage_miss_rows(connection, lineage_id)
-    miss_hashes = [row["event_hash"] for row in misses]
-    review = connection.execute(
+    reviews = connection.execute(
         """
         SELECT * FROM events
         WHERE lineage_id=? AND kind='coordinator_review_completed'
-        ORDER BY sequence DESC LIMIT 1
+        ORDER BY sequence
         """,
         (lineage_id,),
-    ).fetchone()
-    review_valid = False
-    review_hash = None
-    if review is not None:
-        review_hash = review["event_hash"]
+    ).fetchall()
+    reviewed_through_sequence = 0
+    valid_batches: list[tuple[sqlite3.Row, list[sqlite3.Row]]] = []
+    for review in reviews:
+        batch = [
+            row for row in misses
+            if reviewed_through_sequence < row["sequence"] < review["sequence"]
+        ]
+        if len(batch) < COORDINATOR_REVIEW_THRESHOLD:
+            continue
         try:
             payload = event_payload(review)
+            batch_hashes = [row["event_hash"] for row in batch]
             latest_window = get_window(
                 connection,
-                misses[-1]["lineage_id"],
-                misses[-1]["run_id"],
-                misses[-1]["window_id"],
+                batch[-1]["lineage_id"],
+                batch[-1]["run_id"],
+                batch[-1]["window_id"],
             )
             verify_file_hash(
                 payload.get("receipt_path"), payload.get("receipt_sha256"), "Review receipt"
             )
-            review_valid = (
-                payload.get("reviewed_failure_event_hashes") == miss_hashes
-                and bool(misses)
-                and parse_iso(review["at_utc"]) > parse_iso(misses[-1]["at_utc"])
+            valid = (
+                payload.get("reviewed_failure_event_hashes") == batch_hashes
+                and parse_iso(review["at_utc"]) > parse_iso(batch[-1]["at_utc"])
                 and payload.get("fresh") is True
                 and payload.get("reviewer_profile") == "sol-xhigh"
                 and non_empty_text(payload.get("reviewer_identity"))
                 and payload.get("reviewed_parent_skill_hash") == latest_window["skill_hash"]
             )
         except (HarnessError, json.JSONDecodeError, IndexError):
-            review_valid = False
-    required = len(misses) >= COORDINATOR_REVIEW_THRESHOLD and not review_valid
+            valid = False
+        if valid:
+            reviewed_through_sequence = review["sequence"]
+            valid_batches.append((review, batch))
+    return valid_batches
+
+
+def lineage_review_state(connection: sqlite3.Connection, lineage_id: str) -> dict[str, Any]:
+    misses = lineage_miss_rows(connection, lineage_id)
+    valid_batches = valid_lineage_review_batches(connection, lineage_id)
+    latest_valid_review = valid_batches[-1][0] if valid_batches else None
+    reviewed_through_sequence = (
+        latest_valid_review["sequence"] if latest_valid_review is not None else 0
+    )
+
+    unreviewed = [row for row in misses if row["sequence"] > reviewed_through_sequence]
+    miss_hashes = [row["event_hash"] for row in unreviewed]
+    required = len(unreviewed) >= COORDINATOR_REVIEW_THRESHOLD
     return {
         "miss_count": len(misses),
+        "reviewed_miss_count": len(misses) - len(unreviewed),
+        "unreviewed_miss_count": len(unreviewed),
         "threshold": COORDINATOR_REVIEW_THRESHOLD,
         "review_required": required,
-        "review_valid": review_valid,
-        "review_hash": review_hash,
+        "review_valid": latest_valid_review is not None,
+        "review_hash": (
+            latest_valid_review["event_hash"] if latest_valid_review is not None else None
+        ),
         "miss_event_hashes": miss_hashes,
+        "all_miss_event_hashes": [row["event_hash"] for row in misses],
     }
 
 
@@ -1167,6 +1194,7 @@ def expire_window(
             "expired": True,
             "new": False,
             "miss_count": review_state["miss_count"],
+            "unreviewed_miss_count": review_state["unreviewed_miss_count"],
             "coordinator_review_required": review_state["review_required"],
         }
     completed = valid_completed_row(connection, lineage_id, run_id, window_id, rows)
@@ -1200,6 +1228,7 @@ def expire_window(
             "coordinator_review_required",
             {
                 "distinct_failed_windows": miss_count,
+                "unreviewed_failed_windows": review_state["unreviewed_miss_count"],
                 "threshold": COORDINATOR_REVIEW_THRESHOLD,
             },
             current,
@@ -1219,6 +1248,7 @@ def expire_window(
         "deadline_utc": window["deadline_utc"],
         "observed_utc": iso(current),
         "miss_count": miss_count,
+        "unreviewed_miss_count": review_state["unreviewed_miss_count"],
         "coordinator_review_required": review_required,
         "event_kinds": [row["kind"] for row in events_for(connection, lineage_id, run_id, window_id)],
         "assessment_required": [
@@ -1240,6 +1270,7 @@ def expire_window(
         "expired": True,
         "new": True,
         "miss_count": miss_count,
+        "unreviewed_miss_count": review_state["unreviewed_miss_count"],
         "coordinator_review_required": review_required,
         "damage_path": str(damage_path),
     }
@@ -1699,7 +1730,10 @@ def validate_coordinator_review(
     at: datetime,
 ) -> None:
     state = lineage_review_state(connection, lineage_id)
-    if state["miss_count"] < COORDINATOR_REVIEW_THRESHOLD or not state["review_required"]:
+    if (
+        state["unreviewed_miss_count"] < COORDINATOR_REVIEW_THRESHOLD
+        or not state["review_required"]
+    ):
         raise HarnessError("Coordinator review requires the current authorized missed-window gate")
     if not non_empty_text(payload.get("reviewer_identity")):
         raise HarnessError("Coordinator review requires reviewer_identity")
@@ -1708,8 +1742,12 @@ def validate_coordinator_review(
     if payload.get("fresh") is not True:
         raise HarnessError("Coordinator review must explicitly attest fresh=true")
     if payload.get("reviewed_failure_event_hashes") != state["miss_event_hashes"]:
-        raise HarnessError("Coordinator review must bind the complete current failure event set")
-    misses = lineage_miss_rows(connection, lineage_id)
+        raise HarnessError("Coordinator review must bind the complete current unreviewed failure set")
+    unreviewed_hashes = set(state["miss_event_hashes"])
+    misses = [
+        row for row in lineage_miss_rows(connection, lineage_id)
+        if row["event_hash"] in unreviewed_hashes
+    ]
     latest_miss = misses[-1]
     latest_window = get_window(
         connection,

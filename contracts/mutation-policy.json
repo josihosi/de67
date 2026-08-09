@@ -1,8 +1,8 @@
 {
-  "version": 1,
+  "version": 2,
   "authority": {
     "window_ceiling": "Requester set the ledger ceiling to ten",
-    "coordinator_review_threshold": "Requester set review after three total failed windows"
+    "coordinator_review_threshold": "Requester set review after three unreviewed failed windows; valid review advances the watermark and success does not"
   },
   "window_ceiling": 10,
   "coordinator_review_threshold": 3,

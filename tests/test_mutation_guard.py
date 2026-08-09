@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import shutil
@@ -1120,6 +1120,102 @@ class MutationGuardTests(unittest.TestCase):
             )
             guard.validate_coordinator_evidence(
                 evidence, POLICY["coordinator_review_threshold"]
+            )
+
+            first_batch = {
+                failure["event_hash"] for failure in evidence["window_failures"]
+            }
+            review_bytes = review_receipt.read_bytes()
+            review_receipt.write_text('{"review":"tampered"}\n', encoding="utf-8")
+            connection = harness.connect(db)
+            tampered_state = harness.lineage_review_state(connection, "L")
+            connection.close()
+            self.assertEqual(tampered_state["unreviewed_miss_count"], 3)
+            self.assertTrue(tampered_state["review_required"])
+            with self.assertRaisesRegex(guard.GuardError, "valid sealed review receipt"):
+                guard.evidence_from_harness(
+                    db_path=db,
+                    lineage_id="L",
+                    run_id="R2",
+                    window_id="W",
+                    scope="coordinator",
+                    event_hash=recorded["event_hash"],
+                    policy=POLICY,
+                )
+            review_receipt.write_bytes(review_bytes)
+
+            for number in range(3, 6):
+                run_id = f"R{number}"
+                window_started = started.replace(second=number * 10)
+                harness.open_window(
+                    db_path=db,
+                    install_root=install,
+                    source_script=ROOT / "scripts" / "deadline_harness.py",
+                    lineage_id="L",
+                    run_id=run_id,
+                    window_id="W",
+                    fs_root=specification(root),
+                    ledger=ledger,
+                    now=window_started,
+                    start_watcher=False,
+                )
+                connection = harness.connect(db)
+                harness.expire_window(
+                    connection=connection,
+                    install_root=install,
+                    lineage_id="L",
+                    run_id=run_id,
+                    window_id="W",
+                    now=window_started + timedelta(seconds=2),
+                )
+                connection.close()
+
+            connection = harness.connect(db)
+            state = harness.lineage_review_state(connection, "L")
+            parent_skill_hash = harness.get_window(connection, "L", "R5", "W")["skill_hash"]
+            connection.close()
+            self.assertEqual(state["miss_count"], 6)
+            self.assertEqual(state["unreviewed_miss_count"], 3)
+            second_batch = set(state["miss_event_hashes"])
+            self.assertTrue(first_batch.isdisjoint(second_batch))
+
+            second_receipt = root / "review-2.json"
+            second_receipt.write_text('{"review":"fresh second batch"}\n', encoding="utf-8")
+            second_review = harness.record_event(
+                db_path=db,
+                install_root=install,
+                lineage_id="L",
+                run_id="R5",
+                window_id="W",
+                kind="coordinator_review_completed",
+                payload={
+                    "reviewer_identity": "fresh-sol/reviewer-2",
+                    "reviewer_profile": "sol-xhigh",
+                    "fresh": True,
+                    "reviewed_parent_skill_hash": parent_skill_hash,
+                    "reviewed_failure_event_hashes": state["miss_event_hashes"],
+                    "receipt_path": str(second_receipt),
+                    "receipt_sha256": harness.digest_bytes(second_receipt.read_bytes()),
+                },
+                now=started.replace(second=53),
+            )
+            evidence = guard.evidence_from_harness(
+                db_path=db,
+                lineage_id="L",
+                run_id="R5",
+                window_id="W",
+                scope="coordinator",
+                event_hash=second_review["event_hash"],
+                policy=POLICY,
+            )
+            self.assertEqual(
+                {failure["event_hash"] for failure in evidence["window_failures"]},
+                second_batch,
+            )
+            self.assertTrue(
+                first_batch.isdisjoint(
+                    failure["event_hash"] for failure in evidence["window_failures"]
+                )
             )
 
 

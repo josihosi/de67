@@ -31,10 +31,11 @@ accepted parent V_n
 ```
 
 For `worker`, require one identity-bound worker failure and permit changes only to
-`policy/orchestration.json`. For `coordinator`, require three distinct failed ledger windows in
-the same lineage for `P1`/`P3`; permit `P2` mutation only after three causally distinct cumulative
-proof-plan-owned failed windows and the same fresh external review. Successes do not reset this
-count. Neither scope may change the kernel or its enforcement tools.
+`policy/orchestration.json`. For `coordinator`, require three distinct unreviewed failed ledger
+windows in the same lineage for `P1`/`P3`; permit `P2` mutation only when the reviewed batch
+contains three causally distinct proof-plan-owned failed windows. A valid fresh review consumes its
+exact batch and advances the review watermark. Successes do not move that watermark. Neither scope
+may change the kernel or its enforcement tools.
 
 ## Production coordination
 
@@ -109,10 +110,12 @@ and sorted artifact content hashes with `permit-dispatch --causal-evidence`; the
 
 If the authoritative subject or preconditions are absent before dispatch, record one
 `preflight_blocked` event and complete the zero-dispatch window honestly. After three distinct
-deadline misses in a lineage, stop opening windows or issuing permits until a fresh external
-`sol-xhigh` review is sealed with `record-lineage-review`. Healthy late work may still finish and
-record its terminal receipt; seal the required review before final `completed`. Its deadline miss
-remains in the lineage.
+deadline misses since the latest valid lineage review, stop opening windows or issuing permits
+until a fresh external `sol-xhigh` review is sealed with `record-lineage-review`. The review must
+bind the complete current unreviewed batch; it resets that batch to zero without deleting the
+historical misses. Success never resets the batch. Healthy late work may still finish and record
+its terminal receipt; seal the required review before final `completed`. Its deadline miss remains
+in the lineage.
 
 For mutation benchmarks, seal `benchmark_binding` in the ledger: exact candidate Git identity,
 product frontier, target failure, changed policy keys, and expected reduction. Repeat the same

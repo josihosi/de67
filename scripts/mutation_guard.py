@@ -451,14 +451,6 @@ def evidence_from_harness(
         (lineage_id,),
     ).fetchall()
     threshold = int(policy["coordinator_review_threshold"])
-    distinct = {(row["run_id"], row["window_id"]): row for row in failures}
-    if len(distinct) < threshold:
-        connection.close()
-        raise GuardError(f"Coordinator mutation requires {threshold} sealed failed windows")
-    latest = list(distinct.values())[-1]
-    if latest["skill_hash"] != digest_json(file_map(ROOT)):
-        connection.close()
-        raise GuardError("Current parent tree is not the latest failed coordinator skill version")
     review_row = connection.execute(
         """
         SELECT * FROM events
@@ -467,15 +459,6 @@ def evidence_from_harness(
         (lineage_id, event_hash),
     ).fetchone()
     try:
-        for row in distinct.values():
-            window_rows = connection.execute(
-                """
-                SELECT * FROM events WHERE lineage_id=? AND run_id=? AND window_id=?
-                ORDER BY sequence
-                """,
-                (lineage_id, row["run_id"], row["window_id"]),
-            ).fetchall()
-            verify_event_chain(window_rows)
         if review_row is not None:
             review_rows = connection.execute(
                 """
@@ -491,19 +474,78 @@ def evidence_from_harness(
     if review_row is None:
         connection.close()
         raise GuardError("Coordinator mutation requires a sealed coordinator_review_completed event")
-    if review_row["sequence"] <= max(row["sequence"] for row in distinct.values()):
+    valid_review_batches = deadline_harness.valid_lineage_review_batches(connection, lineage_id)
+    selected_valid_batch = next(
+        (
+            batch
+            for valid_review, batch in valid_review_batches
+            if valid_review["event_hash"] == event_hash
+        ),
+        None,
+    )
+    if selected_valid_batch is None:
         connection.close()
-        raise GuardError("Coordinator review predates one or more sealed failed windows")
+        raise GuardError("Coordinator mutation requires a currently valid sealed review receipt")
     review_payload = json.loads(review_row["payload_json"])
+    reviewed_hashes = review_payload.get("reviewed_failure_event_hashes")
+    if (
+        not isinstance(reviewed_hashes, list)
+        or len(reviewed_hashes) < threshold
+        or len(reviewed_hashes) != len(set(reviewed_hashes))
+    ):
+        connection.close()
+        raise GuardError(
+            f"Coordinator mutation requires {threshold} distinct reviewed failed windows"
+        )
+    failures_by_hash = {row["event_hash"]: row for row in failures}
+    reviewed_failures = [failures_by_hash.get(event_hash) for event_hash in reviewed_hashes]
+    if any(row is None for row in reviewed_failures):
+        connection.close()
+        raise GuardError("Coordinator review cites an unknown missed-window event")
+    reviewed = [row for row in reviewed_failures if row is not None]
+    reviewed.sort(key=lambda row: row["sequence"])
+    if reviewed_hashes != [row["event_hash"] for row in reviewed]:
+        connection.close()
+        raise GuardError("Coordinator review failure hashes are not in sealed event order")
+    if reviewed_hashes != [row["event_hash"] for row in selected_valid_batch]:
+        connection.close()
+        raise GuardError("Coordinator review does not match its replay-validated failure batch")
+    distinct = {(row["run_id"], row["window_id"]): row for row in reviewed}
+    if len(distinct) != len(reviewed):
+        connection.close()
+        raise GuardError("Coordinator review repeats a failed ledger window")
+    try:
+        for row in reviewed:
+            window_rows = connection.execute(
+                """
+                SELECT * FROM events WHERE lineage_id=? AND run_id=? AND window_id=?
+                ORDER BY sequence
+                """,
+                (lineage_id, row["run_id"], row["window_id"]),
+            ).fetchall()
+            verify_event_chain(window_rows)
+    except (GuardError, sqlite3.Error, json.JSONDecodeError):
+        connection.close()
+        raise
+    latest = reviewed[-1]
+    if latest["skill_hash"] != digest_json(file_map(ROOT)):
+        connection.close()
+        raise GuardError("Current parent tree is not the latest failed coordinator skill version")
+    if review_row["sequence"] <= max(row["sequence"] for row in reviewed):
+        connection.close()
+        raise GuardError("Coordinator review predates one or more reviewed failed windows")
     review_payload["review_event_hash"] = review_row["event_hash"]
     all_events = connection.execute(
         "SELECT * FROM events WHERE lineage_id=? ORDER BY sequence", (lineage_id,)
     ).fetchall()
     assessments = [row for row in all_events if row["kind"] == "damage_assessment"]
+    reviewed_windows = {(row["run_id"], row["window_id"]) for row in reviewed}
     qualified: list[dict[str, Any]] = []
     fingerprints: set[str] = set()
     for assessment in assessments:
         if assessment["sequence"] >= review_row["sequence"]:
+            continue
+        if (assessment["run_id"], assessment["window_id"]) not in reviewed_windows:
             continue
         payload = json.loads(assessment["payload_json"])
         if payload.get("failure_owner") != "proof_plan":
@@ -555,7 +597,7 @@ def evidence_from_harness(
                 "deadline_missed": True,
                 "event_hash": row["event_hash"],
             }
-            for row in distinct.values()
+            for row in reviewed
         ],
         "proof_plan_failures": qualified,
         "fresh_review": review_payload,

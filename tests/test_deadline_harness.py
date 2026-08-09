@@ -1669,7 +1669,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             self.assertTrue(result["target_failure_resolved"])
             self.assertEqual(result["deadline"]["elapsed_seconds"], 5)
             self.assertEqual(result["usage"]["tokens"], 123)
-            self.assertEqual(result["provenance"]["producer"], "de67-deadline-harness/0.2.0")
+            self.assertEqual(result["provenance"]["producer"], "de67-deadline-harness/0.3.0")
             self.assertEqual(result["provenance"]["state_db"], str(db.resolve()))
             self.assertEqual(
                 result["provenance"]["definition_hash"],
@@ -2152,7 +2152,97 @@ class DeadlineHarnessTests(unittest.TestCase):
                 },
                 now=epoch + timedelta(seconds=43),
             )
-            open_run("R6", epoch + timedelta(seconds=50))
+            open_run("R6", epoch + timedelta(seconds=50), 5)
+            complete_run("R6", epoch + timedelta(seconds=50))
+            connection = harness.connect(db)
+            state = harness.lineage_review_state(connection, "L")
+            connection.close()
+            self.assertEqual(state["miss_count"], 3)
+            self.assertEqual(state["unreviewed_miss_count"], 0)
+            self.assertFalse(state["review_required"])
+
+            for run_id, offset in (("R7", 60), ("R9", 80), ("R10", 90)):
+                started = epoch + timedelta(seconds=offset)
+                open_run(run_id, started)
+                connection = harness.connect(db)
+                result = harness.expire_window(
+                    connection=connection,
+                    install_root=install,
+                    lineage_id="L",
+                    run_id=run_id,
+                    window_id="W",
+                    now=started + timedelta(seconds=2),
+                )
+                connection.close()
+                if run_id == "R7":
+                    self.assertEqual(result["unreviewed_miss_count"], 1)
+                    self.assertFalse(result["coordinator_review_required"])
+                    open_run("R8", epoch + timedelta(seconds=70), 5)
+                    complete_run("R8", epoch + timedelta(seconds=70))
+                elif run_id == "R9":
+                    self.assertEqual(result["unreviewed_miss_count"], 2)
+                    self.assertFalse(result["coordinator_review_required"])
+                else:
+                    self.assertEqual(result["miss_count"], 6)
+                    self.assertEqual(result["unreviewed_miss_count"], 3)
+                    self.assertTrue(result["coordinator_review_required"])
+
+            with self.assertRaises(harness.HarnessError):
+                open_run("R11", epoch + timedelta(seconds=100))
+            connection = harness.connect(db)
+            state = harness.lineage_review_state(connection, "L")
+            parent_skill_hash = harness.get_window(connection, "L", "R10", "W")["skill_hash"]
+            connection.close()
+            self.assertEqual(state["reviewed_miss_count"], 3)
+            self.assertEqual(len(state["miss_event_hashes"]), 3)
+            self.assertEqual(len(state["all_miss_event_hashes"]), 6)
+
+            with self.assertRaisesRegex(harness.HarnessError, "unreviewed failure set"):
+                harness.record_event(
+                    db_path=db,
+                    install_root=install,
+                    lineage_id="L",
+                    run_id="R10",
+                    window_id="W",
+                    kind="coordinator_review_completed",
+                    payload={
+                        "reviewer_identity": "fresh-sol/stale-reviewer",
+                        "reviewer_profile": "sol-xhigh",
+                        "fresh": True,
+                        "reviewed_parent_skill_hash": parent_skill_hash,
+                        "reviewed_failure_event_hashes": state["all_miss_event_hashes"],
+                        "receipt_path": str(receipt),
+                        "receipt_sha256": harness.digest_bytes(receipt.read_bytes()),
+                    },
+                    now=epoch + timedelta(seconds=93),
+                )
+
+            harness.record_event(
+                db_path=db,
+                install_root=install,
+                lineage_id="L",
+                run_id="R10",
+                window_id="W",
+                kind="coordinator_review_completed",
+                payload={
+                    "reviewer_identity": "fresh-sol/reviewer-2",
+                    "reviewer_profile": "sol-xhigh",
+                    "fresh": True,
+                    "reviewed_parent_skill_hash": parent_skill_hash,
+                    "reviewed_failure_event_hashes": state["miss_event_hashes"],
+                    "receipt_path": str(receipt),
+                    "receipt_sha256": harness.digest_bytes(receipt.read_bytes()),
+                },
+                now=epoch + timedelta(seconds=94),
+            )
+            connection = harness.connect(db)
+            state = harness.lineage_review_state(connection, "L")
+            connection.close()
+            self.assertEqual(state["miss_count"], 6)
+            self.assertEqual(state["reviewed_miss_count"], 6)
+            self.assertEqual(state["unreviewed_miss_count"], 0)
+            self.assertFalse(state["review_required"])
+            open_run("R11", epoch + timedelta(seconds=100))
 
     def test_third_late_success_waits_for_review_before_completion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

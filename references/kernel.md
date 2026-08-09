@@ -37,6 +37,15 @@ Only the specification author may author or refreeze a material change through t
 consent path. Coordination may record a non-material evidence-bound clarification only when its
 delegated authority is explicit in `S.A`.
 
+```text
+dS intersect dP = empty
+```
+
+`dS` changes the product contract and starts a new benchmark epoch. `dP` changes coordination
+policy while holding `S` and the accepted product frontier fixed. A mutation candidate may emit a
+specification-gap receipt, but it cannot author `dS`. The accepted coordinator routes that receipt
+through the delegated non-material clarification path or the material user-consent path above.
+
 Specification authoring is outside the MSW deletion domain. After `S` freezes, apply MSW only to
 candidate execution work:
 

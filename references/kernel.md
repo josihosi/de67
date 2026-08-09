@@ -52,6 +52,18 @@ within its assigned slot. A verifier applies it to proposed remediation and find
 delete candidate work; it may not delete, weaken, reinterpret, or silently close `S`, `A`, `R`, a
 slot pass test, or required evidence. A failed evidence route remains an unmet claim, not success.
 
+Before dispatch, prove the slot can decide its claim:
+
+```text
+dispatchable(T) <=> every required precondition is proved by an identity-bound artifact
+                  or an authorized acquisition act can establish it
+```
+
+If `dispatchable(T)` is false, do not dispatch implementation or synthetic-proof work. Admit the
+smallest artifact-acquisition slot when authorized; otherwise return the first missing precondition
+and required authority as the blocker. A control may validate a discriminator, but it cannot
+substitute for the subject state named by the slot.
+
 ## Non-bypassable execution integrity
 
 For every ledger slot `T`:
@@ -189,6 +201,12 @@ product frontier; a failed slot quarantines its unaccepted delta without discard
 accepted diffs. Each policy candidate benchmarks from an isolated snapshot of that same frontier.
 Rejecting the candidate discards its policy and disposable benchmark lane, not accepted product
 work.
+
+When a worker was dispatched on a claim its available artifacts and authority could not decide,
+seal that as a worker orchestration failure. Mutate `P1`, benchmark the candidate against the same
+`S` and accepted product frontier, and resume from that frontier after promotion. The promoted
+workflow admits an authorized acquisition slot or another independent ready red claim before it
+returns an external-authority blocker. It does not replay the wasted dispatch.
 
 ## Benchmark and promotion law
 

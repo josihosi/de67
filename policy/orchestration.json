@@ -5,7 +5,7 @@
   "profile_route": "weakest_sufficient",
   "context_route": "minimal_contract",
   "receipt_route": "receipt_then_named_selector",
-  "retry_route": "same_worker_changed_evidence",
+  "retry_route": "replace_worker_changed_owner",
   "coordinator_flow": "discriminator_first_gate",
   "worker_flow": "discriminate_implement_test_receipt",
   "tooling_route": "capability_gap_then_focused_adapter",

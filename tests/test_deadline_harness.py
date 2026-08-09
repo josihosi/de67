@@ -15,6 +15,20 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "scripts" / "deadline_harness.py"
 
 
+def skill_with_retry_route(root: Path, retry_route: str) -> Path:
+    skill_root = root / "skill"
+    shutil.copytree(
+        ROOT,
+        skill_root,
+        ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache"),
+    )
+    policy_path = skill_root / "policy" / "orchestration.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["retry_route"] = retry_route
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    return skill_root
+
+
 def task(task_id: str, seconds: int, depends_on: list[str] | None = None) -> dict:
     dependencies = depends_on or []
     return {
@@ -344,11 +358,13 @@ class DeadlineHarnessTests(unittest.TestCase):
     def test_third_equivalent_failure_is_denied_but_changed_cause_is_permitted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            skill_root = skill_with_retry_route(root, "same_worker_changed_evidence")
             db = root / "state.sqlite3"
             install = root / "install"
             started = datetime(2026, 8, 9, tzinfo=timezone.utc)
             harness.open_window(
-                db_path=db, install_root=install, source_script=SOURCE,
+                db_path=db, install_root=install,
+                source_script=skill_root / "scripts" / "deadline_harness.py",
                 lineage_id="L8", run_id="R", window_id="W",
                 fs_root=specification(root), ledger={"tasks": [task("T", 60)]},
                 now=started, start_watcher=False,
@@ -417,11 +433,13 @@ class DeadlineHarnessTests(unittest.TestCase):
     def test_each_repeated_causal_group_fuses_and_a_new_group_remains_possible(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            skill_root = skill_with_retry_route(root, "same_worker_changed_evidence")
             db = root / "state.sqlite3"
             install = root / "install"
             started = datetime(2026, 8, 9, tzinfo=timezone.utc)
             harness.open_window(
-                db_path=db, install_root=install, source_script=SOURCE,
+                db_path=db, install_root=install,
+                source_script=skill_root / "scripts" / "deadline_harness.py",
                 lineage_id="L8-groups", run_id="R", window_id="W",
                 fs_root=specification(root), ledger={"tasks": [task("T", 60)]},
                 now=started, start_watcher=False,
@@ -491,6 +509,84 @@ class DeadlineHarnessTests(unittest.TestCase):
                 now=started + timedelta(seconds=9),
             )
             self.assertTrue(permit_c["permitted"])
+
+    def test_replacement_retry_requires_new_worker_and_receipt_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            skill_root = skill_with_retry_route(root, "replace_worker_changed_owner")
+            db = root / "state.sqlite3"
+            install = root / "install"
+            started = datetime(2026, 8, 9, tzinfo=timezone.utc)
+            harness.open_window(
+                db_path=db, install_root=install,
+                source_script=skill_root / "scripts" / "deadline_harness.py",
+                lineage_id="L8-replace", run_id="R", window_id="W",
+                fs_root=specification(root), ledger={"tasks": [task("T", 60)]},
+                now=started, start_watcher=False,
+            )
+            receipt = root / "receipt.json"
+            artifact = root / "artifact.json"
+
+            def evidence(cause: str, owner: str) -> dict:
+                receipt.write_text(
+                    json.dumps({"causal_class": cause, "owner": owner}) + "\n",
+                    encoding="utf-8",
+                )
+                artifact.write_text(json.dumps({"failure": cause}) + "\n", encoding="utf-8")
+                return harness.causal_evidence_binding(
+                    receipt, {str(artifact): harness.digest_bytes(artifact.read_bytes())}
+                )
+
+            evidence("missing-tool", "owner/original")
+            for attempt in range(2):
+                permit = harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L8-replace", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="worker/original", now=started + timedelta(seconds=attempt * 2 + 1),
+                )
+                harness.record_event(
+                    db_path=db, install_root=install, lineage_id="L8-replace", run_id="R",
+                    window_id="W", kind="task_failed",
+                    payload={
+                        "slot_id": "T", "worker_profile": "terra-high",
+                        "worker_identity": "worker/original", "test_completed": True,
+                        "test_result": "failed", "permit_event_hash": permit["permit_event_hash"],
+                        "receipt_path": str(receipt),
+                        "receipt_sha256": harness.digest_bytes(receipt.read_bytes()),
+                        "artifact_hashes": {str(artifact): harness.digest_bytes(artifact.read_bytes())},
+                    },
+                    now=started + timedelta(seconds=attempt * 2 + 2),
+                )
+            with self.assertRaisesRegex(harness.HarnessError, "unchanged equivalent retry"):
+                harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L8-replace", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="worker/original", now=started + timedelta(seconds=5),
+                )
+            changed_owner = evidence("installed-tool", "owner/replacement")
+            with self.assertRaisesRegex(harness.HarnessError, "replacement worker and changed owner"):
+                harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L8-replace", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="worker/original", causal_evidence=changed_owner,
+                    now=started + timedelta(seconds=5),
+                )
+            changed_same_owner = evidence("installed-tool", "owner/original")
+            with self.assertRaisesRegex(harness.HarnessError, "replacement worker and changed owner"):
+                harness.permit_dispatch(
+                    db_path=db, install_root=install, lineage_id="L8-replace", run_id="R",
+                    window_id="W", slot_id="T", worker_profile="terra-high",
+                    worker_identity="worker/replacement", causal_evidence=changed_same_owner,
+                    now=started + timedelta(seconds=5),
+                )
+            changed_owner = evidence("installed-tool", "owner/replacement")
+            permitted = harness.permit_dispatch(
+                db_path=db, install_root=install, lineage_id="L8-replace", run_id="R",
+                window_id="W", slot_id="T", worker_profile="terra-high",
+                worker_identity="worker/replacement", causal_evidence=changed_owner,
+                now=started + timedelta(seconds=5),
+            )
+            self.assertTrue(permitted["permitted"])
 
     def test_both_conformance_routes_require_distinct_evidence_and_execute(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

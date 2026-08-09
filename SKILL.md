@@ -1,6 +1,6 @@
 ---
 name: de67-lab
-description: Explicit-call laboratory for evolving DE67 coordination under immutable functional-specification, proof-integrity, deadline, and mutation laws. Use only when the user invokes `$de67-lab` to design, validate, benchmark, or provision a candidate DE67 mutation; do not use it to start production coordination without separate DE67 Gate C consent.
+description: Explicit-call DE67 coordination and mutation lab. Use when the user invokes `$de67-lab` to author or refine a frozen functional specification, coordinate its implementation after separate explicit Gate C consent, or evolve coordination policy under immutable proof, deadline, and promotion laws. Invocation alone grants neither consent gate.
 ---
 
 # DE67 Lab
@@ -36,6 +36,40 @@ the same lineage for `P1`/`P3`; permit `P2` mutation only after three causally d
 proof-plan-owned failed windows and the same fresh external review. Successes do not reset this
 count. Neither scope may change the kernel or its enforcement tools.
 
+## Production coordination
+
+Invocation opens briefing only. Follow the kernel Gate S path to author or refreeze the semantic
+functional specification, then stop. Before Gate C, display the exact frozen specification
+revision, accepted product frontier, branch/worktree, fresh xhigh coordinator identity, proposed
+initial ledger, and requested acts. Start production coordination only after separate explicit
+Gate C consent; never infer it from Gate S.
+
+The coordinator is never a worker. It may maintain the ledger, prepare dispatch packets, gate
+compact receipts and targeted diffs, accept or quarantine slot output, and advance the accepted
+product frontier. Assign every implementation, tooling, build, test, live-operation, and
+remediation act to an identity-bound worker.
+
+Until every frozen red claim and explicitly required integrated proof is green:
+
+1. Derive no more than ten necessary atomic slots from the current specification under the kernel
+   MSW implementation domain. Ten is the requester-authorized ceiling, not a target.
+2. Preflight owner, authority, dispatchability, and the exact source/binary/fixture/test evidence;
+   bind and independently review a liquid proof plan where the claim requires one.
+3. Seal the ledger window. Dispatch dependency-ready disjoint slots using the selected `P1`
+   routes and the weakest sufficient available worker profiles; unknown overlap serializes.
+4. Require workers to implement, test, and return compact receipts. Gate every terminal against
+   the frozen acceptance predicates and advance only accepted output.
+5. Derive the next ledger from the remaining red claims.
+
+Seal every failed terminal or missed deadline and classify it under the kernel mutation law. For a
+qualifying failure, preserve the frozen specification and accepted product frontier, run the lab
+mutation workflow from the accepted parent in isolated serial benchmark lanes, promote only a
+validated strict improvement, then resume product coordination from the accepted frontier.
+Mutation benchmarks never perform or receive credit for product recovery.
+
+Stop only for all-green completion, revoked consent, a material Gate S owner choice, an external
+blocker, or the authorized fuse with no independent ready claim.
+
 Concrete proof plans are liquid ledger data, not `P2`. The lineage seals proof presence, semantic
 manifest, accepted frontier, and authoritative owner route. A closed plan maps every condition and
 control to exact source/binary/fixture/test artifacts. Append an independent `proof_reviewed` event,
@@ -49,9 +83,9 @@ truthful preflight blocker stays zero-dispatch.
 Do not repair a rejected candidate. Discard it, retain its compact benchmark receipt, identify a
 different causal direction, and derive the next candidate from the last accepted parent.
 
-## First ledger window
+## Ledger windows
 
-Before the first worker dispatch of every DE67 lineage, call the deadline harness `open-window`.
+Before any worker dispatch in each new ledger window, call the deadline harness `open-window`.
 That command idempotently deploys the harness when it is absent or version-stale, validates the
 ledger DAG, seals its deadline, persists the clock, and starts the detached watcher. Do not replace
 it with a prompt timer.

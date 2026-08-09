@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -26,6 +27,8 @@ EVENT_KINDS = {
     "progress",
     "task_accepted",
     "task_failed",
+    "preflight_blocked",
+    "coordinator_review_completed",
     "damage_assessment",
     "completed",
 }
@@ -68,6 +71,91 @@ def default_install_root() -> Path:
     return base / "de67-lab"
 
 
+def non_empty_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def stated_provenance(value: Any) -> bool:
+    if non_empty_text(value):
+        return True
+    return isinstance(value, dict) and bool(value)
+
+
+def task_obligation(task: dict[str, Any]) -> dict[str, Any]:
+    pass_evidence_digest = digest_json(
+        {
+            "pass_test": task["pass_test"],
+            "evidence_requirements": task["evidence_requirements"],
+        }
+    )
+    binding = {
+        "slot_id": task["id"],
+        "claim_id": task["claim_id"],
+        "intended_task": task["intended_task"],
+        "owner": task["owner"],
+        "worker_profile": task["worker_profile"],
+        "preconditions": task["preconditions"],
+        "depends_on": task["depends_on"],
+        "authoritative_route": task["authoritative_route"],
+        "pass_evidence_digest": pass_evidence_digest,
+    }
+    binding["obligation_digest"] = digest_json(binding)
+    return binding
+
+
+def obligation_map(ledger: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {task["claim_id"]: task_obligation(task) for task in ledger["tasks"]}
+
+
+def valid_git_object_id(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) in {40, 64}
+        and all(character in "0123456789abcdef" for character in value.lower())
+    )
+
+
+def validate_benchmark_binding(binding: Any) -> None:
+    if not isinstance(binding, dict):
+        raise HarnessError("benchmark_binding must be an object")
+    git = binding.get("git")
+    if not isinstance(git, dict):
+        raise HarnessError("benchmark_binding.git is required")
+    for field in ("worktree", "branch"):
+        if not non_empty_text(git.get(field)):
+            raise HarnessError(f"benchmark_binding.git.{field} is required")
+    for field in ("commit", "tree"):
+        if not valid_git_object_id(git.get(field)):
+            raise HarnessError(f"benchmark_binding.git.{field} must be a Git object id")
+    frontier = binding.get("product_frontier")
+    if not isinstance(frontier, dict) or not non_empty_text(frontier.get("repository")):
+        raise HarnessError("benchmark_binding.product_frontier.repository is required")
+    for field in ("commit", "tree"):
+        if not valid_git_object_id(frontier.get(field)):
+            raise HarnessError(
+                f"benchmark_binding.product_frontier.{field} must be a Git object id"
+            )
+    mutation = binding.get("mutation")
+    if not isinstance(mutation, dict):
+        raise HarnessError("benchmark_binding.mutation is required")
+    for field in ("target_failure_id", "expected_reduction"):
+        if not non_empty_text(mutation.get(field)):
+            raise HarnessError(f"benchmark_binding.mutation.{field} is required")
+    keys = mutation.get("changed_policy_keys")
+    if not isinstance(keys, list) or not keys or not all(non_empty_text(key) for key in keys):
+        raise HarnessError("benchmark_binding.mutation.changed_policy_keys must be non-empty")
+    if keys != sorted(set(keys)):
+        raise HarnessError("benchmark_binding mutation policy keys must be unique and sorted")
+
+
+def benchmark_definition_hash(ledger: dict[str, Any]) -> str:
+    normalized = json.loads(canonical(ledger))
+    binding = normalized.get("benchmark_binding")
+    if isinstance(binding, dict):
+        binding.pop("git", None)
+    return digest_json(normalized)
+
+
 def validate_ledger(ledger: dict[str, Any], ceiling: int = WINDOW_CEILING) -> dict[str, Any]:
     tasks = ledger.get("tasks")
     if not isinstance(tasks, list) or not tasks:
@@ -81,9 +169,16 @@ def validate_ledger(ledger: dict[str, Any], ceiling: int = WINDOW_CEILING) -> di
         "pass_test",
         "worker_profile",
         "estimate_seconds",
+        "estimate_provenance",
         "depends_on",
+        "claim_id",
+        "owner",
+        "preconditions",
+        "authoritative_route",
+        "evidence_requirements",
     }
     by_id: dict[str, dict[str, Any]] = {}
+    claim_ids: set[str] = set()
     for task in tasks:
         if not isinstance(task, dict):
             raise HarnessError("Each ledger task must be an object")
@@ -95,16 +190,42 @@ def validate_ledger(ledger: dict[str, Any], ceiling: int = WINDOW_CEILING) -> di
             raise HarnessError("Task id must be a non-empty string")
         if task_id in by_id:
             raise HarnessError(f"Duplicate task id: {task_id}")
-        for field in ("intended_task", "pass_test", "worker_profile"):
-            if not isinstance(task[field], str) or not task[field].strip():
+        for field in (
+            "intended_task",
+            "pass_test",
+            "worker_profile",
+            "claim_id",
+            "owner",
+            "authoritative_route",
+        ):
+            if not non_empty_text(task[field]):
                 raise HarnessError(f"{task_id}.{field} must be a non-empty string")
+        if task["claim_id"] in claim_ids:
+            raise HarnessError(f"Duplicate stable claim id: {task['claim_id']}")
+        claim_ids.add(task["claim_id"])
         estimate = task["estimate_seconds"]
-        if isinstance(estimate, bool) or not isinstance(estimate, (int, float)) or estimate <= 0:
-            raise HarnessError(f"{task_id}.estimate_seconds must be positive")
+        if (
+            isinstance(estimate, bool)
+            or not isinstance(estimate, (int, float))
+            or not math.isfinite(estimate)
+            or estimate <= 0
+        ):
+            raise HarnessError(f"{task_id}.estimate_seconds must be positive and finite")
+        if not stated_provenance(task["estimate_provenance"]):
+            raise HarnessError(f"{task_id}.estimate_provenance must state its source")
         if not isinstance(task["depends_on"], list) or not all(
-            isinstance(dep, str) for dep in task["depends_on"]
+            non_empty_text(dep) for dep in task["depends_on"]
         ):
             raise HarnessError(f"{task_id}.depends_on must be a list of task ids")
+        if len(task["depends_on"]) != len(set(task["depends_on"])):
+            raise HarnessError(f"{task_id}.depends_on contains duplicates")
+        if not isinstance(task["preconditions"], list) or not all(
+            non_empty_text(precondition) for precondition in task["preconditions"]
+        ):
+            raise HarnessError(f"{task_id}.preconditions must be a list of non-empty strings")
+        evidence_requirements = task["evidence_requirements"]
+        if not isinstance(evidence_requirements, (dict, list)) or not evidence_requirements:
+            raise HarnessError(f"{task_id}.evidence_requirements must be a non-empty object or list")
         by_id[task_id] = task
 
     for task_id, task in by_id.items():
@@ -113,8 +234,17 @@ def validate_ledger(ledger: dict[str, Any], ceiling: int = WINDOW_CEILING) -> di
             raise HarnessError(f"{task_id} has unknown dependencies: {', '.join(unknown)}")
 
     reserve = ledger.get("reserve_seconds", 0)
-    if isinstance(reserve, bool) or not isinstance(reserve, (int, float)) or reserve < 0:
-        raise HarnessError("reserve_seconds must be non-negative")
+    if (
+        isinstance(reserve, bool)
+        or not isinstance(reserve, (int, float))
+        or not math.isfinite(reserve)
+        or reserve < 0
+    ):
+        raise HarnessError("reserve_seconds must be non-negative and finite")
+    if "reserve_seconds" in ledger and not stated_provenance(ledger.get("reserve_provenance")):
+        raise HarnessError("reserve_provenance must state the source of reserve_seconds")
+    if "benchmark_binding" in ledger:
+        validate_benchmark_binding(ledger["benchmark_binding"])
 
     visiting: set[str] = set()
     memo: dict[str, float] = {}
@@ -137,7 +267,9 @@ def validate_ledger(ledger: dict[str, Any], ceiling: int = WINDOW_CEILING) -> di
         "task_count": len(tasks),
         "critical_path_seconds": critical_path,
         "reserve_seconds": float(reserve),
+        "reserve_provenance": ledger.get("reserve_provenance"),
         "duration_seconds": duration,
+        "obligation_hash": digest_json(obligation_map(ledger)),
     }
 
 
@@ -379,6 +511,129 @@ def get_window(
     return row
 
 
+def event_payload(row: sqlite3.Row) -> dict[str, Any]:
+    payload = json.loads(row["payload_json"])
+    if not isinstance(payload, dict):
+        raise HarnessError("Event payload must be an object")
+    return payload
+
+
+def validate_token_use(payload: dict[str, Any]) -> None:
+    tokens = payload.get("tokens")
+    if tokens is None:
+        return
+    if (
+        isinstance(tokens, bool)
+        or not isinstance(tokens, (int, float))
+        or not math.isfinite(tokens)
+        or tokens < 0
+    ):
+        raise HarnessError("Completed event tokens must be non-negative and finite or null")
+
+
+def validate_completion_event(
+    connection: sqlite3.Connection,
+    lineage_id: str,
+    run_id: str,
+    window_id: str,
+    payload: dict[str, Any],
+    prior_rows: list[sqlite3.Row],
+    verify_files: bool = True,
+    enforce_review_gate: bool = True,
+) -> str:
+    if any(row["kind"] == "completed" for row in prior_rows):
+        raise HarnessError("A window permits exactly one completed event")
+    validate_token_use(payload)
+    if enforce_review_gate and lineage_review_state(connection, lineage_id)["review_required"]:
+        raise HarnessError(
+            "Completion denied: lineage requires a fresh coordinator review receipt"
+        )
+    window = get_window(connection, lineage_id, run_id, window_id)
+    ledger = effective_ledger(window, prior_rows)
+    benchmark_binding = ledger.get("benchmark_binding")
+    terminal_mutation = payload.get("mutation")
+    if benchmark_binding is not None:
+        if not isinstance(terminal_mutation, dict):
+            raise HarnessError("Mutation benchmark completion requires terminal mutation evidence")
+        sealed_mutation = benchmark_binding["mutation"]
+        for field in ("target_failure_id", "changed_policy_keys", "expected_reduction"):
+            if terminal_mutation.get(field) != sealed_mutation[field]:
+                raise HarnessError(f"Terminal mutation evidence changed sealed field {field}")
+        observed = terminal_mutation.get("observed_reductions")
+        if not isinstance(observed, list) or not all(non_empty_text(item) for item in observed):
+            raise HarnessError("Terminal mutation evidence requires observed_reductions")
+    elif terminal_mutation is not None:
+        raise HarnessError("Terminal mutation evidence was not bound when the window was sealed")
+    required_slots = {task["id"] for task in ledger["tasks"]}
+    outcome = payload.get("outcome", "execution")
+    if outcome == "execution":
+        accepted_rows = [row for row in prior_rows if row["kind"] == "task_accepted"]
+        accepted_slots = [event_payload(row).get("slot_id") for row in accepted_rows]
+        if len(accepted_slots) != len(set(accepted_slots)):
+            raise HarnessError("Completion requires exactly one acceptance per execution task")
+        if set(accepted_slots) != required_slots:
+            missing = sorted(required_slots - set(accepted_slots))
+            raise HarnessError(
+                "Completion requires valid terminal acceptance for every execution task"
+                + (f": {', '.join(missing)}" if missing else "")
+            )
+        for row in accepted_rows:
+            validate_terminal_task_event(
+                connection,
+                lineage_id,
+                run_id,
+                window_id,
+                "task_accepted",
+                event_payload(row),
+                current_event_hash=row["event_hash"],
+                verify_files=verify_files,
+            )
+        return "execution"
+    if outcome == "preflight_blocked":
+        blocker_rows = [row for row in prior_rows if row["kind"] == "preflight_blocked"]
+        if len(blocker_rows) != 1:
+            raise HarnessError("Preflight completion requires one authorized blocker outcome")
+        validate_preflight_blocker(
+            connection,
+            lineage_id,
+            run_id,
+            window_id,
+            event_payload(blocker_rows[0]),
+            prior_rows[: prior_rows.index(blocker_rows[0])],
+            verify_files=verify_files,
+        )
+        return "preflight_gate"
+    raise HarnessError("Completed event outcome must be execution or preflight_blocked")
+
+
+def valid_completed_row(
+    connection: sqlite3.Connection,
+    lineage_id: str,
+    run_id: str,
+    window_id: str,
+    rows: list[sqlite3.Row] | None = None,
+) -> sqlite3.Row | None:
+    rows = rows if rows is not None else events_for(connection, lineage_id, run_id, window_id)
+    completed = [row for row in rows if row["kind"] == "completed"]
+    if len(completed) != 1 or rows[-1]["event_hash"] != completed[0]["event_hash"]:
+        return None
+    completed_index = rows.index(completed[0])
+    try:
+        validate_completion_event(
+            connection,
+            lineage_id,
+            run_id,
+            window_id,
+            event_payload(completed[0]),
+            rows[:completed_index],
+            verify_files=False,
+            enforce_review_gate=False,
+        )
+    except HarnessError:
+        return None
+    return completed[0]
+
+
 def append_event(
     connection: sqlite3.Connection,
     lineage_id: str,
@@ -389,20 +644,42 @@ def append_event(
     at: datetime | None = None,
 ) -> str:
     get_window(connection, lineage_id, run_id, window_id)
-    previous = connection.execute(
-        """
-        SELECT event_hash FROM events
-        WHERE lineage_id=? AND run_id=? AND window_id=?
-        ORDER BY sequence DESC LIMIT 1
-        """,
-        window_key(lineage_id, run_id, window_id),
-    ).fetchone()
-    previous_hash = previous["event_hash"] if previous else ZERO_HASH
+    rows = events_for(connection, lineage_id, run_id, window_id)
+    if rows and valid_completed_row(connection, lineage_id, run_id, window_id, rows):
+        raise HarnessError("No events are permitted after window completion")
+    if not rows and kind != "window_opened":
+        raise HarnessError("The first window event must be window_opened")
+    if rows and kind == "window_opened":
+        raise HarnessError("window_opened is unique")
+    event_at = at or utc_now()
+    if rows and event_at < parse_iso(rows[-1]["at_utc"]):
+        raise HarnessError("Event timestamps must follow append order")
+    if kind == "dispatch_permitted":
+        validate_dispatch_event(
+            connection, lineage_id, run_id, window_id, payload, rows, event_at
+        )
+    elif kind in {"task_accepted", "task_failed"}:
+        validate_terminal_task_event(
+            connection, lineage_id, run_id, window_id, kind, payload
+        )
+    elif kind == "preflight_blocked":
+        validate_preflight_blocker(
+            connection, lineage_id, run_id, window_id, payload, rows
+        )
+    elif kind == "coordinator_review_completed":
+        validate_coordinator_review(
+            connection, lineage_id, run_id, window_id, payload, event_at
+        )
+    elif kind == "completed":
+        validate_completion_event(
+            connection, lineage_id, run_id, window_id, payload, rows
+        )
+    previous_hash = rows[-1]["event_hash"] if rows else ZERO_HASH
     record = {
         "lineage_id": lineage_id,
         "run_id": run_id,
         "window_id": window_id,
-        "at_utc": iso(at or utc_now()),
+        "at_utc": iso(event_at),
         "kind": kind,
         "payload": payload,
         "previous_hash": previous_hash,
@@ -535,6 +812,12 @@ def open_window(
     except Exception:
         connection.close()
         raise
+    review_state = lineage_review_state(connection, lineage_id)
+    if review_state["review_required"]:
+        connection.close()
+        raise HarnessError(
+            "New window denied: lineage requires a fresh externally bound coordinator review"
+        )
     lineage_install = install_root / "lineages" / digest_bytes(lineage_id.encode("utf-8"))[:16]
     installed_script, deployed = ensure_installed(source_script, lineage_install)
     try:
@@ -566,6 +849,8 @@ def open_window(
 
     opened = {
         "ledger_hash": digest_json(ledger),
+        "effective_plan_hash": digest_json(ledger),
+        "task_obligations": obligation_map(ledger),
         "timing": timing,
         "deadline_utc": iso(deadline),
         "harness_deployed": deployed,
@@ -611,6 +896,69 @@ def lineage_miss_count(connection: sqlite3.Connection, lineage_id: str) -> int:
     return int(row["failures"])
 
 
+def lineage_miss_rows(connection: sqlite3.Connection, lineage_id: str) -> list[sqlite3.Row]:
+    rows = connection.execute(
+        """
+        SELECT * FROM events
+        WHERE lineage_id=? AND kind='deadline_missed'
+        ORDER BY sequence
+        """,
+        (lineage_id,),
+    ).fetchall()
+    distinct: dict[tuple[str, str], sqlite3.Row] = {}
+    for row in rows:
+        distinct.setdefault((row["run_id"], row["window_id"]), row)
+    return list(distinct.values())
+
+
+def lineage_review_state(connection: sqlite3.Connection, lineage_id: str) -> dict[str, Any]:
+    misses = lineage_miss_rows(connection, lineage_id)
+    miss_hashes = [row["event_hash"] for row in misses]
+    review = connection.execute(
+        """
+        SELECT * FROM events
+        WHERE lineage_id=? AND kind='coordinator_review_completed'
+        ORDER BY sequence DESC LIMIT 1
+        """,
+        (lineage_id,),
+    ).fetchone()
+    review_valid = False
+    review_hash = None
+    if review is not None:
+        review_hash = review["event_hash"]
+        try:
+            payload = event_payload(review)
+            latest_window = get_window(
+                connection,
+                misses[-1]["lineage_id"],
+                misses[-1]["run_id"],
+                misses[-1]["window_id"],
+            )
+            verify_file_hash(
+                payload.get("receipt_path"), payload.get("receipt_sha256"), "Review receipt"
+            )
+            review_valid = (
+                payload.get("reviewed_failure_event_hashes") == miss_hashes
+                and bool(misses)
+                and parse_iso(review["at_utc"]) > parse_iso(misses[-1]["at_utc"])
+                and payload.get("fresh") is True
+                and payload.get("reviewer_profile") == "sol-xhigh"
+                and non_empty_text(payload.get("reviewer_identity"))
+                and payload.get("reviewed_parent_skill_hash") == latest_window["skill_hash"]
+            )
+        except (HarnessError, json.JSONDecodeError, IndexError):
+            review_valid = False
+    required = len(misses) >= COORDINATOR_REVIEW_THRESHOLD and not review_valid
+    return {
+        "miss_count": len(misses),
+        "threshold": COORDINATOR_REVIEW_THRESHOLD,
+        "review_required": required,
+        "review_valid": review_valid,
+        "review_hash": review_hash,
+        "miss_event_hashes": miss_hashes,
+    }
+
+
 def expire_window(
     *,
     connection: sqlite3.Connection,
@@ -626,9 +974,15 @@ def expire_window(
     kinds = [row["kind"] for row in rows]
     deadline = parse_iso(window["deadline_utc"])
     if "deadline_missed" in kinds:
-        return {"expired": True, "new": False, "miss_count": lineage_miss_count(connection, lineage_id)}
-    completed = [row for row in rows if row["kind"] == "completed"]
-    if completed and parse_iso(completed[0]["at_utc"]) <= deadline:
+        review_state = lineage_review_state(connection, lineage_id)
+        return {
+            "expired": True,
+            "new": False,
+            "miss_count": review_state["miss_count"],
+            "coordinator_review_required": review_state["review_required"],
+        }
+    completed = valid_completed_row(connection, lineage_id, run_id, window_id, rows)
+    if completed is not None and parse_iso(completed["at_utc"]) <= deadline:
         return {"expired": False, "new": False, "completed": True}
     if current < deadline:
         return {
@@ -638,15 +992,17 @@ def expire_window(
         }
 
     elapsed = (current - parse_iso(window["started_utc"])).total_seconds()
+    effective_plan = effective_ledger(window, rows)
     payload = {
         "deadline_utc": window["deadline_utc"],
         "observed_utc": iso(current),
         "elapsed_seconds": elapsed,
-        "ledger_hash": window["ledger_hash"],
+        "ledger_hash": digest_json(effective_plan),
     }
     append_event(connection, lineage_id, run_id, window_id, "deadline_missed", payload, current)
-    miss_count = lineage_miss_count(connection, lineage_id)
-    review_required = miss_count >= COORDINATOR_REVIEW_THRESHOLD
+    review_state = lineage_review_state(connection, lineage_id)
+    miss_count = review_state["miss_count"]
+    review_required = review_state["review_required"]
     if review_required:
         append_event(
             connection,
@@ -721,6 +1077,7 @@ def status_window(
     )
     window = get_window(connection, lineage_id, run_id, window_id)
     rows = events_for(connection, lineage_id, run_id, window_id)
+    review_state = lineage_review_state(connection, lineage_id)
     result = {
         "lineage_id": lineage_id,
         "run_id": run_id,
@@ -730,7 +1087,8 @@ def status_window(
         "expiry": expiry,
         "event_kinds": [row["kind"] for row in rows],
         "chain_valid": verify_chain(rows),
-        "lineage_miss_count": lineage_miss_count(connection, lineage_id),
+        "lineage_miss_count": review_state["miss_count"],
+        "lineage_review": review_state,
     }
     connection.close()
     return result
@@ -767,6 +1125,126 @@ def verify_file_hash(path_text: Any, expected: Any, label: str) -> None:
         raise HarnessError(f"{label} hash mismatch: {path}")
 
 
+def validate_dispatch_event(
+    connection: sqlite3.Connection,
+    lineage_id: str,
+    run_id: str,
+    window_id: str,
+    payload: dict[str, Any],
+    rows: list[sqlite3.Row],
+    at: datetime,
+) -> None:
+    window = get_window(connection, lineage_id, run_id, window_id)
+    if at >= parse_iso(window["deadline_utc"]):
+        raise HarnessError("Dispatch denied: the sealed deadline has expired")
+    if lineage_review_state(connection, lineage_id)["review_required"]:
+        raise HarnessError("Dispatch denied: lineage coordinator review is required")
+    ledger = effective_ledger(window, rows)
+    slot_id = payload.get("slot_id")
+    task = next((item for item in ledger["tasks"] if item["id"] == slot_id), None)
+    if task is None:
+        raise HarnessError("Dispatch denied: slot is absent from the effective ledger")
+    if task["worker_profile"] != payload.get("worker_profile"):
+        raise HarnessError("Dispatch denied: worker profile differs from the effective ledger")
+    if payload.get("ledger_hash") != digest_json(ledger):
+        raise HarnessError("Dispatch denied: effective-plan hash mismatch")
+    binding = task_obligation(task)
+    if payload.get("obligation_digest") != binding["obligation_digest"]:
+        raise HarnessError("Dispatch denied: stable task obligation mismatch")
+    accepted_slots = {
+        event_payload(row).get("slot_id")
+        for row in rows
+        if row["kind"] == "task_accepted"
+    }
+    missing_parents = sorted(set(task["depends_on"]) - accepted_slots)
+    if missing_parents:
+        raise HarnessError(
+            "Dispatch denied: dependencies lack accepted terminal receipts: "
+            + ", ".join(missing_parents)
+        )
+    if slot_id in accepted_slots:
+        raise HarnessError("Dispatch denied: task is already accepted")
+    terminal_permits = {
+        event_payload(row).get("permit_event_hash")
+        for row in rows
+        if row["kind"] in {"task_accepted", "task_failed"}
+    }
+    for row in rows:
+        if row["kind"] != "dispatch_permitted" or row["event_hash"] in terminal_permits:
+            continue
+        if event_payload(row).get("slot_id") == slot_id:
+            raise HarnessError("Dispatch denied: task already has an active permit")
+    if any(row["kind"] == "preflight_blocked" for row in rows):
+        raise HarnessError("Dispatch denied: the window has a preflight blocker outcome")
+
+
+def validate_preflight_blocker(
+    connection: sqlite3.Connection,
+    lineage_id: str,
+    run_id: str,
+    window_id: str,
+    payload: dict[str, Any],
+    prior_rows: list[sqlite3.Row],
+    verify_files: bool = True,
+) -> None:
+    if any(
+        row["kind"] in {"dispatch_permitted", "task_accepted", "task_failed", "preflight_blocked"}
+        for row in prior_rows
+    ):
+        raise HarnessError("Preflight blocker outcome requires a zero-dispatch window")
+    for field in ("authorized_by", "authority_reference", "blocker"):
+        if not non_empty_text(payload.get(field)):
+            raise HarnessError(f"Preflight blocker requires {field}")
+    window = get_window(connection, lineage_id, run_id, window_id)
+    ledger = effective_ledger(window, prior_rows)
+    expected_claims = sorted(task["claim_id"] for task in ledger["tasks"])
+    if payload.get("blocked_claim_ids") != expected_claims:
+        raise HarnessError("Preflight blocker must bind every unresolved stable claim")
+    if verify_files:
+        verify_file_hash(
+            payload.get("receipt_path"), payload.get("receipt_sha256"), "Blocker receipt"
+        )
+    elif not non_empty_text(payload.get("receipt_path")) or not valid_sha256(
+        payload.get("receipt_sha256")
+    ):
+        raise HarnessError("Preflight blocker requires a bound receipt path and SHA-256")
+
+
+def validate_coordinator_review(
+    connection: sqlite3.Connection,
+    lineage_id: str,
+    run_id: str,
+    window_id: str,
+    payload: dict[str, Any],
+    at: datetime,
+) -> None:
+    state = lineage_review_state(connection, lineage_id)
+    if state["miss_count"] < COORDINATOR_REVIEW_THRESHOLD or not state["review_required"]:
+        raise HarnessError("Coordinator review requires the current authorized missed-window gate")
+    if not non_empty_text(payload.get("reviewer_identity")):
+        raise HarnessError("Coordinator review requires reviewer_identity")
+    if payload.get("reviewer_profile") != "sol-xhigh":
+        raise HarnessError("Coordinator review requires reviewer_profile=sol-xhigh")
+    if payload.get("fresh") is not True:
+        raise HarnessError("Coordinator review must explicitly attest fresh=true")
+    if payload.get("reviewed_failure_event_hashes") != state["miss_event_hashes"]:
+        raise HarnessError("Coordinator review must bind the complete current failure event set")
+    misses = lineage_miss_rows(connection, lineage_id)
+    latest_miss = misses[-1]
+    latest_window = get_window(
+        connection,
+        latest_miss["lineage_id"],
+        latest_miss["run_id"],
+        latest_miss["window_id"],
+    )
+    parent_hash = payload.get("reviewed_parent_skill_hash")
+    if not valid_sha256(parent_hash) or parent_hash != latest_window["skill_hash"]:
+        raise HarnessError("Coordinator review must bind the current parent skill hash")
+    if at <= parse_iso(latest_miss["at_utc"]):
+        raise HarnessError("Coordinator review must be recorded after the latest missed window")
+    verify_file_hash(payload.get("receipt_path"), payload.get("receipt_sha256"), "Review receipt")
+
+
 def validate_terminal_task_event(
     connection: sqlite3.Connection,
     lineage_id: str,
@@ -774,6 +1252,8 @@ def validate_terminal_task_event(
     window_id: str,
     kind: str,
     payload: dict[str, Any],
+    current_event_hash: str | None = None,
+    verify_files: bool = True,
 ) -> None:
     permit_hash = payload.get("permit_event_hash")
     if not valid_sha256(permit_hash):
@@ -793,6 +1273,14 @@ def validate_terminal_task_event(
         raise HarnessError("Terminal task slot does not match its dispatch permit")
     if payload.get("worker_profile") != permit_payload.get("worker_profile"):
         raise HarnessError("Terminal task worker profile does not match its dispatch permit")
+    window = get_window(connection, lineage_id, run_id, window_id)
+    ledger = effective_ledger(window, events_for(connection, lineage_id, run_id, window_id))
+    task = next((item for item in ledger["tasks"] if item["id"] == payload.get("slot_id")), None)
+    if task is None:
+        raise HarnessError("Terminal task is absent from the effective ledger")
+    binding = task_obligation(task)
+    if permit_payload.get("obligation_digest") != binding["obligation_digest"]:
+        raise HarnessError("Terminal task permit is not bound to the stable obligation")
     if not isinstance(payload.get("worker_identity"), str) or not payload["worker_identity"].strip():
         raise HarnessError("Terminal task event requires an observed worker identity")
     if payload.get("test_completed") is not True:
@@ -800,19 +1288,31 @@ def validate_terminal_task_event(
     expected_result = "passed" if kind == "task_accepted" else "failed"
     if payload.get("test_result") != expected_result:
         raise HarnessError(f"{kind} requires test_result={expected_result}")
-    verify_file_hash(payload.get("receipt_path"), payload.get("receipt_sha256"), "Receipt")
+    if verify_files:
+        verify_file_hash(payload.get("receipt_path"), payload.get("receipt_sha256"), "Receipt")
+    elif not non_empty_text(payload.get("receipt_path")) or not valid_sha256(
+        payload.get("receipt_sha256")
+    ):
+        raise HarnessError("Terminal task event requires a bound receipt path and SHA-256")
     artifacts = payload.get("artifact_hashes")
     if not isinstance(artifacts, dict) or not artifacts:
         raise HarnessError("Terminal task event requires artifact hashes")
     for artifact_path, artifact_hash in artifacts.items():
-        verify_file_hash(artifact_path, artifact_hash, "Artifact")
+        if verify_files:
+            verify_file_hash(artifact_path, artifact_hash, "Artifact")
+        elif not non_empty_text(artifact_path) or not valid_sha256(artifact_hash):
+            raise HarnessError("Terminal task event requires bound artifact paths and SHA-256s")
 
     for row in events_for(connection, lineage_id, run_id, window_id):
+        if current_event_hash is not None and row["event_hash"] == current_event_hash:
+            continue
         if row["kind"] not in {"task_accepted", "task_failed"}:
             continue
         prior = json.loads(row["payload_json"])
         if prior.get("permit_event_hash") == permit_hash:
             raise HarnessError("Dispatch permit was already consumed by a terminal task event")
+        if kind == "task_accepted" and prior.get("slot_id") == payload.get("slot_id") and row["kind"] == kind:
+            raise HarnessError("Task already has an accepted terminal event")
 
 
 def export_benchmark(
@@ -831,20 +1331,27 @@ def export_benchmark(
         connection.close()
         raise HarnessError("Functional specification changed after lineage seal")
     ledger = effective_ledger(window, rows)
+    effective_plan_hash = digest_json(ledger)
+    definition_hash = benchmark_definition_hash(ledger)
     required_slots = {task["id"] for task in ledger["tasks"]}
     accepted: dict[str, dict[str, Any]] = {}
     failed_slots: set[str] = set()
-    completed_payload: dict[str, Any] | None = None
-    completed_at: datetime | None = None
+    completed_row = valid_completed_row(connection, lineage_id, run_id, window_id, rows)
+    if completed_row is None:
+        connection.close()
+        raise HarnessError("Cannot export a benchmark without one valid terminal completion")
+    completed_payload = event_payload(completed_row)
+    completion_mode = (
+        "preflight_gate"
+        if completed_payload.get("outcome") == "preflight_blocked"
+        else "execution"
+    )
     for row in rows:
         payload = json.loads(row["payload_json"])
         if row["kind"] == "task_accepted" and isinstance(payload.get("slot_id"), str):
             accepted[payload["slot_id"]] = payload
         elif row["kind"] == "task_failed" and isinstance(payload.get("slot_id"), str):
             failed_slots.add(payload["slot_id"])
-        elif row["kind"] == "completed":
-            completed_payload = payload
-            completed_at = parse_iso(row["at_utc"])
 
     permits = {
         row["event_hash"]: json.loads(row["payload_json"])
@@ -882,13 +1389,33 @@ def export_benchmark(
                 verify_file_hash(artifact_path, artifact_hash, "Artifact")
     except HarnessError:
         files_valid = False
-    evidence_valid = (
-        verify_chain(rows)
-        and len(accepted_payloads) == len(required_slots)
-        and permits_valid
-        and files_valid
+    if completion_mode == "preflight_gate":
+        blocker_rows = [row for row in rows if row["kind"] == "preflight_blocked"]
+        try:
+            blocker_index = rows.index(blocker_rows[0])
+            validate_preflight_blocker(
+                connection,
+                lineage_id,
+                run_id,
+                window_id,
+                event_payload(blocker_rows[0]),
+                rows[:blocker_index],
+                verify_files=True,
+            )
+        except (HarnessError, IndexError):
+            files_valid = False
+    evidence_valid = verify_chain(rows) and (
+        (completion_mode == "preflight_gate" and files_valid)
+        or (
+            len(accepted_payloads) == len(required_slots)
+            and permits_valid
+            and files_valid
+        )
     )
-    acceptance_passed = set(accepted) == required_slots and completed_payload is not None
+    acceptance_passed = completion_mode == "execution" and set(accepted) == required_slots
+    if completion_mode == "preflight_gate":
+        worker_executed = False
+        test_completed = False
     quality = {
         "worker_executed": worker_executed,
         "test_completed": test_completed,
@@ -896,12 +1423,10 @@ def export_benchmark(
         "evidence_valid": evidence_valid,
     }
     deadline_misses = sum(row["kind"] == "deadline_missed" for row in rows)
-    terminal_at = completed_at or parse_iso(rows[-1]["at_utc"])
+    terminal_at = parse_iso(completed_row["at_utc"])
     elapsed = (terminal_at - parse_iso(window["started_utc"])).total_seconds()
-    tokens = completed_payload.get("tokens") if completed_payload else None
-    if tokens is not None and (isinstance(tokens, bool) or not isinstance(tokens, (int, float))):
-        connection.close()
-        raise HarnessError("Completed event tokens must be numeric or null")
+    validate_token_use(completed_payload)
+    tokens = completed_payload.get("tokens")
 
     skill_root = Path(lineage["skill_root"])
     current_skill_hash = digest_json(skill_file_map(skill_root))
@@ -916,7 +1441,8 @@ def export_benchmark(
             "lineage_id": lineage_id,
             "run_id": run_id,
             "window_id": window_id,
-            "definition_hash": window["ledger_hash"],
+            "definition_hash": definition_hash,
+            "effective_plan_hash": effective_plan_hash,
             "fs_hash": lineage["fs_root_hash"],
             "comparison_epoch": lineage["frozen_hash"],
             "skill_hash": window["skill_hash"],
@@ -924,12 +1450,22 @@ def export_benchmark(
             "state_db": str(db_path.resolve()),
         },
         "quality": quality,
+        "quality_context": {
+            "window_kind": completion_mode,
+            "execution_quality_applicable": completion_mode == "execution",
+            "authorized_preflight_blocker": completion_mode == "preflight_gate",
+        },
         "deadline": {"misses": deadline_misses, "elapsed_seconds": elapsed},
         "usage": {"tokens": tokens},
         "skill": {"bytes": skill_bytes},
         "target_failure_resolved": all(quality.values()) and deadline_misses == 0,
         "new_failure_ids": unresolved_failures,
     }
+    benchmark_binding = ledger.get("benchmark_binding")
+    if benchmark_binding is not None:
+        result["provenance"]["git"] = benchmark_binding["git"]
+        result["provenance"]["product_frontier"] = benchmark_binding["product_frontier"]
+        result["mutation"] = completed_payload["mutation"]
     connection.close()
     return result
 
@@ -941,19 +1477,48 @@ def revise_ledger(
     run_id: str,
     window_id: str,
     ledger: dict[str, Any],
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     timing = validate_ledger(ledger)
     connection = connect(db_path)
     window = get_window(connection, lineage_id, run_id, window_id)
+    rows = events_for(connection, lineage_id, run_id, window_id)
+    current_ledger = effective_ledger(window, rows)
+    if current_ledger.get("benchmark_binding") != ledger.get("benchmark_binding"):
+        connection.close()
+        raise HarnessError("Ledger revision cannot change the sealed benchmark binding")
+    current_obligations = obligation_map(current_ledger)
+    revised_obligations = obligation_map(ledger)
+    missing_claims = sorted(set(current_obligations) - set(revised_obligations))
+    if missing_claims:
+        connection.close()
+        raise HarnessError(
+            "Ledger revision cannot delete stable claims: " + ", ".join(missing_claims)
+        )
+    changed_claims = sorted(
+        claim_id
+        for claim_id, binding in current_obligations.items()
+        if revised_obligations[claim_id] != binding
+    )
+    if changed_claims:
+        connection.close()
+        raise HarnessError(
+            "Ledger revision cannot weaken or replace stable task obligations: "
+            + ", ".join(changed_claims)
+        )
     payload = {
         "ledger_hash": digest_json(ledger),
+        "previous_ledger_hash": digest_json(current_ledger),
         "ledger": ledger,
+        "task_obligations": revised_obligations,
         "timing_if_new_window": timing,
         "sealed_deadline_utc": window["deadline_utc"],
         "deadline_changed": False,
     }
-    append_event(connection, lineage_id, run_id, window_id, "ledger_revised", payload)
-    connection.close()
+    try:
+        append_event(connection, lineage_id, run_id, window_id, "ledger_revised", payload, now)
+    finally:
+        connection.close()
     return payload
 
 
@@ -980,10 +1545,6 @@ def record_event(
             window_id=window_id,
             now=now,
         )
-        if kind in {"task_accepted", "task_failed"}:
-            validate_terminal_task_event(
-                connection, lineage_id, run_id, window_id, kind, payload
-            )
         event_hash = append_event(connection, lineage_id, run_id, window_id, kind, payload, now)
         return {"event_hash": event_hash, "deadline_state": expiry}
     finally:
@@ -1011,8 +1572,11 @@ def permit_dispatch(
         now=now,
     )
     rows = events_for(connection, lineage_id, run_id, window_id)
-    kinds = [row["kind"] for row in rows]
-    if expiry.get("expired") or "completed" in kinds or "coordinator_review_required" in kinds:
+    if (
+        expiry.get("expired")
+        or valid_completed_row(connection, lineage_id, run_id, window_id, rows)
+        or lineage_review_state(connection, lineage_id)["review_required"]
+    ):
         connection.close()
         raise HarnessError("Dispatch denied: the sealed window no longer permits new work")
     window = get_window(connection, lineage_id, run_id, window_id)
@@ -1024,20 +1588,23 @@ def permit_dispatch(
     if task["worker_profile"] != worker_profile:
         connection.close()
         raise HarnessError("Dispatch denied: worker profile differs from the sealed ledger")
-    event_hash = append_event(
-        connection,
-        lineage_id,
-        run_id,
-        window_id,
-        "dispatch_permitted",
-        {
-            "slot_id": slot_id,
-            "worker_profile": worker_profile,
-            "ledger_hash": digest_json(ledger),
-        },
-        now,
-    )
-    connection.close()
+    try:
+        event_hash = append_event(
+            connection,
+            lineage_id,
+            run_id,
+            window_id,
+            "dispatch_permitted",
+            {
+                "slot_id": slot_id,
+                "worker_profile": worker_profile,
+                "ledger_hash": digest_json(ledger),
+                "obligation_digest": task_obligation(task)["obligation_digest"],
+            },
+            now,
+        )
+    finally:
+        connection.close()
     return {"permitted": True, "permit_event_hash": event_hash, "deadline": expiry}
 
 
@@ -1045,6 +1612,10 @@ def watch(
     *, db_path: Path, install_root: Path, lineage_id: str, run_id: str, window_id: str
 ) -> None:
     connection = connect(db_path)
+    rows = events_for(connection, lineage_id, run_id, window_id)
+    if valid_completed_row(connection, lineage_id, run_id, window_id, rows):
+        connection.close()
+        return
     append_event(
         connection,
         lineage_id,
@@ -1064,8 +1635,9 @@ def watch(
             window_id=window_id,
         )
         rows = events_for(connection, lineage_id, run_id, window_id)
+        completed = valid_completed_row(connection, lineage_id, run_id, window_id, rows)
         connection.close()
-        if result.get("expired") or "completed" in [row["kind"] for row in rows]:
+        if result.get("expired") or completed is not None:
             return
         time.sleep(min(max(float(result["remaining_seconds"]), 0.1), 30.0))
 
@@ -1117,6 +1689,13 @@ def build_parser() -> argparse.ArgumentParser:
     export = subparsers.add_parser("export-benchmark", help="Derive a benchmark receipt from events")
     common_identity(export)
     export.add_argument("--install-root", type=Path, default=default_install_root())
+
+    review = subparsers.add_parser(
+        "record-lineage-review", help="Bind a fresh external review to all current lineage misses"
+    )
+    common_identity(review)
+    review.add_argument("--payload", type=Path, required=True)
+    review.add_argument("--install-root", type=Path, default=default_install_root())
 
     watcher = subparsers.add_parser("watch", help=argparse.SUPPRESS)
     common_identity(watcher)
@@ -1186,6 +1765,16 @@ def main() -> int:
                 lineage_id=arguments.lineage_id,
                 run_id=arguments.run_id,
                 window_id=arguments.window_id,
+            )
+        elif arguments.command == "record-lineage-review":
+            result = record_event(
+                db_path=resolve_db(arguments),
+                install_root=arguments.install_root,
+                lineage_id=arguments.lineage_id,
+                run_id=arguments.run_id,
+                window_id=arguments.window_id,
+                kind="coordinator_review_completed",
+                payload=read_json(arguments.payload),
             )
         elif arguments.command == "watch":
             watch(

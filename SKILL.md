@@ -44,6 +44,23 @@ That command idempotently deploys the harness when it is absent or version-stale
 ledger DAG, seals its deadline, persists the clock, and starts the detached watcher. Do not replace
 it with a prompt timer.
 
+Each task must bind `id`, `claim_id`, `intended_task`, `pass_test`, `owner`, `worker_profile`,
+`preconditions`, `authoritative_route`, `evidence_requirements`, `estimate_seconds`,
+`estimate_provenance`, and `depends_on`. If the ledger states `reserve_seconds`, also state
+`reserve_provenance`. Keep stable claims and their obligations unchanged across ledger revisions;
+only scheduling details may move.
+
+If the authoritative subject or preconditions are absent before dispatch, record one
+`preflight_blocked` event and complete the zero-dispatch window honestly. After three distinct
+deadline misses in a lineage, stop opening windows or issuing permits until a fresh external
+`sol-xhigh` review is sealed with `record-lineage-review`. Healthy late work may still finish and
+record its terminal receipt; seal the required review before final `completed`. Its deadline miss
+remains in the lineage.
+
+For mutation benchmarks, seal `benchmark_binding` in the ledger: exact candidate Git identity,
+product frontier, target failure, changed policy keys, and expected reduction. Repeat the same
+mutation identity plus observed reductions in the terminal completion event.
+
 The lab invocation alone does not grant production acts or start a coordinator. Preserve DE67's
 separate specification and coordination consent gates.
 
@@ -58,17 +75,28 @@ python scripts/deadline_harness.py permit-dispatch --lineage-id ... --run-id ...
 
 python scripts/deadline_harness.py status --lineage-id ... --run-id ... --window-id ...
 
+python scripts/deadline_harness.py record-lineage-review --lineage-id ... --run-id ... \
+  --window-id ... --payload review.json
+
 python scripts/deadline_harness.py export-benchmark --lineage-id ... --run-id ... --window-id ...
 
 python scripts/mutation_guard.py validate --candidate candidate --scope worker \
-  --lineage-id ... --run-id ... --window-id ... --event-hash ... --intent mutation-intent.json
+  --lineage-id ... --run-id ... --window-id ... --event-hash ... --intent mutation-intent.json \
+  --accepted-ref main --product-frontier product-frontier.json \
+  --baseline-benchmark baseline-benchmark.json
 
 python scripts/mutation_guard.py compare \
   --baseline-install-root parent-harness-state --baseline-lineage-id ... \
   --baseline-run-id ... --baseline-window-id ... --candidate-skill candidate \
   --candidate-install-root candidate-harness-state --candidate-lineage-id ... \
-  --candidate-run-id ... --candidate-window-id ...
+  --candidate-run-id ... --candidate-window-id ... \
+  --validation-receipt validation-receipt.json
+
+python scripts/mutation_guard.py promote --candidate candidate \
+  --validation-receipt validation-receipt.json \
+  --comparison-receipt comparison-receipt.json
 ```
 
 Use absolute paths when a task crosses worktrees or machines. Return compact receipts and artifact
-paths; do not ingest complete worker transcripts merely to operate the lab.
+paths; do not ingest complete worker transcripts merely to operate the lab. `promote` emits a
+validated fast-forward command plan; execute that plan separately from the accepted checkout.

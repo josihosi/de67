@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -54,12 +55,27 @@ def worker_evidence(
 
 
 def coordinator_evidence() -> dict:
+    event_hashes = [f"{number + 1:064x}" for number in range(3)]
     return {
         "kind": "coordinator_review",
         "window_failures": [
-            {"deadline_id": f"lineage/run-{number}/window", "deadline_missed": True}
+            {
+                "deadline_id": (
+                    "lineage/run/window/T01" if number == 0 else f"lineage/run-{number}/window"
+                ),
+                "deadline_missed": True,
+                "event_hash": event_hashes[number],
+            }
             for number in range(3)
         ],
+        "fresh_review": {
+            "reviewer_identity": "fresh-reviewer/sol-xhigh",
+            "reviewer_profile": "sol-xhigh",
+            "fresh": True,
+            "review_event_hash": "f" * 64,
+            "reviewed_parent_skill_hash": "c" * 64,
+            "reviewed_failure_event_hashes": event_hashes,
+        },
     }
 
 
@@ -101,6 +117,42 @@ def benchmark(*, misses: int, elapsed: int, tokens: int, size: int, quality: boo
     }
 
 
+def product_frontier() -> dict:
+    return {
+        "repository": "product/example",
+        "commit": "a" * 40,
+        "tree": "b" * 40,
+    }
+
+
+def run_git(root: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(root), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout.strip()
+
+
+def benchmark_binding(skill_root: Path) -> dict:
+    identity = guard.git_identity(skill_root)
+    return {
+        "git": {
+            "worktree": identity["worktree"],
+            "branch": identity["branch"],
+            "commit": identity["commit"],
+            "tree": identity["tree"],
+        },
+        "product_frontier": product_frontier(),
+        "mutation": {
+            "target_failure_id": "lineage/run/window/T01",
+            "changed_policy_keys": ["policy/orchestration.json.ready_order"],
+            "expected_reduction": "repeated_work",
+        },
+    }
+
+
 class MutationGuardTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -121,8 +173,75 @@ class MutationGuardTests(unittest.TestCase):
         policy[key] = value
         path.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
 
+    def git_pair(self) -> tuple[Path, Path]:
+        admin = Path(self.temporary.name) / "git-admin"
+        parent = Path(self.temporary.name) / "git-parent"
+        candidate = Path(self.temporary.name) / "git-candidate"
+        ignore = shutil.ignore_patterns(".git", ".skill-init", "__pycache__", ".pytest_cache")
+        shutil.copytree(ROOT, admin, ignore=ignore)
+        run_git(admin, "init", "-b", "main")
+        run_git(admin, "config", "user.name", "Mutation Guard Test")
+        run_git(admin, "config", "user.email", "mutation-guard@example.invalid")
+        run_git(admin, "add", ".")
+        run_git(admin, "commit", "-m", "accepted parent")
+        run_git(admin, "switch", "--detach")
+        run_git(admin, "worktree", "add", str(parent), "main")
+        run_git(parent, "worktree", "add", "-b", "candidate", str(candidate), "main")
+        policy_path = candidate / "policy" / "orchestration.json"
+        value = json.loads(policy_path.read_text(encoding="utf-8"))
+        value["ready_order"] = "fs_order"
+        policy_path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+        run_git(candidate, "add", "policy/orchestration.json")
+        run_git(candidate, "commit", "-m", "candidate mutation")
+        return parent, candidate
+
+    def secure_benchmarks(self, parent: Path, candidate: Path) -> tuple[dict, dict]:
+        baseline = benchmark(misses=1, elapsed=120, tokens=1000, size=5000)
+        result = benchmark(misses=0, elapsed=90, tokens=900, size=5100)
+        for plan_number, (benchmark_result, skill_root) in enumerate(
+            ((baseline, parent), (result, candidate)), start=6
+        ):
+            identity = guard.git_identity(skill_root)
+            benchmark_result["provenance"]["skill_hash"] = identity["skill_hash"]
+            benchmark_result["provenance"]["effective_plan_hash"] = (
+                f"{plan_number:x}" * 64
+            )
+            benchmark_result["provenance"]["git"] = {
+                "worktree": identity["worktree"],
+                "branch": identity["branch"],
+                "commit": identity["commit"],
+                "tree": identity["tree"],
+            }
+            benchmark_result["provenance"]["product_frontier"] = product_frontier()
+        result["mutation"] = {
+            "target_failure_id": "lineage/run/window/T01",
+            "changed_policy_keys": ["policy/orchestration.json.ready_order"],
+            "expected_reduction": "repeated_work",
+            "observed_reductions": ["repeated_work"],
+        }
+        return baseline, result
+
+    def validation_receipt(self, parent: Path, candidate: Path, baseline: dict) -> dict:
+        return guard.create_validation_receipt(
+            base=parent,
+            candidate=candidate,
+            accepted_ref="main",
+            scope="worker",
+            evidence=worker_evidence(),
+            intent=intent("policy/orchestration.json.ready_order"),
+            policy=POLICY,
+            product_frontier=product_frontier(),
+            baseline_benchmark=baseline,
+        )
+
     def seal_success(
-        self, *, skill_root: Path, install_root: Path, elapsed_seconds: int, tokens: int
+        self,
+        *,
+        skill_root: Path,
+        install_root: Path,
+        elapsed_seconds: int,
+        tokens: int,
+        benchmark_binding: dict | None = None,
     ) -> dict:
         started = datetime(2026, 8, 9, tzinfo=timezone.utc)
         install_root.mkdir(parents=True, exist_ok=True)
@@ -134,14 +253,22 @@ class MutationGuardTests(unittest.TestCase):
             "tasks": [
                 {
                     "id": "T",
+                    "claim_id": "claim-T",
                     "intended_task": "work",
+                    "owner": "unit-test fixture",
+                    "preconditions": ["fixture files exist"],
+                    "authoritative_route": "sealed harness event",
                     "pass_test": "test",
+                    "evidence_requirements": {"artifact": "production-route proof"},
                     "worker_profile": "terra-high",
                     "estimate_seconds": 20,
+                    "estimate_provenance": "fixed unit-test scenario",
                     "depends_on": [],
                 }
             ]
         }
+        if benchmark_binding is not None:
+            ledger["benchmark_binding"] = benchmark_binding
         db = install_root / "state.sqlite3"
         harness.open_window(
             db_path=db,
@@ -165,6 +292,14 @@ class MutationGuardTests(unittest.TestCase):
             worker_profile="terra-high",
             now=started,
         )
+        completed_payload = {"tokens": tokens}
+        if benchmark_binding is not None:
+            completed_payload["mutation"] = {
+                **benchmark_binding["mutation"],
+                "observed_reductions": [
+                    benchmark_binding["mutation"]["expected_reduction"]
+                ],
+            }
         harness.record_event(
             db_path=db,
             install_root=install_root,
@@ -194,7 +329,7 @@ class MutationGuardTests(unittest.TestCase):
             run_id="R",
             window_id="W",
             kind="completed",
-            payload={"tokens": tokens},
+            payload=completed_payload,
             now=started.replace(second=elapsed_seconds),
         )
         return guard.benchmark_from_harness(
@@ -343,11 +478,59 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(result["baseline_fitness"][:2], (0.0, 10.0))
         self.assertEqual(result["candidate_fitness"][:2], (0.0, 8.0))
 
-    def test_equal_operations_choose_smaller_skill(self) -> None:
+    def test_exact_git_benchmarks_share_definition_and_compare_end_to_end(self) -> None:
+        parent, candidate = self.git_pair()
+        baseline_install = Path(self.temporary.name) / "git-baseline-state"
+        candidate_install = Path(self.temporary.name) / "git-candidate-state"
+        baseline = self.seal_success(
+            skill_root=parent,
+            install_root=baseline_install,
+            elapsed_seconds=10,
+            tokens=100,
+            benchmark_binding=benchmark_binding(parent),
+        )
+        result = self.seal_success(
+            skill_root=candidate,
+            install_root=candidate_install,
+            elapsed_seconds=8,
+            tokens=90,
+            benchmark_binding=benchmark_binding(candidate),
+        )
+        self.assertEqual(
+            baseline["provenance"]["definition_hash"],
+            result["provenance"]["definition_hash"],
+        )
+        self.assertNotEqual(
+            baseline["provenance"]["effective_plan_hash"],
+            result["provenance"]["effective_plan_hash"],
+        )
+        validation = self.validation_receipt(parent, candidate, baseline)
+        comparison = guard.compare_validated_candidate(
+            validation_receipt=validation,
+            baseline=baseline,
+            candidate=result,
+            candidate_root=candidate,
+            predicates=POLICY["quality_predicates"],
+        )
+        self.assertEqual(comparison["decision"], "promotable")
+
+        wrong_plan = json.loads(json.dumps(baseline))
+        wrong_plan["provenance"]["effective_plan_hash"] = "0" * 64
+        rejected = guard.compare_validated_candidate(
+            validation_receipt=validation,
+            baseline=wrong_plan,
+            candidate=result,
+            candidate_root=candidate,
+            predicates=POLICY["quality_predicates"],
+        )
+        self.assertEqual(rejected["decision"], "rejected")
+        self.assertIn("exact validated parent benchmark", rejected["error"])
+
+    def test_equal_operations_cannot_win_by_shortening_skill_only(self) -> None:
         baseline = benchmark(misses=0, elapsed=100, tokens=1000, size=5000)
         candidate = benchmark(misses=0, elapsed=100, tokens=1000, size=4900)
-        result = guard.compare_benchmark(baseline, candidate, POLICY["quality_predicates"])
-        self.assertTrue(result["promotable"])
+        with self.assertRaises(guard.GuardError):
+            guard.compare_benchmark(baseline, candidate, POLICY["quality_predicates"])
 
     def test_unavailable_usage_is_omitted_symmetrically(self) -> None:
         baseline = benchmark(misses=0, elapsed=100, tokens=1000, size=5000)
@@ -363,6 +546,213 @@ class MutationGuardTests(unittest.TestCase):
         candidate["usage"]["tokens"] = 900
         with self.assertRaises(guard.GuardError):
             guard.compare_benchmark(baseline, candidate, POLICY["quality_predicates"])
+
+    def test_gitless_candidate_cannot_receive_validation_receipt(self) -> None:
+        baseline = benchmark(misses=1, elapsed=120, tokens=1000, size=5000)
+        with self.assertRaises(guard.GuardError):
+            self.validation_receipt(self.base, self.candidate, baseline)
+
+    def test_mutation_benchmarks_require_exact_git_and_product_frontier(self) -> None:
+        parent, candidate = self.git_pair()
+        baseline, result = self.secure_benchmarks(parent, candidate)
+
+        for missing, message in (
+            ("git", "Git provenance"),
+            ("product_frontier", "product frontier provenance"),
+            ("effective_plan_hash", "effective_plan_hash provenance"),
+        ):
+            incomplete = json.loads(json.dumps(baseline))
+            incomplete["provenance"].pop(missing)
+            with self.assertRaisesRegex(guard.GuardError, message):
+                self.validation_receipt(parent, candidate, incomplete)
+
+        validation = self.validation_receipt(parent, candidate, baseline)
+        for missing, message in (
+            ("git", "Git provenance"),
+            ("product_frontier", "product frontier provenance"),
+            ("effective_plan_hash", "effective_plan_hash provenance"),
+        ):
+            incomplete = json.loads(json.dumps(result))
+            incomplete["provenance"].pop(missing)
+            comparison = guard.compare_validated_candidate(
+                validation_receipt=validation,
+                baseline=baseline,
+                candidate=incomplete,
+                candidate_root=candidate,
+                predicates=POLICY["quality_predicates"],
+            )
+            self.assertEqual(comparison["decision"], "rejected")
+            self.assertIn(message, comparison["error"])
+
+        wrong_git = json.loads(json.dumps(result))
+        wrong_git["provenance"]["git"]["commit"] = "0" * 40
+        wrong_frontier = json.loads(json.dumps(result))
+        wrong_frontier["provenance"]["product_frontier"]["commit"] = "0" * 40
+        for wrong, message in (
+            (wrong_git, "Git provenance differs"),
+            (wrong_frontier, "product frontier differs"),
+        ):
+            comparison = guard.compare_validated_candidate(
+                validation_receipt=validation,
+                baseline=baseline,
+                candidate=wrong,
+                candidate_root=candidate,
+                predicates=POLICY["quality_predicates"],
+            )
+            self.assertEqual(comparison["decision"], "rejected")
+            self.assertIn(message, comparison["error"])
+
+    def test_dirty_or_nonroot_candidate_path_is_rejected(self) -> None:
+        parent, candidate = self.git_pair()
+        baseline, _ = self.secure_benchmarks(parent, candidate)
+        with self.assertRaisesRegex(guard.GuardError, "exact root"):
+            self.validation_receipt(parent, candidate / "policy", baseline)
+        (candidate / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+        with self.assertRaisesRegex(guard.GuardError, "clean"):
+            self.validation_receipt(parent, candidate, baseline)
+
+    def test_mutation_target_must_be_in_sealed_failure_evidence(self) -> None:
+        self.set_policy("policy/orchestration.json", "ready_order", "fs_order")
+        unrelated = intent("policy/orchestration.json.ready_order")
+        unrelated["target_failure_id"] = "another/claim"
+        with self.assertRaises(guard.GuardError):
+            guard.validate_mutation(
+                base=self.base,
+                candidate=self.candidate,
+                scope="worker",
+                evidence=worker_evidence(),
+                intent=unrelated,
+                policy=POLICY,
+            )
+
+    def test_coordinator_cannot_bypass_fresh_review(self) -> None:
+        self.set_policy("policy/execution.json", "live_route", "final_integration_only")
+        evidence = coordinator_evidence()
+        evidence.pop("fresh_review")
+        with self.assertRaises(guard.GuardError):
+            guard.validate_mutation(
+                base=self.base,
+                candidate=self.candidate,
+                scope="coordinator",
+                evidence=evidence,
+                intent=intent("policy/execution.json.live_route"),
+                policy=POLICY,
+            )
+
+    def test_validate_candidate_a_then_compare_candidate_b_is_rejected(self) -> None:
+        parent, candidate_a = self.git_pair()
+        baseline, result_a = self.secure_benchmarks(parent, candidate_a)
+        validation = self.validation_receipt(parent, candidate_a, baseline)
+        candidate_b = Path(self.temporary.name) / "git-candidate-b"
+        run_git(parent, "worktree", "add", "-b", "candidate-b", str(candidate_b), "main")
+        policy_path = candidate_b / "policy" / "orchestration.json"
+        policy_value = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy_value["parallelism"] = "conservative_disjoint"
+        policy_path.write_text(json.dumps(policy_value, indent=2) + "\n", encoding="utf-8")
+        run_git(candidate_b, "add", "policy/orchestration.json")
+        run_git(candidate_b, "commit", "-m", "different candidate")
+        result_a["provenance"]["skill_hash"] = guard.digest_json(guard.file_map(candidate_b))
+        comparison = guard.compare_validated_candidate(
+            validation_receipt=validation,
+            baseline=baseline,
+            candidate=result_a,
+            candidate_root=candidate_b,
+            predicates=POLICY["quality_predicates"],
+        )
+        self.assertEqual(comparison["decision"], "rejected")
+        self.assertIn("exact validated Git candidate", comparison["error"])
+        tampered = json.loads(json.dumps(validation))
+        tampered["candidate"]["commit"] = "0" * 40
+        with self.assertRaisesRegex(guard.GuardError, "changed after"):
+            guard.compare_validated_candidate(
+                validation_receipt=tampered,
+                baseline=baseline,
+                candidate=result_a,
+                candidate_root=candidate_a,
+                predicates=POLICY["quality_predicates"],
+            )
+
+    def test_main_movement_makes_validated_candidate_stale(self) -> None:
+        parent, candidate = self.git_pair()
+        baseline, result = self.secure_benchmarks(parent, candidate)
+        validation = self.validation_receipt(parent, candidate, baseline)
+        comparison = guard.compare_validated_candidate(
+            validation_receipt=validation,
+            baseline=baseline,
+            candidate=result,
+            candidate_root=candidate,
+            predicates=POLICY["quality_predicates"],
+        )
+        self.assertEqual(comparison["decision"], "promotable")
+        marker = parent / "accepted-frontier.txt"
+        marker.write_text("advanced\n", encoding="utf-8")
+        run_git(parent, "add", "accepted-frontier.txt")
+        run_git(parent, "commit", "-m", "advance accepted main")
+        with self.assertRaisesRegex(guard.GuardError, "stale"):
+            guard.create_promotion_plan(
+                validation_receipt=validation,
+                comparison_receipt=comparison,
+                accepted_root=parent,
+                candidate_root=candidate,
+            )
+
+    def test_rejected_candidate_cannot_be_parent_of_next_candidate(self) -> None:
+        parent, rejected = self.git_pair()
+        baseline, result = self.secure_benchmarks(parent, rejected)
+        validation = self.validation_receipt(parent, rejected, baseline)
+        result["deadline"] = dict(baseline["deadline"])
+        result["usage"] = dict(baseline["usage"])
+        result["skill"]["bytes"] = baseline["skill"]["bytes"] - 1
+        comparison = guard.compare_validated_candidate(
+            validation_receipt=validation,
+            baseline=baseline,
+            candidate=result,
+            candidate_root=rejected,
+            predicates=POLICY["quality_predicates"],
+        )
+        self.assertEqual(comparison["decision"], "rejected")
+
+        descendant = Path(self.temporary.name) / "rejected-descendant"
+        run_git(parent, "worktree", "add", "-b", "descendant", str(descendant), "candidate")
+        policy_path = descendant / "policy" / "orchestration.json"
+        policy_value = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy_value["parallelism"] = "conservative_disjoint"
+        policy_path.write_text(json.dumps(policy_value, indent=2) + "\n", encoding="utf-8")
+        run_git(descendant, "add", "policy/orchestration.json")
+        run_git(descendant, "commit", "-m", "descendant of rejected candidate")
+        descendant_baseline, _ = self.secure_benchmarks(parent, descendant)
+        with self.assertRaisesRegex(guard.GuardError, "directly"):
+            self.validation_receipt(parent, descendant, descendant_baseline)
+
+    def test_non_fast_forward_candidate_has_no_promotion_plan(self) -> None:
+        parent, candidate = self.git_pair()
+        baseline, result = self.secure_benchmarks(parent, candidate)
+        validation = self.validation_receipt(parent, candidate, baseline)
+        comparison = guard.compare_validated_candidate(
+            validation_receipt=validation,
+            baseline=baseline,
+            candidate=result,
+            candidate_root=candidate,
+            predicates=POLICY["quality_predicates"],
+        )
+        unrelated = Path(self.temporary.name) / "unrelated-candidate"
+        run_git(parent, "worktree", "add", "--detach", str(unrelated), "main")
+        run_git(unrelated, "switch", "--orphan", "unrelated")
+        run_git(unrelated, "commit", "--allow-empty", "-m", "unrelated candidate")
+        forged_validation = dict(validation)
+        forged_validation["candidate"] = guard.git_identity(unrelated)
+        forged_validation = guard.seal_receipt(forged_validation)
+        forged_comparison = dict(comparison)
+        forged_comparison["validation_receipt_hash"] = forged_validation["receipt_hash"]
+        forged_comparison["candidate_commit"] = forged_validation["candidate"]["commit"]
+        forged_comparison = guard.seal_receipt(forged_comparison)
+        with self.assertRaisesRegex(guard.GuardError, "fast-forward"):
+            guard.create_promotion_plan(
+                validation_receipt=forged_validation,
+                comparison_receipt=forged_comparison,
+                accepted_root=parent,
+                candidate_root=unrelated,
+            )
 
     def test_worker_evidence_is_resolved_from_sealed_harness_event(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -382,10 +772,16 @@ class MutationGuardTests(unittest.TestCase):
                     "tasks": [
                         {
                             "id": "T",
+                            "claim_id": "claim-T",
                             "intended_task": "work",
+                            "owner": "unit-test fixture",
+                            "preconditions": ["fixture files exist"],
+                            "authoritative_route": "sealed harness event",
                             "pass_test": "test",
+                            "evidence_requirements": {"artifact": "failed test proof"},
                             "worker_profile": "terra-high",
                             "estimate_seconds": 10,
+                            "estimate_provenance": "fixed unit-test scenario",
                             "depends_on": [],
                         }
                     ]
@@ -433,7 +829,7 @@ class MutationGuardTests(unittest.TestCase):
             )
             self.assertEqual(evidence["worker_identity"], "worker-1/terra-high")
 
-    def test_coordinator_evidence_comes_from_three_sealed_misses(self) -> None:
+    def test_three_sealed_misses_without_fresh_review_are_insufficient(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             db = root / "state.sqlite3"
@@ -443,10 +839,16 @@ class MutationGuardTests(unittest.TestCase):
                 "tasks": [
                     {
                         "id": "T",
+                        "claim_id": "claim-T",
                         "intended_task": "work",
+                        "owner": "unit-test fixture",
+                        "preconditions": ["fixture files exist"],
+                        "authoritative_route": "sealed harness event",
                         "pass_test": "test",
+                        "evidence_requirements": {"artifact": "deadline proof"},
                         "worker_profile": "terra-high",
                         "estimate_seconds": 1,
+                        "estimate_provenance": "fixed unit-test scenario",
                         "depends_on": [],
                     }
                 ]
@@ -475,16 +877,52 @@ class MutationGuardTests(unittest.TestCase):
                     now=started.replace(second=2),
                 )
                 connection.close()
+            with self.assertRaisesRegex(guard.GuardError, "fresh|review"):
+                guard.evidence_from_harness(
+                    db_path=db,
+                    lineage_id="L",
+                    run_id="R2",
+                    window_id="W",
+                    scope="coordinator",
+                    event_hash=None,
+                    policy=POLICY,
+                )
+            connection = harness.connect(db)
+            state = harness.lineage_review_state(connection, "L")
+            parent_skill_hash = harness.get_window(connection, "L", "R2", "W")["skill_hash"]
+            connection.close()
+            review_receipt = root / "review.json"
+            review_receipt.write_text('{"review":"fresh"}\n', encoding="utf-8")
+            recorded = harness.record_event(
+                db_path=db,
+                install_root=install,
+                lineage_id="L",
+                run_id="R2",
+                window_id="W",
+                kind="coordinator_review_completed",
+                payload={
+                    "reviewer_identity": "fresh-sol/reviewer",
+                    "reviewer_profile": "sol-xhigh",
+                    "fresh": True,
+                    "reviewed_parent_skill_hash": parent_skill_hash,
+                    "reviewed_failure_event_hashes": state["miss_event_hashes"],
+                    "receipt_path": str(review_receipt),
+                    "receipt_sha256": harness.digest_bytes(review_receipt.read_bytes()),
+                },
+                now=started.replace(second=3),
+            )
             evidence = guard.evidence_from_harness(
                 db_path=db,
                 lineage_id="L",
                 run_id="R2",
                 window_id="W",
                 scope="coordinator",
-                event_hash=None,
+                event_hash=recorded["event_hash"],
                 policy=POLICY,
             )
-            self.assertEqual(len(evidence["window_failures"]), 3)
+            guard.validate_coordinator_evidence(
+                evidence, POLICY["coordinator_review_threshold"]
+            )
 
 
 if __name__ == "__main__":

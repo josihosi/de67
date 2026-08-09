@@ -9,6 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
 from typing import Any
 
@@ -25,6 +26,7 @@ class GuardError(RuntimeError):
 IGNORED_PARTS = {".git", ".skill-init", ".de67-lab", "__pycache__", ".pytest_cache"}
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts" / "mutation-policy.json"
+RECEIPT_VERSION = 1
 
 
 def canonical(value: Any) -> str:
@@ -35,11 +37,140 @@ def digest_json(value: Any) -> str:
     return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
 
 
+def valid_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value.lower())
+    )
+
+
+def seal_receipt(value: dict[str, Any]) -> dict[str, Any]:
+    sealed = dict(value)
+    sealed.pop("receipt_hash", None)
+    sealed["receipt_hash"] = digest_json(sealed)
+    return sealed
+
+
+def verify_receipt(receipt: dict[str, Any], kind: str) -> None:
+    if receipt.get("kind") != kind or receipt.get("version") != RECEIPT_VERSION:
+        raise GuardError(f"Expected a version {RECEIPT_VERSION} {kind} receipt")
+    claimed = receipt.get("receipt_hash")
+    if not valid_sha256(claimed):
+        raise GuardError(f"{kind} receipt has no valid receipt hash")
+    unsealed = dict(receipt)
+    unsealed.pop("receipt_hash", None)
+    if digest_json(unsealed) != claimed:
+        raise GuardError(f"{kind} receipt was changed after it was sealed")
+
+
 def read_json(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise GuardError(f"Expected JSON object in {path}")
     return value
+
+
+def git_output(root: Path, *arguments: str) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        detail = ""
+        if isinstance(error, subprocess.CalledProcessError):
+            detail = (error.stderr or error.stdout or "").strip()
+        raise GuardError(f"Git identity check failed for {root}: {detail or error}") from error
+    return completed.stdout.strip()
+
+
+def registered_worktrees(root: Path) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    for line in git_output(root, "worktree", "list", "--porcelain").splitlines() + [""]:
+        if not line:
+            if current:
+                records.append(current)
+                current = {}
+            continue
+        key, _, value = line.partition(" ")
+        current[key] = value
+    return records
+
+
+def git_identity(root: Path, *, require_clean: bool = True) -> dict[str, Any]:
+    resolved = root.resolve()
+    if not resolved.is_dir():
+        raise GuardError(f"Candidate Git worktree does not exist: {resolved}")
+    top = Path(git_output(resolved, "rev-parse", "--show-toplevel")).resolve()
+    if top != resolved:
+        raise GuardError("Mutation path must be the exact root of a Git worktree")
+    common_text = git_output(resolved, "rev-parse", "--git-common-dir")
+    common = Path(common_text)
+    if not common.is_absolute():
+        common = (resolved / common).resolve()
+    else:
+        common = common.resolve()
+    branch_ref = git_output(resolved, "symbolic-ref", "-q", "HEAD")
+    if not branch_ref.startswith("refs/heads/"):
+        raise GuardError("Mutation candidate must be on a dedicated local branch")
+    commit = git_output(resolved, "rev-parse", "HEAD^{commit}")
+    tree = git_output(resolved, "rev-parse", "HEAD^{tree}")
+    status = git_output(resolved, "status", "--porcelain=v1", "--untracked-files=all")
+    if require_clean and status:
+        raise GuardError("Mutation Git worktree must be clean and fully committed")
+    matching = [
+        record
+        for record in registered_worktrees(resolved)
+        if Path(record.get("worktree", "")).resolve() == resolved
+    ]
+    if len(matching) != 1:
+        raise GuardError("Mutation path is not a uniquely registered Git worktree")
+    registered = matching[0]
+    if registered.get("HEAD") != commit or registered.get("branch") != branch_ref:
+        raise GuardError("Registered worktree identity differs from candidate HEAD")
+    return {
+        "worktree": str(resolved),
+        "common_git_dir": str(common),
+        "branch": branch_ref,
+        "commit": commit,
+        "tree": tree,
+        "skill_hash": digest_json(file_map(resolved)),
+        "clean": not bool(status),
+    }
+
+
+def accepted_ref_name(value: str) -> str:
+    if value.startswith("refs/heads/"):
+        return value
+    if not value or value.startswith("refs/"):
+        raise GuardError("Accepted ref must name a local branch")
+    return f"refs/heads/{value}"
+
+
+def git_candidate_pair(base: Path, candidate: Path, accepted_ref: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    parent = git_identity(base)
+    child = git_identity(candidate)
+    expected_ref = accepted_ref_name(accepted_ref)
+    if parent["branch"] != expected_ref:
+        raise GuardError("Accepted-parent worktree is not checked out on the accepted branch")
+    accepted_commit = git_output(base, "rev-parse", f"{expected_ref}^{{commit}}")
+    if accepted_commit != parent["commit"]:
+        raise GuardError("Accepted branch and accepted-parent HEAD differ")
+    if parent["common_git_dir"] != child["common_git_dir"]:
+        raise GuardError("Candidate is not a worktree of the accepted-parent repository")
+    if parent["worktree"] == child["worktree"] or parent["branch"] == child["branch"]:
+        raise GuardError("Candidate requires a separate dedicated branch and worktree")
+    parents = git_output(candidate, "show", "-s", "--format=%P", child["commit"]).split()
+    if parents != [parent["commit"]]:
+        raise GuardError("Candidate must be derived directly from the last accepted parent")
+    child["parent_commits"] = parents
+    parent["accepted_ref"] = expected_ref
+    return parent, child
 
 
 def file_map(root: Path) -> dict[str, str]:
@@ -125,13 +256,13 @@ def validate_worker_evidence(evidence: dict[str, Any]) -> None:
     if evidence.get("test_state") not in {"failed", "passed"}:
         raise GuardError("Worker mutation requires a completed test result")
     receipt_hash = evidence.get("receipt_sha256")
-    if not isinstance(receipt_hash, str) or len(receipt_hash) != 64:
+    if not valid_sha256(receipt_hash):
         raise GuardError("Worker failure evidence requires a receipt SHA-256")
     artifacts = evidence.get("artifact_hashes")
     if not isinstance(artifacts, dict) or not artifacts:
         raise GuardError("Worker failure evidence requires identity-bound artifact hashes")
     if not all(
-        isinstance(path, str) and isinstance(value, str) and len(value) == 64
+        isinstance(path, str) and valid_sha256(value)
         for path, value in artifacts.items()
     ):
         raise GuardError("Worker artifact hashes must map paths to SHA-256 values")
@@ -152,11 +283,45 @@ def validate_coordinator_evidence(evidence: dict[str, Any], threshold: int) -> N
             raise GuardError("Each window failure requires deadline_id")
         if failure.get("deadline_missed") is not True:
             raise GuardError("Each coordinator failure must be a sealed deadline miss")
+        if not valid_sha256(failure.get("event_hash")):
+            raise GuardError("Each coordinator failure requires its sealed deadline event hash")
         identities.add(identity)
     if len(identities) < threshold:
         raise GuardError(
             f"Coordinator mutation requires {threshold} distinct failed windows; found {len(identities)}"
         )
+    review = evidence.get("fresh_review")
+    if not isinstance(review, dict):
+        raise GuardError("Coordinator mutation requires a sealed fresh Sol xhigh review")
+    if review.get("reviewer_profile") != "sol-xhigh":
+        raise GuardError("Coordinator mutation requires reviewer_profile=sol-xhigh")
+    if not isinstance(review.get("reviewer_identity"), str) or not review["reviewer_identity"].strip():
+        raise GuardError("Coordinator review requires a reviewer identity")
+    if review.get("fresh") is not True or not valid_sha256(review.get("review_event_hash")):
+        raise GuardError("Coordinator review must be fresh and sealed by the harness")
+    if not valid_sha256(review.get("reviewed_parent_skill_hash")):
+        raise GuardError("Coordinator review must bind the reviewed accepted-parent skill hash")
+    reviewed = review.get("reviewed_failure_event_hashes")
+    failure_hashes = sorted(failure["event_hash"] for failure in failures)
+    if not isinstance(reviewed, list) or sorted(reviewed) != failure_hashes:
+        raise GuardError("Fresh review does not exactly cover the sealed failed windows")
+
+
+def evidence_failure_ids(evidence: dict[str, Any]) -> set[str]:
+    if evidence.get("kind") == "worker_failure":
+        return {evidence["deadline_id"]}
+    failures = evidence.get("window_failures", [])
+    return {
+        failure["deadline_id"]
+        for failure in failures
+        if isinstance(failure, dict) and isinstance(failure.get("deadline_id"), str)
+    }
+
+
+def validate_target_binding(intent: dict[str, Any], evidence: dict[str, Any]) -> None:
+    target = intent.get("target_failure_id")
+    if target not in evidence_failure_ids(evidence):
+        raise GuardError("Mutation intent targets a failure outside the sealed failure evidence")
 
 
 def frozen_hash(root: Path, policy: dict[str, Any]) -> str:
@@ -249,7 +414,7 @@ def evidence_from_harness(
 
     failures = connection.execute(
         """
-        SELECT w.run_id, w.window_id, w.skill_hash, e.event_hash
+        SELECT w.run_id, w.window_id, w.skill_hash, e.event_hash, e.sequence
         FROM events e
         JOIN windows w USING (lineage_id, run_id, window_id)
         WHERE e.lineage_id=? AND e.kind='deadline_missed'
@@ -257,14 +422,51 @@ def evidence_from_harness(
         """,
         (lineage_id,),
     ).fetchall()
-    connection.close()
     threshold = int(policy["coordinator_review_threshold"])
     distinct = {(row["run_id"], row["window_id"]): row for row in failures}
     if len(distinct) < threshold:
+        connection.close()
         raise GuardError(f"Coordinator mutation requires {threshold} sealed failed windows")
     latest = list(distinct.values())[-1]
     if latest["skill_hash"] != digest_json(file_map(ROOT)):
+        connection.close()
         raise GuardError("Current parent tree is not the latest failed coordinator skill version")
+    review_row = connection.execute(
+        """
+        SELECT * FROM events
+        WHERE lineage_id=? AND event_hash=? AND kind='coordinator_review_completed'
+        """,
+        (lineage_id, event_hash),
+    ).fetchone()
+    try:
+        for row in distinct.values():
+            window_rows = connection.execute(
+                """
+                SELECT * FROM events WHERE lineage_id=? AND run_id=? AND window_id=?
+                ORDER BY sequence
+                """,
+                (lineage_id, row["run_id"], row["window_id"]),
+            ).fetchall()
+            verify_event_chain(window_rows)
+        if review_row is not None:
+            review_rows = connection.execute(
+                """
+                SELECT * FROM events WHERE lineage_id=? AND run_id=? AND window_id=?
+                ORDER BY sequence
+                """,
+                (lineage_id, review_row["run_id"], review_row["window_id"]),
+            ).fetchall()
+            verify_event_chain(review_rows)
+    except (GuardError, sqlite3.Error, json.JSONDecodeError):
+        connection.close()
+        raise
+    connection.close()
+    if review_row is None:
+        raise GuardError("Coordinator mutation requires a sealed coordinator_review_completed event")
+    if review_row["sequence"] <= max(row["sequence"] for row in distinct.values()):
+        raise GuardError("Coordinator review predates one or more sealed failed windows")
+    review_payload = json.loads(review_row["payload_json"])
+    review_payload["review_event_hash"] = review_row["event_hash"]
     return {
         "kind": "coordinator_review",
         "window_failures": [
@@ -275,6 +477,7 @@ def evidence_from_harness(
             }
             for row in distinct.values()
         ],
+        "fresh_review": review_payload,
     }
 
 
@@ -298,6 +501,7 @@ def validate_mutation(
     validate_policy_files(base, policy)
     validate_policy_files(candidate, policy)
     policy_keys = validate_intent(intent, base, candidate, policy)
+    validate_target_binding(intent, evidence)
     changes = changed_paths(base, candidate)
     if not changes:
         raise GuardError("Candidate contains no mutation")
@@ -312,6 +516,116 @@ def validate_mutation(
         "expected_reduction": intent["expected_reduction"],
         "allowed_paths": allowed,
     }
+
+
+def valid_git_oid(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) in {40, 64}
+        and all(character in "0123456789abcdef" for character in value.lower())
+    )
+
+
+def validate_product_frontier(frontier: dict[str, Any]) -> None:
+    if not isinstance(frontier.get("repository"), str) or not frontier["repository"].strip():
+        raise GuardError("Product frontier requires a repository identity")
+    for field in ("commit", "tree"):
+        if not valid_git_oid(frontier.get(field)):
+            raise GuardError(f"Product frontier requires a full Git {field} identity")
+
+
+def validate_benchmark_identity(
+    result: dict[str, Any],
+    skill: dict[str, Any],
+    product_frontier: dict[str, Any],
+    *,
+    required: bool = False,
+) -> None:
+    provenance = result.get("provenance")
+    if not isinstance(provenance, dict):
+        raise GuardError("Benchmark result requires provenance")
+    supplied_git = provenance.get("git")
+    if required and not isinstance(supplied_git, dict):
+        raise GuardError("Mutation benchmark requires exact Git provenance")
+    if supplied_git is not None:
+        expected_git = {
+            "worktree": skill["worktree"],
+            "branch": skill["branch"],
+            "commit": skill["commit"],
+            "tree": skill["tree"],
+        }
+        if supplied_git != expected_git:
+            raise GuardError("Benchmark Git provenance differs from the bound skill worktree")
+    supplied_frontier = provenance.get("product_frontier")
+    if required and not isinstance(supplied_frontier, dict):
+        raise GuardError("Mutation benchmark requires exact product frontier provenance")
+    if supplied_frontier is not None and supplied_frontier != product_frontier:
+        raise GuardError("Benchmark product frontier differs from the bound accepted frontier")
+
+
+def validate_effective_plan_receipt(result: dict[str, Any]) -> None:
+    provenance = result.get("provenance")
+    if not isinstance(provenance, dict) or not valid_sha256(
+        provenance.get("effective_plan_hash")
+    ):
+        raise GuardError("Mutation benchmark requires SHA-256 effective_plan_hash provenance")
+
+
+def create_validation_receipt(
+    *,
+    base: Path,
+    candidate: Path,
+    accepted_ref: str,
+    scope: str,
+    evidence: dict[str, Any],
+    intent: dict[str, Any],
+    policy: dict[str, Any],
+    product_frontier: dict[str, Any],
+    baseline_benchmark: dict[str, Any],
+) -> dict[str, Any]:
+    parent, child = git_candidate_pair(base, candidate, accepted_ref)
+    mutation = validate_mutation(
+        base=base,
+        candidate=candidate,
+        scope=scope,
+        evidence=evidence,
+        intent=intent,
+        policy=policy,
+    )
+    validate_product_frontier(product_frontier)
+    validate_benchmark_provenance(baseline_benchmark, baseline_benchmark)
+    provenance = baseline_benchmark["provenance"]
+    if provenance["skill_hash"] != parent["skill_hash"]:
+        raise GuardError("Stored parent benchmark is for a different accepted-parent skill")
+    validate_benchmark_identity(
+        baseline_benchmark, parent, product_frontier, required=True
+    )
+    validate_effective_plan_receipt(baseline_benchmark)
+    if scope == "coordinator":
+        reviewed_hash = evidence["fresh_review"]["reviewed_parent_skill_hash"]
+        if reviewed_hash != parent["skill_hash"]:
+            raise GuardError("Fresh coordinator review covers a different accepted parent")
+    return seal_receipt(
+        {
+            "kind": "de67-mutation-validation",
+            "version": RECEIPT_VERSION,
+            "decision": "validated",
+            "accepted_parent": parent,
+            "candidate": child,
+            "mutation": {
+                **mutation,
+                "target_failure_id": intent["target_failure_id"],
+                "evidence_hash": digest_json(evidence),
+                "intent_hash": digest_json(intent),
+            },
+            "product_frontier": product_frontier,
+            "product_frontier_hash": digest_json(product_frontier),
+            "benchmark": {
+                "definition_hash": provenance["definition_hash"],
+                "baseline_result_hash": digest_json(baseline_benchmark),
+            },
+        }
+    )
 
 
 def quality_passes(result: dict[str, Any], predicates: list[str]) -> bool:
@@ -337,7 +651,7 @@ def validate_benchmark_provenance(baseline: dict[str, Any], candidate: dict[str,
             "event_chain_hash",
         ):
             value = source.get(field)
-            if not isinstance(value, str) or len(value) != 64:
+            if not valid_sha256(value):
                 raise GuardError(f"Benchmark provenance requires SHA-256 {field}")
     for field in ("definition_hash", "fs_hash", "comparison_epoch"):
         if baseline_source[field] != candidate_source[field]:
@@ -422,6 +736,13 @@ def compare_benchmark(
             dimensions.append(optional)
     baseline_fitness = tuple(float(baseline_values[name]) for name in dimensions)
     candidate_fitness = tuple(float(candidate_values[name]) for name in dimensions)
+    operational_dimensions = [name for name in dimensions if name != "skill_bytes"]
+    operational_improvement = any(
+        float(candidate_values[name]) < float(baseline_values[name])
+        for name in operational_dimensions
+    )
+    if baseline_quality and not operational_improvement:
+        raise GuardError("Candidate cannot win only by shortening skill bytes")
     improved = not baseline_quality or candidate_fitness < baseline_fitness
     if not improved:
         raise GuardError("Candidate does not improve the stored parent benchmark")
@@ -433,6 +754,184 @@ def compare_benchmark(
         "dimensions": dimensions,
         "comparison": "candidate-only run versus stored accepted-parent result",
     }
+
+
+def validate_benchmark_mutation_binding(
+    baseline: dict[str, Any], candidate: dict[str, Any], validation: dict[str, Any]
+) -> None:
+    mutation = candidate.get("mutation")
+    expected = validation["mutation"]
+    if not isinstance(mutation, dict):
+        raise GuardError("Candidate benchmark does not identify the mutation it exercised")
+    for field in ("target_failure_id", "changed_policy_keys", "expected_reduction"):
+        if mutation.get(field) != expected[field]:
+            raise GuardError(f"Candidate benchmark changed bound mutation field {field}")
+    observed = mutation.get("observed_reductions")
+    if not isinstance(observed, list) or expected["expected_reduction"] not in observed:
+        raise GuardError("Benchmark did not observe the mutation's declared expected reduction")
+
+    baseline_values = fitness_values(baseline)
+    candidate_values = fitness_values(candidate)
+    reduction = expected["expected_reduction"]
+    deadline_or_elapsed = (
+        candidate_values["deadline_misses"] < baseline_values["deadline_misses"]
+        or candidate_values["elapsed_seconds"] < baseline_values["elapsed_seconds"]
+    )
+    token_reduction = (
+        baseline_values["tokens"] is not None
+        and candidate_values["tokens"] is not None
+        and candidate_values["tokens"] < baseline_values["tokens"]
+    )
+    if reduction == "context_tokens":
+        measured = token_reduction
+    elif reduction in {"repeated_work", "build_or_live_cost"}:
+        measured = deadline_or_elapsed or token_reduction
+    else:
+        measured = deadline_or_elapsed
+    if not measured:
+        raise GuardError("Benchmark metrics do not substantiate the declared expected reduction")
+
+
+def validate_bound_benchmark_provenance(
+    baseline: dict[str, Any], candidate: dict[str, Any], validation: dict[str, Any]
+) -> None:
+    validate_benchmark_provenance(baseline, candidate)
+    parent = validation["accepted_parent"]
+    child = validation["candidate"]
+    benchmark = validation["benchmark"]
+    if digest_json(baseline) != benchmark["baseline_result_hash"]:
+        raise GuardError("Comparison did not consume the exact validated parent benchmark")
+    if baseline["provenance"]["skill_hash"] != parent["skill_hash"]:
+        raise GuardError("Parent benchmark skill hash differs from the validation receipt")
+    if candidate["provenance"]["skill_hash"] != child["skill_hash"]:
+        raise GuardError("Candidate benchmark skill hash differs from the validated candidate")
+    if candidate["provenance"]["definition_hash"] != benchmark["definition_hash"]:
+        raise GuardError("Candidate benchmark definition differs from validation")
+    frontier = validation["product_frontier"]
+    validate_benchmark_identity(baseline, parent, frontier, required=True)
+    validate_benchmark_identity(candidate, child, frontier, required=True)
+    validate_effective_plan_receipt(baseline)
+    validate_effective_plan_receipt(candidate)
+
+
+def compare_validated_candidate(
+    *,
+    validation_receipt: dict[str, Any],
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+    candidate_root: Path,
+    predicates: list[str],
+) -> dict[str, Any]:
+    verify_receipt(validation_receipt, "de67-mutation-validation")
+    if validation_receipt.get("decision") != "validated":
+        raise GuardError("Only a validated candidate may be compared")
+    validation_hash = validation_receipt["receipt_hash"]
+    candidate_result_hash = digest_json(candidate)
+    try:
+        current = git_identity(candidate_root)
+        expected = validation_receipt["candidate"]
+        for field in (
+            "worktree",
+            "common_git_dir",
+            "branch",
+            "commit",
+            "tree",
+            "skill_hash",
+        ):
+            if current[field] != expected[field]:
+                raise GuardError("Comparison candidate differs from the exact validated Git candidate")
+        validate_bound_benchmark_provenance(baseline, candidate, validation_receipt)
+        validate_benchmark_mutation_binding(baseline, candidate, validation_receipt)
+        comparison = compare_benchmark(baseline, candidate, predicates)
+        decision = "promotable"
+        error = None
+    except GuardError as rejected:
+        comparison = None
+        decision = "rejected"
+        error = str(rejected)
+    return seal_receipt(
+        {
+            "kind": "de67-mutation-comparison",
+            "version": RECEIPT_VERSION,
+            "decision": decision,
+            "validation_receipt_hash": validation_hash,
+            "candidate_commit": validation_receipt["candidate"]["commit"],
+            "candidate_result_hash": candidate_result_hash,
+            "comparison": comparison,
+            "error": error,
+        }
+    )
+
+
+def is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
+    completed = subprocess.run(
+        ["git", "-C", str(root), "merge-base", "--is-ancestor", ancestor, descendant],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if completed.returncode == 0:
+        return True
+    if completed.returncode == 1:
+        return False
+    raise GuardError((completed.stderr or completed.stdout or "Git ancestry check failed").strip())
+
+
+def create_promotion_plan(
+    *,
+    validation_receipt: dict[str, Any],
+    comparison_receipt: dict[str, Any],
+    accepted_root: Path,
+    candidate_root: Path,
+) -> dict[str, Any]:
+    verify_receipt(validation_receipt, "de67-mutation-validation")
+    verify_receipt(comparison_receipt, "de67-mutation-comparison")
+    if comparison_receipt.get("decision") != "promotable":
+        raise GuardError("Rejected candidates are ineligible for promotion or parenthood")
+    if comparison_receipt.get("validation_receipt_hash") != validation_receipt["receipt_hash"]:
+        raise GuardError("Promotion comparison belongs to a different validation receipt")
+    parent = git_identity(accepted_root)
+    candidate = git_identity(candidate_root)
+    bound_parent = validation_receipt["accepted_parent"]
+    bound_candidate = validation_receipt["candidate"]
+    accepted_ref = bound_parent["accepted_ref"]
+    current_accepted = git_output(accepted_root, "rev-parse", f"{accepted_ref}^{{commit}}")
+    if current_accepted != bound_parent["commit"]:
+        raise GuardError("Accepted main moved after validation; candidate is stale")
+    for field in ("worktree", "common_git_dir", "branch", "commit", "tree", "skill_hash"):
+        if parent[field] != bound_parent[field]:
+            raise GuardError("Promotion accepted-parent path or Git identity changed after validation")
+    for field in ("worktree", "common_git_dir", "branch", "commit", "tree", "skill_hash"):
+        if candidate[field] != bound_candidate[field]:
+            raise GuardError("Promotion candidate differs from the exact compared Git candidate")
+    if parent["common_git_dir"] != candidate["common_git_dir"]:
+        raise GuardError("Promotion paths belong to different Git repositories")
+    if not is_ancestor(accepted_root, bound_parent["commit"], bound_candidate["commit"]):
+        raise GuardError("Candidate cannot fast-forward the accepted parent")
+    if comparison_receipt.get("candidate_commit") != bound_candidate["commit"]:
+        raise GuardError("Comparison receipt names a different candidate commit")
+    command = [
+        "git",
+        "-C",
+        parent["worktree"],
+        "merge",
+        "--ff-only",
+        bound_candidate["commit"],
+    ]
+    return seal_receipt(
+        {
+            "kind": "de67-mutation-promotion",
+            "version": RECEIPT_VERSION,
+            "decision": "eligible",
+            "validation_receipt_hash": validation_receipt["receipt_hash"],
+            "comparison_receipt_hash": comparison_receipt["receipt_hash"],
+            "accepted_ref": accepted_ref,
+            "base_commit": bound_parent["commit"],
+            "candidate_commit": bound_candidate["commit"],
+            "git_mutated": False,
+            "command_plan": [command],
+        }
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -448,6 +947,9 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--window-id", required=True)
     validate.add_argument("--event-hash")
     validate.add_argument("--intent", type=Path, required=True)
+    validate.add_argument("--accepted-ref", default="main")
+    validate.add_argument("--product-frontier", type=Path, required=True)
+    validate.add_argument("--baseline-benchmark", type=Path, required=True)
 
     compare = subparsers.add_parser("compare", help="Compare candidate to stored parent benchmark")
     compare.add_argument("--baseline-install-root", type=Path, required=True)
@@ -459,6 +961,12 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--candidate-lineage-id", required=True)
     compare.add_argument("--candidate-run-id", required=True)
     compare.add_argument("--candidate-window-id", required=True)
+    compare.add_argument("--validation-receipt", type=Path, required=True)
+
+    promote = subparsers.add_parser("promote", help="Recheck and emit a fast-forward command plan")
+    promote.add_argument("--candidate", type=Path, required=True)
+    promote.add_argument("--validation-receipt", type=Path, required=True)
+    promote.add_argument("--comparison-receipt", type=Path, required=True)
     return parser
 
 
@@ -476,15 +984,18 @@ def main() -> int:
                 event_hash=arguments.event_hash,
                 policy=policy,
             )
-            result = validate_mutation(
+            result = create_validation_receipt(
                 base=ROOT,
                 candidate=arguments.candidate,
+                accepted_ref=arguments.accepted_ref,
                 scope=arguments.scope,
                 evidence=evidence,
                 intent=read_json(arguments.intent),
                 policy=policy,
+                product_frontier=read_json(arguments.product_frontier),
+                baseline_benchmark=read_json(arguments.baseline_benchmark),
             )
-        else:
+        elif arguments.command == "compare":
             baseline = benchmark_from_harness(
                 install_root=arguments.baseline_install_root,
                 lineage_id=arguments.baseline_lineage_id,
@@ -499,10 +1010,19 @@ def main() -> int:
                 window_id=arguments.candidate_window_id,
                 expected_skill_root=arguments.candidate_skill,
             )
-            result = compare_benchmark(
-                baseline,
-                candidate,
-                list(policy["quality_predicates"]),
+            result = compare_validated_candidate(
+                validation_receipt=read_json(arguments.validation_receipt),
+                baseline=baseline,
+                candidate=candidate,
+                candidate_root=arguments.candidate_skill,
+                predicates=list(policy["quality_predicates"]),
+            )
+        else:
+            result = create_promotion_plan(
+                validation_receipt=read_json(arguments.validation_receipt),
+                comparison_receipt=read_json(arguments.comparison_receipt),
+                accepted_root=ROOT,
+                candidate_root=arguments.candidate,
             )
     except (GuardError, OSError, json.JSONDecodeError, KeyError) as error:
         print(canonical({"ok": False, "error": str(error)}), file=sys.stderr)

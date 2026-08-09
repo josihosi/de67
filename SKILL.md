@@ -87,7 +87,7 @@ target. Never add filler.
 T_i = (R_i, owner, write_set, proof_artifacts, hypotheses, discriminator,
        worker_profile, allowed_acts, pass_test, coordinator_gate)
 
-atomic(T_i) = one authoritative transition + one integration proof
+atomic(T_i) = one authoritative transition + one slot acceptance proof
 ```
 
 Write the pass test before dispatch. `Q_C` specifies what must be proved; the worker writes any
@@ -116,7 +116,7 @@ Choose the weakest sufficient profile:
 | Luna high | focused fixture, proof, or tricky local change |
 | Terra medium | multi-file work behind a stable interface |
 | Terra high | coupled production ownership or wiring |
-| Sol medium | unresolved owner arbitration or final adversarial review |
+| Sol medium | unresolved owner arbitration or bounded named acceptance risk |
 
 Resolve the requested profile against actually exposed worker capabilities before dispatch. Never
 claim a role, model, or effort ran unless runtime metadata proves it. If no available profile is

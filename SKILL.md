@@ -84,6 +84,10 @@ For mutation benchmarks, seal `benchmark_binding` in the ledger: exact candidate
 product frontier, target failure, changed policy keys, and expected reduction. Repeat the same
 mutation identity plus observed reductions in the terminal completion event.
 
+Run mutation benchmarks serially: consume each worker-ready receipt before starting or processing
+another candidate. The first sealed candidate result is authoritative. Do not rerun, select, or
+aggregate results unless an owner-authorized benchmark law already defines that operation.
+
 The lab invocation alone does not grant production acts or start a coordinator. Preserve DE67's
 separate specification and coordination consent gates.
 

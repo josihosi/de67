@@ -267,6 +267,11 @@ returns an external-authority blocker. It does not replay the wasted dispatch.
 Store the accepted parent's benchmark result. Run only the candidate against the same frozen
 benchmark definition and deadline.
 
+Benchmark candidates one at a time. Seal worker-ready evidence as it arrives; no other candidate
+may create a coordinator consumption barrier. The first sealed candidate result is the result.
+An unchanged rerun cannot replace, average with, or be selected over it without an owner-authorized
+benchmark law established before the run.
+
 ```text
 Q(r) = worker_executed and test_completed and acceptance_passed and evidence_valid
 

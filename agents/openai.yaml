@@ -1,0 +1,7 @@
+interface:
+  display_name: "DE67 Mutation Lab"
+  short_description: "Deadline-bound coordination evolution lab"
+  default_prompt: "Use $de67-lab to design or evaluate a deadline-bound DE67 mutation without starting production coordination."
+
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "preflight_route": "identity_owner_discriminator",
+  "evidence_route": "owner_test_artifact_live",
+  "integration_route": "accepted_frontier",
+  "recovery_route": "reconcile_then_resume",
+  "live_route": "cheapest_remaining",
+  "build_route": "smallest_owner_test_first",
+  "harness_route": "observer_before_live"
+}

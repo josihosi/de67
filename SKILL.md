@@ -30,6 +30,13 @@ accepted parent V_n
     -> promote | discard candidate and return to V_n
 ```
 
+Before deriving a worker- or coordinator-scope mutation candidate, consult the environment's
+non-authoritative mutation-suggestion ledger when one is present. Verify its recorded accepted
+parent against the actual accepted parent, then bind the ledger hash, suggestion IDs considered,
+and evidence-based selection or rejection in the review receipt or mutation intent. A stale or
+absent ledger never blocks continuation, and a suggestion supplies no failure eligibility,
+authority, benchmark, or promotion credit.
+
 For `worker`, require one identity-bound worker failure and permit changes only to
 `policy/orchestration.json`. For `coordinator`, require three distinct unreviewed failed ledger
 windows in the same lineage for `P1`/`P3`; permit `P2` mutation only when the reviewed batch
@@ -80,6 +87,21 @@ smaller honest discriminator; or derive a new slot graph. Do not spend a round o
 retry, weaken proof, or manufacture an outcome. A failed tactic is not an external blocker while an
 authorized materially distinct route remains.
 
+A product-behavior failure requires a source-grounded causal review before declaring its cause,
+`no_same_contract_repair`, a specification gap, a material owner choice, or an external blocker,
+and before selecting the next attempt on that red claim. Inspect the exact accepted source and any
+quarantined diff against every still-red `S.A` predicate, including the immediate production owner,
+every helper or policy controlling that owner, ordinary or reference callers, underlying primitive
+semantics, owning tests, relevant history, and the difference between focused setup and natural
+execution. Bind exact source, tree, diff, and artifact hashes; name the first contradicted premise;
+then name the smallest same-contract repair or replan, or show why every authorized implementation
+seam is unavailable. A safe inert negative branch proves safety only; it does not prove that the
+positive lifecycle needs no repair. The coordinator may perform this read-only diagnosis and
+solution search itself. When it delegates the search, use the strongest available
+implementation-capable model and reasoning effort rather than ordinary weakest-sufficient routing;
+independence is not additionally required. Scaled workers still implement, build, test, and operate
+the product.
+
 When failed production evidence narrows an existing red claim to one admissible clarification,
 apply the kernel `continuous(dS | S,e)` test. If it passes and `S.A` delegates refinement, record and
 refreeze the minimal amendment, update that claim's proof route, and continue the same slot without
@@ -98,8 +120,12 @@ history.
 
 Concrete proof plans are liquid ledger data, not `P2`. The lineage seals proof presence, semantic
 manifest, accepted frontier, and authoritative owner route. A closed plan maps every condition and
-control to exact source/binary/fixture/test artifacts. Append an independent `proof_reviewed` event,
-then permit proof dispatch with `--worker-identity`; author, reviewer, and worker must differ. Only a
+control to exact source/binary/fixture/test artifacts. One independent review is required for each
+distinct proof binding, not for each ledger window. When the contract, plan, artifact,
+condition/control mapping, owner route, accepted frontier, and `P2` route bindings are unchanged and
+the receipt and artifacts still verify, append the same reviewed payload and receipt in a successor
+window without rerunning the reviewer. Any changed binding or invalid receipt requires a new review.
+Then permit proof dispatch with `--worker-identity`; author, reviewer, and worker must differ. Only a
 reviewed permit consumed by a real `task_failed` can receive a harness-derived proof-plan causal
 fingerprint. `minimal_authoritative_conformance` requires that independent authoritative receipt;
 `authoritative_owner_then_live_conformance` additionally requires bound owner and live-conformance

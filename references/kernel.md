@@ -66,9 +66,11 @@ through the delegated non-material clarification path or the material user-conse
 The semantic functional-specification core remains frozen. The first lineage window seals proof
 presence, the semantic manifest, accepted product frontier, and authoritative owner route; every
 later window must match. A closed concrete plan maps every condition and negative control to exact
-source/binary/fixture/test artifacts. Its seed and coordinates may change under MSW, but each plan
-requires a separately appended independent review receipt before dispatch. This ledger refinement
-is not a `P2` mutation.
+source/binary/fixture/test artifacts. Its seed and coordinates may change under MSW. Each distinct
+proof binding requires one independent review before first dispatch. An exact prior review may be
+reused across successor windows only while every runtime-binding field and reviewed artifact remains
+identical and valid; the successor appends the same reviewed payload and receipt. Changed bindings
+require a new independent review. This ledger refinement and review reuse are not `P2` mutations.
 
 Specification authoring is outside the MSW deletion domain. After `S` freezes, apply MSW only to
 candidate execution work:
@@ -186,16 +188,18 @@ with the same worker. `replace_worker_changed_owner` permits it only with a repl
 a changed receipt-bound owner. Both prior failures remain append-only evidence.
 
 Before proof-plan dispatch, the harness validates the separately appended review against the frozen
-contract hash, closed plan hash, artifact hash, and exact condition/control mapping hashes. The
-permit binds that review and an intended worker; plan author, reviewer, and worker are distinct, and
-the terminal worker must match. Helper/mock-only evidence, direct outcome setting, stale reviews,
-omitted mappings, or a changed core/contract blocks dispatch. A proof-plan failure counts toward
-`P2` only when its assessment binds the reviewed permit and the real `task_failed` that consumed it;
-the harness derives its causal fingerprint from the authoritative causal class and frozen owner
-facts. `minimal_authoritative_conformance` requires the independent authoritative review receipt;
-`authoritative_owner_then_live_conformance` additionally requires authoritative-owner and live
-conformance receipts. The exact selected route is sealed through review, permit, terminal, damage,
-and benchmark provenance. Zero-dispatch and accepted executions cannot qualify.
+contract hash, closed plan hash, artifact hash, and exact condition/control mapping hashes. A valid
+exact-binding review receipt may be appended again in a successor window without rerunning its
+reviewer; changed or stale bindings may not. The permit binds that review and an intended worker;
+plan author, reviewer, and worker are distinct, and the terminal worker must match. Helper/mock-only
+evidence, direct outcome setting, stale reviews, omitted mappings, or a changed core/contract blocks
+dispatch. A proof-plan failure counts toward `P2` only when its assessment binds the reviewed permit
+and the real `task_failed` that consumed it; the harness derives its causal fingerprint from the
+authoritative causal class and frozen owner facts. `minimal_authoritative_conformance` requires the
+independent authoritative review receipt; `authoritative_owner_then_live_conformance` additionally
+requires authoritative-owner and live conformance receipts. The exact selected route is sealed
+through review, permit, terminal, damage, and benchmark provenance. Zero-dispatch and accepted
+executions cannot qualify.
 
 Every proposed delta declares an efficiency hypothesis:
 
@@ -288,6 +292,22 @@ the build, test, or live-proof route. Before reporting an external blocker, show
 materially distinct directions are unavailable and that the next required act exceeds `S.A` or the
 available environment. This search cannot fan out across overlapping state, reset evidence, weaken
 acceptance, substitute synthetic evidence for required live proof, or repeat an unchanged route.
+
+A product-failure classification is authoritative only when it maps every still-red acceptance
+predicate to exact current implementation evidence, including the immediate production owner,
+every controlling helper or policy, ordinary or reference callers, the underlying primitive,
+owning tests, relevant diff and history, and the natural execution state. `no_same_contract_repair`,
+specification-gap, material-choice, and external-blocker verdicts are invalid while an authorized
+implementation seam remains uninspected. The coordinator may perform this read-only diagnosis; a
+delegated diagnosis and solution search uses the strongest available implementation-capable model
+and reasoning effort. This conditional source review is neither proof conformance nor the three-miss
+mutation review and adds no independent-identity gate.
+
+The environment's mutation-suggestion ledger is non-authoritative search input. When present, a
+mutation review binds its verified hash and records which suggestions it selected or rejected
+against the current accepted parent and failure evidence. The ledger can identify candidate
+directions but cannot establish eligibility, authority, quality, improvement, or promotion, and a
+stale or absent ledger cannot stop continuation.
 
 Every candidate begins from the last accepted parent. Rejected candidates have no descendants.
 Incident facts stay in receipts and benchmarks; they do not become skill addenda. The mutation

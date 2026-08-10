@@ -1,6 +1,6 @@
 # DE-67
 
-> **Order 67:** execute the plan, not each other.
+> *Six becomes seven by finishing what it started.*
 
 Sometimes work stops proceeding in order: the plan grows sideways, tests repeat, agents hand the
 problem around, and the finish line quietly moves away. DE-67 turns that drift back into a path from

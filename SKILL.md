@@ -68,6 +68,12 @@ mutation workflow from the accepted parent in isolated serial benchmark lanes, p
 validated strict improvement, then resume product coordination from the accepted frontier.
 Mutation benchmarks never perform or receive credit for product recovery.
 
+When failed production evidence narrows an existing red claim to one admissible clarification,
+apply the kernel `continuous(dS | S,e)` test. If it passes and `S.A` delegates refinement, record and
+refreeze the minimal amendment, update that claim's proof route, and continue the same slot without
+asking the user. Do not classify by words such as `owner` or `authority`: return to Gate S only for
+a changed player contract or permissions, or for two or more non-equivalent admissible choices.
+
 Stop only for all-green completion, revoked consent, a material Gate S owner choice, an external
 blocker, or the authorized fuse with no independent ready claim.
 

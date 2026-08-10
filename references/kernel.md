@@ -38,6 +38,22 @@ Only the specification author may author or refreeze a material change through t
 consent path. Coordination may record a non-material evidence-bound clarification only when its
 delegated authority is explicit in `S.A`.
 
+Classify materiality by the remaining choice, not by the vocabulary touched:
+
+```text
+continuous(dS | S,e) <=> deleting dS leaves evidenced failure unclassified or its proof undefined
+                         and player_contract(S + dS) = player_contract(S)
+                         and permissions(S + dS) = permissions(S)
+                         and count(non_equivalent_admissible_refinements(S,e)) = 1
+```
+
+When `continuous` holds, the coordinator records and refreezes the minimal amendment, updates the
+same red claim and proof route, and continues the same slot. This may make the only lawful owner or
+transition explicit; touching an ownership seam does not by itself make the amendment material.
+Return through the material Gate S path only when the requested player contract or permissions
+change, or when two or more non-equivalent admissible refinements remain. A uniquely implied
+clarification is not a blocker.
+
 ```text
 dS intersect dP = empty
 ```

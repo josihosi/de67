@@ -232,6 +232,129 @@ class DeadlineHarnessTests(unittest.TestCase):
             self.harness.status_task("project", "task", now=101)["completion_accepted"]
         )
 
+    def test_on_time_worker_finding_stops_timer_without_accepting_task(self) -> None:
+        self.harness.start_task("project", "task", "R-1", 10, now=100)
+
+        reported = self.harness.report_worker_finding(
+            "project", "task", "blocker", "missing production dependency", now=109
+        )
+        later = self.harness.status_task("project", "task", now=500)
+
+        self.assertTrue(reported["finding"]["recorded"])
+        self.assertIsNone(reported["deadline_incident"])
+        self.assertEqual(reported["status"]["state"], "worker_finding")
+        self.assertFalse(reported["status"]["completion_accepted"])
+        self.assertFalse(reported["status"]["deadline_missed"])
+        self.assertEqual(later["state"], "worker_finding")
+        self.assertEqual(later["cumulative_miss_units"], 0)
+        self.assertEqual(later["worker_finding"]["kind"], "blocker")
+        self.assertEqual(
+            later["worker_finding"]["evidence"], "missing production dependency"
+        )
+        with self.assertRaises(DeadlineError):
+            self.harness.complete_task("project", "task", "green test", now=501)
+
+    def test_late_worker_finding_preserves_exactly_one_deadline_miss(self) -> None:
+        self.harness.start_task("project", "task", "R-1", 10, now=100)
+
+        reported = self.harness.report_worker_finding(
+            "project", "task", "unexpected", "runtime contradicts DFS", now=110
+        )
+        repeated_expiry = self.harness.expire_task("project", "task", now=500)
+
+        self.assertTrue(reported["deadline_incident"]["recorded"])
+        self.assertEqual(reported["deadline_incident"]["units"], 1)
+        self.assertEqual(reported["status"]["state"], "worker_finding")
+        self.assertTrue(reported["status"]["deadline_missed"])
+        self.assertFalse(repeated_expiry["incident"]["recorded"])
+        self.assertEqual(repeated_expiry["status"]["cumulative_miss_units"], 1)
+
+    def test_worker_finding_is_validated_immutable_and_terminal(self) -> None:
+        self.harness.start_task("project", "task", "R-1", 10, now=100)
+
+        for kind, evidence in (("unknown", "evidence"), ("blocker", "   ")):
+            with self.subTest(kind=kind, evidence=repr(evidence)):
+                with self.assertRaises(DeadlineError):
+                    self.harness.report_worker_finding(
+                        "project", "task", kind, evidence, now=101
+                    )
+
+        first = self.harness.report_worker_finding(
+            "project", "task", "unexpected", "observed result", now=102
+        )
+        repeated = self.harness.report_worker_finding(
+            "project", "task", "unexpected", "observed result", now=500
+        )
+
+        self.assertTrue(first["finding"]["recorded"])
+        self.assertFalse(repeated["finding"]["recorded"])
+        self.assertEqual(repeated["finding"]["reported_at"], 102)
+        self.assertEqual(repeated["status"]["cumulative_miss_units"], 0)
+        for kind, evidence in (
+            ("blocker", "observed result"),
+            ("unexpected", "different evidence"),
+        ):
+            with self.subTest(kind=kind, evidence=evidence):
+                with self.assertRaisesRegex(DeadlineError, "immutable"):
+                    self.harness.report_worker_finding(
+                        "project", "task", kind, evidence, now=501
+                    )
+
+    def test_completed_or_breached_task_rejects_worker_finding(self) -> None:
+        self.harness.start_task("project", "completed", "R-1", 10, now=100)
+        self.harness.complete_task("project", "completed", "green test", now=101)
+        with self.assertRaises(DeadlineError):
+            self.harness.report_worker_finding(
+                "project", "completed", "blocker", "too late", now=102
+            )
+
+        self.harness.start_task("project", "breached", "R-2", 10, now=100)
+        self.harness.record_integrity_breach(
+            "project", "breached", "fabricated output", now=101
+        )
+        with self.assertRaises(DeadlineError):
+            self.harness.report_worker_finding(
+                "project", "breached", "unexpected", "too late", now=102
+            )
+
+    def test_cli_finding_and_list_expose_terminal_finding(self) -> None:
+        state_path = Path(self.temporary.name) / "finding-cli.sqlite"
+        with DeadlineHarness(state_path) as harness:
+            harness.start_task("project", "task", "R-1", 100)
+        finding_output = io.StringIO()
+        with redirect_stdout(finding_output):
+            self.assertEqual(
+                main(
+                    [
+                        "finding",
+                        "--state",
+                        str(state_path),
+                        "--lineage",
+                        "project",
+                        "--task",
+                        "task",
+                        "--kind",
+                        "blocker",
+                        "--evidence",
+                        "dependency is absent",
+                    ]
+                ),
+                0,
+            )
+        finding_payload = json.loads(finding_output.getvalue())
+
+        list_output = io.StringIO()
+        with redirect_stdout(list_output):
+            self.assertEqual(main(["list", "--state", str(state_path)]), 0)
+        listed_task = json.loads(list_output.getvalue())["tasks"][0]
+
+        self.assertEqual(finding_payload["finding"]["kind"], "blocker")
+        self.assertTrue(listed_task["finding_reported"])
+        self.assertEqual(listed_task["state"], "worker_finding")
+        self.assertEqual(
+            listed_task["worker_finding"]["evidence"], "dependency is absent"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,9 @@ Lineage: `<one stable project identity; the deadline database binds it on first 
 
 Keep only the current batch. The active list contains at most ten still-red DFS claims. Each item is
 free-form prose beneath an unchecked claim line; useful details are outcome, code scope, worker,
-passing test, dependencies, estimate/deadline, and current result.
+passing test, dependencies, estimate/deadline, and current result. A worker finding keeps its claim
+active. Record the dependency or replacement route concisely; newly discovered DFS claims enter only
+when necessary and without exceeding the active ceiling.
 
 ## Active work
 

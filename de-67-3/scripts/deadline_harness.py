@@ -65,6 +65,17 @@ class DeadlineHarness:
                     REFERENCES tasks(lineage_id, task_id)
             );
 
+            CREATE TABLE IF NOT EXISTS worker_findings (
+                lineage_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('blocker', 'unexpected')),
+                reported_at REAL NOT NULL,
+                evidence TEXT NOT NULL,
+                PRIMARY KEY (lineage_id, task_id),
+                FOREIGN KEY (lineage_id, task_id)
+                    REFERENCES tasks(lineage_id, task_id)
+            );
+
             CREATE TABLE IF NOT EXISTS lineage_binding (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                 lineage_id TEXT NOT NULL
@@ -171,6 +182,28 @@ class DeadlineHarness:
             "cadence_threshold": threshold,
         }
 
+    @staticmethod
+    def _finding_result(row: sqlite3.Row, recorded: bool) -> dict[str, Any]:
+        return {
+            "lineage_id": row["lineage_id"],
+            "task_id": row["task_id"],
+            "kind": row["kind"],
+            "reported_at": row["reported_at"],
+            "evidence": row["evidence"],
+            "recorded": recorded,
+        }
+
+    def _worker_finding(
+        self, lineage_id: str, task_id: str
+    ) -> sqlite3.Row | None:
+        return self.connection.execute(
+            """
+            SELECT * FROM worker_findings
+            WHERE lineage_id = ? AND task_id = ?
+            """,
+            (lineage_id, task_id),
+        ).fetchone()
+
     def _record_incident(
         self,
         lineage_id: str,
@@ -209,11 +242,17 @@ class DeadlineHarness:
         self, task: sqlite3.Row, now: float, *, completion_invalid: bool = False
     ) -> dict[str, Any] | None:
         completed_at = task["completed_at"]
+        finding = self._worker_finding(task["lineage_id"], task["task_id"])
+        finding_at = finding["reported_at"] if finding is not None else None
+        terminal_on_time = (
+            completed_at is not None and completed_at < task["deadline_at"]
+        ) or (
+            finding_at is not None and finding_at < task["deadline_at"]
+        )
         missed = now >= task["deadline_at"] and (
             completion_invalid
             or task["integrity_breached_at"] is not None
-            or completed_at is None
-            or completed_at >= task["deadline_at"]
+            or not terminal_on_time
         )
         if not missed:
             return None
@@ -223,6 +262,7 @@ class DeadlineHarness:
 
     def _status(self, lineage_id: str, task_id: str, now: float) -> dict[str, Any]:
         task = self._task(lineage_id, task_id)
+        finding = self._worker_finding(lineage_id, task_id)
         incidents = self.connection.execute(
             """
             SELECT * FROM incidents
@@ -233,12 +273,16 @@ class DeadlineHarness:
         ).fetchall()
         kinds = {row["kind"] for row in incidents}
         completion_accepted = (
-            task["completed_at"] is not None and task["integrity_breached_at"] is None
+            task["completed_at"] is not None
+            and task["integrity_breached_at"] is None
+            and finding is None
         )
         if task["integrity_breached_at"] is not None:
             state = "integrity_breach"
         elif completion_accepted:
             state = "accepted"
+        elif finding is not None:
+            state = "worker_finding"
         elif "deadline_miss" in kinds:
             state = "deadline_missed"
         else:
@@ -255,6 +299,12 @@ class DeadlineHarness:
             "completion_accepted": completion_accepted,
             "completed_at": task["completed_at"],
             "completion_evidence": task["completion_evidence"],
+            "finding_reported": finding is not None,
+            "worker_finding": (
+                self._finding_result(finding, recorded=False)
+                if finding is not None
+                else None
+            ),
             "deadline_missed": "deadline_miss" in kinds,
             "integrity_breached": "integrity_breach" in kinds,
             "integrity_reason": task["integrity_reason"],
@@ -404,6 +454,10 @@ class DeadlineHarness:
             task = self._task(lineage_id, task_id)
             if task["integrity_breached_at"] is not None:
                 raise DeadlineError("An integrity breach invalidates task completion")
+            if self._worker_finding(lineage_id, task_id) is not None:
+                raise DeadlineError(
+                    "A worker finding terminates this task without accepting completion"
+                )
             if task["completed_at"] is None:
                 self._record_miss_if_due(task, completed_at)
                 self.connection.execute(
@@ -415,6 +469,67 @@ class DeadlineHarness:
                     (completed_at, evidence, lineage_id, task_id),
                 )
             result = self._status(lineage_id, task_id, completed_at)
+            self.connection.commit()
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def report_worker_finding(
+        self,
+        lineage_id: str,
+        task_id: str,
+        kind: str,
+        evidence: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        task_id = self._identity(task_id, "Task id")
+        kind = self._identity(kind, "Worker finding kind")
+        if kind not in {"blocker", "unexpected"}:
+            raise DeadlineError("Worker finding kind must be blocker or unexpected")
+        evidence = self._nonempty_text(evidence, "Worker finding evidence")
+        reported_at = self._now(now)
+        self._begin()
+        try:
+            task = self._task(lineage_id, task_id)
+            if task["integrity_breached_at"] is not None:
+                raise DeadlineError(
+                    "An integrity breach prevents a worker finding from being recorded"
+                )
+            if task["completed_at"] is not None:
+                raise DeadlineError(
+                    "An accepted task cannot later report a worker finding"
+                )
+
+            existing = self._worker_finding(lineage_id, task_id)
+            if existing is not None and (
+                existing["kind"] != kind or existing["evidence"] != evidence
+            ):
+                raise DeadlineError("A worker finding is immutable once recorded")
+
+            deadline_incident = self._record_miss_if_due(task, reported_at)
+            if existing is None:
+                self.connection.execute(
+                    """
+                    INSERT INTO worker_findings (
+                        lineage_id, task_id, kind, reported_at, evidence
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (lineage_id, task_id, kind, reported_at, evidence),
+                )
+                finding = self._worker_finding(lineage_id, task_id)
+                recorded = True
+            else:
+                finding = existing
+                recorded = False
+
+            result = {
+                "deadline_incident": deadline_incident,
+                "finding": self._finding_result(finding, recorded=recorded),
+                "status": self._status(lineage_id, task_id, reported_at),
+            }
             self.connection.commit()
             return result
         except Exception:
@@ -536,6 +651,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_task_identity_flags(complete)
     complete.add_argument("--evidence", required=True)
 
+    finding = commands.add_parser(
+        "finding", help="Record one terminal worker blocker or unexpected result"
+    )
+    add_task_identity_flags(finding)
+    finding.add_argument("--kind", choices=("blocker", "unexpected"), required=True)
+    finding.add_argument("--evidence", required=True)
+
     breach = commands.add_parser("breach", help="Record an integrity breach once")
     add_task_identity_flags(breach)
     breach.add_argument("--reason", required=True)
@@ -580,6 +702,13 @@ def main(argv: list[str] | None = None) -> int:
                 elif arguments.command == "complete":
                     result = harness.complete_task(
                         arguments.lineage, arguments.task, arguments.evidence
+                    )
+                elif arguments.command == "finding":
+                    result = harness.report_worker_finding(
+                        arguments.lineage,
+                        arguments.task,
+                        arguments.kind,
+                        arguments.evidence,
                     )
                 else:
                     result = harness.record_integrity_breach(

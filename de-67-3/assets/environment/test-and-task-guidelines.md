@@ -13,12 +13,16 @@ dependencies and likely collision surfaces before parallel dispatch.
 
 Confirm the required tool, environment, command, and smallest runnable route before estimating or
 dispatching. Treat setup uncertainty as work to resolve, not as invisible worker time.
+Validate brittle flags, dates, fixtures, and output paths before they consume an implementation
+deadline. When repeated runs cannot expose the needed production fact, stop rerunning the product
+task and add the smallest useful logging or probe capability.
 
 ## Task definition
 
 Describe the desired outcome in natural language, bind it to one red DFS claim and the relevant code
 surface, state material boundaries, and name the evidence that will decide acceptance. Do not demand
-a fixed receipt shape.
+a fixed receipt shape. Ask the worker to stop and report expected versus observed behavior with
+direct evidence when a blocker or unexpected production result invalidates a task premise.
 
 ## Worker and model selection
 
@@ -30,13 +34,17 @@ Change the route or worker only when evidence supports the change.
 
 Define the smallest honest test that proves the DFS outcome through its authoritative owner. Include
 negative controls only when they distinguish a real competing explanation. Do not substitute test
-volume for coverage of the requested behavior.
+volume for coverage of the requested behavior. Separate the mechanism verdict from incidental
+metadata or receipt formatting; an incidental mismatch is fatal only when it can change identity,
+the verdict, or a false-green control.
 
 ## Test checking
 
 The coordinator checks the actual diff, command result, and relevant artifact or observation. A test
 passes only the claim it exercises. Preserve concise evidence paths; do not encode the same result in
-nested receipts.
+nested receipts. A blocker or unexpected result is evidence for causal review, never proof that the
+claim passed or automatic authority to weaken its test. Do not rerun an unchanged failing route
+without changed source, tooling, or causal evidence.
 
 ## Deadline estimation
 

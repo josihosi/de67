@@ -89,9 +89,19 @@ DFS is internally consistent and bound to an inspected source baseline.
 
 After its named proof passes, automation may close an existing red item by changing it to `[x]` and
 removing `🔴`. It may also make an evidence-implied nonmaterial clarification to an
-existing red item, then must refreeze. That exception can clarify the same failure/proof boundary;
-it cannot change product intent, vocabulary, required behavior, balance, or ownership. Any material
-change or an ambiguous clarification requires the user.
+existing red item, then must refreeze.
+
+A phase-3 coordinator may also expand a frozen DFS when direct worker evidence reveals a blocker or
+unexpected production result that no current claim classifies. Before doing so, re-inspect the exact
+owner, helpers, callers, competing readers and writers, tests, relevant history, and natural route;
+name the first contradicted DFS premise. Expansion is append-only with respect to existing stable
+claims and may add only the uniquely implied same-contract mechanism, ownership or precedence fact,
+proof route, and necessary new `- [ ] 🔴 R-...` claim. Preserve accepted work and immediately
+refreeze. The worker reports the finding but cannot edit the DFS.
+
+These exceptions cannot change product intent, vocabulary, permissions, required behavior, balance,
+or acceptance strength. Multiple materially different designs, changed user-visible behavior, or an
+ambiguous refinement requires DE-67-2 and the user.
 
 Keep worker selection, task batching, deadlines, dispatch, mutation, and review procedure out of
 the DFS. In particular, do not reproduce a multi-row coordination projection or handoff schema.

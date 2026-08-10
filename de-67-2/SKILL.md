@@ -47,11 +47,18 @@ After freeze, automated edits are limited to:
 - changing an existing `- [ ] 🔴 R-...` item to `[x]` and removing `🔴` after named evidence proves
   that exact requirement; and
 - an evidence-implied, nonmaterial clarification to an existing red requirement, followed by an
-  immediate refreeze.
+  immediate refreeze; and
+- a phase-3 coordinator expansion after a worker reports a blocker or unexpected production result
+  that the current DFS cannot classify. The coordinator must re-inspect the production owner,
+  helpers, callers, competing readers and writers, tests, history, and natural execution path. It
+  may then append only the uniquely implied same-contract mechanism, ownership decision, proof
+  route, and necessary new stable red claim before immediately refreezing.
 
-That clarification may classify the same behavior or proof boundary. It may not add product
-behavior, change project language, weaken acceptance, change an authority decision, or legitimize
-an implementation shortcut. An ambiguous clarification or any material change returns to the user.
+Those refinements may classify the same behavior or proof boundary. They may not add product
+behavior, change project language or permissions, weaken acceptance, rewrite or close an existing
+claim, or legitimize an implementation shortcut. A worker reports evidence but never edits or
+refreezes the DFS. An ambiguous refinement, multiple materially different designs, or any material
+change returns to DE-67-2 and the user.
 
 Do not add task slots, worker profiles, deadlines, dispatch packets, proof-review payloads, or a
 coordination matrix to the DFS. Those are not functional specification.

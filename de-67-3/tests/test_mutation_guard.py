@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import importlib.util
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -388,6 +389,199 @@ class MutationGuardTests(unittest.TestCase):
         result, output = self.run_complete_cli(breached)
         self.assertEqual(result, 1)
         self.assertIn("integrity breach", output)
+
+    @staticmethod
+    def expansion_dfs(*, new_claim: str = "- [ ] 🔴 R-003 — New prerequisite\n") -> str:
+        return (
+            "# DFS\n\n"
+            "## Functional contract\n\n"
+            "The existing behavior remains the contract.\n\n"
+            "## Project language and terminology\n\n"
+            "Use the project's existing names.\n\n"
+            "## Mechanistic design\n\n"
+            "The coordinator may add source-grounded mechanics here.\n\n"
+            "## Stable work claims\n\n"
+            "- [x] R-000 — Accepted frontier\n"
+            "- [ ] 🔴 R-001 — Worker found a blocker\n"
+            "- [ ] 🔴 R-002 — Existing next work\n"
+            + new_claim
+        )
+
+    def expansion_files(self, candidate_text: str | None = None) -> tuple[Path, Path]:
+        before = self.root / "expansion-before.md"
+        candidate = self.root / "expansion-candidate.md"
+        before.write_text(self.expansion_dfs(new_claim=""), encoding="utf-8")
+        candidate.write_text(
+            self.expansion_dfs() if candidate_text is None else candidate_text,
+            encoding="utf-8",
+        )
+        return before, candidate
+
+    def finding_state(
+        self,
+        name: str,
+        *,
+        kind: str = "blocker",
+        claim: str = "R-001",
+        report: bool = True,
+    ) -> Path:
+        state = self.root / f"finding-{name}.sqlite"
+        with deadline.DeadlineHarness(state) as harness:
+            harness.start_task("project", "worker-task", claim, 10, now=0)
+            if report:
+                harness.report_worker_finding(
+                    "project",
+                    "worker-task",
+                    kind,
+                    "The production owner has an unmodelled competing writer.",
+                    now=1,
+                )
+        return state
+
+    def run_expand_cli(
+        self,
+        state: Path,
+        *,
+        lineage: str = "project",
+        task: str = "worker-task",
+        candidate_text: str | None = None,
+    ) -> tuple[int, str]:
+        before, candidate = self.expansion_files(candidate_text)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            result = guard.main(
+                [
+                    "expand-dfs",
+                    "--before",
+                    str(before),
+                    "--candidate",
+                    str(candidate),
+                    "--state",
+                    str(state),
+                    "--lineage",
+                    lineage,
+                    "--task",
+                    task,
+                ]
+            )
+        return result, stdout.getvalue() + stderr.getvalue()
+
+    def test_expand_dfs_cli_accepts_exact_blocker_and_unexpected_findings(self) -> None:
+        for kind in ("blocker", "unexpected"):
+            with self.subTest(kind=kind):
+                state = self.finding_state(kind, kind=kind)
+                result, output = self.run_expand_cli(state)
+                self.assertEqual(result, 0, output)
+                self.assertIn(f"ok: {kind} finding expanded R-001", output)
+                self.assertIn("added R-003", output)
+
+    def test_expand_dfs_cli_rejects_missing_or_mismatched_finding(self) -> None:
+        missing = self.finding_state("missing", report=False)
+        result, output = self.run_expand_cli(missing)
+        self.assertEqual(result, 1)
+        self.assertIn("Missing stored worker finding", output)
+
+        stored = self.finding_state("stored")
+        result, output = self.run_expand_cli(stored, task="other-task")
+        self.assertEqual(result, 1)
+        self.assertIn("Missing stored worker finding", output)
+
+        wrong_claim = self.finding_state("wrong-claim", claim="R-999")
+        result, output = self.run_expand_cli(wrong_claim)
+        self.assertEqual(result, 1)
+        self.assertIn("not exactly one still-red DFS claim", output)
+
+    def test_expand_dfs_preserves_protected_sections_exactly(self) -> None:
+        before, candidate = self.expansion_files(
+            self.expansion_dfs().replace(
+                "The existing behavior remains the contract.",
+                "The behavior is now broader.",
+            )
+        )
+        with self.assertRaisesRegex(guard.GuardError, "Functional contract"):
+            guard.validate_dfs_expansion(before, candidate, "R-001")
+
+        before, candidate = self.expansion_files(
+            self.expansion_dfs().replace(
+                "Use the project's existing names.",
+                "Introduce a new project vocabulary.",
+            )
+        )
+        with self.assertRaisesRegex(guard.GuardError, "Project language"):
+            guard.validate_dfs_expansion(before, candidate, "R-001")
+
+    def test_expand_dfs_requires_a_unique_new_unchecked_red_claim(self) -> None:
+        before, candidate = self.expansion_files(self.expansion_dfs(new_claim=""))
+        with self.assertRaisesRegex(guard.GuardError, "at least one new red claim"):
+            guard.validate_dfs_expansion(before, candidate, "R-001")
+
+        before, candidate = self.expansion_files(
+            self.expansion_dfs(new_claim="- [x] R-003 — Prematurely accepted\n")
+        )
+        with self.assertRaisesRegex(guard.GuardError, "unchecked and red"):
+            guard.validate_dfs_expansion(before, candidate, "R-001")
+
+        before, candidate = self.expansion_files(
+            self.expansion_dfs(new_claim="- [ ] 🔴 R-001 — Duplicate id\n")
+        )
+        with self.assertRaisesRegex(guard.GuardError, "duplicate stable claim id"):
+            guard.validate_dfs_expansion(before, candidate, "R-001")
+
+    def test_expand_dfs_rejects_existing_claim_deletion_rewrite_closure_or_reorder(self) -> None:
+        baseline = self.expansion_dfs()
+        mutations = {
+            "delete": baseline.replace("- [ ] 🔴 R-002 — Existing next work\n", ""),
+            "rewrite": baseline.replace(
+                "R-002 — Existing next work", "R-002 — Renamed work"
+            ),
+            "close": baseline.replace(
+                "- [ ] 🔴 R-001 — Worker found a blocker",
+                "- [x] R-001 — Worker found a blocker",
+            ),
+            "reopen accepted frontier": baseline.replace(
+                "- [x] R-000 — Accepted frontier",
+                "- [ ] 🔴 R-000 — Accepted frontier",
+            ),
+            "reorder": baseline.replace(
+                "- [ ] 🔴 R-001 — Worker found a blocker\n"
+                "- [ ] 🔴 R-002 — Existing next work\n",
+                "- [ ] 🔴 R-002 — Existing next work\n"
+                "- [ ] 🔴 R-001 — Worker found a blocker\n",
+            ),
+        }
+        for name, candidate_text in mutations.items():
+            with self.subTest(name=name):
+                before, candidate = self.expansion_files(candidate_text)
+                with self.assertRaises(guard.GuardError):
+                    guard.validate_dfs_expansion(before, candidate, "R-001")
+
+    def test_expand_dfs_never_authorizes_completed_task_or_claim(self) -> None:
+        state = self.finding_state("completed")
+        connection = sqlite3.connect(state)
+        try:
+            connection.execute(
+                """
+                UPDATE tasks
+                SET completed_at = 2, completion_evidence = 'tampered completion'
+                WHERE lineage_id = 'project' AND task_id = 'worker-task'
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        result, output = self.run_expand_cli(state)
+        self.assertEqual(result, 1)
+        self.assertIn("completed task cannot authorize DFS expansion", output)
+
+        closed = self.expansion_dfs().replace(
+            "- [ ] 🔴 R-001 — Worker found a blocker",
+            "- [x] R-001 — Worker found a blocker",
+        )
+        state = self.finding_state("claim-closure")
+        result, output = self.run_expand_cli(state, candidate_text=closed)
+        self.assertEqual(result, 1)
+        self.assertIn("cannot rename, rewrite, or change status", output)
 
 
 if __name__ == "__main__":

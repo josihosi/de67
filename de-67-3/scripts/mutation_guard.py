@@ -25,6 +25,14 @@ ACTIVE_ITEM = re.compile(rf"^- \[ \] (?P<reference>{CLAIM_REFERENCE})[ \t]*$")
 RED_CLAIM = re.compile(
     rf"^(?P<lead>- )\[ \] 🔴 (?P<label>{CLAIM_REFERENCE})(?P<trailing>[ \t]*)$"
 )
+STABLE_CLAIM = re.compile(
+    rf"^- \[(?P<status>[ xX])\](?P<red> 🔴)? "
+    rf"(?P<label>{CLAIM_REFERENCE})(?P<trailing>[ \t]*)$"
+)
+PROTECTED_DFS_SECTIONS = (
+    "## Functional contract",
+    "## Project language and terminology",
+)
 
 
 class GuardError(RuntimeError):
@@ -234,6 +242,180 @@ def validate_accepted_task_state(
     return expected_claim
 
 
+def worker_finding_from_state(
+    state: str | Path,
+    lineage_id: str,
+    task_id: str,
+) -> tuple[str, str]:
+    """Read one exact, unresolved worker finding without mutating deadline state."""
+
+    state_path = Path(state).expanduser()
+    if not state_path.is_file():
+        raise GuardError(f"Deadline state does not exist: {state_path}")
+    try:
+        connection = sqlite3.connect(state_path.resolve().as_uri() + "?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            """
+            SELECT tasks.claim_id,
+                   tasks.completed_at,
+                   tasks.integrity_breached_at,
+                   worker_findings.kind,
+                   worker_findings.evidence,
+                   EXISTS (
+                       SELECT 1 FROM incidents
+                       WHERE incidents.lineage_id = tasks.lineage_id
+                         AND incidents.task_id = tasks.task_id
+                         AND incidents.kind = 'integrity_breach'
+                   ) AS has_integrity_incident
+            FROM tasks
+            JOIN worker_findings
+              ON worker_findings.lineage_id = tasks.lineage_id
+             AND worker_findings.task_id = tasks.task_id
+            WHERE tasks.lineage_id = ? AND tasks.task_id = ?
+            """,
+            (lineage_id, task_id),
+        ).fetchone()
+    except sqlite3.Error as error:
+        raise GuardError(f"Cannot read worker finding state: {error}") from error
+    finally:
+        if "connection" in locals():
+            connection.close()
+
+    if row is None:
+        raise GuardError(f"Missing stored worker finding for {lineage_id}/{task_id}")
+    if row["kind"] not in ("blocker", "unexpected"):
+        raise GuardError(f"Unsupported worker finding kind: {row['kind']}")
+    if row["evidence"] is None or not str(row["evidence"]).strip():
+        raise GuardError("Stored worker finding has no evidence")
+    if row["completed_at"] is not None:
+        raise GuardError("A completed task cannot authorize DFS expansion")
+    if row["integrity_breached_at"] is not None or row["has_integrity_incident"]:
+        raise GuardError("An integrity breach invalidates the worker finding")
+    return str(row["claim_id"]), str(row["kind"])
+
+
+def _markdown_sections(text: str) -> tuple[tuple[int, int, str], ...]:
+    """Return heading positions and levels outside fenced examples."""
+
+    sections: list[tuple[int, int, str]] = []
+    fence_character: str | None = None
+    for index, line in enumerate(text.splitlines(keepends=True)):
+        body = line.rstrip("\r\n")
+        fence = FENCE.match(body)
+        if fence:
+            character = fence.group("marker")[0]
+            if fence_character is None:
+                fence_character = character
+            elif fence_character == character:
+                fence_character = None
+            continue
+        if fence_character is not None:
+            continue
+        heading = ATX_HEADING.match(body)
+        if heading:
+            stripped = body.rstrip()
+            sections.append((index, len(stripped) - len(stripped.lstrip("#")), stripped))
+    return tuple(sections)
+
+
+def _exact_markdown_section(text: str, heading: str) -> str:
+    lines = text.splitlines(keepends=True)
+    sections = _markdown_sections(text)
+    matches = [section for section in sections if section[2] == heading]
+    if len(matches) != 1:
+        raise GuardError(f"DFS must contain exactly one {heading!r} section")
+    start, level, _ = matches[0]
+    end = len(lines)
+    for index, other_level, _ in sections:
+        if index > start and other_level <= level:
+            end = index
+            break
+    return "".join(lines[start:end])
+
+
+def _stable_claim_records(dfs_text: str) -> tuple[tuple[str, str, bool, str], ...]:
+    records: list[tuple[str, str, bool, str]] = []
+    for _, line in _outside_fences(dfs_text):
+        match = STABLE_CLAIM.match(line)
+        if match:
+            label = _normalize_reference(match.group("label"))
+            records.append(
+                (
+                    _selected_claim_id(label),
+                    match.group("status"),
+                    match.group("red") is not None,
+                    line,
+                )
+            )
+    return tuple(records)
+
+
+def _claims_by_id(
+    records: tuple[tuple[str, str, bool, str], ...],
+    version: str,
+) -> dict[str, tuple[str, str, bool, str]]:
+    claims: dict[str, tuple[str, str, bool, str]] = {}
+    for record in records:
+        claim_id = record[0]
+        if claim_id in claims:
+            raise GuardError(f"{version} DFS has duplicate stable claim id: {claim_id}")
+        claims[claim_id] = record
+    return claims
+
+
+def validate_dfs_expansion(before: Path, candidate: Path, task_claim_id: str) -> tuple[str, ...]:
+    """Preserve the accepted frontier and require an append-only red-claim expansion."""
+
+    baseline = read_markdown(before)
+    proposed = read_markdown(candidate)
+    for heading in PROTECTED_DFS_SECTIONS:
+        if _exact_markdown_section(baseline, heading) != _exact_markdown_section(
+            proposed, heading
+        ):
+            raise GuardError(f"DFS expansion cannot change {heading}")
+
+    baseline_records = _stable_claim_records(baseline)
+    candidate_records = _stable_claim_records(proposed)
+    baseline_by_id = _claims_by_id(baseline_records, "Baseline")
+    candidate_by_id = _claims_by_id(candidate_records, "Candidate")
+
+    task_claim_id = _selected_claim_id(task_claim_id)
+    task_claim = baseline_by_id.get(task_claim_id)
+    if task_claim is None or task_claim[1] != " " or not task_claim[2]:
+        raise GuardError(
+            f"Worker finding task claim is not exactly one still-red DFS claim: {task_claim_id}"
+        )
+
+    candidate_positions = {
+        record[0]: index for index, record in enumerate(candidate_records)
+    }
+    prior_position = -1
+    for record in baseline_records:
+        claim_id = record[0]
+        candidate_record = candidate_by_id.get(claim_id)
+        if candidate_record is None:
+            raise GuardError(f"DFS expansion cannot delete stable claim {claim_id}")
+        if candidate_record[3] != record[3]:
+            raise GuardError(
+                f"DFS expansion cannot rename, rewrite, or change status of stable claim {claim_id}"
+            )
+        position = candidate_positions[claim_id]
+        if position <= prior_position:
+            raise GuardError("DFS expansion cannot reorder existing stable claims")
+        prior_position = position
+
+    new_records = [
+        record for record in candidate_records if record[0] not in baseline_by_id
+    ]
+    if not new_records:
+        raise GuardError("DFS expansion must add at least one new red claim")
+    for record in new_records:
+        if record[1] != " " or not record[2] or RED_CLAIM.match(record[3]) is None:
+            raise GuardError(f"New DFS claim must be unchecked and red: {record[0]}")
+    return tuple(record[0] for record in new_records)
+
+
 def red_dfs_claims(dfs_text: str) -> tuple[str, ...]:
     claims: list[str] = []
     for _, line in _outside_fences(dfs_text):
@@ -329,6 +511,15 @@ def build_parser() -> argparse.ArgumentParser:
     completion.add_argument("--state", type=Path, required=True)
     completion.add_argument("--lineage", required=True)
     completion.add_argument("--task", required=True)
+
+    expansion = commands.add_parser(
+        "expand-dfs", help="Validate expansion from one stored worker finding"
+    )
+    expansion.add_argument("--before", type=Path, required=True)
+    expansion.add_argument("--candidate", type=Path, required=True)
+    expansion.add_argument("--state", type=Path, required=True)
+    expansion.add_argument("--lineage", required=True)
+    expansion.add_argument("--task", required=True)
     return parser
 
 
@@ -351,7 +542,7 @@ def main(argv: list[str] | None = None) -> int:
         elif arguments.command == "work-ledger":
             items = validate_work_ledger(arguments.ledger, arguments.dfs)
             print(f"ok: {len(items)} active work items")
-        else:
+        elif arguments.command == "complete-dfs":
             validate_accepted_task_state(
                 arguments.state,
                 arguments.lineage,
@@ -362,6 +553,21 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.before, arguments.after, arguments.claim
             )
             print(f"ok: completed {claim}")
+        else:
+            task_claim, finding_kind = worker_finding_from_state(
+                arguments.state,
+                arguments.lineage,
+                arguments.task,
+            )
+            added = validate_dfs_expansion(
+                arguments.before,
+                arguments.candidate,
+                task_claim,
+            )
+            print(
+                f"ok: {finding_kind} finding expanded {task_claim}; added "
+                + ", ".join(added)
+            )
     except (GuardError, OSError, UnicodeError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

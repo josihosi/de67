@@ -103,7 +103,33 @@ continuous(dS | S, evidence)
       AND exactly one admissible refinement remains
 ```
 
-Otherwise return to DE-67-2 for user-owned refreeze.
+When worker evidence cannot be classified by the current DFS:
+
+```text
+worker finding
+  -> source-grounded causal review
+  -> first contradicted DFS premise
+  -> minimal dS
+  -> necessity test
+  -> proof route and new stable red claim
+  -> structural validation
+  -> refreeze
+  -> fresh coordinator
+```
+
+The source review covers the production owner, helpers, primitives, callers, competing readers and
+writers, owning tests, relevant history, and natural execution. `dS` may append only a uniquely
+implied same-contract mechanism, ownership/precedence fact, proof route, and necessary red claim.
+Every existing claim and the accepted product frontier remain byte-stable in identity, text, order,
+and status. A worker reports evidence but cannot author `dS`.
+
+```text
+dS ∩ guidance_policy_change = ∅
+```
+
+A finding before its deadline can activate `dS` without a miss. A late finding can independently
+activate both `dS` and the deadline mutation. Task, test, tooling, evidence, or external-authority
+gaps are not specification gaps. Otherwise return to DE-67-2 for user-owned refreeze.
 
 ## Fitness
 

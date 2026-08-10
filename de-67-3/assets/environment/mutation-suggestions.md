@@ -15,6 +15,12 @@ Suggested content for an incident:
 Manual suggestions clearly say `Source: manual`. They receive consideration in the next mutation
 round but no automatic authority.
 
+A worker-finding entry says `Source: worker finding` and records expected versus observed behavior,
+direct evidence, the coordinator's causal classification, and its disposition. For a DFS expansion,
+also name the first contradicted DFS premise, the added red IDs, the changed mechanism/ownership/proof
+sections, and why the change preserves the WEC, project language, permissions, and acceptance
+strength. A worker finding is not automatically a specification gap.
+
 ## Entries
 
 No incidents recorded.

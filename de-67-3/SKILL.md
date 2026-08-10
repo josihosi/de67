@@ -64,13 +64,53 @@ database binds it on first use and rejects a reset to another lineage.
 The coordinator may dispatch multiple workers in parallel when code, state, dependencies, and proof
 surfaces are disjoint. Unknown overlap serializes. Handoffs are compact prose: desired outcome,
 relevant code/claim, the passing test, and material boundaries. A worker returns what changed, test
-results, paths, and any uncertainty. Do not require JSON receipts, artifact hash maps, permits, fixed
-terminal schemas, or full transcript ingestion.
+results, paths, and any uncertainty. If blocked or surprised by production behavior, the worker
+returns expected versus observed behavior and direct evidence immediately; it does not guess around
+the finding or edit the DFS. Do not require JSON receipts, artifact hash maps, permits, fixed terminal
+schemas, or full transcript ingestion.
 
 Remain live while work is outstanding. Use the platform's non-polling worker wait or deadline wakeup
 when available, and act on whichever worker result or deadline arrives first. The detached SQLite
 watcher is durable interruption protection; it records a miss but does not replace the independent
 review and mutation transaction. A resumed coordinator reconciles any recorded incident immediately.
+
+## Worker findings and the third mutation lane
+
+A worker that encounters a blocker or unexpected production result records a non-success finding:
+
+```text
+python <active-de-67-3-skill>/scripts/deadline_harness.py finding --state .de67/state/deadlines.sqlite3 --lineage PROJECT --task W-001 --kind blocker --evidence "<expected, observed, and direct evidence>"
+```
+
+An on-time finding stops that task clock without accepting work, closing its DFS claim, or adding a
+miss. A late finding preserves the already-earned miss, so the ordinary deadline mutation and this
+DFS review are independent lanes. A finding is immutable; retry under a new task identity after the
+coordinator dispositions it.
+
+The worker cannot choose the mutation. The coordinator re-inspects the exact production owner,
+helpers, primitives, callers, competing readers and writers, owning tests, relevant history, and the
+natural execution route. Name the first contradicted premise, then classify the finding:
+
+- implementation, task, test, tooling, or evidence gap: replan or use the applicable guidance lane;
+- uniquely implied same-contract specification gap: expand and refreeze the DFS;
+- changed behavior, project language, permissions, acceptance strength, or multiple materially
+  different designs: return to DE-67-2 and the user;
+- genuine external blocker: record the unavailable authority or environment after materially
+  different authorized routes were checked.
+
+For a specification gap, snapshot the current DFS, append the smallest necessary mechanistic fact,
+ownership/precedence decision, proof route, and at least one new stable red claim. Preserve every
+existing claim's identity, text, order, and status and preserve the accepted product frontier. Record
+the finding, diagnosis, added red IDs, and disposition in `mutation-suggestions.md`, then validate:
+
+```text
+python <active-de-67-3-skill>/scripts/mutation_guard.py expand-dfs --before <before-DFS> --after <candidate-DFS> --state .de67/state/deadlines.sqlite3 --lineage PROJECT --task W-001
+```
+
+Only after validation may the coordinator promote and refreeze the DFS. Keep the blocked original
+claim red. Project a newly added prerequisite into the current work ledger only when it is necessary
+now and the active ceiling remains satisfied; otherwise it waits for a later refill. Retire the
+coordinator after a DFS expansion so a fresh coordinator reconciles the expanded contract.
 
 ## Accept work
 
@@ -140,10 +180,16 @@ The coordinator may:
 - remove one red marker after accepted evidence;
 - make an evidence-required, uniquely implied non-material mechanistic clarification when it
   preserves the user outcome, terminology, permissions, and acceptance strength; record and
-  refreeze it.
+  refreeze it;
+- after a stored worker blocker or unexpected-result finding and the source-grounded review above,
+  append the uniquely implied same-contract mechanism, ownership/proof detail, and necessary stable
+  red claims, validate the expansion, and refreeze it.
 
-Return to DE-67-2 and the user for changed product behavior/language/permissions or two genuinely
-different admissible designs. Never mutate the DFS merely to make current work pass.
+Existing claims and accepted work are never renamed, deleted, reopened, or closed by expansion. A
+DFS mutation never substitutes for a deadline-triggered guidance mutation; if both conditions occur,
+run both lanes. Return to DE-67-2 and the user for changed product behavior/language/permissions,
+weaker acceptance, or multiple materially different admissible designs. Never mutate the DFS merely
+to make current work pass.
 
 ## Continue and stop
 

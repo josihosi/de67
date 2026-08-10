@@ -85,9 +85,12 @@ preconditions -> authoritative owner -> transition -> observable outcome -> arti
 - Status: `<Draft | Frozen | Refrozen>`
 - Frozen source baseline: `<commit/tree and relevant state>`
 - User-owned choices: `<WEC clauses or confirmed decisions>`
-- Evidence-implied clarifications: `<none | each uniquely implied clarification and its evidence>`
+- Evidence-implied refinements: `<none | each uniquely implied clarification or phase-3 expansion,
+  its worker evidence, added red IDs, and the first contradicted premise>`
 
 After freeze, automation may only close existing red items after named proof and remove their red
-markers, or make an evidence-implied nonmaterial clarification and immediately
-refreeze. Product intent, project language, behavior, balance, and authority changes remain
-user-owned.
+markers; make an evidence-implied nonmaterial clarification; or append a uniquely implied
+same-contract mechanism, ownership/proof detail, and necessary new stable red claim after a verified
+phase-3 worker finding. Existing claim identities, text, status, accepted work, and acceptance
+strength remain fixed. Refreeze immediately. Product intent, project language, permissions,
+user-visible behavior, balance, and materially different design choices remain user-owned.

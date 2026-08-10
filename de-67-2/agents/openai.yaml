@@ -1,0 +1,7 @@
+interface:
+  display_name: "DE-67-2 Specification"
+  short_description: "Turn a WEC into a code-grounded frozen DFS"
+  default_prompt: "Use $de-67-2 to inspect this repository and freeze a mechanistic DFS from WEC.md."
+
+policy:
+  allow_implicit_invocation: false

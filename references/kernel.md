@@ -229,9 +229,11 @@ rename(T) | split(T) | replace(worker) | revise(ledger) | discover(problem)
     does not change start(W) or deadline(W)
 ```
 
-Only an explicit new user contract creates a new lineage. Deadline expiry freezes new dispatch,
-records a missed window, and requires a compact damage assessment. Later functional success does
-not erase the scheduling failure.
+Only an explicit new user contract creates a new lineage. Deadline expiry ends `W`: it freezes new
+dispatch into `W`, records a missed window, and requires a compact damage assessment. It does not
+end the functional-specification program, close a frozen red claim, change the accepted product
+frontier, or reset the lineage, any sealed start or deadline, or any event or review history. Later
+functional success does not erase the scheduling failure.
 
 ## Failure and mutation law
 
@@ -267,6 +269,25 @@ The next review is due only after three additional distinct misses. Product- and
 failures do not qualify for mutation and an authoritative causal fingerprint cannot be relabeled.
 Mutation evidence is limited to the batch consumed by its review; reviewed failures cannot be
 reused in a later mutation batch.
+
+Every failed terminal or missed deadline must seal its append-only evidence, preserve the stable
+obligation and accepted frontier, reassess the remaining red claims, and continue through a
+materially changed causal retry under the sealed `P1.retry_route` or a successor-window replan.
+Each time `N` reaches three, the fresh independent `sol-xhigh` review is an additive continuation
+gate, not a terminal state. After that review and any admissible mutation workflow, coordination
+resumes whether the result is promotion, rejection, or `no_mutation`. The program stops only for
+all-green completion, revoked consent, a material Gate S owner choice, or a genuine external
+blocker; no internal round or retry fuse may stop an actionable frozen red claim. A mandatory fuse
+may rotate the evaluator only after an identity-bound successor or required-review handoff preserves
+that claim, the accepted frontier, all sealed deadlines, and the append-only history.
+
+A successor is materially changed when receipt-bound evidence invalidates a causal premise of the
+failed route. Different angles can include exact workspace, artifact, or subject identity;
+authoritative-state acquisition; owner or worker assignment; slot decomposition or ordering; and
+the build, test, or live-proof route. Before reporting an external blocker, show that authorized
+materially distinct directions are unavailable and that the next required act exceeds `S.A` or the
+available environment. This search cannot fan out across overlapping state, reset evidence, weaken
+acceptance, substitute synthetic evidence for required live proof, or repeat an unchanged route.
 
 Every candidate begins from the last accepted parent. Rejected candidates have no descendants.
 Incident facts stay in receipts and benchmarks; they do not become skill addenda. The mutation

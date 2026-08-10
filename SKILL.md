@@ -1,166 +1,22 @@
 ---
 name: de67-lab
-description: Explicit-call DE67 coordination and mutation lab. Use when the user invokes `$de67-lab` to author or refine a frozen functional specification, coordinate its implementation after separate explicit Gate C consent, or evolve coordination policy under immutable proof, deadline, and promotion laws. Invocation alone grants neither consent gate.
+description: Compatibility router for the DE-67 lab. Use when the user says `DE-67-1`, `DE-67-2`, or `DE-67-3`, invokes `$de67-lab`, or asks which phase should handle the current work. Route to exactly one phase and never preload the other phase instructions.
 ---
 
-# DE67 Lab
+# DE-67 lab router
 
-Use a frozen constitution around three bounded policy surfaces. Read all four references before any
-lab act:
+This file routes; it does not run a phase.
 
-1. `references/kernel.md` — immutable specification, integrity, clock, mutation, and promotion law.
-2. `policy/orchestration.json` — `P1`, the single-worker-failure mutation surface.
-3. `policy/proof.json` — `P2`, the proof-conformance mutation surface.
-4. `policy/execution.json` — `P3`, the additional three-window-failure mutation surface.
+Match the user's command and read exactly one entrypoint:
 
-Treat `contracts/mutation-policy.json`, both scripts, tests, this file, agent metadata, and the
-kernel as frozen. A candidate never evaluates its own mutation boundary; run
-`scripts/mutation_guard.py` from the accepted parent checkout.
+- `DE-67-1` or `$de-67-1`: read `de-67-1/SKILL.md` for the current-chat discussion and WEC.
+- `DE-67-2` or `$de-67-2`: read `de-67-2/SKILL.md` for code inspection and DFS authoring.
+- `DE-67-3` or `$de-67-3`: read `de-67-3/SKILL.md` for implementation, deadlines, and mutation.
 
-## Lab workflow
+Open the exact selected entrypoint directly; do not inventory or read sibling phase folders for
+background or completeness. The handoff artifacts are the interface: phase 2 receives `WEC.md`;
+phase 3 receives the frozen `DFS.md` and `.de67/` state.
 
-```text
-accepted parent V_n
-    -> sealed failure receipt(s)
-    -> scope(worker | coordinator)
-    -> candidate V_n+1 from V_n
-    -> parent-side mutation validation
-    -> candidate-only frozen benchmark
-    -> compare(candidate result, stored parent result)
-    -> promote | discard candidate and return to V_n
-```
-
-For `worker`, require one identity-bound worker failure and permit changes only to
-`policy/orchestration.json`. For `coordinator`, require three distinct failed ledger windows in
-the same lineage for `P1`/`P3`; permit `P2` mutation only after three causally distinct cumulative
-proof-plan-owned failed windows and the same fresh external review. Successes do not reset this
-count. Neither scope may change the kernel or its enforcement tools.
-
-## Production coordination
-
-Invocation opens briefing only. Follow the kernel Gate S path to author or refreeze the semantic
-functional specification, then stop. Before Gate C, display the exact frozen specification
-revision, accepted product frontier, branch/worktree, fresh xhigh coordinator identity, proposed
-initial ledger, and requested acts. Start production coordination only after separate explicit
-Gate C consent; never infer it from Gate S.
-
-The coordinator is never a worker. It may maintain the ledger, prepare dispatch packets, gate
-compact receipts and targeted diffs, accept or quarantine slot output, and advance the accepted
-product frontier. Assign every implementation, tooling, build, test, live-operation, and
-remediation act to an identity-bound worker.
-
-Until every frozen red claim and explicitly required integrated proof is green:
-
-1. Derive no more than ten necessary atomic slots from the current specification under the kernel
-   MSW implementation domain. Ten is the requester-authorized ceiling, not a target.
-2. Preflight owner, authority, dispatchability, and the exact source/binary/fixture/test evidence;
-   bind and independently review a liquid proof plan where the claim requires one.
-3. Seal the ledger window. Dispatch dependency-ready disjoint slots using the selected `P1`
-   routes and the weakest sufficient available worker profiles; unknown overlap serializes.
-4. Require workers to implement, test, and return compact receipts. Gate every terminal against
-   the frozen acceptance predicates and advance only accepted output.
-5. Derive the next ledger from the remaining red claims.
-
-Seal every failed terminal or missed deadline and classify it under the kernel mutation law. For a
-qualifying failure, preserve the frozen specification and accepted product frontier, run the lab
-mutation workflow from the accepted parent in isolated serial benchmark lanes, promote only a
-validated strict improvement, then resume product coordination from the accepted frontier.
-Mutation benchmarks never perform or receive credit for product recovery.
-
-Stop only for all-green completion, revoked consent, a material Gate S owner choice, an external
-blocker, or the authorized fuse with no independent ready claim.
-
-Concrete proof plans are liquid ledger data, not `P2`. The lineage seals proof presence, semantic
-manifest, accepted frontier, and authoritative owner route. A closed plan maps every condition and
-control to exact source/binary/fixture/test artifacts. Append an independent `proof_reviewed` event,
-then permit proof dispatch with `--worker-identity`; author, reviewer, and worker must differ. Only a
-reviewed permit consumed by a real `task_failed` can receive a harness-derived proof-plan causal
-fingerprint. `minimal_authoritative_conformance` requires that independent authoritative receipt;
-`authoritative_owner_then_live_conformance` additionally requires bound owner and live-conformance
-receipts. The selected route follows review, permit, terminal, damage, and benchmark provenance. A
-truthful preflight blocker stays zero-dispatch.
-
-Do not repair a rejected candidate. Discard it, retain its compact benchmark receipt, identify a
-different causal direction, and derive the next candidate from the last accepted parent.
-
-## Ledger windows
-
-Before any worker dispatch in each new ledger window, call the deadline harness `open-window`.
-That command idempotently deploys the harness when it is absent or version-stale, validates the
-ledger DAG, seals its deadline, persists the clock, and starts the detached watcher. Do not replace
-it with a prompt timer.
-
-Each task must bind `id`, `claim_id`, `intended_task`, `pass_test`, `owner`, `worker_profile`,
-`preconditions`, `authoritative_route`, `evidence_requirements`, `estimate_seconds`,
-`estimate_provenance`, and `depends_on`. If the ledger states `reserve_seconds`, also state
-`reserve_provenance`. Keep stable claims and their obligations unchanged across ledger revisions;
-only scheduling details may move.
-
-If a valid worker/test/artifact result is rejected only because its receipt hash is wrong, append
-the rejected terminal payload as one `receipt_rejected` event. The harness must prove that hash
-mismatches the existing receipt file. Append one `receipt_resealed` event bound to that rejection
-event hash and corrected receipt path/hash, then submit the otherwise unchanged `task_accepted`
-payload with the reseal event hash. Do not issue another worker permit or rerun the test.
-
-After two equivalent terminal failures, the harness rejects a third unchanged dispatch. For a
-materially changed causal retry, pass a pre-execution causal-evidence JSON binding receipt semantics
-and sorted artifact content hashes with `permit-dispatch --causal-evidence`; the sealed P1
-`retry_route` determines whether the same or a replacement worker is admissible.
-
-If the authoritative subject or preconditions are absent before dispatch, record one
-`preflight_blocked` event and complete the zero-dispatch window honestly. After three distinct
-deadline misses in a lineage, stop opening windows or issuing permits until a fresh external
-`sol-xhigh` review is sealed with `record-lineage-review`. Healthy late work may still finish and
-record its terminal receipt; seal the required review before final `completed`. Its deadline miss
-remains in the lineage.
-
-For mutation benchmarks, seal `benchmark_binding` in the ledger: exact candidate Git identity,
-product frontier, target failure, changed policy keys, and expected reduction. Repeat the same
-mutation identity plus observed reductions in the terminal completion event.
-
-Run mutation benchmarks serially: consume each worker-ready receipt before starting or processing
-another candidate. The first sealed candidate result is authoritative. Do not rerun, select, or
-aggregate results unless an owner-authorized benchmark law already defines that operation.
-
-The lab invocation alone does not grant production acts or start a coordinator. Preserve DE67's
-separate specification and coordination consent gates.
-
-## Commands
-
-```text
-python scripts/deadline_harness.py open-window --lineage-id ... --run-id ... \
-  --window-id ... --fs-root /absolute/path/to/specification --ledger ledger.json
-
-python scripts/deadline_harness.py record --lineage-id ... --run-id ... \
-  --window-id ... --kind proof_reviewed --payload proof-review.json
-
-python scripts/deadline_harness.py permit-dispatch --lineage-id ... --run-id ... \
-  --window-id ... --slot-id ... --worker-profile ... --worker-identity ...
-
-python scripts/deadline_harness.py status --lineage-id ... --run-id ... --window-id ...
-
-python scripts/deadline_harness.py record-lineage-review --lineage-id ... --run-id ... \
-  --window-id ... --payload review.json
-
-python scripts/deadline_harness.py export-benchmark --lineage-id ... --run-id ... --window-id ...
-
-python scripts/mutation_guard.py validate --candidate candidate --scope worker \
-  --lineage-id ... --run-id ... --window-id ... --event-hash ... --intent mutation-intent.json \
-  --accepted-ref main --product-frontier product-frontier.json \
-  --baseline-benchmark baseline-benchmark.json
-
-python scripts/mutation_guard.py compare \
-  --baseline-install-root parent-harness-state --baseline-lineage-id ... \
-  --baseline-run-id ... --baseline-window-id ... --candidate-skill candidate \
-  --candidate-install-root candidate-harness-state --candidate-lineage-id ... \
-  --candidate-run-id ... --candidate-window-id ... \
-  --validation-receipt validation-receipt.json
-
-python scripts/mutation_guard.py promote --candidate candidate \
-  --validation-receipt validation-receipt.json \
-  --comparison-receipt comparison-receipt.json
-```
-
-Use absolute paths when a task crosses worktrees or machines. Return compact receipts and artifact
-paths; do not ingest complete worker transcripts merely to operate the lab. `promote` emits a
-validated fast-forward command plan; execute that plan separately from the accepted checkout.
+If `$de67-lab` is invoked without a phase, ask one structured multiple-choice question listing the
+three phases, put the recommended phase first, and route after the answer. Do not infer implementation
+consent from a discussion or specification request.

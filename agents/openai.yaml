@@ -1,7 +1,7 @@
 interface:
-  display_name: "DE67 Mutation Lab"
-  short_description: "Deadline-bound coordination evolution lab"
-  default_prompt: "Use $de67-lab to design or evaluate a deadline-bound DE67 mutation without starting production coordination."
+  display_name: "DE-67 Lab Router"
+  short_description: "Route explicitly to one DE-67 workflow phase"
+  default_prompt: "Use $de67-lab to choose the active DE-67 workflow phase."
 
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true

@@ -1,24 +1,33 @@
-# de67
+# DE-67
 
-**D** is the 4th letter. **E** is the 5th. Then comes **6, 7**.
+> *Six becomes seven by finishing what it started.*
 
-Sometimes work stops proceeding in order. The plan grows sideways, tests repeat, agents loop, and
-the finish line quietly moves away.
+Sometimes work stops proceeding in order: the plan grows sideways, tests repeat, agents hand the
+problem around, and the finish line quietly moves away. DE-67 turns that drift back into a path from
+an idea to working, honestly proven code.
 
-When things are 67, you need to de67 them.
+DE-67 has three explicit phases. The router opens only the phase you invoke:
 
-To **de67** something is to give it a beginning and an end:
+- `DE-67-1` — **Discuss.** Shape the idea through focused multiple choice and produce `WEC.md`, the
+  user's intent and language brief.
+- `DE-67-2` — **Specify.** Inspect the real code and turn the WEC into a code-grounded, frozen
+  `.de67/DFS.md`.
+- `DE-67-3` — **Deliver.** Implement the frozen DFS with deadline-bound work, independent failure
+  review, and controlled mutation that preserves accepted progress.
 
-1. specify what done means;
-2. turn what remains into concrete work;
-3. give that work to the right agents;
-4. prove the result against the real system;
-5. keep accepted progress, learn from failure, and stop when the specification is green.
+The artifacts form the handoff:
 
-DE67 is a coordination skill. Its coordinator holds the specification and the work ledger; workers
-implement and test the individual items. Deadlines expose bad estimates and stuck workflows, while
-evidence gates keep shortcuts from masquerading as completion.
+```text
+WEC.md  ->  frozen DFS.md  ->  delivery and mutation
+```
 
-This repository is a stable checkpoint. Active evolution and mutation happen in
-[josihosi/de67-lab](https://github.com/josihosi/de67-lab), where candidate workflows must prove that
-they are better before they replace the accepted one.
+A phase never silently starts the next one. Invoke the phase you need in chat:
+
+```text
+DE-67-1
+DE-67-2
+DE-67-3
+```
+
+Start with phase 1 for a new idea, phase 2 when the WEC exists, or phase 3 when the DFS is frozen and
+ready to build.

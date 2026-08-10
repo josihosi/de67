@@ -1,0 +1,7 @@
+interface:
+  display_name: "DE-67-1 Discussion"
+  short_description: "Grill an idea into a user-owned WEC brief"
+  default_prompt: "Use $de-67-1 to shape this idea into a WEC through one multiple-choice decision at a time."
+
+policy:
+  allow_implicit_invocation: false

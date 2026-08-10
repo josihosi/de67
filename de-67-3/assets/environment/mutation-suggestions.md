@@ -1,26 +1,15 @@
 # DE-67 mutation suggestion ledger
 
-This ledger is append-only. Independent reviews and manual suggestions use ordinary Markdown, not a
-fixed data schema. Every incident entry must make its short verdict easy to scan; only the current
-incident requires its full diagnosis to be reread, while all earlier short verdicts are reread.
+This is consumable scratch, not history. Independent reviews and manual suggestions use ordinary
+Markdown. The current mutation transaction reads every pending entry. After a real guarded mutation
+is applied, replace the whole ledger with this empty template; if guard or application fails, clear
+nothing.
 
-Suggested content for an incident:
+A random improvement review records one to three concrete inefficiencies ranked by causal
+importance, direct evidence, the candidate target/section change, and proposed treatment of pending
+suggestions. The accepted subset must correspond to the actual guarded file change. A guarded DFS
+no-op leaves this scratch ledger intact.
 
-- incident/task and deadline evidence;
-- **Short verdict:** a compact causal label;
-- **Diagnosis:** one paragraph naming the first contradicted premise and direct evidence;
-- **Suggested mutation:** the guideline section and proposed change;
-- disposition after coordinator review: applied, superseded, rejected, or pending, with reason.
+## Pending suggestions
 
-Manual suggestions clearly say `Source: manual`. They receive consideration in the next mutation
-round but no automatic authority.
-
-A worker-finding entry says `Source: worker finding` and records expected versus observed behavior,
-direct evidence, the coordinator's causal classification, and its disposition. For a DFS expansion,
-also name the first contradicted DFS premise, the added red IDs, the changed mechanism/ownership/proof
-sections, and why the change preserves the WEC, project language, permissions, and acceptance
-strength. A worker finding is not automatically a specification gap.
-
-## Entries
-
-No incidents recorded.
+None.

@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +32,7 @@ TASK_GUIDANCE = guard.read_markdown(
 ORCHESTRATOR_GUIDANCE = guard.read_markdown(
     guard.CANONICAL_GUIDELINES_ROOT / guard.ORCHESTRATOR_GUIDELINES
 )
+SKILL_TEXT = (ROOT / "SKILL.md").read_text(encoding="utf-8")
 
 
 class MutationGuardTests(unittest.TestCase):
@@ -43,6 +45,16 @@ class MutationGuardTests(unittest.TestCase):
         self.candidate.mkdir()
         self.write_guidelines(self.baseline, TASK_GUIDANCE, ORCHESTRATOR_GUIDANCE)
         self.write_guidelines(self.candidate, TASK_GUIDANCE, ORCHESTRATOR_GUIDANCE)
+        dfs_text = self.expansion_dfs(new_claim="")
+        (self.baseline / guard.DFS_FILE).write_text(dfs_text, encoding="utf-8")
+        (self.candidate / guard.DFS_FILE).write_text(dfs_text, encoding="utf-8")
+        self.empty_ledger = self.root / guard.MUTATION_LEDGER
+        self.empty_ledger.write_text(
+            guard.read_markdown(
+                guard.CANONICAL_GUIDELINES_ROOT / guard.MUTATION_LEDGER
+            ),
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -116,6 +128,27 @@ class MutationGuardTests(unittest.TestCase):
                 self.baseline, self.candidate, broader_mutation=False
             )
 
+    def test_incident_mutations_reject_whitespace_only_ledger_consumption(self) -> None:
+        task_path = self.candidate / guard.TASK_GUIDELINES
+        task_path.write_text(
+            TASK_GUIDANCE.replace("Read the exact", "Read  the exact"),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(guard.GuardError, "whitespace-only"):
+            guard.validate_guideline_mutation(
+                self.baseline, self.candidate, broader_mutation=False
+            )
+
+        orchestrator_path = self.candidate / guard.ORCHESTRATOR_GUIDELINES
+        orchestrator_path.write_text(
+            ORCHESTRATOR_GUIDANCE.replace("Begin fresh", "Begin  fresh"),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(guard.GuardError, "whitespace-only"):
+            guard.validate_guideline_mutation(
+                self.baseline, self.candidate, broader_mutation=True
+            )
+
     def test_broader_mutation_requires_both_guidelines(self) -> None:
         self.mutate_task()
         with self.assertRaisesRegex(guard.GuardError, "must change both"):
@@ -167,6 +200,8 @@ class MutationGuardTests(unittest.TestCase):
                     task,
                     "--incident-kind",
                     incident_kind,
+                    "--ledger-candidate",
+                    str(self.empty_ledger),
                 ]
             )
         return result, stdout.getvalue() + stderr.getvalue()
@@ -463,6 +498,8 @@ class MutationGuardTests(unittest.TestCase):
                     lineage,
                     "--task",
                     task,
+                    "--ledger-candidate",
+                    str(self.empty_ledger),
                 ]
             )
         return result, stdout.getvalue() + stderr.getvalue()
@@ -510,6 +547,25 @@ class MutationGuardTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(guard.GuardError, "Project language"):
             guard.validate_dfs_expansion(before, candidate, "R-001")
+
+    def test_expand_dfs_cannot_rewrite_or_delete_nonprotected_prose(self) -> None:
+        baseline = self.expansion_dfs()
+        candidates = (
+            baseline.replace(
+                "The coordinator may add source-grounded mechanics here.",
+                "A different owner now controls the transition.",
+            ),
+            baseline.replace(
+                "The coordinator may add source-grounded mechanics here.\n", ""
+            ),
+        )
+        for candidate_text in candidates:
+            with self.subTest(candidate=candidate_text):
+                before, candidate = self.expansion_files(candidate_text)
+                with self.assertRaisesRegex(
+                    guard.GuardError, "cannot delete or rewrite"
+                ):
+                    guard.validate_dfs_expansion(before, candidate, "R-001")
 
     def test_expand_dfs_requires_a_unique_new_unchecked_red_claim(self) -> None:
         before, candidate = self.expansion_files(self.expansion_dfs(new_claim=""))
@@ -581,7 +637,147 @@ class MutationGuardTests(unittest.TestCase):
         state = self.finding_state("claim-closure")
         result, output = self.run_expand_cli(state, candidate_text=closed)
         self.assertEqual(result, 1)
-        self.assertIn("cannot rename, rewrite, or change status", output)
+        self.assertIn("cannot delete or rewrite", output)
+
+    def random_review_state(self, lane_index: int) -> tuple[Path, int]:
+        state = self.root / f"random-{lane_index}.sqlite"
+        with patch.object(
+            deadline.secrets, "randbelow", side_effect=[0, lane_index]
+        ), deadline.DeadlineHarness(state) as harness:
+            for number in range(1, 11):
+                task = f"terminal-{number}"
+                harness.start_task("project", task, f"R-{number:03d}", 10, now=0)
+                harness.complete_task("project", task, "green", now=1)
+            cycle = harness.list_tasks(now=2)["random_mutation"]["cycle_number"]
+        return state, cycle
+
+    def run_random_review_cli(
+        self,
+        state: Path,
+        cycle: int,
+        *,
+        ledger: Path | None = None,
+    ) -> tuple[int, str]:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            result = guard.main(
+                [
+                    "random-review",
+                    "--baseline",
+                    str(self.baseline),
+                    "--candidate",
+                    str(self.candidate),
+                    "--state",
+                    str(state),
+                    "--lineage",
+                    "project",
+                    "--cycle",
+                    str(cycle),
+                    "--ledger-candidate",
+                    str(self.empty_ledger if ledger is None else ledger),
+                ]
+            )
+        return result, stdout.getvalue() + stderr.getvalue()
+
+    def test_random_review_applies_exactly_the_selected_guideline_lane(self) -> None:
+        state, cycle = self.random_review_state(0)
+        self.mutate_task()
+        result, output = self.run_random_review_cli(state, cycle)
+        self.assertEqual(result, 0, output)
+        self.assertIn(guard.TASK_GUIDELINES, output)
+
+        self.setUp_candidate_again()
+        state, cycle = self.random_review_state(1)
+        self.mutate_orchestrator()
+        result, output = self.run_random_review_cli(state, cycle)
+        self.assertEqual(result, 0, output)
+        self.assertIn(guard.ORCHESTRATOR_GUIDELINES, output)
+
+    def setUp_candidate_again(self) -> None:
+        self.write_guidelines(self.candidate, TASK_GUIDANCE, ORCHESTRATOR_GUIDANCE)
+        (self.candidate / guard.DFS_FILE).write_text(
+            self.expansion_dfs(new_claim=""), encoding="utf-8"
+        )
+
+    def test_random_review_rejects_wrong_lane_and_whitespace_only_change(self) -> None:
+        state, cycle = self.random_review_state(1)
+        self.mutate_task()
+        result, output = self.run_random_review_cli(state, cycle)
+        self.assertEqual(result, 1)
+        self.assertIn("selected orchestrator-guidelines.md", output)
+
+        self.setUp_candidate_again()
+        state, cycle = self.random_review_state(0)
+        path = self.candidate / guard.TASK_GUIDELINES
+        path.write_text(
+            TASK_GUIDANCE.replace("Read the exact", "Read  the exact"),
+            encoding="utf-8",
+        )
+        result, output = self.run_random_review_cli(state, cycle)
+        self.assertEqual(result, 1)
+        self.assertIn("whitespace-only", output)
+
+    def test_random_dfs_review_accepts_safe_expansion_or_exact_guarded_noop(self) -> None:
+        state, cycle = self.random_review_state(2)
+        (self.candidate / guard.DFS_FILE).write_text(
+            self.expansion_dfs(), encoding="utf-8"
+        )
+        result, output = self.run_random_review_cli(state, cycle)
+        self.assertEqual(result, 0, output)
+        self.assertIn("changed DFS.md", output)
+
+        self.setUp_candidate_again()
+        state, cycle = self.random_review_state(2)
+        result, output = self.run_random_review_cli(state, cycle)
+        self.assertEqual(result, 0, output)
+        self.assertIn("guarded DFS no-op", output)
+
+    def test_random_dfs_review_preserves_frozen_contract(self) -> None:
+        state, cycle = self.random_review_state(2)
+        candidate = self.expansion_dfs().replace(
+            "The existing behavior remains the contract.",
+            "The behavior is now broader.",
+        )
+        (self.candidate / guard.DFS_FILE).write_text(candidate, encoding="utf-8")
+        result, output = self.run_random_review_cli(state, cycle)
+        self.assertEqual(result, 1)
+        self.assertIn("Functional contract", output)
+
+    def test_successful_random_mutation_requires_empty_scratch_ledger(self) -> None:
+        state, cycle = self.random_review_state(0)
+        self.mutate_task()
+        uncleared = self.root / "uncleared.md"
+        uncleared.write_text("# pending suggestion\n", encoding="utf-8")
+        result, output = self.run_random_review_cli(
+            state, cycle, ledger=uncleared
+        )
+        self.assertEqual(result, 1)
+        self.assertIn("reset mutation-suggestions.md", output)
+
+    def test_random_review_requires_due_unresolved_stored_cycle(self) -> None:
+        state = self.root / "not-due.sqlite"
+        with patch.object(
+            deadline.secrets, "randbelow", side_effect=[0, 0]
+        ), deadline.DeadlineHarness(state) as harness:
+            harness.start_task("project", "running", "R-001", 100, now=0)
+            cycle = harness.list_tasks(now=1)["random_mutation"]["cycle_number"]
+        self.mutate_task()
+        result, output = self.run_random_review_cli(state, cycle)
+        self.assertEqual(result, 1)
+        self.assertIn("not due", output)
+
+    def test_documented_random_commands_use_the_tested_cli_surface(self) -> None:
+        command_lines = [
+            line
+            for line in SKILL_TEXT.splitlines()
+            if "mutation_guard.py random-review" in line
+            or "deadline_harness.py resolve-random-mutation" in line
+        ]
+        self.assertEqual(len(command_lines), 2)
+        self.assertNotIn("--disposition", "\n".join(command_lines))
+        self.assertIn("--ledger-candidate", command_lines[0])
+        self.assertIn("--evidence", command_lines[1])
 
 
 if __name__ == "__main__":

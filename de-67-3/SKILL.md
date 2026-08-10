@@ -29,11 +29,11 @@ Required project state:
 - `orchestrator-guidelines.md` — mutable coordination and failure-investigation guidance; its
   headings are frozen.
 - `work-ledger.md` — the current batch of no more than ten still-red DFS claims.
-- `mutation-suggestions.md` — append-only short verdict history, full current diagnoses, manual
-  suggestions, and mutation dispositions.
+- `mutation-suggestions.md` — consumable scratch for pending reviews and manual suggestions; every
+  successful mutation resets it to the empty skill template.
 
 The normative mutable surface is exactly the DFS and the two guideline documents. The ledgers carry
-current/history state; they are not additional policy surfaces.
+current scratch state; they are not additional policy surfaces.
 
 ## Start or resume
 
@@ -45,6 +45,9 @@ work:
 ```text
 python <active-de-67-3-skill>/scripts/deadline_harness.py list --state .de67/state/deadlines.sqlite3
 ```
+
+If `random_mutation.due` is true, do not dispatch another task. Complete the random improvement
+transaction below first. Already-dispatched workers keep their original briefs and clocks.
 
 If the work ledger has no active item, select up to ten necessary remaining red DFS claims. Ten is
 the user-authorized ceiling, not a target. Re-read the affected code and tests, define the smallest
@@ -100,17 +103,19 @@ natural execution route. Name the first contradicted premise, then classify the 
 
 For a specification gap, snapshot the current DFS, append the smallest necessary mechanistic fact,
 ownership/precedence decision, proof route, and at least one new stable red claim. Preserve every
-existing claim's identity, text, order, and status and preserve the accepted product frontier. Record
-the finding, diagnosis, added red IDs, and disposition in `mutation-suggestions.md`, then validate:
+existing claim's identity, text, order, and status and preserve the accepted product frontier. Put the
+finding and diagnosis in `mutation-suggestions.md`, prepare an empty ledger candidate from the skill
+template, then validate both candidates:
 
 ```text
-python <active-de-67-3-skill>/scripts/mutation_guard.py expand-dfs --before <before-DFS> --after <candidate-DFS> --state .de67/state/deadlines.sqlite3 --lineage PROJECT --task W-001
+python <active-de-67-3-skill>/scripts/mutation_guard.py expand-dfs --before <before-DFS> --candidate <candidate-DFS> --state .de67/state/deadlines.sqlite3 --lineage PROJECT --task W-001 --ledger-candidate <empty-ledger-candidate>
 ```
 
-Only after validation may the coordinator promote and refreeze the DFS. Keep the blocked original
-claim red. Project a newly added prerequisite into the current work ledger only when it is necessary
-now and the active ceiling remains satisfied; otherwise it waits for a later refill. Retire the
-coordinator after a DFS expansion so a fresh coordinator reconciles the expanded contract.
+Only after validation may the coordinator promote and refreeze the DFS and replace the suggestion
+ledger with the empty candidate. Keep the blocked original claim red. Project a newly added
+prerequisite into the current work ledger only when it is necessary now and the active ceiling
+remains satisfied; otherwise it waits for a later refill. Retire the coordinator after a DFS
+expansion so a fresh coordinator reconciles the expanded contract.
 
 ## Accept work
 
@@ -140,26 +145,68 @@ start this transaction:
 2. Prefer `gpt-5.6-sol` at `xhigh` for this X-type causal review. If unavailable, use the strongest
    independent implementation-capable reviewer available; the worker and coordinator do not review
    their own miss.
-3. Append the review to `mutation-suggestions.md`: a short verdict, one explanatory paragraph,
-   direct evidence references, and a suggested mutation naming the relevant guideline section.
-4. Read the full current diagnosis and every earlier short verdict. Decide whether this failure
-   recurs because earlier mutations did not address it.
+3. Put the review in `mutation-suggestions.md`: a short verdict, one explanatory paragraph, direct
+   evidence references, and a suggested mutation naming the relevant guideline section.
+4. Read every pending suggestion in that scratch ledger and decide which evidence supports now.
 5. Snapshot the two current guideline files as the read-only baseline, then apply the smallest
    supported change to candidate copies of `test-and-task-guidelines.md`. On cumulative miss units
    3, 6, 9, and so on, also mutate `orchestrator-guidelines.md` in the same transaction.
-6. Validate the candidate against canonical headings, baseline, and the exact stored incident with
-   `mutation_guard.py guidelines --state ... --lineage ... --task ... --incident-kind ...`; only then
-   replace the live guideline bodies. The guard derives ordinary versus broader scope from SQLite;
-   the coordinator never supplies the miss count.
-7. Retire the current coordinator. A fresh coordinator reads the mutated state and resumes from the
-   accepted product frontier.
+6. Prepare an empty ledger candidate from the skill template. Validate the guideline candidates,
+   empty ledger, canonical headings, baseline, and exact stored incident with
+   `mutation_guard.py guidelines ... --ledger-candidate <empty-ledger-candidate>`. The guard derives
+   ordinary versus broader scope from SQLite; the coordinator never supplies the miss count.
+7. Promote the guarded guideline bodies and empty ledger together. If validation or application
+   fails, preserve the live ledger. Retire the current coordinator only after the real files change;
+   a fresh coordinator reads the mutated state and resumes from the accepted product frontier.
 
 Useful short verdicts include `goal unclear`, `task unclear`, `test undefined`, `test overdefined`,
 `test unachievable`, `wrong worker or model`, `tooling unchecked`, `estimate unsound`, `competing
 owner missed`, `integrity breach`, and `external wait`. These are examples, not a closed vocabulary.
 
-Manual mutation proposals may be appended to the same suggestion ledger at any time. The next
-mutation round considers and dispositions them; a suggestion is evidence, not automatic authority.
+Manual mutation proposals may be put in the suggestion ledger at any time. The next successful
+mutation consumes all entries; a suggestion is evidence, not automatic authority.
+
+## Random improvement cadence
+
+The deadline harness privately draws and persists a uniform interval from 10 through 30 terminal
+task windows and one uniform target from `test-and-task-guidelines.md`,
+`orchestrator-guidelines.md`, and `DFS.md`. A task contributes exactly once at its first completion,
+worker finding, deadline miss, or integrity breach. A later result for that task does not contribute
+again. The harness exposes the draw and due state for audit; callers cannot pass an interval, lane,
+or seed. On first installation it backfills terminal windows already evidenced by stored completions,
+findings, misses, and breaches before drawing the lineage's first cycle. It does not edit Markdown or
+start reviewers.
+
+When the stored cycle becomes due, the old coordinator blocks new dispatch and runs this transaction:
+
+1. Give a genuinely independent reviewer the selected target, current DFS and both guidance files,
+   compact recent deadline outcomes, and the pending suggestion ledger.
+2. Require one to three concrete inefficiencies, ranked by causal importance, with direct evidence,
+   a small candidate patch for the selected target, and proposed treatment of pending suggestions.
+   This owner-authorized bound prevents an audit dump.
+3. The old coordinator checks the evidence and prepares candidate copies of all three mutable files.
+   Change only the stored target. An accepted suggestion must correspond to a real file and section
+   change. Do not reselect a friendlier lane.
+4. For a DFS draw, apply only a uniquely implied, source-grounded same-contract expansion that
+   preserves protected contract/language and every existing line byte-for-byte, including `Status`
+   and refreeze prose; insert only additive refinement text. If none is safe, use an exact guarded
+   DFS no-op; never invent product behavior to satisfy randomness.
+5. Put the review in the scratch ledger, prepare an empty ledger candidate only for an actual
+   mutation, and validate with:
+
+```text
+python <active-de-67-3-skill>/scripts/mutation_guard.py random-review --baseline <baseline-dir> --candidate <candidate-dir> --state .de67/state/deadlines.sqlite3 --lineage PROJECT --cycle N --ledger-candidate <ledger-candidate>
+```
+
+6. After an `applied` verdict, promote the real target and empty ledger together. On a guarded DFS
+   no-op, leave both DFS and scratch ledger unchanged. Then record the actual target/section and guard
+   evidence, end the old coordinator, and let a fresh coordinator consume only durable mutated state:
+
+```text
+python <active-de-67-3-skill>/scripts/deadline_harness.py resolve-random-mutation --state .de67/state/deadlines.sqlite3 --lineage PROJECT --cycle N --evidence "<guard result and actual target/section>"
+```
+
+Failed validation changes and clears nothing, and the cadence gate stays due.
 
 ## Integrity breaches
 
@@ -186,10 +233,11 @@ The coordinator may:
   red claims, validate the expansion, and refreeze it.
 
 Existing claims and accepted work are never renamed, deleted, reopened, or closed by expansion. A
-DFS mutation never substitutes for a deadline-triggered guidance mutation; if both conditions occur,
-run both lanes. Return to DE-67-2 and the user for changed product behavior/language/permissions,
-weaker acceptance, or multiple materially different admissible designs. Never mutate the DFS merely
-to make current work pass.
+DFS expansion only inserts lines; it never rewrites existing `Status` or refreeze prose. A DFS
+mutation never substitutes for a deadline-triggered guidance mutation; if both conditions occur, run
+both lanes. Return to DE-67-2 and the user for changed product behavior/language/permissions, weaker
+acceptance, or multiple materially different admissible designs. Never mutate the DFS merely to make
+current work pass.
 
 ## Continue and stop
 

@@ -7,12 +7,22 @@ import argparse
 import json
 import math
 import os
+import secrets
 import sqlite3
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+
+RANDOM_INTERVAL_MIN = 10
+RANDOM_INTERVAL_MAX = 30
+RANDOM_MUTATION_LANES = (
+    "test-and-task-guidelines.md",
+    "orchestrator-guidelines.md",
+    "DFS.md",
+)
 
 
 class DeadlineError(RuntimeError):
@@ -46,6 +56,7 @@ class DeadlineHarness:
                 completion_evidence TEXT,
                 integrity_breached_at REAL,
                 integrity_reason TEXT,
+                terminal_at REAL,
                 PRIMARY KEY (lineage_id, task_id)
             );
 
@@ -80,8 +91,54 @@ class DeadlineHarness:
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                 lineage_id TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS random_mutation_cycles (
+                lineage_id TEXT NOT NULL,
+                cycle_number INTEGER NOT NULL CHECK (cycle_number > 0),
+                interval_windows INTEGER NOT NULL CHECK (
+                    interval_windows BETWEEN 10 AND 30
+                ),
+                due_after_terminal_windows INTEGER NOT NULL CHECK (
+                    due_after_terminal_windows >= interval_windows
+                ),
+                selected_lane TEXT NOT NULL CHECK (
+                    selected_lane IN (
+                        'test-and-task-guidelines.md',
+                        'orchestrator-guidelines.md',
+                        'DFS.md'
+                    )
+                ),
+                due_task_id TEXT,
+                resolution_evidence TEXT,
+                PRIMARY KEY (lineage_id, cycle_number)
+            );
             """
         )
+        task_columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        needs_terminal_backfill = "terminal_at" not in task_columns
+        if needs_terminal_backfill:
+            self.connection.execute("ALTER TABLE tasks ADD COLUMN terminal_at REAL")
+            self.connection.executescript(
+                """
+                UPDATE tasks AS current
+                SET terminal_at = (
+                    SELECT MIN(event_at) FROM (
+                        SELECT current.completed_at AS event_at
+                        UNION ALL SELECT current.integrity_breached_at
+                        UNION ALL SELECT reported_at FROM worker_findings
+                            WHERE lineage_id = current.lineage_id
+                              AND task_id = current.task_id
+                        UNION ALL SELECT recorded_at FROM incidents
+                            WHERE lineage_id = current.lineage_id
+                              AND task_id = current.task_id
+                    )
+                )
+                WHERE current.terminal_at IS NULL;
+                """
+            )
 
     def close(self) -> None:
         self.connection.close()
@@ -163,6 +220,127 @@ class DeadlineHarness:
             (lineage_id,),
         ).fetchone()
         return int(row["total"])
+
+    def _terminal_window_count(self, lineage_id: str) -> int:
+        row = self.connection.execute(
+            """
+            SELECT COUNT(*) AS total FROM tasks
+            WHERE lineage_id = ? AND terminal_at IS NOT NULL
+            """,
+            (lineage_id,),
+        ).fetchone()
+        return int(row["total"])
+
+    @staticmethod
+    def _draw_random_cycle() -> tuple[int, str]:
+        interval_width = RANDOM_INTERVAL_MAX - RANDOM_INTERVAL_MIN + 1
+        interval = RANDOM_INTERVAL_MIN + secrets.randbelow(interval_width)
+        lane = RANDOM_MUTATION_LANES[secrets.randbelow(len(RANDOM_MUTATION_LANES))]
+        return interval, lane
+
+    def _latest_random_cycle(self, lineage_id: str) -> sqlite3.Row | None:
+        return self.connection.execute(
+            """
+            SELECT * FROM random_mutation_cycles
+            WHERE lineage_id = ?
+            ORDER BY cycle_number DESC
+            LIMIT 1
+            """,
+            (lineage_id,),
+        ).fetchone()
+
+    def _ensure_random_cycle(self, lineage_id: str) -> sqlite3.Row:
+        cycle = self._latest_random_cycle(lineage_id)
+        if cycle is not None and cycle["resolution_evidence"] is None:
+            return cycle
+        completed = self._terminal_window_count(lineage_id)
+        number = 1 if cycle is None else int(cycle["cycle_number"]) + 1
+        cycle_start = 0 if cycle is None else completed
+        interval, lane = self._draw_random_cycle()
+        self.connection.execute(
+            """
+            INSERT INTO random_mutation_cycles (
+                lineage_id, cycle_number, interval_windows,
+                due_after_terminal_windows, selected_lane
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (lineage_id, number, interval, cycle_start + interval, lane),
+        )
+        cycle = self._latest_random_cycle(lineage_id)
+        if cycle is None:
+            raise DeadlineError("Failed to persist random mutation cycle")
+        if completed >= cycle["due_after_terminal_windows"]:
+            boundary = self.connection.execute(
+                """
+                SELECT task_id FROM tasks
+                WHERE lineage_id = ? AND terminal_at IS NOT NULL
+                ORDER BY terminal_at, task_id
+                LIMIT 1 OFFSET ?
+                """,
+                (lineage_id, cycle["due_after_terminal_windows"] - 1),
+            ).fetchone()
+            self.connection.execute(
+                """
+                UPDATE random_mutation_cycles SET due_task_id = ?
+                WHERE lineage_id = ? AND cycle_number = ?
+                """,
+                (boundary["task_id"], lineage_id, cycle["cycle_number"]),
+            )
+            cycle = self._latest_random_cycle(lineage_id)
+        return cycle
+
+    def _random_cycle_result(self, row: sqlite3.Row) -> dict[str, Any]:
+        completed = self._terminal_window_count(row["lineage_id"])
+        due = row["due_task_id"] is not None and row["resolution_evidence"] is None
+        return {
+            "cycle_number": row["cycle_number"],
+            "interval_windows": row["interval_windows"],
+            "due_after_terminal_windows": row["due_after_terminal_windows"],
+            "selected_lane": row["selected_lane"],
+            "completed_terminal_windows": completed,
+            "due": due,
+            "due_task_id": row["due_task_id"],
+        }
+
+    def _random_mutation_status(self, lineage_id: str) -> dict[str, Any]:
+        return self._random_cycle_result(self._ensure_random_cycle(lineage_id))
+
+    def _record_terminal_window(
+        self,
+        task: sqlite3.Row,
+        terminal_at: float,
+    ) -> None:
+        if self._task(task["lineage_id"], task["task_id"])["terminal_at"] is not None:
+            return
+        cycle = self._ensure_random_cycle(task["lineage_id"])
+        self.connection.execute(
+            """
+            UPDATE tasks SET terminal_at = ?
+            WHERE lineage_id = ? AND task_id = ? AND terminal_at IS NULL
+            """,
+            (
+                terminal_at,
+                task["lineage_id"],
+                task["task_id"],
+            ),
+        )
+        completed = self._terminal_window_count(task["lineage_id"])
+        if (
+            cycle["due_task_id"] is None
+            and completed >= cycle["due_after_terminal_windows"]
+        ):
+            self.connection.execute(
+                """
+                UPDATE random_mutation_cycles
+                SET due_task_id = ?
+                WHERE lineage_id = ? AND cycle_number = ?
+                """,
+                (
+                    task["task_id"],
+                    task["lineage_id"],
+                    cycle["cycle_number"],
+                ),
+            )
 
     @staticmethod
     def _incident_result(row: sqlite3.Row, recorded: bool) -> dict[str, Any]:
@@ -256,9 +434,11 @@ class DeadlineHarness:
         )
         if not missed:
             return None
-        return self._record_incident(
+        incident = self._record_incident(
             task["lineage_id"], task["task_id"], "deadline_miss", 1, now
         )
+        self._record_terminal_window(task, now)
+        return incident
 
     def _status(self, lineage_id: str, task_id: str, now: float) -> dict[str, Any]:
         task = self._task(lineage_id, task_id)
@@ -329,6 +509,19 @@ class DeadlineHarness:
         self._begin()
         try:
             self._bind_lineage(lineage_id)
+            self._ensure_random_cycle(lineage_id)
+            existing = self.connection.execute(
+                """
+                SELECT * FROM tasks
+                WHERE lineage_id = ? AND task_id = ?
+                """,
+                (lineage_id, task_id),
+            ).fetchone()
+            random_mutation = self._random_mutation_status(lineage_id)
+            if existing is None and random_mutation["due"]:
+                raise DeadlineError(
+                    "Random improvement review is due; resolve it before dispatching a new task"
+                )
             cursor = self.connection.execute(
                 """
                 INSERT OR IGNORE INTO tasks (
@@ -346,6 +539,7 @@ class DeadlineHarness:
                 raise DeadlineError("Repeated start cannot change estimate")
             result = self._status(lineage_id, task_id, started_at)
             result["created"] = created
+            result["random_mutation"] = self._random_mutation_status(lineage_id)
             self.connection.commit()
             return result
         except Exception:
@@ -363,6 +557,7 @@ class DeadlineHarness:
             task = self._task(lineage_id, task_id)
             self._record_miss_if_due(task, checked_at)
             result = self._status(lineage_id, task_id, checked_at)
+            result["random_mutation"] = self._random_mutation_status(lineage_id)
             self.connection.commit()
             return result
         except Exception:
@@ -405,6 +600,7 @@ class DeadlineHarness:
                 "lineage_id": lineage_id,
                 "checked_at": checked_at,
                 "cumulative_miss_units": self._cumulative_units(lineage_id),
+                "random_mutation": self._random_mutation_status(lineage_id),
                 "tasks": tasks,
                 "incidents": [
                     self._incident_result(incident, recorded=False)
@@ -430,6 +626,7 @@ class DeadlineHarness:
             result = {
                 "incident": incident,
                 "status": self._status(lineage_id, task_id, checked_at),
+                "random_mutation": self._random_mutation_status(lineage_id),
             }
             self.connection.commit()
             return result
@@ -468,7 +665,9 @@ class DeadlineHarness:
                     """,
                     (completed_at, evidence, lineage_id, task_id),
                 )
+                self._record_terminal_window(task, completed_at)
             result = self._status(lineage_id, task_id, completed_at)
+            result["random_mutation"] = self._random_mutation_status(lineage_id)
             self.connection.commit()
             return result
         except Exception:
@@ -525,10 +724,13 @@ class DeadlineHarness:
                 finding = existing
                 recorded = False
 
+            self._record_terminal_window(task, reported_at)
+
             result = {
                 "deadline_incident": deadline_incident,
                 "finding": self._finding_result(finding, recorded=recorded),
                 "status": self._status(lineage_id, task_id, reported_at),
+                "random_mutation": self._random_mutation_status(lineage_id),
             }
             self.connection.commit()
             return result
@@ -566,10 +768,75 @@ class DeadlineHarness:
                     """,
                     (recorded_at, reason, lineage_id, task_id),
                 )
+            self._record_terminal_window(task, recorded_at)
             result = {
                 "deadline_incident": deadline_incident,
                 "incident": incident,
                 "status": self._status(lineage_id, task_id, recorded_at),
+                "random_mutation": self._random_mutation_status(lineage_id),
+            }
+            self.connection.commit()
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def resolve_random_mutation(
+        self,
+        lineage_id: str,
+        cycle_number: int,
+        evidence: str,
+    ) -> dict[str, Any]:
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        if isinstance(cycle_number, bool) or not isinstance(cycle_number, int):
+            raise DeadlineError("Cycle number must be a positive integer")
+        if cycle_number <= 0:
+            raise DeadlineError("Cycle number must be a positive integer")
+        evidence = self._nonempty_text(evidence, "Random review evidence")
+        self._begin()
+        try:
+            self._bind_lineage(lineage_id)
+            cycle = self.connection.execute(
+                """
+                SELECT * FROM random_mutation_cycles
+                WHERE lineage_id = ? AND cycle_number = ?
+                """,
+                (lineage_id, cycle_number),
+            ).fetchone()
+            if cycle is None:
+                raise DeadlineError(
+                    f"Unknown random mutation cycle: {lineage_id}/{cycle_number}"
+                )
+            if cycle["due_task_id"] is None:
+                raise DeadlineError("Random mutation cycle is not due")
+            if cycle["resolution_evidence"] is None:
+                self.connection.execute(
+                    """
+                    UPDATE random_mutation_cycles
+                    SET resolution_evidence = ?
+                    WHERE lineage_id = ? AND cycle_number = ?
+                    """,
+                    (
+                        evidence,
+                        lineage_id,
+                        cycle_number,
+                    ),
+                )
+                recorded = True
+            else:
+                if cycle["resolution_evidence"] != evidence:
+                    raise DeadlineError(
+                        "Random mutation resolution is immutable once recorded"
+                    )
+                recorded = False
+
+            next_cycle = self._ensure_random_cycle(lineage_id)
+            result = {
+                "recorded": recorded,
+                "cycle_number": cycle_number,
+                "selected_lane": cycle["selected_lane"],
+                "resolution_evidence": evidence,
+                "random_mutation": self._random_cycle_result(next_cycle),
             }
             self.connection.commit()
             return result
@@ -667,6 +934,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_command = commands.add_parser("list", help="List bound-lineage deadline state")
     list_command.add_argument("--state", dest="command_state")
+
+    resolve_random = commands.add_parser(
+        "resolve-random-mutation",
+        help="Record one guarded random improvement review",
+    )
+    resolve_random.add_argument("--state", dest="command_state")
+    resolve_random.add_argument("--lineage", required=True)
+    resolve_random.add_argument("--cycle", required=True, type=int)
+    resolve_random.add_argument("--evidence", required=True)
     return parser
 
 
@@ -708,6 +984,12 @@ def main(argv: list[str] | None = None) -> int:
                         arguments.lineage,
                         arguments.task,
                         arguments.kind,
+                        arguments.evidence,
+                    )
+                elif arguments.command == "resolve-random-mutation":
+                    result = harness.resolve_random_mutation(
+                        arguments.lineage,
+                        arguments.cycle,
                         arguments.evidence,
                     )
                 else:

@@ -71,11 +71,12 @@ its own independent causal review.
 ```text
 incident
   -> independent review
-  -> append short verdict + full diagnosis + suggestion
-  -> compare all earlier short verdicts
+  -> put verdict + diagnosis + suggestion in scratch ledger
+  -> consume pending suggestions into candidate guidance
   -> mutate task/test guidance
   -> if broader cadence: mutate orchestrator guidance too
-  -> validate frozen headings and scope
+  -> validate guidance + empty-ledger candidate
+  -> promote mutation + empty ledger
   -> fresh coordinator
   -> continue from accepted product frontier
 ```
@@ -83,6 +84,29 @@ incident
 The diagnosis identifies the first contradicted premise, not merely the last visible error. Inspect
 the real source owner, helpers, other readers/writers, callers, tests, relevant history, tooling, and
 the difference between a focused setup and natural execution.
+
+The suggestion ledger is consumable scratch, not history. A successful guarded mutation resets it to
+the empty skill template; a failed guard or application leaves it untouched.
+
+## Random improvement review
+
+For each lineage, privately and uniformly draw `k in [10, 30]` and one lane from task/test guidance,
+orchestrator guidance, and DFS. Persist the draw before exposing it. The first cycle starts at lineage
+terminal zero, including terminal facts backfilled from pre-cadence machine state; later cycles start
+at the resolution frontier.
+
+```text
+first terminal window for task i -> terminal_count += 1
+terminal_count = cycle_start + k -> random review due; block new dispatch
+```
+
+Completion, worker finding, deadline miss, and integrity breach are terminal windows; later outcomes
+for the same task do not count again. The old coordinator gives the fixed lane and compact durable
+state to an independent reviewer, receives one to three ranked inefficiencies and a concrete patch,
+guards and applies the actual target, consumes the scratch ledger after a real mutation, resolves the
+cycle, and retires. The fresh coordinator consumes only durable state. A DFS draw permits only a
+source-grounded `dS`; when none is safe, exact DFS no-op is the only admissible resolution and the
+scratch ledger remains.
 
 ## Controlled DFS mutation
 
@@ -120,8 +144,8 @@ worker finding
 The source review covers the production owner, helpers, primitives, callers, competing readers and
 writers, owning tests, relevant history, and natural execution. `dS` may append only a uniquely
 implied same-contract mechanism, ownership/precedence fact, proof route, and necessary red claim.
-Every existing claim and the accepted product frontier remain byte-stable in identity, text, order,
-and status. A worker reports evidence but cannot author `dS`.
+Every existing DFS line remains byte-identical and in order, including `Status` and refreeze prose;
+`dS` is insertion-only. A worker reports evidence but cannot author `dS`.
 
 ```text
 dS ∩ guidance_policy_change = ∅
@@ -146,6 +170,7 @@ must improve the causal guidance before retry; mutation volume is not fitness.
 
 ## Persistence
 
-Accepted code and green claims form the product frontier. A failed candidate has no descendants, but
-its causal evidence remains in the mutation ledger. No miss, mutation, reviewer result, or coordinator
-retirement ends the DFS program while a red claim has an authorized materially different route.
+Accepted code and green claims form the product frontier. A failed candidate has no descendants.
+Deadline machine state remains auditable, while successful mutations consume their scratch review
+ledger. No miss, mutation, reviewer result, or coordinator retirement ends the DFS program while a
+red claim has an authorized materially different route.

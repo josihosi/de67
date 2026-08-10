@@ -13,6 +13,9 @@ import sys
 TASK_GUIDELINES = "test-and-task-guidelines.md"
 ORCHESTRATOR_GUIDELINES = "orchestrator-guidelines.md"
 GUIDELINE_FILES = (TASK_GUIDELINES, ORCHESTRATOR_GUIDELINES)
+DFS_FILE = "DFS.md"
+MUTATION_LEDGER = "mutation-suggestions.md"
+RANDOM_MUTATION_LANES = (*GUIDELINE_FILES, DFS_FILE)
 INCIDENT_KINDS = ("deadline_miss", "integrity_breach")
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_GUIDELINES_ROOT = SKILL_ROOT / "assets" / "environment"
@@ -43,6 +46,17 @@ def read_markdown(path: Path) -> str:
     if not path.is_file():
         raise GuardError(f"Missing Markdown file: {path}")
     return path.read_text(encoding="utf-8")
+
+
+def validate_consumed_mutation_ledger(candidate: Path) -> None:
+    """Require a successful mutation candidate to consume all scratch suggestions."""
+
+    expected = read_markdown(CANONICAL_GUIDELINES_ROOT / MUTATION_LEDGER)
+    actual = read_markdown(candidate)
+    if actual != expected:
+        raise GuardError(
+            "A successful mutation must reset mutation-suggestions.md to its empty template"
+        )
 
 
 def markdown_headings(text: str) -> tuple[str, ...]:
@@ -95,6 +109,11 @@ def validate_guideline_mutation(
             changed.append(name)
 
     changed_set = set(changed)
+    for name in changed:
+        baseline = read_markdown(baseline_root / name)
+        candidate = read_markdown(candidate_root / name)
+        if _meaningful_markdown(baseline) == _meaningful_markdown(candidate):
+            raise GuardError(f"{name} mutation cannot be whitespace-only")
     if broader_mutation:
         if changed_set != set(GUIDELINE_FILES):
             raise GuardError(
@@ -105,6 +124,103 @@ def validate_guideline_mutation(
             "An ordinary miss must change task/test guidance and leave orchestrator guidance unchanged"
         )
     return tuple(changed)
+
+
+def _meaningful_markdown(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def random_review_from_state(
+    state: str | Path,
+    lineage_id: str,
+    cycle_number: int,
+) -> str:
+    """Read one exact due random-review lane without changing machine state."""
+
+    state_path = Path(state).expanduser()
+    if not state_path.is_file():
+        raise GuardError(f"Deadline state does not exist: {state_path}")
+    try:
+        connection = sqlite3.connect(state_path.resolve().as_uri() + "?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            """
+            SELECT selected_lane, due_task_id, resolution_evidence
+            FROM random_mutation_cycles
+            WHERE lineage_id = ? AND cycle_number = ?
+            """,
+            (lineage_id, cycle_number),
+        ).fetchone()
+    except sqlite3.Error as error:
+        raise GuardError(f"Cannot read random mutation state: {error}") from error
+    finally:
+        if "connection" in locals():
+            connection.close()
+
+    if row is None:
+        raise GuardError(
+            f"Missing random mutation cycle for {lineage_id}/{cycle_number}"
+        )
+    if row["due_task_id"] is None:
+        raise GuardError("Random mutation cycle is not due")
+    if row["resolution_evidence"] is not None:
+        raise GuardError("Random mutation cycle is already resolved")
+    lane = str(row["selected_lane"])
+    if lane not in RANDOM_MUTATION_LANES:
+        raise GuardError(f"Unsupported random mutation lane: {lane}")
+    return lane
+
+
+def validate_random_review_mutation(
+    baseline_root: Path,
+    candidate_root: Path,
+    *,
+    selected_lane: str,
+) -> tuple[str, ...]:
+    """Validate exactly the stored random lane, including a safe DFS no-op."""
+
+    if selected_lane not in RANDOM_MUTATION_LANES:
+        raise GuardError(f"Unsupported random mutation lane: {selected_lane}")
+    baseline_files = {
+        name: read_markdown(baseline_root / name)
+        for name in (*GUIDELINE_FILES, DFS_FILE)
+    }
+    candidate_files = {
+        name: read_markdown(candidate_root / name)
+        for name in (*GUIDELINE_FILES, DFS_FILE)
+    }
+    for name in GUIDELINE_FILES:
+        _require_frozen_headings(
+            name, baseline_files[name], candidate_files[name]
+        )
+
+    changed = tuple(
+        name
+        for name in (*GUIDELINE_FILES, DFS_FILE)
+        if baseline_files[name] != candidate_files[name]
+    )
+    if selected_lane in GUIDELINE_FILES:
+        if changed != (selected_lane,):
+            raise GuardError(
+                f"Random review selected {selected_lane}; no other mutable file may change"
+            )
+        if _meaningful_markdown(baseline_files[selected_lane]) == _meaningful_markdown(
+            candidate_files[selected_lane]
+        ):
+            raise GuardError("Random guideline mutation cannot be whitespace-only")
+        return changed
+
+    if any(name in changed for name in GUIDELINE_FILES):
+        raise GuardError("A DFS random review cannot change either guideline file")
+    if not changed:
+        return ()
+    if changed != (DFS_FILE,):
+        raise GuardError("An applied DFS random review must change only DFS.md")
+    validate_random_dfs_mutation(
+        baseline_root / DFS_FILE,
+        candidate_root / DFS_FILE,
+    )
+    return changed
 
 
 def broader_mutation_from_incident(
@@ -364,9 +480,21 @@ def _claims_by_id(
     return claims
 
 
-def validate_dfs_expansion(before: Path, candidate: Path, task_claim_id: str) -> tuple[str, ...]:
-    """Preserve the accepted frontier and require an append-only red-claim expansion."""
+def _require_baseline_line_subsequence(baseline: str, candidate: str) -> None:
+    remaining = iter(candidate.splitlines(keepends=True))
+    for baseline_line in baseline.splitlines(keepends=True):
+        if not any(line == baseline_line for line in remaining):
+            raise GuardError(
+                "DFS expansion cannot delete or rewrite any baseline line"
+            )
 
+
+def _validate_append_only_dfs(
+    before: Path,
+    candidate: Path,
+    *,
+    task_claim_id: str | None,
+) -> tuple[str, ...]:
     baseline = read_markdown(before)
     proposed = read_markdown(candidate)
     for heading in PROTECTED_DFS_SECTIONS:
@@ -374,18 +502,21 @@ def validate_dfs_expansion(before: Path, candidate: Path, task_claim_id: str) ->
             proposed, heading
         ):
             raise GuardError(f"DFS expansion cannot change {heading}")
+    _require_baseline_line_subsequence(baseline, proposed)
 
     baseline_records = _stable_claim_records(baseline)
     candidate_records = _stable_claim_records(proposed)
     baseline_by_id = _claims_by_id(baseline_records, "Baseline")
     candidate_by_id = _claims_by_id(candidate_records, "Candidate")
 
-    task_claim_id = _selected_claim_id(task_claim_id)
-    task_claim = baseline_by_id.get(task_claim_id)
-    if task_claim is None or task_claim[1] != " " or not task_claim[2]:
-        raise GuardError(
-            f"Worker finding task claim is not exactly one still-red DFS claim: {task_claim_id}"
-        )
+    if task_claim_id is not None:
+        task_claim_id = _selected_claim_id(task_claim_id)
+        task_claim = baseline_by_id.get(task_claim_id)
+        if task_claim is None or task_claim[1] != " " or not task_claim[2]:
+            raise GuardError(
+                "Worker finding task claim is not exactly one still-red DFS claim: "
+                f"{task_claim_id}"
+            )
 
     candidate_positions = {
         record[0]: index for index, record in enumerate(candidate_records)
@@ -414,6 +545,26 @@ def validate_dfs_expansion(before: Path, candidate: Path, task_claim_id: str) ->
         if record[1] != " " or not record[2] or RED_CLAIM.match(record[3]) is None:
             raise GuardError(f"New DFS claim must be unchecked and red: {record[0]}")
     return tuple(record[0] for record in new_records)
+
+
+def validate_dfs_expansion(before: Path, candidate: Path, task_claim_id: str) -> tuple[str, ...]:
+    """Preserve the frontier for an expansion authorized by a worker finding."""
+
+    return _validate_append_only_dfs(
+        before,
+        candidate,
+        task_claim_id=task_claim_id,
+    )
+
+
+def validate_random_dfs_mutation(before: Path, candidate: Path) -> tuple[str, ...]:
+    """Allow only a same-contract append-only DFS refinement with new red work."""
+
+    return _validate_append_only_dfs(
+        before,
+        candidate,
+        task_claim_id=None,
+    )
 
 
 def red_dfs_claims(dfs_text: str) -> tuple[str, ...]:
@@ -499,6 +650,7 @@ def build_parser() -> argparse.ArgumentParser:
     guidelines.add_argument("--lineage", required=True)
     guidelines.add_argument("--task", required=True)
     guidelines.add_argument("--incident-kind", choices=INCIDENT_KINDS, required=True)
+    guidelines.add_argument("--ledger-candidate", type=Path, required=True)
 
     ledger = commands.add_parser("work-ledger", help="Validate active work against red DFS claims")
     ledger.add_argument("--ledger", type=Path, required=True)
@@ -520,6 +672,18 @@ def build_parser() -> argparse.ArgumentParser:
     expansion.add_argument("--state", type=Path, required=True)
     expansion.add_argument("--lineage", required=True)
     expansion.add_argument("--task", required=True)
+    expansion.add_argument("--ledger-candidate", type=Path, required=True)
+
+    random_review = commands.add_parser(
+        "random-review",
+        help="Validate one due random improvement-review lane",
+    )
+    random_review.add_argument("--baseline", type=Path, required=True)
+    random_review.add_argument("--candidate", type=Path, required=True)
+    random_review.add_argument("--state", type=Path, required=True)
+    random_review.add_argument("--lineage", required=True)
+    random_review.add_argument("--cycle", type=int, required=True)
+    random_review.add_argument("--ledger-candidate", type=Path, required=True)
     return parser
 
 
@@ -538,6 +702,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.candidate,
                 broader_mutation=broader_mutation,
             )
+            validate_consumed_mutation_ledger(arguments.ledger_candidate)
             print("ok: guideline mutation; changed " + ", ".join(changed))
         elif arguments.command == "work-ledger":
             items = validate_work_ledger(arguments.ledger, arguments.dfs)
@@ -553,7 +718,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.before, arguments.after, arguments.claim
             )
             print(f"ok: completed {claim}")
-        else:
+        elif arguments.command == "expand-dfs":
             task_claim, finding_kind = worker_finding_from_state(
                 arguments.state,
                 arguments.lineage,
@@ -564,10 +729,33 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.candidate,
                 task_claim,
             )
+            validate_consumed_mutation_ledger(arguments.ledger_candidate)
             print(
                 f"ok: {finding_kind} finding expanded {task_claim}; added "
                 + ", ".join(added)
             )
+        else:
+            lane = random_review_from_state(
+                arguments.state,
+                arguments.lineage,
+                arguments.cycle,
+            )
+            changed = validate_random_review_mutation(
+                arguments.baseline,
+                arguments.candidate,
+                selected_lane=lane,
+            )
+            if changed:
+                validate_consumed_mutation_ledger(arguments.ledger_candidate)
+            if changed:
+                print(
+                    f"ok: random review cycle {arguments.cycle}; changed "
+                    + ", ".join(changed)
+                )
+            else:
+                print(
+                    f"ok: random review cycle {arguments.cycle}; guarded DFS no-op"
+                )
     except (GuardError, OSError, UnicodeError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

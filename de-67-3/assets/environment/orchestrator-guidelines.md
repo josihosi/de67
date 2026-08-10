@@ -50,10 +50,18 @@ accepted product transition, not by tests run, artifacts written, reviews comple
 
 ## Mutate and hand over
 
-After each incident, consume the independent diagnosis, read all earlier short verdicts, mutate the
-smallest relevant guidance, validate frozen headings/scope, and retire. The successor is a fresh
-coordinator reading durable state, not a prose reconstruction of the predecessor. DFS expansion and
+After each incident, consume the independent diagnosis and all pending scratch suggestions, mutate
+the smallest relevant guidance, validate the target plus an empty-ledger candidate, promote both,
+and retire. A failed guard or application clears nothing. The successor is a fresh coordinator
+reading durable state, not a prose reconstruction of the predecessor. DFS expansion and
 deadline-guidance mutation are independent: perform both when the same evidence activates both.
+
+When the harness reports a due random improvement review, block new dispatch. Give a genuinely
+independent reviewer the stored target, current guidance/DFS, compact recent deadline outcomes, and
+pending scratch. Require one to three ranked evidence-backed inefficiencies and a concrete patch.
+The old coordinator guards and applies only the stored target, consumes the ledger after a real
+mutation, resolves the cycle, and retires. Never reselect a DFS draw; use an exact guarded no-op when
+no source-grounded same-contract DFS expansion is safe.
 
 ## Continue and stop
 

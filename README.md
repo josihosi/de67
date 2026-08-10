@@ -1,6 +1,6 @@
 # DE-67
 
-> **D** is the 4th letter. **E** is the 5th. Then comes **6, 7** — one step past Order 66.
+> **Order 67:** execute the plan, not each other.
 
 Sometimes work stops proceeding in order: the plan grows sideways, tests repeat, agents hand the
 problem around, and the finish line quietly moves away. DE-67 turns that drift back into a path from

@@ -878,14 +878,6 @@ class DeadlineHarness:
                     current.completed_at IS NULL
                     OR current.integrity_breached_at IS NOT NULL
                   )
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM tasks AS accepted
-                    WHERE accepted.lineage_id = current.lineage_id
-                      AND accepted.claim_id = current.claim_id
-                      AND accepted.completed_at IS NOT NULL
-                      AND accepted.integrity_breached_at IS NULL
-                  )
                   AND (
                     current.terminal_at IS NULL
                     OR NOT EXISTS (

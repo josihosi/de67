@@ -344,6 +344,19 @@ class DeadlineHarnessTests(unittest.TestCase):
         )
         self.assertEqual(self.harness.list_tasks(now=7)["tasks"], [])
 
+    def test_accepted_subtask_does_not_hide_a_new_route_for_the_same_claim(self) -> None:
+        self.harness.start_task("project", "partial", "R-001", 100, now=0)
+        self.harness.complete_task(
+            "project", "partial", "One necessary seam is accepted.", now=1
+        )
+        self.harness.start_task("project", "next", "R-001", 100, now=2)
+
+        summary = self.harness.list_tasks(now=3)
+
+        self.assertEqual(
+            [task["task_id"] for task in summary["tasks"]], ["next"]
+        )
+
     def test_list_supersedes_prior_deadline_miss_for_the_same_claim(self) -> None:
         for number in (1, 2):
             task_id = f"miss-{number}"

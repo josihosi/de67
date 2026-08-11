@@ -29,9 +29,10 @@ direct evidence when a blocker or unexpected production result invalidates a tas
 Use the weakest sufficient Phase-2-proved model and effort for understood implementation. Give one
 self-contained brief per task. Select Luna through the trusted project default and Terra explicitly;
 the effort remains task-specific. Use a stronger implementation-capable model for ambiguous
-ownership, causal diagnosis, or risky cross-cutting work. Change the route or worker only when
-evidence supports the change. A small read-only code-mapping worker is optional when ownership is
-genuinely unclear, not a required prelude.
+ownership, causal diagnosis, or risky cross-cutting work. Choose or change the route and worker from
+the task, current evidence, context fit, and coordination cost. A small read-only code-mapping worker
+is optional when ownership is genuinely unclear, not a required prelude. Reuse a relevant worker or
+spawn another as useful; the choice is orchestration, not a task result.
 
 ## Test definition
 

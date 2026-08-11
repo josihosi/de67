@@ -10,7 +10,7 @@ read `de-67-1/` or `de-67-2/`. Read this file, then `references/kernel.md`; load
 from `.de67/` and the working code.
 
 Phase 2 must already have frozen `.de67/DFS.md` and created `.de67/state/workspace.json` with the
-bound clock lineage, state path, branch, checkpoint targets, and proved Luna and Terra capabilities
+bound clock lineage, state path, branch, managed upstream target, and proved Luna and Terra capabilities
 at more than one effort level. Read that small machine
 configuration; do not redo workspace setup here. A missing configuration returns to DE-67-2.
 Copy each missing guideline or ledger from `assets/environment/` individually. The Markdown
@@ -74,8 +74,8 @@ never turn the ledger or DFS into task history.
 
 Choose model, effort, brief, and evidence through the mutable guidelines and the Phase-2-proved
 roster. The technical selector stays small: Luna omits `model` and supplies its proved effort; Terra
-supplies both. Every task uses a fresh `fork_turns="none"` worker and a self-contained prompt. Then
-start its timer at actual dispatch:
+supplies both. Choose whether to reuse a relevant worker or spawn another; any new worker uses
+`fork_turns="none"`, and every task gets a self-contained brief. Start its timer at actual dispatch:
 
 ```text
 python <active-de-67-3-skill>/scripts/deadline_harness.py start --state .de67/state/deadlines.sqlite3 --lineage PROJECT --task W-001 --claim R-001 --estimate-seconds 900
@@ -86,7 +86,7 @@ database binds it on first use and rejects a reset to another lineage.
 
 Workers report through the native parent/child channel; the coordinator may clarify an active task
 without loading its transcript. Follow the kernel and mutable guidelines for parallelism, findings,
-and worker retirement.
+and worker choice.
 
 Remain live while dispatched workers are outstanding. Use the platform's non-polling worker wait or
 deadline wakeup when available, and act on whichever worker result or deadline arrives first. The
@@ -157,14 +157,14 @@ python <active-de-67-3-skill>/scripts/mutation_guard.py complete-dfs --before <b
 After validation, promote the candidate DFS, remove the item from the active ledger, and run
 `mutation_guard.py work-ledger` against the live ledger, DFS, and clock state. The coordinator does
 not run product builds, tests, harnesses, or GUI operations itself; when more execution is necessary,
-dispatch a fresh scoped worker. Preserve concise evidence, not a receipt bureaucracy.
+dispatch a suitable scoped worker. Preserve concise evidence, not a receipt bureaucracy.
 
 ```text
 python <active-de-67-3-skill>/scripts/mutation_guard.py work-ledger --ledger .de67/work-ledger.md --dfs .de67/DFS.md --state .de67/state/deadlines.sqlite3 --lineage PROJECT
 ```
 
 Checkpoint accepted changes with an ordinary commit. The Phase-2-installed post-commit hook pushes
-that exact committed `HEAD` to the configured targets; coordinators do not run routine pushes or
+that exact committed `HEAD` to the configured upstream; coordinators do not run routine pushes or
 wait for a clean worker tree. A rejected push never permits force or history repair and retries only
 when a later commit fires the hook.
 

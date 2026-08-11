@@ -23,7 +23,8 @@ state. Only Josef or an agent directly tasked with maintaining this note may cha
   main skill, kernel, mutable guidelines, templates, and tests instead of choosing a new canonical
   copy for every repetition.
 - Keep model choice in the proved workspace roster and mutable worker guidance. The frozen path only
-  needs a fresh isolated worker, a self-contained task prompt, and a clock started at dispatch.
+  needs a self-contained task prompt and a clock started at dispatch. Worker reuse or replacement is
+  a coordinator choice; newly spawned workers do not inherit coordinator context.
 - Replace symbolic `S` / `dS` notation with plain same-contract and DFS-authority language. Revisit
   byte-identical insertion-only DFS expansion: preserve the user outcome, accepted claims, red claim
   identities, and proof strength, but do not forbid a necessary local refinement merely because its

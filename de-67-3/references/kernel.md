@@ -42,9 +42,9 @@ Focused tests can isolate a seam. They do not replace a required natural or inte
 
 The coordinator plans, dispatches, checks evidence, updates ledgers/DFS, diagnoses, and mutates
 guidance. Workers implement, build, test, or operate. A coordinator may perform read-only code
-investigation, but it does not quietly become an implementation or proof worker. One clock task owns
-one fresh worker thread; a terminal task retires that thread. Workers receive a task-local prompt,
-never the coordinator or predecessor transcript.
+investigation, but it does not quietly become an implementation or proof worker. The coordinator may
+reuse a relevant worker or spawn another as it judges useful. Workers receive a task-local brief,
+never the coordinator or predecessor transcript; worker lifecycle is not a task outcome.
 
 Parallel work is admissible only when code, state, dependencies, and proof surfaces do not collide.
 Unknown ownership is a dependency to investigate, not permission to race.

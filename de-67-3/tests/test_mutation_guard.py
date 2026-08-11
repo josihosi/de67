@@ -903,6 +903,13 @@ class MutationGuardTests(unittest.TestCase):
         )
         self.assertIn("applied mutation or another explicit restart event", combined)
 
+    def test_worker_lifecycle_is_not_a_task_requirement(self) -> None:
+        combined = SKILL_TEXT + "\n" + KERNEL_TEXT
+        self.assertNotIn("Every task uses a fresh", combined)
+        self.assertNotIn("one fresh worker thread", combined)
+        self.assertNotIn("terminal task retires", combined)
+        self.assertNotIn("worker retirement", combined)
+
 
 if __name__ == "__main__":
     unittest.main()

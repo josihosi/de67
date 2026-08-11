@@ -96,23 +96,19 @@ class WorkspaceSetupTests(unittest.TestCase):
         next_head = self.commit_file("next.txt", "next\n", "next")
         self.assertEqual(self.head(self.origin, "refs/heads/dev"), next_head)
 
-    def test_one_commit_can_checkpoint_two_explicit_remotes(self) -> None:
+    def test_configuration_rejects_multiple_automatic_targets(self) -> None:
         checkpoint = self.root / "checkpoint.git"
         self.git(self.root, "init", "--bare", str(checkpoint))
         self.git(self.workspace, "remote", "add", "checkpoint", str(checkpoint))
-        head = self.commit_file("two-remotes.txt", "checkpoint\n", "checkpoint")
 
-        result = configure(
-            self.workspace,
-            [("origin", "dev"), ("checkpoint", "main")],
-            bind_clock=False,
-        )
+        with self.assertRaisesRegex(SetupError, "Exactly one --target"):
+            configure(
+                self.workspace,
+                [("origin", "dev"), ("checkpoint", "main")],
+                bind_clock=False,
+            )
 
-        self.assertTrue(result["push"]["ok"])
-        self.assertEqual(self.head(self.origin, "refs/heads/dev"), head)
-        self.assertEqual(self.head(checkpoint, "refs/heads/main"), head)
-
-    def test_repeated_setup_is_idempotent_and_allows_only_additive_targets(self) -> None:
+    def test_repeated_setup_is_idempotent_and_rejects_added_target(self) -> None:
         self.freeze_dfs()
         first = configure(
             self.workspace,
@@ -140,25 +136,10 @@ class WorkspaceSetupTests(unittest.TestCase):
         checkpoint = self.root / "checkpoint-additive.git"
         self.git(self.root, "init", "--bare", str(checkpoint))
         self.git(self.workspace, "remote", "add", "checkpoint", str(checkpoint))
-        additive = configure(
-            self.workspace,
-            [("origin", "dev"), ("checkpoint", "main")],
-            bind_clock=True,
-            worker_capabilities=VERIFIED_WORKERS,
-        )
-        additive_config = json.loads(
-            (self.workspace / CONFIG_RELATIVE_PATH).read_text(encoding="utf-8")
-        )
-        self.assertEqual(additive["clock"], first["clock"])
-        self.assertEqual(len(additive_config["targets"]), 2)
-        self.assertEqual(
-            self.head(checkpoint, "refs/heads/main"), self.head(self.workspace)
-        )
-
-        with self.assertRaisesRegex(SetupError, "cannot be removed"):
+        with self.assertRaisesRegex(SetupError, "Exactly one --target"):
             configure(
                 self.workspace,
-                [("origin", "dev")],
+                [("origin", "dev"), ("checkpoint", "main")],
                 bind_clock=True,
                 worker_capabilities=VERIFIED_WORKERS,
             )
@@ -166,7 +147,7 @@ class WorkspaceSetupTests(unittest.TestCase):
             json.loads(
                 (self.workspace / CONFIG_RELATIVE_PATH).read_text(encoding="utf-8")
             ),
-            additive_config,
+            initial_config,
         )
 
     def test_repeated_setup_cannot_repin_changed_remote_url(self) -> None:

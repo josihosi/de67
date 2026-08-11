@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind a DE-67 workspace clock and install guarded checkpoint pushes."""
+"""Bind a DE-67 workspace clock and install one guarded upstream push."""
 
 from __future__ import annotations
 
@@ -231,8 +231,11 @@ def _install_hook(workspace: Path) -> Path:
 def _targets(
     workspace: Path, requested: Sequence[Sequence[str]]
 ) -> tuple[list[dict[str, str]], str]:
-    if not requested:
-        raise SetupError("At least one --target REMOTE BRANCH is required")
+    if len(requested) != 1:
+        raise SetupError(
+            "Exactly one --target REMOTE BRANCH is allowed for automatic pushes; "
+            "checkpoint pushes are explicit one-shot operations"
+        )
     upstream = _upstream(workspace)
     result: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()

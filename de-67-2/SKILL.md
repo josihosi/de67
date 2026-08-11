@@ -78,15 +78,16 @@ gate and create no coordination artifact unless it is named here.
    the installed runner rejects the project agent default, update that runner to a compatible
    version and repeat the probes; do not invent an alias, a custom role taxonomy, or a model matrix.
 11. After freeze, perform the one-time workspace setup. Ensure `.de67/state/` is ignored, keep the
-   current branch's configured upstream as the first checkpoint target, and add another target only
-   when the user named it. Run:
+   current branch's configured upstream as the sole managed automatic target. A checkpoint repository
+   is pushed only as a separate one-shot action after the user explicitly requests it; never persist
+   it in the hook or clock configuration. Run:
 
    ```text
-   python <parent-of-this-phase-folder>/scripts/workspace_setup.py setup --workspace . --target REMOTE BRANCH --worker-capability MODEL REASONING_EFFORT [--worker-capability MODEL REASONING_EFFORT] [--target CHECKPOINT_REMOTE BRANCH]
+   python <parent-of-this-phase-folder>/scripts/workspace_setup.py setup --workspace . --target REMOTE BRANCH --worker-capability MODEL REASONING_EFFORT [--worker-capability MODEL REASONING_EFFORT]
    ```
 
    The helper binds one stable lineage clock, records its machine-only configuration under
-   `.de67/state/`, installs a guarded post-commit checkpoint hook, and immediately pushes the
+   `.de67/state/`, installs a guarded post-commit upstream hook, and immediately pushes the
    already-committed backlog. It never commits, switches branches, force-pushes, or launches a
    coordinator. A dirty tree is allowed because only committed `HEAD` is pushed. If the upstream,
    remote URL, branch, or an existing unmanaged hook conflicts, stop and report it rather than

@@ -15,7 +15,7 @@ Match the user's command and read exactly one entrypoint:
 
 Open the exact selected entrypoint directly; do not inventory or read sibling phase folders for
 background or completeness. The handoff artifacts are the interface: phase 2 receives `WEC.md`;
-phase 3 receives the frozen `DFS.md` and `.de67/` state.
+phase 3 receives the frozen `DFS.md` and Phase-2-initialized `.de67/` clock state.
 
 If `$de67-lab` is invoked without a phase, ask one structured multiple-choice question listing the
 three phases, put the recommended phase first, and route after the answer. Do not infer implementation

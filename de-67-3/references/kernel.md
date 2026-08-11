@@ -15,7 +15,8 @@ S = (C, E, D, O, A, R)
 - `A`: acceptance conditions and honest proof routes.
 - `R`: stable red work claims.
 
-The DFS owns `S`. The work ledger is only a current projection of `R`.
+The DFS owns `S`. The work ledger is only a current projection of `R`; accepted work disappears from
+it and needs no second narrative record.
 
 ```text
 active(work ledger) <= min(10, remaining_red(DFS))
@@ -176,8 +177,9 @@ must improve the causal guidance before retry; mutation volume is not fitness.
 ## Persistence
 
 Accepted code and green claims form the product frontier. A failed candidate has no descendants.
-Deadline machine state remains auditable, while successful mutations consume their scratch review
-ledger. Coordinator logs are evidence, not context or liveness authority. A pending restart blocks
-new dispatch until a supervisor-owned fresh coordinator acknowledges it. No miss, mutation, reviewer
-result, or coordinator retirement ends the DFS program while a red claim has an authorized
-materially different route.
+Every unresolved incident and incomplete claim remains discoverable without loading completed
+history; accepted tasks are represented only by their green DFS claims. Successful mutations consume
+their scratch review ledger. Coordinator logs are evidence, not context or liveness authority. A
+pending restart blocks new dispatch until a supervisor-owned fresh coordinator acknowledges it. No
+miss, mutation, reviewer result, or coordinator retirement ends the DFS program while a red claim has
+an authorized materially different route.

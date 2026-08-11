@@ -5,9 +5,11 @@ cadence or after an integrity breach.
 
 ## Read state
 
-Begin fresh from the DFS, both guidance documents, both ledgers, timer status, repository identity,
-current code, and returned worker evidence. Preserve accepted work; do not inherit unsupported claims
-from the previous coordinator.
+Begin fresh by reading the DFS, both guidance documents, both ledgers, compact timer status,
+repository identity, current code, and returned worker evidence once. Reopen only a changed or
+actionable section. Preserve accepted work; do not inherit unsupported claims or logs from the
+previous coordinator. Default history is the latest ten short failure verdicts; fetch long detail
+only for the exact current anomaly.
 
 ## Assess failures
 
@@ -28,7 +30,10 @@ same-contract refinement; task, test, tooling, evidence, and external-authority 
 ## Plan the work ledger
 
 When the current batch is empty, project no more than ten necessary still-red DFS claims into the
-work ledger. Re-read code and define tests at planning time. Keep task mechanics out of the frozen DFS.
+work ledger. Re-read code and define tests at planning time. Remove accepted items without a batch
+summary or archive; their checked DFS claims are the record. For a still-red claim, replace old task
+notes with only the current causal frontier and active route. Keep task mechanics out of the frozen
+DFS.
 
 ## Coordinate workers
 
@@ -60,8 +65,8 @@ expansion and deadline-guidance mutation are
 independent: perform both when the same evidence activates both.
 
 When the harness reports a due random improvement review, block new dispatch. Give a genuinely
-independent reviewer the stored target, current guidance/DFS, compact recent deadline outcomes, and
-pending scratch. Require one to three ranked evidence-backed inefficiencies and a concrete patch.
+independent reviewer the stored target, current guidance/DFS, the latest ten short failure verdicts,
+and pending scratch. Require one to three ranked evidence-backed inefficiencies and a concrete patch.
 The old coordinator guards and applies only the stored target, consumes the ledger after a real
 mutation, resolves the cycle so the clock queues the restart, and retires. Never reselect a DFS draw,
 launch the successor from the old coordinator, or treat a log's `RUNNING` text as liveness. Use an

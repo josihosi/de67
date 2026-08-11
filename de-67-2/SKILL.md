@@ -12,7 +12,8 @@ Run only after an explicit `DE-67-2` or `$de-67-2` invocation.
 - Accept `WEC.md` as the only cross-phase input.
 - Preserve it as `.de67/WEC.md` and produce `.de67/DFS.md`; the frozen DFS is phase 3's required
   handoff.
-- Do not read or require phase-1 or phase-3 instructions, folders, ledgers, or artifacts.
+- Do not read or require phase-1 or phase-3 instructions, ledgers, or artifacts. The shared
+  workspace-setup helper is infrastructure, not another phase's instructions.
 - Preserve the user's product intent and project language from `WEC.md`. Only the user may change
   either.
 - Change no product code or tests in this phase.
@@ -39,6 +40,24 @@ Run only after an explicit `DE-67-2` or `$de-67-2` invocation.
    `- [ ] 🔴 R-...`. Define the outcome test and production proof that closes each red item.
 7. Check the DFS against the current code again, resolve internal contradictions, record its source
    baseline, and freeze it.
+8. After freeze, perform the one-time workspace setup. Ensure `.de67/state/` is ignored, keep the
+   current branch's configured upstream as the first checkpoint target, and add another target only
+   when the user named it. Run:
+
+   ```text
+   python <parent-of-this-phase-folder>/scripts/workspace_setup.py setup --workspace . --target REMOTE BRANCH [--target CHECKPOINT_REMOTE BRANCH]
+   ```
+
+   The helper binds one stable lineage clock, records its machine-only configuration under
+   `.de67/state/`, installs a guarded post-commit checkpoint hook, and immediately pushes the
+   already-committed backlog. It never commits, switches branches, force-pushes, or launches a
+   coordinator. A dirty tree is allowed because only committed `HEAD` is pushed. If the upstream,
+   remote URL, branch, or an existing unmanaged hook conflicts, stop and report it rather than
+   weakening the guard. If setup succeeds but only its immediate backlog push fails, continue with
+   the scoped local commit below; the hook preserves the failure status and retries on the next
+   commit. Git setup is outside the DFS and does not add dispatch policy to it.
+9. Checkpoint only `.de67/WEC.md`, `.de67/DFS.md`, and a required ignore-rule change; preserve every
+   unrelated dirty path. The installed hook pushes that commit, so do not run a second routine push.
 
 ## Frozen DFS
 

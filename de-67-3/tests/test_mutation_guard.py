@@ -80,8 +80,8 @@ class MutationGuardTests(unittest.TestCase):
         path = self.candidate / guard.ORCHESTRATOR_GUIDELINES
         path.write_text(
             ORCHESTRATOR_GUIDANCE.replace(
-                "Begin fresh from the DFS, both guidance documents, both ledgers, timer status, repository identity,",
-                "Begin independently from the DFS, both guidance documents, both ledgers, timer status, and repository identity,",
+                "Begin fresh by reading",
+                "Begin independently by reading",
             ),
             encoding="utf-8",
         )
@@ -173,9 +173,25 @@ class MutationGuardTests(unittest.TestCase):
                     "project", task, f"R-{number:03d}", 1, now=0
                 )
                 harness.expire_task("project", task, now=2)
+                harness.diagnose_incident(
+                    "project",
+                    task,
+                    "deadline_miss",
+                    f"miss {number}",
+                    f"Independent diagnosis for miss {number}.",
+                    now=3,
+                )
             harness.start_task("project", "breach", "R-004", 10, now=0)
             harness.record_integrity_breach(
                 "project", "breach", "fabricated evidence", now=1
+            )
+            harness.diagnose_incident(
+                "project",
+                "breach",
+                "integrity_breach",
+                "integrity breach",
+                "Independent diagnosis of fabricated evidence.",
+                now=2,
             )
         return state
 
@@ -249,6 +265,20 @@ class MutationGuardTests(unittest.TestCase):
         )
         self.assertEqual(result, 1)
         self.assertIn("Missing stored integrity_breach incident", output)
+
+    def test_guidelines_cli_rejects_an_undiagnosed_incident(self) -> None:
+        state = self.root / "undiagnosed.sqlite"
+        with deadline.DeadlineHarness(state) as harness:
+            harness.start_task("project", "miss", "R-001", 1, now=0)
+            harness.expire_task("project", "miss", now=2)
+        self.mutate_task()
+
+        result, output = self.run_guidelines_cli(
+            state, "miss", "deadline_miss"
+        )
+
+        self.assertEqual(result, 1)
+        self.assertIn("independent short and long diagnosis", output)
 
     def write_dfs(self, text: str) -> Path:
         path = self.root / "DFS.md"
@@ -778,6 +808,10 @@ class MutationGuardTests(unittest.TestCase):
         self.assertNotIn("--disposition", "\n".join(command_lines))
         self.assertIn("--ledger-candidate", command_lines[0])
         self.assertIn("--evidence", command_lines[1])
+
+    def test_documented_integrity_route_requires_exact_diagnosis(self) -> None:
+        self.assertIn("`--kind integrity_breach`", SKILL_TEXT)
+        self.assertIn("using `--kind integrity_breach`", SKILL_TEXT)
 
 
 if __name__ == "__main__":

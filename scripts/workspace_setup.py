@@ -1,0 +1,603 @@
+#!/usr/bin/env python3
+"""Bind a DE-67 workspace clock and install guarded checkpoint pushes."""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any, Sequence
+
+
+MANAGED_HOOK_MARKER = "# managed by DE-67 workspace_setup.py v1"
+CONFIG_RELATIVE_PATH = Path(".de67/state/workspace.json")
+PUSH_STATUS_RELATIVE_PATH = Path(".de67/state/checkpoint-push.json")
+DEADLINE_STATE_RELATIVE_PATH = Path(".de67/state/deadlines.sqlite3")
+STATE_IGNORE_SENTINEL = Path(".de67/state/.workspace-setup-ignore-probe.tmp")
+
+
+class SetupError(RuntimeError):
+    """Raised when workspace setup or a guarded push is unsafe."""
+
+
+def _run_git(
+    workspace: Path,
+    arguments: Sequence[str],
+    *,
+    check: bool = True,
+    environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        ["git", "-C", str(workspace), *arguments],
+        text=True,
+        capture_output=True,
+        env=environment,
+        check=False,
+    )
+    if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise SetupError(detail or f"git {' '.join(arguments)} failed")
+    return result
+
+
+def _git_text(workspace: Path, arguments: Sequence[str]) -> str:
+    return _run_git(workspace, arguments).stdout.strip()
+
+
+def _workspace(path: str | Path) -> Path:
+    requested = Path(path).expanduser().resolve()
+    if not requested.is_dir():
+        raise SetupError(f"Workspace does not exist: {requested}")
+    root = Path(_git_text(requested, ["rev-parse", "--show-toplevel"])).resolve()
+    if root != requested:
+        raise SetupError(f"Use the exact Git worktree root: {root}")
+    return root
+
+
+def _current_ref(workspace: Path) -> str:
+    result = _run_git(workspace, ["symbolic-ref", "-q", "HEAD"], check=False)
+    reference = result.stdout.strip()
+    if result.returncode != 0 or not reference.startswith("refs/heads/"):
+        raise SetupError("Checkpoint pushes require an attached local branch")
+    return reference
+
+
+def _remote_push_url(workspace: Path, remote: str) -> str:
+    result = _run_git(
+        workspace, ["remote", "get-url", "--push", "--all", remote], check=False
+    )
+    urls = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if result.returncode != 0 or len(urls) != 1:
+        raise SetupError(f"Remote {remote} must have exactly one push URL")
+    mirror = _run_git(
+        workspace, ["config", "--bool", f"remote.{remote}.mirror"], check=False
+    )
+    if mirror.returncode == 0 and mirror.stdout.strip().lower() == "true":
+        raise SetupError(f"Remote {remote} must not be a mirror")
+    return urls[0]
+
+
+def _upstream(workspace: Path) -> str:
+    result = _run_git(
+        workspace,
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        check=False,
+    )
+    value = result.stdout.strip()
+    if result.returncode != 0 or not value:
+        raise SetupError("The source branch must have a configured upstream")
+    return value
+
+
+def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    temporary.replace(path)
+
+
+def _load_config(workspace: Path) -> dict[str, Any] | None:
+    path = workspace / CONFIG_RELATIVE_PATH
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SetupError(f"Invalid workspace configuration: {error}") from error
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        raise SetupError("Unsupported workspace configuration")
+    return payload
+
+
+def _require_ignored_state(workspace: Path) -> None:
+    result = _run_git(
+        workspace,
+        ["check-ignore", "-q", "--", STATE_IGNORE_SENTINEL.as_posix()],
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SetupError("Ignore the whole .de67/state/ directory before setup")
+
+
+def _hook_path(workspace: Path) -> Path:
+    common_raw = _git_text(workspace, ["rev-parse", "--git-common-dir"])
+    common = Path(common_raw)
+    if not common.is_absolute():
+        common = workspace / common
+    expected = Path(os.path.abspath(common / "hooks/post-commit"))
+    raw = _git_text(workspace, ["rev-parse", "--git-path", "hooks/post-commit"])
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = workspace / candidate
+    candidate = Path(os.path.abspath(candidate))
+    if os.path.normcase(str(candidate)) != os.path.normcase(str(expected)):
+        raise SetupError(
+            "Custom core.hooksPath is outside this repository's common Git directory"
+        )
+    return expected
+
+
+def _shell_path(path: Path) -> str:
+    return shlex.quote(path.as_posix())
+
+
+def _install_hook(workspace: Path) -> Path:
+    hook = _hook_path(workspace)
+    script = Path(__file__).resolve()
+    hook_text = (
+        "#!/bin/sh\n"
+        f"{MANAGED_HOOK_MARKER}\n"
+        f"{_shell_path(Path(sys.executable))} {_shell_path(script)} "
+        'push --workspace "$PWD" --hook || :\n'
+    )
+    if hook.exists():
+        existing = hook.read_text(encoding="utf-8", errors="replace")
+        if existing != hook_text:
+            kind = (
+                "modified managed hook"
+                if MANAGED_HOOK_MARKER in existing
+                else "unmanaged hook"
+            )
+            raise SetupError(f"Refusing to overwrite {kind}: {hook}")
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    with hook.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(hook_text)
+    if os.name != "nt":
+        hook.chmod(hook.stat().st_mode | 0o111)
+    return hook
+
+
+def _targets(
+    workspace: Path, requested: Sequence[Sequence[str]]
+) -> tuple[list[dict[str, str]], str]:
+    if not requested:
+        raise SetupError("At least one --target REMOTE BRANCH is required")
+    upstream = _upstream(workspace)
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for pair in requested:
+        remote, branch = pair
+        remote = remote.strip()
+        branch = branch.strip()
+        if (
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", remote)
+            or not branch
+            or branch.startswith("refs/")
+        ):
+            raise SetupError("Targets use a remote name and short branch name")
+        if _run_git(
+            workspace,
+            ["check-ref-format", f"refs/heads/{branch}"],
+            check=False,
+        ).returncode != 0:
+            raise SetupError(f"Invalid target branch: {branch}")
+        key = (remote, branch)
+        if key in seen:
+            raise SetupError(f"Duplicate checkpoint target: {remote}/{branch}")
+        seen.add(key)
+        result.append(
+            {
+                "remote": remote,
+                "remote_url": _remote_push_url(workspace, remote),
+                "target_ref": f"refs/heads/{branch}",
+            }
+        )
+    first = requested[0]
+    if upstream != f"{first[0]}/{first[1]}":
+        raise SetupError(
+            f"First checkpoint target must match branch upstream {upstream}"
+        )
+    return result, upstream
+
+
+def _configured_targets(config: dict[str, Any]) -> list[dict[str, str]]:
+    raw_targets = config.get("targets")
+    if not isinstance(raw_targets, list) or not raw_targets:
+        raise SetupError("Existing workspace configuration has no checkpoint targets")
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in raw_targets:
+        if not isinstance(raw, dict):
+            raise SetupError("Existing workspace checkpoint target is invalid")
+        target = {
+            "remote": str(raw.get("remote", "")).strip(),
+            "remote_url": str(raw.get("remote_url", "")).strip(),
+            "target_ref": str(raw.get("target_ref", "")).strip(),
+        }
+        if (
+            not target["remote"]
+            or not target["remote_url"]
+            or not target["target_ref"].startswith("refs/heads/")
+        ):
+            raise SetupError("Existing workspace checkpoint target is invalid")
+        key = (target["remote"], target["target_ref"])
+        if key in seen:
+            raise SetupError("Existing workspace checkpoint targets contain a duplicate")
+        seen.add(key)
+        result.append(target)
+    return result
+
+
+def _merge_existing_binding(
+    workspace: Path,
+    existing_config: dict[str, Any] | None,
+    source_ref: str,
+    upstream: str,
+    requested_targets: list[dict[str, str]],
+    state_path: Path,
+) -> tuple[list[dict[str, str]], str | None]:
+    if existing_config is None:
+        return requested_targets, None
+    if Path(str(existing_config.get("workspace", ""))).resolve() != workspace:
+        raise SetupError("Existing workspace configuration belongs to another worktree")
+    if existing_config.get("source_ref") != source_ref:
+        raise SetupError("Existing checkpoint source branch cannot be changed by setup")
+    if existing_config.get("upstream") != upstream:
+        raise SetupError("Existing checkpoint upstream cannot be changed by setup")
+
+    existing_targets = _configured_targets(existing_config)
+    requested_by_key = {
+        (target["remote"], target["target_ref"]): target
+        for target in requested_targets
+    }
+    merged = list(existing_targets)
+    existing_keys: set[tuple[str, str]] = set()
+    for existing in existing_targets:
+        key = (existing["remote"], existing["target_ref"])
+        existing_keys.add(key)
+        requested = requested_by_key.get(key)
+        if requested is None:
+            raise SetupError("Existing checkpoint targets cannot be removed by setup")
+        if requested["remote_url"] != existing["remote_url"]:
+            raise SetupError(
+                f"Remote {existing['remote']} URL cannot be changed by setup"
+            )
+    merged.extend(
+        target
+        for target in requested_targets
+        if (target["remote"], target["target_ref"]) not in existing_keys
+    )
+
+    raw_clock = existing_config.get("clock")
+    if raw_clock is None:
+        return merged, None
+    if not isinstance(raw_clock, dict):
+        raise SetupError("Existing workspace clock configuration is invalid")
+    configured_lineage = str(raw_clock.get("lineage", "")).strip()
+    configured_state = Path(str(raw_clock.get("state", ""))).resolve()
+    if not configured_lineage or configured_state != state_path.resolve():
+        raise SetupError("Existing workspace clock configuration is invalid")
+    return merged, configured_lineage
+
+
+def _default_lineage(
+    workspace: Path, source_ref: str, primary_remote_url: str
+) -> str:
+    name = re.split(r"[:/\\]", primary_remote_url.rstrip("/"))[-1].removesuffix(
+        ".git"
+    )
+    name = name or workspace.name
+    return f"{name}:{source_ref.removeprefix('refs/heads/')}"
+
+
+def _existing_lineage(state_path: Path) -> str | None:
+    if not state_path.is_file():
+        return None
+    import sqlite3
+
+    try:
+        connection = sqlite3.connect(state_path)
+        try:
+            table = connection.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'lineage_binding'"
+            ).fetchone()
+            if table is None:
+                return None
+            row = connection.execute(
+                "SELECT lineage_id FROM lineage_binding WHERE singleton = 1"
+            ).fetchone()
+        finally:
+            connection.close()
+    except sqlite3.Error as error:
+        raise SetupError(f"Cannot read existing deadline lineage: {error}") from error
+    return None if row is None else str(row[0])
+
+
+def _deadline_harness_class() -> type[Any]:
+    path = Path(__file__).resolve().parents[1] / "de-67-3/scripts/deadline_harness.py"
+    specification = importlib.util.spec_from_file_location("de67_deadline_harness", path)
+    if specification is None or specification.loader is None:
+        raise SetupError(f"Cannot load deadline harness: {path}")
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module.DeadlineHarness
+
+
+def _require_frozen_dfs(workspace: Path) -> None:
+    path = workspace / ".de67/DFS.md"
+    if not path.is_file():
+        raise SetupError("Freeze .de67/DFS.md before workspace setup")
+    text = path.read_text(encoding="utf-8")
+    if re.search(
+        r"(?mi)^\s*(?:-\s*)?Status:\s*`?(?:Frozen|Refrozen)\b", text
+    ) is None:
+        raise SetupError(".de67/DFS.md must record Frozen or Refrozen status")
+
+
+def configure(
+    workspace_path: str | Path,
+    requested_targets: Sequence[Sequence[str]],
+    *,
+    bind_clock: bool,
+    lineage: str | None = None,
+) -> dict[str, Any]:
+    workspace = _workspace(workspace_path)
+    _require_ignored_state(workspace)
+    source_ref = _current_ref(workspace)
+    targets, upstream = _targets(workspace, requested_targets)
+    state_path = workspace / DEADLINE_STATE_RELATIVE_PATH
+    existing_config = _load_config(workspace)
+    targets, configured_lineage = _merge_existing_binding(
+        workspace,
+        existing_config,
+        source_ref,
+        upstream,
+        targets,
+        state_path,
+    )
+    selected_lineage: str | None = None
+    if bind_clock:
+        _require_frozen_dfs(workspace)
+        requested_lineage = None if lineage is None else lineage.strip()
+        if lineage is not None and not requested_lineage:
+            raise SetupError("Lineage must not be empty")
+        bound_lineage = _existing_lineage(state_path)
+        known_lineages = {
+            value
+            for value in (configured_lineage, bound_lineage, requested_lineage)
+            if value is not None
+        }
+        if len(known_lineages) > 1:
+            raise SetupError("Existing clock lineage cannot be changed by setup")
+        selected_lineage = next(iter(known_lineages), None) or _default_lineage(
+            workspace, source_ref, targets[0]["remote_url"]
+        )
+        harness_class = _deadline_harness_class()
+        try:
+            with harness_class(state_path) as harness:
+                harness.coordinator_restart_status(selected_lineage)
+        except Exception as error:
+            raise SetupError(f"Cannot bind deadline clock: {error}") from error
+    else:
+        selected_lineage = configured_lineage
+    hook = _install_hook(workspace)
+    config = {
+        "version": 1,
+        "workspace": str(workspace),
+        "source_ref": source_ref,
+        "upstream": upstream,
+        "targets": targets,
+        "clock": (
+            None
+            if selected_lineage is None
+            else {"lineage": selected_lineage, "state": str(state_path)}
+        ),
+    }
+    _atomic_json(workspace / CONFIG_RELATIVE_PATH, config)
+    pushed = push_checkpoints(workspace)
+    return {
+        "workspace": str(workspace),
+        "hook": str(hook),
+        "clock": config["clock"],
+        "push": pushed,
+    }
+
+
+def _concise_error(result: subprocess.CompletedProcess[str]) -> str:
+    lines = [
+        line.strip()
+        for line in (result.stderr or result.stdout).splitlines()
+        if line.strip()
+    ]
+    return lines[-1][:500] if lines else f"git push exited {result.returncode}"
+
+
+def push_checkpoints(workspace_path: str | Path) -> dict[str, Any]:
+    workspace = _workspace(workspace_path)
+    head: str | None = None
+    source_ref: str | None = None
+    outcomes: list[dict[str, Any]] = []
+    try:
+        config = _load_config(workspace)
+        if config is None:
+            return {"configured": False, "ok": True}
+        head = _git_text(workspace, ["rev-parse", "HEAD"])
+        if Path(str(config.get("workspace", ""))).resolve() != workspace:
+            raise SetupError("Workspace configuration belongs to another worktree")
+        source_ref = _current_ref(workspace)
+        if source_ref != config.get("source_ref"):
+            raise SetupError(
+                f"Configured source is {config.get('source_ref')}; "
+                f"current source is {source_ref}"
+            )
+        if _upstream(workspace) != config.get("upstream"):
+            raise SetupError("Branch upstream changed after checkpoint setup")
+        environment = os.environ.copy()
+        environment.update(
+            {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "Never"}
+        )
+        raw_targets = config.get("targets")
+        if not isinstance(raw_targets, list) or not raw_targets:
+            raise SetupError("Workspace configuration has no checkpoint targets")
+        for target in raw_targets:
+            if not isinstance(target, dict):
+                raise SetupError("Workspace checkpoint target is invalid")
+            remote = str(target.get("remote", ""))
+            target_ref = str(target.get("target_ref", ""))
+            expected_url = str(target.get("remote_url", ""))
+            try:
+                if _remote_push_url(workspace, remote) != expected_url:
+                    raise SetupError(f"Remote {remote} push URL changed after setup")
+                result = _run_git(
+                    workspace,
+                    [
+                        "push",
+                        "--porcelain",
+                        "--no-force",
+                        "--no-follow-tags",
+                        "--recurse-submodules=no",
+                        "--",
+                        remote,
+                        f"{head}:{target_ref}",
+                    ],
+                    check=False,
+                    environment=environment,
+                )
+                if result.returncode != 0:
+                    outcomes.append(
+                        {
+                            "remote": remote,
+                            "target_ref": target_ref,
+                            "ok": False,
+                            "error": _concise_error(result),
+                        }
+                    )
+                else:
+                    outcomes.append(
+                        {"remote": remote, "target_ref": target_ref, "ok": True}
+                    )
+            except SetupError as error:
+                outcomes.append(
+                    {
+                        "remote": remote,
+                        "target_ref": target_ref,
+                        "ok": False,
+                        "error": str(error),
+                    }
+                )
+        status = {
+            "head": head,
+            "source_ref": source_ref,
+            "recorded_at": time.time(),
+            "ok": bool(outcomes) and all(item["ok"] for item in outcomes),
+            "targets": outcomes,
+        }
+        _atomic_json(workspace / PUSH_STATUS_RELATIVE_PATH, status)
+        return {"configured": True, **status}
+    except (SetupError, OSError, subprocess.SubprocessError) as error:
+        status = {
+            "head": head,
+            "source_ref": source_ref,
+            "recorded_at": time.time(),
+            "ok": False,
+            "error": str(error),
+            "targets": outcomes,
+        }
+        try:
+            _atomic_json(workspace / PUSH_STATUS_RELATIVE_PATH, status)
+        except OSError:
+            pass
+        raise
+
+
+def disable(workspace_path: str | Path) -> dict[str, Any]:
+    workspace = _workspace(workspace_path)
+    config_path = workspace / CONFIG_RELATIVE_PATH
+    removed = config_path.exists()
+    if removed:
+        config_path.unlink()
+    return {"workspace": str(workspace), "disabled": removed}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name, help_text in (
+        ("setup", "Bind the clock and configure checkpoint pushes"),
+        ("configure-push", "Configure checkpoint pushes without a project clock"),
+    ):
+        command = commands.add_parser(name, help=help_text)
+        command.add_argument("--workspace", required=True)
+        command.add_argument(
+            "--target", nargs=2, action="append", metavar=("REMOTE", "BRANCH"), required=True
+        )
+        if name == "setup":
+            command.add_argument("--lineage")
+    push = commands.add_parser("push", help="Push the exact configured committed HEAD")
+    push.add_argument("--workspace", required=True)
+    push.add_argument("--hook", action="store_true", help=argparse.SUPPRESS)
+    off = commands.add_parser("disable", help="Disable pushes for one worktree")
+    off.add_argument("--workspace", required=True)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = build_parser().parse_args(argv)
+    try:
+        if arguments.command == "setup":
+            result = configure(
+                arguments.workspace,
+                arguments.target,
+                bind_clock=True,
+                lineage=arguments.lineage,
+            )
+        elif arguments.command == "configure-push":
+            result = configure(
+                arguments.workspace, arguments.target, bind_clock=False
+            )
+        elif arguments.command == "disable":
+            result = disable(arguments.workspace)
+        else:
+            result = push_checkpoints(arguments.workspace)
+            if result.get("configured") and not result.get("ok"):
+                failed = next(
+                    (
+                        str(item.get("error", "")).strip()
+                        for item in result.get("targets", [])
+                        if not item.get("ok")
+                    ),
+                    "",
+                )
+                raise SetupError(failed or "one or more checkpoint pushes failed")
+        if not getattr(arguments, "hook", False):
+            print(json.dumps(result, sort_keys=True))
+        if arguments.command in {"setup", "configure-push"}:
+            return 0 if result["push"]["ok"] else 1
+        return 0
+    except (SetupError, OSError, subprocess.SubprocessError) as error:
+        print(f"DE-67 workspace setup: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

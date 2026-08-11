@@ -123,10 +123,16 @@ class DeadlineHarnessTests(unittest.TestCase):
 
         self.assertEqual(summary["lineage_id"], "project")
         self.assertEqual(summary["cumulative_miss_units"], 1)
-        self.assertEqual(len(summary["incidents"]), 1)
-        self.assertEqual(summary["incidents"][0]["kind"], "deadline_miss")
-        self.assertTrue(summary["incidents"][0]["independent_review_required"])
-        self.assertTrue(tasks["late"]["deadline_missed"])
+        self.assertNotIn("incidents", summary)
+        self.assertEqual(summary["recent_failure_verdicts"], [])
+        self.assertEqual(len(summary["pending_incident_reviews"]), 1)
+        self.assertEqual(
+            summary["pending_incident_reviews"][0]["kind"], "deadline_miss"
+        )
+        self.assertEqual(
+            summary["pending_incident_reviews"][0]["task_id"], "late"
+        )
+        self.assertEqual(tasks["late"]["state"], "deadline_missed")
         self.assertEqual(tasks["active"]["state"], "running")
 
     def test_list_requires_binding_and_cli_needs_no_task_identity(self) -> None:
@@ -145,6 +151,250 @@ class DeadlineHarnessTests(unittest.TestCase):
 
         self.assertEqual(payload["lineage_id"], "project")
         self.assertEqual([task["task_id"] for task in payload["tasks"]], ["task"])
+
+    def test_list_omits_accepted_tasks_but_keeps_nonaccepted_current_work(self) -> None:
+        with patch("deadline_harness.secrets.randbelow", side_effect=[20, 0]):
+            self.harness.start_task("project", "accepted", "R-001", 100, now=0)
+        self.harness.complete_task("project", "accepted", "green detail", now=1)
+
+        self.harness.start_task("project", "late-accepted", "R-002", 10, now=0)
+        self.harness.complete_task(
+            "project", "late-accepted", "late green detail", now=11
+        )
+
+        self.harness.start_task("project", "breached", "R-003", 100, now=0)
+        self.harness.complete_task("project", "breached", "later invalidated", now=1)
+        self.harness.record_integrity_breach(
+            "project", "breached", "fabricated long reason", now=2
+        )
+
+        self.harness.start_task("project", "finding", "R-004", 100, now=0)
+        self.harness.report_worker_finding(
+            "project",
+            "finding",
+            "blocker",
+            "long dependency evidence",
+            short_verdict="dependency absent",
+            now=3,
+        )
+        self.harness.start_task("project", "running", "R-005", 100, now=0)
+
+        with patch.object(
+            self.harness, "_status", wraps=self.harness._status
+        ) as status:
+            summary = self.harness.list_tasks(now=4)
+        listed = {task["task_id"]: task for task in summary["tasks"]}
+
+        self.assertEqual(set(listed), {"breached", "finding", "running"})
+        self.assertEqual(
+            {call.args[1] for call in status.call_args_list},
+            {"breached", "finding", "running"},
+        )
+        self.assertEqual(listed["breached"]["state"], "integrity_breach")
+        self.assertEqual(listed["finding"]["state"], "worker_finding")
+        self.assertEqual(listed["running"]["state"], "running")
+        for task in listed.values():
+            self.assertNotIn("completion_evidence", task)
+            self.assertNotIn("incidents", task)
+            self.assertNotIn("worker_finding", task)
+            self.assertNotIn("integrity_reason", task)
+
+        pending = summary["pending_incident_reviews"]
+        self.assertEqual(
+            {review["task_id"] for review in pending},
+            {"late-accepted", "breached"},
+        )
+        self.assertEqual(
+            [verdict["task_id"] for verdict in summary["recent_failure_verdicts"]],
+            ["finding"],
+        )
+        verdicts = pending + summary["recent_failure_verdicts"]
+        for verdict in verdicts:
+            self.assertNotIn("evidence", verdict)
+            self.assertNotIn("reason", verdict)
+            self.assertNotIn("long_detail", verdict)
+
+    def test_list_keeps_only_ten_recent_short_failure_verdicts(self) -> None:
+        with patch("deadline_harness.secrets.randbelow", side_effect=[20, 0]):
+            for number in range(1, 13):
+                task_id = f"W-{number:03d}"
+                if number % 2:
+                    self.harness.start_task(
+                        "project", task_id, f"R-{number:03d}", 1, now=0
+                    )
+                    self.harness.expire_task("project", task_id, now=number)
+                    self.harness.diagnose_incident(
+                        "project",
+                        task_id,
+                        "deadline_miss",
+                        f"short {number}",
+                        f"long incident diagnosis {number}",
+                        now=100 + number,
+                    )
+                else:
+                    self.harness.start_task(
+                        "project", task_id, f"R-{number:03d}", 100, now=0
+                    )
+                    self.harness.report_worker_finding(
+                        "project",
+                        task_id,
+                        "unexpected",
+                        f"long worker evidence {number}",
+                        short_verdict=f"short {number}",
+                        now=number,
+                    )
+
+        summary = self.harness.list_tasks(now=20)
+        verdicts = summary["recent_failure_verdicts"]
+
+        self.assertEqual(summary["pending_incident_reviews"], [])
+        self.assertEqual(len(verdicts), 10)
+        self.assertEqual(
+            [verdict["task_id"] for verdict in verdicts],
+            [f"W-{number:03d}" for number in range(12, 2, -1)],
+        )
+        self.assertEqual(
+            [verdict["short_verdict"] for verdict in verdicts],
+            [f"short {number}" for number in range(12, 2, -1)],
+        )
+        for verdict in verdicts:
+            self.assertNotIn("evidence", verdict)
+            self.assertNotIn("reason", verdict)
+            self.assertNotIn("long_detail", verdict)
+
+        incident_status = self.harness.status_task("project", "W-011", now=20)
+        self.assertEqual(
+            incident_status["incidents"][0]["long_detail"],
+            "long incident diagnosis 11",
+        )
+        finding_status = self.harness.status_task("project", "W-012", now=20)
+        self.assertEqual(
+            finding_status["worker_finding"]["evidence"],
+            "long worker evidence 12",
+        )
+
+    def test_list_omits_completed_task_with_prior_finding_but_keeps_verdict(self) -> None:
+        self.harness.start_task("project", "task", "R-001", 100, now=0)
+        self.harness.report_worker_finding(
+            "project",
+            "task",
+            "unexpected",
+            "Long finding evidence retained for exact diagnostics.",
+            short_verdict="owner contradicted",
+            now=1,
+        )
+        self.harness.connection.execute(
+            """
+            UPDATE tasks
+            SET completed_at = 2, completion_evidence = 'accepted after finding review'
+            WHERE lineage_id = 'project' AND task_id = 'task'
+            """
+        )
+        self.harness.connection.commit()
+
+        summary = self.harness.list_tasks(now=3)
+
+        self.assertEqual(summary["tasks"], [])
+        self.assertEqual(summary["pending_incident_reviews"], [])
+        self.assertEqual(
+            summary["recent_failure_verdicts"],
+            [
+                {
+                    "task_id": "task",
+                    "claim_id": "R-001",
+                    "kind": "unexpected",
+                    "recorded_at": 1,
+                    "short_verdict": "owner contradicted",
+                }
+            ],
+        )
+
+    def test_list_keeps_only_current_route_for_an_unresolved_claim(self) -> None:
+        for number in (1, 2):
+            task_id = f"attempt-{number}"
+            self.harness.start_task(
+                "project", task_id, "R-001", 100, now=number
+            )
+            self.harness.report_worker_finding(
+                "project",
+                task_id,
+                "unexpected",
+                f"Long evidence for attempt {number}.",
+                short_verdict=f"route {number} failed",
+                now=number + 0.25,
+            )
+
+        summary = self.harness.list_tasks(now=3)
+        self.assertEqual(
+            [task["task_id"] for task in summary["tasks"]], ["attempt-2"]
+        )
+        self.assertEqual(
+            [item["task_id"] for item in summary["recent_failure_verdicts"]],
+            ["attempt-2", "attempt-1"],
+        )
+
+        self.harness.start_task("project", "attempt-3", "R-001", 100, now=4)
+        summary = self.harness.list_tasks(now=5)
+        self.assertEqual(
+            [task["task_id"] for task in summary["tasks"]], ["attempt-3"]
+        )
+
+        self.harness.complete_task(
+            "project", "attempt-3", "The DFS claim is now proven.", now=6
+        )
+        self.assertEqual(self.harness.list_tasks(now=7)["tasks"], [])
+
+    def test_list_supersedes_prior_deadline_miss_for_the_same_claim(self) -> None:
+        for number in (1, 2):
+            task_id = f"miss-{number}"
+            self.harness.start_task("project", task_id, "R-001", 1, now=number)
+            self.harness.expire_task("project", task_id, now=number + 1)
+            self.harness.diagnose_incident(
+                "project",
+                task_id,
+                "deadline_miss",
+                f"route {number} late",
+                f"Long diagnosis for route {number}.",
+                now=number + 1.25,
+            )
+
+        summary = self.harness.list_tasks(now=4)
+        self.assertEqual(
+            [task["task_id"] for task in summary["tasks"]], ["miss-2"]
+        )
+        self.assertEqual(summary["pending_incident_reviews"], [])
+        self.assertEqual(
+            [item["task_id"] for item in summary["recent_failure_verdicts"]],
+            ["miss-2", "miss-1"],
+        )
+
+    def test_seven_due_breaches_cannot_crowd_out_pending_incident_reviews(self) -> None:
+        with patch("deadline_harness.secrets.randbelow", side_effect=[20, 0]):
+            for number in range(1, 8):
+                task_id = f"W-{number:03d}"
+                self.harness.start_task(
+                    "project", task_id, f"R-{number:03d}", 1, now=0
+                )
+                self.harness.record_integrity_breach(
+                    "project", task_id, f"long breach reason {number}", now=2
+                )
+
+        summary = self.harness.list_tasks(now=3)
+        pending = summary["pending_incident_reviews"]
+
+        self.assertEqual(len(pending), 14)
+        self.assertEqual(
+            {
+                (review["task_id"], review["kind"])
+                for review in pending
+            },
+            {
+                (f"W-{number:03d}", kind)
+                for number in range(1, 8)
+                for kind in ("deadline_miss", "integrity_breach")
+            },
+        )
+        self.assertEqual(summary["recent_failure_verdicts"], [])
 
     def test_due_integrity_breach_records_miss_before_three_breach_units(self) -> None:
         self.harness.start_task("project", "task", "R-1", 10, now=100)
@@ -165,6 +415,103 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertEqual(
             [incident["kind"] for incident in result["status"]["incidents"]],
             ["deadline_miss", "integrity_breach"],
+        )
+
+    def test_incident_diagnosis_is_persisted_immutable_and_cli_visible(self) -> None:
+        self.harness.start_task("project", "task", "R-1", 10, now=100)
+        self.harness.expire_task("project", "task", now=111)
+        self.assertTrue(
+            self.harness.status_task("project", "task", now=111)["incidents"][0][
+                "independent_review_required"
+            ]
+        )
+
+        first = self.harness.diagnose_incident(
+            "project",
+            "task",
+            "deadline_miss",
+            "test overdefined",
+            "The intended proof required behavior outside the DFS claim.",
+            now=112,
+        )
+        repeated = self.harness.diagnose_incident(
+            "project",
+            "task",
+            "deadline_miss",
+            "test overdefined",
+            "The intended proof required behavior outside the DFS claim.",
+            now=113,
+        )
+
+        self.assertTrue(first["recorded"])
+        self.assertFalse(repeated["recorded"])
+        self.assertEqual(first["incident"]["short_verdict"], "test overdefined")
+        self.assertEqual(first["incident"]["reviewed_at"], 112)
+        self.assertFalse(first["incident"]["independent_review_required"])
+        with self.assertRaisesRegex(DeadlineError, "immutable"):
+            self.harness.diagnose_incident(
+                "project",
+                "task",
+                "deadline_miss",
+                "different verdict",
+                "Different diagnosis",
+                now=114,
+            )
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(
+                main(
+                    [
+                        "status",
+                        "--state",
+                        str(self.state_path),
+                        "--lineage",
+                        "project",
+                        "--task",
+                        "task",
+                    ]
+                ),
+                0,
+            )
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["incidents"][0]["short_verdict"], "test overdefined")
+        self.assertEqual(
+            payload["incidents"][0]["long_detail"],
+            "The intended proof required behavior outside the DFS claim.",
+        )
+
+    def test_documented_diagnose_cli_records_exact_incident_review(self) -> None:
+        self.harness.start_task("project", "task", "R-1", 10, now=100)
+        self.harness.expire_task("project", "task", now=111)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(
+                main(
+                    [
+                        "diagnose",
+                        "--state",
+                        str(self.state_path),
+                        "--lineage",
+                        "project",
+                        "--task",
+                        "task",
+                        "--kind",
+                        "deadline_miss",
+                        "--short-verdict",
+                        "estimate unsound",
+                        "--diagnosis",
+                        "Measured setup time contradicted the estimate premise.",
+                    ]
+                ),
+                0,
+            )
+        payload = json.loads(output.getvalue())
+        self.assertTrue(payload["recorded"])
+        self.assertEqual(payload["incident"]["short_verdict"], "estimate unsound")
+        self.assertEqual(
+            payload["incident"]["long_detail"],
+            "Measured setup time contradicted the estimate premise.",
         )
 
     def test_cli_start_uses_documented_flags_and_spawns_only_once(self) -> None:
@@ -270,6 +617,39 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertFalse(repeated_expiry["incident"]["recorded"])
         self.assertEqual(repeated_expiry["status"]["cumulative_miss_units"], 1)
 
+    def test_late_worker_finding_verdict_precedes_same_time_deadline_miss(self) -> None:
+        self.harness.start_task("project", "task", "R-1", 10, now=100)
+
+        self.harness.report_worker_finding(
+            "project",
+            "task",
+            "unexpected",
+            "The production owner returned a contradictory long result.",
+            short_verdict="owner contradicted",
+            now=110,
+        )
+        summary = self.harness.list_tasks(now=110)
+
+        self.assertEqual(summary["tasks"][0]["state"], "worker_finding")
+        self.assertEqual(
+            summary["tasks"][0]["current_short_verdict"], "owner contradicted"
+        )
+        self.assertEqual(
+            summary["recent_failure_verdicts"][0]["short_verdict"],
+            "owner contradicted",
+        )
+        self.assertEqual(
+            summary["pending_incident_reviews"],
+            [
+                {
+                    "task_id": "task",
+                    "claim_id": "R-1",
+                    "kind": "deadline_miss",
+                    "recorded_at": 110,
+                }
+            ],
+        )
+
     def test_worker_finding_is_validated_immutable_and_terminal(self) -> None:
         self.harness.start_task("project", "task", "R-1", 10, now=100)
 
@@ -281,14 +661,25 @@ class DeadlineHarnessTests(unittest.TestCase):
                     )
 
         first = self.harness.report_worker_finding(
-            "project", "task", "unexpected", "observed result", now=102
+            "project",
+            "task",
+            "unexpected",
+            "observed result",
+            short_verdict="production owner contradicted",
+            now=102,
         )
         repeated = self.harness.report_worker_finding(
             "project", "task", "unexpected", "observed result", now=500
         )
 
         self.assertTrue(first["finding"]["recorded"])
+        self.assertEqual(
+            first["finding"]["short_verdict"], "production owner contradicted"
+        )
         self.assertFalse(repeated["finding"]["recorded"])
+        self.assertEqual(
+            repeated["finding"]["short_verdict"], "production owner contradicted"
+        )
         self.assertEqual(repeated["finding"]["reported_at"], 102)
         self.assertEqual(repeated["status"]["cumulative_miss_units"], 0)
         for kind, evidence in (
@@ -300,6 +691,15 @@ class DeadlineHarnessTests(unittest.TestCase):
                     self.harness.report_worker_finding(
                         "project", "task", kind, evidence, now=501
                     )
+        with self.assertRaisesRegex(DeadlineError, "immutable"):
+            self.harness.report_worker_finding(
+                "project",
+                "task",
+                "unexpected",
+                "observed result",
+                short_verdict="different short verdict",
+                now=501,
+            )
 
     def test_completed_or_breached_task_rejects_worker_finding(self) -> None:
         self.harness.start_task("project", "completed", "R-1", 10, now=100)
@@ -336,6 +736,8 @@ class DeadlineHarnessTests(unittest.TestCase):
                         "task",
                         "--kind",
                         "blocker",
+                        "--short-verdict",
+                        "dependency absent",
                         "--evidence",
                         "dependency is absent",
                     ]
@@ -347,14 +749,18 @@ class DeadlineHarnessTests(unittest.TestCase):
         list_output = io.StringIO()
         with redirect_stdout(list_output):
             self.assertEqual(main(["list", "--state", str(state_path)]), 0)
-        listed_task = json.loads(list_output.getvalue())["tasks"][0]
+        listed = json.loads(list_output.getvalue())
+        listed_task = listed["tasks"][0]
 
         self.assertEqual(finding_payload["finding"]["kind"], "blocker")
-        self.assertTrue(listed_task["finding_reported"])
         self.assertEqual(listed_task["state"], "worker_finding")
+        self.assertNotIn("worker_finding", listed_task)
+        self.assertEqual(listed_task["current_short_verdict"], "dependency absent")
         self.assertEqual(
-            listed_task["worker_finding"]["evidence"], "dependency is absent"
+            listed["recent_failure_verdicts"][0]["short_verdict"],
+            "dependency absent",
         )
+        self.assertNotIn("evidence", listed["recent_failure_verdicts"][0])
 
     def test_restart_request_persists_and_blocks_only_new_task_ids(self) -> None:
         initial = self.harness.start_task(
@@ -741,6 +1147,150 @@ class DeadlineHarnessTests(unittest.TestCase):
             connection.commit()
         finally:
             connection.close()
+
+    def test_legacy_database_backfills_compact_and_long_failure_forms(self) -> None:
+        self.harness.close()
+        legacy = Path(self.temporary.name) / "legacy-compact-history.sqlite"
+        connection = sqlite3.connect(legacy)
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE tasks (
+                    lineage_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    claim_id TEXT NOT NULL,
+                    estimate_seconds REAL NOT NULL,
+                    started_at REAL NOT NULL,
+                    deadline_at REAL NOT NULL,
+                    completed_at REAL,
+                    completion_evidence TEXT,
+                    integrity_breached_at REAL,
+                    integrity_reason TEXT,
+                    PRIMARY KEY (lineage_id, task_id)
+                );
+                CREATE TABLE incidents (
+                    incident_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    lineage_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    recorded_at REAL NOT NULL,
+                    reason TEXT,
+                    units INTEGER NOT NULL,
+                    cumulative_before INTEGER NOT NULL,
+                    cumulative_after INTEGER NOT NULL,
+                    cadence_threshold INTEGER,
+                    UNIQUE (lineage_id, task_id, kind)
+                );
+                CREATE TABLE worker_findings (
+                    lineage_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    reported_at REAL NOT NULL,
+                    evidence TEXT NOT NULL,
+                    PRIMARY KEY (lineage_id, task_id)
+                );
+                CREATE TABLE lineage_binding (
+                    singleton INTEGER PRIMARY KEY,
+                    lineage_id TEXT NOT NULL
+                );
+                """
+            )
+            connection.executemany(
+                """
+                INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ("project", "legacy-miss", "R-001", 10, 0, 10, None, None, None, None),
+                    (
+                        "project",
+                        "legacy-finding",
+                        "R-002",
+                        10,
+                        0,
+                        10,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO incidents (
+                    lineage_id, task_id, kind, recorded_at, reason, units,
+                    cumulative_before, cumulative_after, cadence_threshold
+                ) VALUES ('project', 'legacy-miss', 'deadline_miss', 11, NULL, 1, 0, 1, NULL)
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO worker_findings
+                VALUES ('project', 'legacy-finding', 'blocker', 5, 'legacy long evidence')
+                """
+            )
+            connection.execute(
+                "INSERT INTO lineage_binding VALUES (1, 'project')"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with patch(
+            "deadline_harness.secrets.randbelow", side_effect=[20, 0]
+        ), DeadlineHarness(legacy) as migrated:
+            summary = migrated.list_tasks(now=6)
+            self.assertEqual(
+                [item["short_verdict"] for item in summary["recent_failure_verdicts"]],
+                ["blocker"],
+            )
+            self.assertEqual(
+                summary["pending_incident_reviews"],
+                [
+                    {
+                        "task_id": "legacy-miss",
+                        "claim_id": "R-001",
+                        "kind": "deadline_miss",
+                        "recorded_at": 11,
+                    }
+                ],
+            )
+            miss = migrated.status_task("project", "legacy-miss", now=6)
+            self.assertEqual(
+                miss["incidents"][0]["long_detail"],
+                "The immutable deadline passed without an on-time terminal result.",
+            )
+            finding = migrated.status_task("project", "legacy-finding", now=6)
+            self.assertEqual(
+                finding["worker_finding"]["evidence"], "legacy long evidence"
+            )
+            diagnosed = migrated.diagnose_incident(
+                "project",
+                "legacy-miss",
+                "deadline_miss",
+                "tooling unchecked",
+                "The required tool had not been probed before dispatch.",
+                now=12,
+            )
+            self.assertTrue(diagnosed["recorded"])
+            incident_columns = {
+                row["name"]
+                for row in migrated.connection.execute(
+                    "PRAGMA table_info(incidents)"
+                ).fetchall()
+            }
+            finding_columns = {
+                row["name"]
+                for row in migrated.connection.execute(
+                    "PRAGMA table_info(worker_findings)"
+                ).fetchall()
+            }
+            self.assertTrue(
+                {"short_verdict", "long_detail", "reviewed_at"}
+                <= incident_columns
+            )
+            self.assertIn("short_verdict", finding_columns)
+        self.harness = DeadlineHarness(self.state_path)
 
     def test_legacy_terminal_history_seeds_the_first_random_cycle(self) -> None:
         self.harness.close()

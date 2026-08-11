@@ -241,7 +241,7 @@ def broader_mutation_from_incident(
         connection.row_factory = sqlite3.Row
         row = connection.execute(
             """
-            SELECT cadence_threshold
+            SELECT cadence_threshold, short_verdict, long_detail, reviewed_at
             FROM incidents
             WHERE lineage_id = ? AND task_id = ? AND kind = ?
             """,
@@ -256,6 +256,14 @@ def broader_mutation_from_incident(
     if row is None:
         raise GuardError(
             f"Missing stored {incident_kind} incident for {lineage_id}/{task_id}"
+        )
+    if (
+        row["reviewed_at"] is None
+        or not str(row["short_verdict"] or "").strip()
+        or not str(row["long_detail"] or "").strip()
+    ):
+        raise GuardError(
+            "The exact incident needs an independent short and long diagnosis before mutation"
         )
     return incident_kind == "integrity_breach" or row["cadence_threshold"] is not None
 

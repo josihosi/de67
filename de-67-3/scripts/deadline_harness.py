@@ -23,6 +23,8 @@ RANDOM_MUTATION_LANES = (
     "orchestrator-guidelines.md",
     "DFS.md",
 )
+RECENT_FAILURE_VERDICT_LIMIT = 10
+INCIDENT_KINDS = ("deadline_miss", "integrity_breach")
 
 
 class DeadlineError(RuntimeError):
@@ -67,6 +69,9 @@ class DeadlineHarness:
                 kind TEXT NOT NULL CHECK (kind IN ('deadline_miss', 'integrity_breach')),
                 recorded_at REAL NOT NULL,
                 reason TEXT,
+                short_verdict TEXT NOT NULL,
+                long_detail TEXT NOT NULL,
+                reviewed_at REAL,
                 units INTEGER NOT NULL CHECK (units IN (1, 3)),
                 cumulative_before INTEGER NOT NULL,
                 cumulative_after INTEGER NOT NULL,
@@ -81,6 +86,7 @@ class DeadlineHarness:
                 task_id TEXT NOT NULL,
                 kind TEXT NOT NULL CHECK (kind IN ('blocker', 'unexpected')),
                 reported_at REAL NOT NULL,
+                short_verdict TEXT NOT NULL,
                 evidence TEXT NOT NULL,
                 PRIMARY KEY (lineage_id, task_id),
                 FOREIGN KEY (lineage_id, task_id)
@@ -173,6 +179,53 @@ class DeadlineHarness:
             self.connection.execute(
                 "ALTER TABLE coordinator_restart_requests ADD COLUMN expected_run_id TEXT"
             )
+        incident_columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(incidents)").fetchall()
+        }
+        if "short_verdict" not in incident_columns:
+            self.connection.execute("ALTER TABLE incidents ADD COLUMN short_verdict TEXT")
+        if "long_detail" not in incident_columns:
+            self.connection.execute("ALTER TABLE incidents ADD COLUMN long_detail TEXT")
+        if "reviewed_at" not in incident_columns:
+            self.connection.execute("ALTER TABLE incidents ADD COLUMN reviewed_at REAL")
+        self.connection.execute(
+            """
+            UPDATE incidents
+            SET short_verdict = replace(kind, '_', ' ')
+            WHERE short_verdict IS NULL OR trim(short_verdict) = ''
+            """
+        )
+        self.connection.execute(
+            """
+            UPDATE incidents
+            SET long_detail = CASE
+                WHEN reason IS NOT NULL AND trim(reason) != '' THEN reason
+                WHEN kind = 'deadline_miss' THEN
+                    'The immutable deadline passed without an on-time terminal result.'
+                ELSE 'An integrity breach invalidated the task result.'
+            END
+            WHERE long_detail IS NULL OR trim(long_detail) = ''
+            """
+        )
+        finding_columns = {
+            row["name"]
+            for row in self.connection.execute(
+                "PRAGMA table_info(worker_findings)"
+            ).fetchall()
+        }
+        if "short_verdict" not in finding_columns:
+            self.connection.execute(
+                "ALTER TABLE worker_findings ADD COLUMN short_verdict TEXT"
+            )
+        self.connection.execute(
+            """
+            UPDATE worker_findings
+            SET short_verdict = replace(kind, '_', ' ')
+            WHERE short_verdict IS NULL OR trim(short_verdict) = ''
+            """
+        )
+        self.connection.commit()
 
     def close(self) -> None:
         self.connection.close()
@@ -213,6 +266,14 @@ class DeadlineHarness:
         if not isinstance(value, str) or not value.strip():
             raise DeadlineError(f"{label} must not be empty")
         return value.strip()
+
+    @staticmethod
+    def _default_incident_detail(kind: str, reason: str | None) -> str:
+        if reason is not None and reason.strip():
+            return reason.strip()
+        if kind == "deadline_miss":
+            return "The immutable deadline passed without an on-time terminal result."
+        return "An integrity breach invalidated the task result."
 
     def _begin(self) -> None:
         self.connection.execute("BEGIN IMMEDIATE")
@@ -460,11 +521,14 @@ class DeadlineHarness:
             "kind": row["kind"],
             "recorded": recorded,
             "recorded_at": row["recorded_at"],
+            "short_verdict": row["short_verdict"],
+            "reviewed_at": row["reviewed_at"],
             "reason": row["reason"],
+            "long_detail": row["long_detail"],
             "units": row["units"],
             "cumulative_before": row["cumulative_before"],
             "cumulative_after": row["cumulative_after"],
-            "independent_review_required": True,
+            "independent_review_required": row["reviewed_at"] is None,
             "cadence_crossed": threshold is not None,
             "cadence_threshold": threshold,
         }
@@ -476,6 +540,7 @@ class DeadlineHarness:
             "task_id": row["task_id"],
             "kind": row["kind"],
             "reported_at": row["reported_at"],
+            "short_verdict": row["short_verdict"],
             "evidence": row["evidence"],
             "recorded": recorded,
         }
@@ -511,14 +576,29 @@ class DeadlineHarness:
         new = prior + units
         crossed = prior // 3 < new // 3
         threshold = (prior // 3 + 1) * 3 if crossed else None
+        short_verdict = kind.replace("_", " ")
+        long_detail = self._default_incident_detail(kind, reason)
         cursor = self.connection.execute(
             """
             INSERT INTO incidents (
-                lineage_id, task_id, kind, recorded_at, reason, units,
+                lineage_id, task_id, kind, recorded_at, reason,
+                short_verdict, long_detail, units,
                 cumulative_before, cumulative_after, cadence_threshold
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (lineage_id, task_id, kind, recorded_at, reason, units, prior, new, threshold),
+            (
+                lineage_id,
+                task_id,
+                kind,
+                recorded_at,
+                reason,
+                short_verdict,
+                long_detail,
+                units,
+                prior,
+                new,
+                threshold,
+            ),
         )
         row = self.connection.execute(
             "SELECT * FROM incidents WHERE incident_id = ?", (cursor.lastrowid,)
@@ -600,6 +680,98 @@ class DeadlineHarness:
             "cumulative_miss_units": self._cumulative_units(lineage_id),
             "incidents": [self._incident_result(row, recorded=False) for row in incidents],
         }
+
+    @staticmethod
+    def _compact_task_result(status: dict[str, Any]) -> dict[str, Any]:
+        finding = status["worker_finding"]
+        incidents_by_kind = {
+            incident["kind"]: incident for incident in status["incidents"]
+        }
+        if status["state"] == "integrity_breach":
+            current_short_verdict = incidents_by_kind["integrity_breach"][
+                "short_verdict"
+            ]
+        elif finding is not None:
+            current_short_verdict = finding["short_verdict"]
+        else:
+            current_incident = next(
+                (
+                    incidents_by_kind[kind]
+                    for kind in ("integrity_breach", "deadline_miss")
+                    if kind in incidents_by_kind
+                ),
+                None,
+            )
+            current_short_verdict = (
+                current_incident["short_verdict"]
+                if current_incident is not None
+                else None
+            )
+        return {
+            "task_id": status["task_id"],
+            "claim_id": status["claim_id"],
+            "state": status["state"],
+            "deadline_at": status["deadline_at"],
+            "current_short_verdict": current_short_verdict,
+        }
+
+    def _pending_incident_reviews(self, lineage_id: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            SELECT incidents.task_id, tasks.claim_id, incidents.kind,
+                   incidents.recorded_at
+            FROM incidents
+            JOIN tasks USING (lineage_id, task_id)
+            WHERE incidents.lineage_id = ? AND incidents.reviewed_at IS NULL
+            ORDER BY incidents.recorded_at, incidents.incident_id
+            """,
+            (lineage_id,),
+        ).fetchall()
+        return [
+            {
+                "task_id": row["task_id"],
+                "claim_id": row["claim_id"],
+                "kind": row["kind"],
+                "recorded_at": row["recorded_at"],
+            }
+            for row in rows
+        ]
+
+    def _recent_failure_verdicts(self, lineage_id: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            SELECT task_id, claim_id, kind, recorded_at, short_verdict
+            FROM (
+                SELECT incidents.task_id, tasks.claim_id, incidents.kind,
+                       incidents.recorded_at, incidents.short_verdict,
+                       0 AS source_order
+                FROM incidents
+                JOIN tasks USING (lineage_id, task_id)
+                WHERE incidents.lineage_id = ?
+                  AND incidents.reviewed_at IS NOT NULL
+                UNION ALL
+                SELECT worker_findings.task_id, tasks.claim_id,
+                       worker_findings.kind, worker_findings.reported_at,
+                       worker_findings.short_verdict, 1 AS source_order
+                FROM worker_findings
+                JOIN tasks USING (lineage_id, task_id)
+                WHERE worker_findings.lineage_id = ?
+            )
+            ORDER BY recorded_at DESC, task_id DESC, source_order DESC, kind DESC
+            LIMIT ?
+            """,
+            (lineage_id, lineage_id, RECENT_FAILURE_VERDICT_LIMIT),
+        ).fetchall()
+        return [
+            {
+                "task_id": row["task_id"],
+                "claim_id": row["claim_id"],
+                "kind": row["kind"],
+                "recorded_at": row["recorded_at"],
+                "short_verdict": row["short_verdict"],
+            }
+            for row in rows
+        ]
 
     def start_task(
         self,
@@ -697,28 +869,52 @@ class DeadlineHarness:
             if binding is None:
                 raise DeadlineError("State database has not been bound to a lineage")
             lineage_id = binding["lineage_id"]
-            task_rows = self.connection.execute(
+            task_ids = self.connection.execute(
                 """
-                SELECT * FROM tasks
-                WHERE lineage_id = ?
-                ORDER BY started_at, task_id
+                SELECT current.task_id
+                FROM tasks AS current
+                WHERE current.lineage_id = ?
+                  AND (
+                    current.completed_at IS NULL
+                    OR current.integrity_breached_at IS NOT NULL
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM tasks AS accepted
+                    WHERE accepted.lineage_id = current.lineage_id
+                      AND accepted.claim_id = current.claim_id
+                      AND accepted.completed_at IS NOT NULL
+                      AND accepted.integrity_breached_at IS NULL
+                  )
+                  AND (
+                    current.terminal_at IS NULL
+                    OR NOT EXISTS (
+                      SELECT 1
+                      FROM tasks AS newer
+                      WHERE newer.lineage_id = current.lineage_id
+                        AND newer.claim_id = current.claim_id
+                        AND (
+                          newer.started_at > current.started_at
+                          OR (
+                            newer.started_at = current.started_at
+                            AND newer.task_id > current.task_id
+                          )
+                        )
+                    )
+                )
+                ORDER BY current.started_at, current.task_id
                 """,
                 (lineage_id,),
             ).fetchall()
-            for task in task_rows:
+            for row in task_ids:
+                task = self._task(lineage_id, row["task_id"])
                 self._record_miss_if_due(task, checked_at)
             tasks = [
-                self._status(lineage_id, task["task_id"], checked_at)
-                for task in task_rows
+                self._compact_task_result(
+                    self._status(lineage_id, row["task_id"], checked_at)
+                )
+                for row in task_ids
             ]
-            incidents = self.connection.execute(
-                """
-                SELECT * FROM incidents
-                WHERE lineage_id = ?
-                ORDER BY incident_id
-                """,
-                (lineage_id,),
-            ).fetchall()
             result = {
                 "lineage_id": lineage_id,
                 "checked_at": checked_at,
@@ -726,10 +922,10 @@ class DeadlineHarness:
                 "random_mutation": self._random_mutation_status(lineage_id),
                 "coordinator_restart": self._coordinator_restart_status(lineage_id),
                 "tasks": tasks,
-                "incidents": [
-                    self._incident_result(incident, recorded=False)
-                    for incident in incidents
-                ],
+                "pending_incident_reviews": self._pending_incident_reviews(
+                    lineage_id
+                ),
+                "recent_failure_verdicts": self._recent_failure_verdicts(lineage_id),
             }
             self.connection.commit()
             return result
@@ -805,6 +1001,7 @@ class DeadlineHarness:
         kind: str,
         evidence: str,
         *,
+        short_verdict: str | None = None,
         now: float | None = None,
     ) -> dict[str, Any]:
         lineage_id = self._identity(lineage_id, "Lineage id")
@@ -813,6 +1010,10 @@ class DeadlineHarness:
         if kind not in {"blocker", "unexpected"}:
             raise DeadlineError("Worker finding kind must be blocker or unexpected")
         evidence = self._nonempty_text(evidence, "Worker finding evidence")
+        if short_verdict is not None:
+            short_verdict = self._nonempty_text(
+                short_verdict, "Worker finding short verdict"
+            )
         reported_at = self._now(now)
         self._begin()
         try:
@@ -827,8 +1028,16 @@ class DeadlineHarness:
                 )
 
             existing = self._worker_finding(lineage_id, task_id)
+            if short_verdict is None:
+                short_verdict = (
+                    existing["short_verdict"]
+                    if existing is not None
+                    else kind.replace("_", " ")
+                )
             if existing is not None and (
-                existing["kind"] != kind or existing["evidence"] != evidence
+                existing["kind"] != kind
+                or existing["short_verdict"] != short_verdict
+                or existing["evidence"] != evidence
             ):
                 raise DeadlineError("A worker finding is immutable once recorded")
 
@@ -837,10 +1046,18 @@ class DeadlineHarness:
                 self.connection.execute(
                     """
                     INSERT INTO worker_findings (
-                        lineage_id, task_id, kind, reported_at, evidence
-                    ) VALUES (?, ?, ?, ?, ?)
+                        lineage_id, task_id, kind, reported_at,
+                        short_verdict, evidence
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (lineage_id, task_id, kind, reported_at, evidence),
+                    (
+                        lineage_id,
+                        task_id,
+                        kind,
+                        reported_at,
+                        short_verdict,
+                        evidence,
+                    ),
                 )
                 finding = self._worker_finding(lineage_id, task_id)
                 recorded = True
@@ -855,6 +1072,86 @@ class DeadlineHarness:
                 "finding": self._finding_result(finding, recorded=recorded),
                 "status": self._status(lineage_id, task_id, reported_at),
                 "random_mutation": self._random_mutation_status(lineage_id),
+            }
+            self.connection.commit()
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def diagnose_incident(
+        self,
+        lineage_id: str,
+        task_id: str,
+        kind: str,
+        short_verdict: str,
+        diagnosis: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Attach one immutable independent review to an exact incident."""
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        task_id = self._identity(task_id, "Task id")
+        kind = self._identity(kind, "Incident kind")
+        if kind not in INCIDENT_KINDS:
+            raise DeadlineError(
+                "Incident kind must be deadline_miss or integrity_breach"
+            )
+        short_verdict = self._nonempty_text(short_verdict, "Short verdict")
+        diagnosis = self._nonempty_text(diagnosis, "Long diagnosis")
+        reviewed_at = self._now(now)
+        self._begin()
+        try:
+            self._task(lineage_id, task_id)
+            incident = self.connection.execute(
+                """
+                SELECT * FROM incidents
+                WHERE lineage_id = ? AND task_id = ? AND kind = ?
+                """,
+                (lineage_id, task_id, kind),
+            ).fetchone()
+            if incident is None:
+                raise DeadlineError(
+                    f"Unknown incident: {lineage_id}/{task_id}/{kind}"
+                )
+            if incident["reviewed_at"] is None:
+                self.connection.execute(
+                    """
+                    UPDATE incidents
+                    SET short_verdict = ?, long_detail = ?, reviewed_at = ?
+                    WHERE lineage_id = ? AND task_id = ? AND kind = ?
+                    """,
+                    (
+                        short_verdict,
+                        diagnosis,
+                        reviewed_at,
+                        lineage_id,
+                        task_id,
+                        kind,
+                    ),
+                )
+                recorded = True
+            elif (
+                incident["short_verdict"] == short_verdict
+                and incident["long_detail"] == diagnosis
+            ):
+                recorded = False
+            else:
+                raise DeadlineError(
+                    "An incident diagnosis is immutable once recorded"
+                )
+            diagnosed = self.connection.execute(
+                """
+                SELECT * FROM incidents
+                WHERE lineage_id = ? AND task_id = ? AND kind = ?
+                """,
+                (lineage_id, task_id, kind),
+            ).fetchone()
+            if diagnosed is None:
+                raise DeadlineError("Failed to read the diagnosed incident")
+            result = {
+                "recorded": recorded,
+                "incident": self._incident_result(diagnosed, recorded=False),
             }
             self.connection.commit()
             return result
@@ -1265,7 +1562,10 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--claim", required=True)
     start.add_argument("--estimate-seconds", required=True, type=float)
 
-    status = commands.add_parser("status", help="Read status and record a due miss")
+    status = commands.add_parser(
+        "status",
+        help="Read one exact task with long evidence and record a due miss",
+    )
     add_task_identity_flags(status)
 
     expire = commands.add_parser("expire", help="Record a due miss once")
@@ -1280,7 +1580,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_task_identity_flags(finding)
     finding.add_argument("--kind", choices=("blocker", "unexpected"), required=True)
+    finding.add_argument("--short-verdict")
     finding.add_argument("--evidence", required=True)
+
+    diagnose = commands.add_parser(
+        "diagnose",
+        help="Attach one immutable short verdict and long diagnosis to an incident",
+    )
+    add_task_identity_flags(diagnose)
+    diagnose.add_argument("--kind", choices=INCIDENT_KINDS, required=True)
+    diagnose.add_argument("--short-verdict", required=True)
+    diagnose.add_argument("--diagnosis", required=True)
 
     breach = commands.add_parser("breach", help="Record an integrity breach once")
     add_task_identity_flags(breach)
@@ -1289,7 +1599,9 @@ def build_parser() -> argparse.ArgumentParser:
     watch = commands.add_parser("watch", help="Wait for and expire one task")
     add_task_identity_flags(watch)
 
-    list_command = commands.add_parser("list", help="List bound-lineage deadline state")
+    list_command = commands.add_parser(
+        "list", help="Show compact bound-lineage startup state"
+    )
     list_command.add_argument("--state", dest="command_state")
 
     resolve_random = commands.add_parser(
@@ -1368,6 +1680,15 @@ def main(argv: list[str] | None = None) -> int:
                         arguments.task,
                         arguments.kind,
                         arguments.evidence,
+                        short_verdict=arguments.short_verdict,
+                    )
+                elif arguments.command == "diagnose":
+                    result = harness.diagnose_incident(
+                        arguments.lineage,
+                        arguments.task,
+                        arguments.kind,
+                        arguments.short_verdict,
+                        arguments.diagnosis,
                     )
                 elif arguments.command == "resolve-random-mutation":
                     result = harness.resolve_random_mutation(

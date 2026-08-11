@@ -10,31 +10,24 @@ read `de-67-1/` or `de-67-2/`. Read this file, then `references/kernel.md`; load
 from `.de67/` and the working code.
 
 Phase 2 must already have frozen `.de67/DFS.md` and created `.de67/state/workspace.json` with the
-bound clock lineage, state path, branch, and checkpoint targets. Read that small machine
+bound clock lineage, state path, branch, checkpoint targets, and proved Luna and Terra capabilities
+at more than one effort level. Read that small machine
 configuration; do not redo workspace setup here. A missing configuration returns to DE-67-2.
 Copy each missing guideline or ledger from `assets/environment/` individually. The Markdown
 documents are normal project artifacts; only machine state belongs under `.de67/state/`. Never
 overwrite an existing state file with a template.
 The skill's `assets/` and `references/kernel.md` are frozen resources; mutate only the project-local
 `.de67/` copies described below.
+Never inventory, search, or read `.de67/no-go-zone/`. Phase 2 has already reconciled and archived
+competing workflow documents there so they cannot regain authority during delivery.
 
 Proceed only when `.de67/DFS.md` records `Frozen` or `Refrozen` against an inspected source baseline.
 A missing/draft DFS or unresolved material owner choice returns to DE-67-2 rather than becoming an
 implementation guess.
 
-Required project state:
-
-- `DFS.md` — mostly frozen functional specification and red work items.
-- `test-and-task-guidelines.md` — mutable task preparation, worker, test, and estimate guidance;
-  its headings are frozen.
-- `orchestrator-guidelines.md` — mutable coordination and failure-investigation guidance; its
-  headings are frozen.
-- `work-ledger.md` — the current batch of no more than ten still-red DFS claims.
-- `mutation-suggestions.md` — consumable scratch for pending reviews and manual suggestions; every
-  successful mutation resets it to the empty skill template.
-
-The normative mutable surface is exactly the DFS and the two guideline documents. The ledgers carry
-current scratch state; they are not additional policy surfaces.
+The normative mutable surface is the DFS plus the two guideline documents. `work-ledger.md` carries
+only current red work; `mutation-suggestions.md` is consumable scratch. They are not policy or
+history surfaces.
 
 ## Start or resume
 
@@ -46,7 +39,7 @@ rescan the full DFS for reassurance. Reconcile late worker results and expired t
 more work:
 
 ```text
-python <active-de-67-3-skill>/scripts/deadline_harness.py list --state .de67/state/deadlines.sqlite3
+python <active-de-67-3-skill>/scripts/deadline_harness.py startup-view --state .de67/state/deadlines.sqlite3
 ```
 
 This startup view contains current nonaccepted tasks, every incident still awaiting review, and the
@@ -62,40 +55,27 @@ coordinator process:
 python <active-de-67-3-skill>/scripts/coordinator_supervisor.py --state .de67/state/deadlines.sqlite3 --lineage PROJECT --workspace . --run-root .de67/state/coordinator-runs --runner <one-shot-runner>
 ```
 
-The runner must accept `--cwd <workspace>` and a prompt on standard input. The supervisor owns each
-coordinator as a direct child, waits for it to exit, reads the clock once, and starts at most one
-successor for each pending restart generation. It does not inspect code, choose tasks, or judge
-evidence. The one-shot runner owns the transcript; the supervisor records only prompt, PID, status,
-and exit code. Never launch a successor from the retiring coordinator with a subagent, foreground
-tool call, `nohup`, or another raw child process.
+The runner accepts `--cwd <workspace>` and a prompt on standard input. The supervisor is the direct
+parent, owns restart generations, and records only process facts; it never judges project work. A
+retiring coordinator requests the baton and exits—it never launches or acknowledges its successor.
+The successor executes `DE67_COORDINATOR_ACK_ARGV_JSON` without a shell before dispatch.
 
-Keep the supervisor itself under durable host ownership (for example `launchd` on the Mac). If that
-host-owned process is killed unexpectedly, confirm its prior runner and descendants are gone before
-starting a replacement. A failed successor remains claimed and cannot be retried by a restarted
-supervisor. Only after that process-tree check may an operator release the exact dead run with
-`deadline_harness.py release-restart-claim`; the clock is a handover baton, not a general process
-manager.
-
-The clock is the handover baton. `coordinator_restart.pending` blocks new task identities until the
-external supervisor binds that generation to one successor run. The fresh coordinator reads the
-installed phase, durable project state, and repository identity, then executes the exact argv array
-in `DE67_COORDINATOR_ACK_ARGV_JSON` without shell interpolation. The retiring coordinator cannot
-acknowledge an unclaimed generation. A successor that exits before acknowledgement leaves the request
-pending and the supervisor stops truthfully instead of retrying or leaving a false `RUNNING` claim.
+Keep the supervisor under durable host ownership, but restart only an unsuccessful exit; success
+stays stopped. It launches nothing after derived DFS completion. After an abnormal death, confirm the
+runner tree is gone before releasing the exact dead claim; failed or unacknowledged successors remain
+pending rather than being silently retried.
 
 If `random_mutation.due` is true, do not dispatch another task. Complete the random improvement
 transaction below first. Already-dispatched workers keep their original briefs and clocks.
 
-If the work ledger has no active item, select up to ten necessary remaining red DFS claims. Ten is
-the user-authorized ceiling, not a target. Re-read the affected code and tests, define the smallest
-honest passing evidence, and record concise natural-language work items. Do not copy a permanent
-coordination matrix into the DFS. Remove a finished item immediately; do not archive or summarize it
-elsewhere because the checked DFS claim is its record. While a claim remains red, replace prior task
-notes with only its current causal frontier and active route; never append a chronological attempt
-history. Git and exact-task clock detail are anomaly diagnostics, not startup reading.
+If the work ledger is empty, select only necessary remaining red claims, up to the user-authorized
+ceiling of ten. Each item keeps its present causal frontier and active route. Delete accepted items;
+never turn the ledger or DFS into task history.
 
-For each ready work item, choose the weakest sufficient worker/model, define the outcome and test,
-and make an evidence-informed duration estimate. Start its timer at actual dispatch:
+Choose model, effort, brief, and evidence through the mutable guidelines and the Phase-2-proved
+roster. The technical selector stays small: Luna omits `model` and supplies its proved effort; Terra
+supplies both. Every task uses a fresh `fork_turns="none"` worker and a self-contained prompt. Then
+start its timer at actual dispatch:
 
 ```text
 python <active-de-67-3-skill>/scripts/deadline_harness.py start --state .de67/state/deadlines.sqlite3 --lineage PROJECT --task W-001 --claim R-001 --estimate-seconds 900
@@ -104,18 +84,21 @@ python <active-de-67-3-skill>/scripts/deadline_harness.py start --state .de67/st
 `PROJECT` is one stable implementation-lineage identity for this `.de67/` environment; the state
 database binds it on first use and rejects a reset to another lineage.
 
-The coordinator may dispatch multiple workers in parallel when code, state, dependencies, and proof
-surfaces are disjoint. Unknown overlap serializes. Handoffs are compact prose: desired outcome,
-relevant code/claim, the passing test, and material boundaries. A worker returns what changed, test
-results, paths, and any uncertainty. If blocked or surprised by production behavior, the worker
-returns expected versus observed behavior and direct evidence immediately; it does not guess around
-the finding or edit the DFS. Do not require JSON receipts, artifact hash maps, permits, fixed terminal
-schemas, or full transcript ingestion.
+Workers report through the native parent/child channel; the coordinator may clarify an active task
+without loading its transcript. Follow the kernel and mutable guidelines for parallelism, findings,
+and worker retirement.
 
-Remain live while work is outstanding. Use the platform's non-polling worker wait or deadline wakeup
+Remain live while the current dispatch wave is outstanding. Use the platform's non-polling worker wait or deadline wakeup
 when available, and act on whichever worker result or deadline arrives first. The detached SQLite
 watcher is durable interruption protection; it records a miss but does not replace the independent
 review and mutation transaction. A resumed coordinator reconciles any recorded incident immediately.
+After every worker in the current wave is dispositioned and the compact frontier is durable, do not
+open another task identity in that transcript. If the DFS is now complete, exit without requesting
+a successor. Otherwise request an ordinary coordinator restart and retire:
+
+```text
+python <active-de-67-3-skill>/scripts/deadline_harness.py request-restart --state .de67/state/deadlines.sqlite3 --lineage PROJECT --reason "dispatch wave complete"
+```
 
 ## Worker findings and the third mutation lane
 
@@ -160,7 +143,7 @@ fresh coordinator that reconciles the expanded contract.
 
 ## Accept work
 
-Inspect the actual diff and run or verify the smallest honest test through the real owner route. A
+Inspect the actual diff and verify the worker's smallest honest test through the real owner route. A
 passing result closes its work item. Record that acceptance with `deadline_harness.py complete` and
 a concise natural-language evidence reference. Then prepare the one-line DFS status candidate and
 verify that it belongs to the same accepted, breach-free task:
@@ -170,8 +153,13 @@ python <active-de-67-3-skill>/scripts/mutation_guard.py complete-dfs --before <b
 ```
 
 After validation, promote the candidate DFS, remove the item from the active ledger, and run
-`mutation_guard.py work-ledger` against the live ledger and DFS. Preserve concise evidence, not a
-receipt bureaucracy.
+`mutation_guard.py work-ledger` against the live ledger, DFS, and clock state. The coordinator does
+not run product builds, tests, harnesses, or GUI operations itself; when more execution is necessary,
+dispatch a fresh scoped worker. Preserve concise evidence, not a receipt bureaucracy.
+
+```text
+python <active-de-67-3-skill>/scripts/mutation_guard.py work-ledger --ledger .de67/work-ledger.md --dfs .de67/DFS.md --state .de67/state/deadlines.sqlite3 --lineage PROJECT
+```
 
 Checkpoint accepted changes with an ordinary commit. The Phase-2-installed post-commit hook pushes
 that exact committed `HEAD` to the configured targets; coordinators do not run routine pushes or
@@ -188,14 +176,11 @@ is detected, record one integrity breach. Then immediately start this transactio
 
 1. Give a fresh independent reviewer the task description, intended test, relevant code/diff,
    worker progress or report if any, and direct evidence of the first divergence.
-2. Prefer `gpt-5.6-sol` at `xhigh` for this X-type causal review. If unavailable, use the strongest
-   independent implementation-capable reviewer available; the worker and coordinator do not review
-   their own miss.
-3. Put the review in `mutation-suggestions.md`: a short verdict, one explanatory paragraph, direct
+2. Put the review in `mutation-suggestions.md`: a short verdict, one explanatory paragraph, direct
    evidence references, and a suggested mutation naming the relevant guideline section. A task with
    both a late miss and an integrity breach needs an explicit diagnosis for each incident, but only
    one broader guidance mutation transaction.
-4. Record the same short verdict and paragraph on every exact incident with
+3. Record the same short verdict and paragraph on every exact incident with
    `deadline_harness.py diagnose`; these are its compact history entry and long form. Use `--kind
    deadline_miss` for a miss and `--kind integrity_breach` for a breach.
 
@@ -203,16 +188,16 @@ is detected, record one integrity breach. Then immediately start this transactio
    python <active-de-67-3-skill>/scripts/deadline_harness.py diagnose --state .de67/state/deadlines.sqlite3 --lineage PROJECT --task W-001 --kind <incident-kind> --short-verdict "<failure mode>" --diagnosis "<first contradicted premise and direct evidence>"
    ```
 
-5. Read every pending suggestion in that scratch ledger and decide which evidence supports now.
-6. Snapshot the two current guideline files as the read-only baseline, then apply the smallest
+4. Read every pending suggestion in that scratch ledger and decide which evidence supports now.
+5. Snapshot the two current guideline files as the read-only baseline, then apply the smallest
    supported change to candidate copies of `test-and-task-guidelines.md`. On cumulative miss units
    3, 6, 9, and so on, or for an integrity breach, also mutate `orchestrator-guidelines.md` in the
    same transaction.
-7. Prepare an empty ledger candidate from the skill template. Validate the guideline candidates,
+6. Prepare an empty ledger candidate from the skill template. Validate the guideline candidates,
    empty ledger, canonical headings, baseline, and exact stored incident with
    `mutation_guard.py guidelines ... --ledger-candidate <empty-ledger-candidate>`. The guard derives
    ordinary versus broader scope from SQLite; the coordinator never supplies the miss count.
-8. Promote and checkpoint the guarded guideline bodies and empty ledger together. If validation or
+7. Promote and checkpoint the guarded guideline bodies and empty ledger together. If validation or
    application fails, preserve the live ledger. After the real files change, request the clock baton,
    then retire; the external supervisor launches the fresh coordinator from the accepted frontier:
 
@@ -229,14 +214,9 @@ mutation consumes all entries; a suggestion is evidence, not automatic authority
 
 ## Random improvement cadence
 
-The deadline harness privately draws and persists a uniform interval from 10 through 30 terminal
-task windows and one uniform target from `test-and-task-guidelines.md`,
-`orchestrator-guidelines.md`, and `DFS.md`. A task contributes exactly once at its first completion,
-worker finding, deadline miss, or integrity breach. A later result for that task does not contribute
-again. The harness exposes the draw and due state for audit; callers cannot pass an interval, lane,
-or seed. On first installation it backfills terminal windows already evidenced by stored completions,
-findings, misses, and breaches before drawing the lineage's first cycle. It does not edit Markdown or
-start reviewers.
+The deadline harness privately draws the user-authorized 10–30 terminal-window cadence and one of the
+three mutable lanes. Each task contributes once. The clock persists and exposes the draw but neither
+edits Markdown nor starts reviewers.
 
 When the stored cycle becomes due, the old coordinator blocks new dispatch and runs this transaction:
 
@@ -287,29 +267,8 @@ task/lineage identity to evade history. Record the concrete reason with the dead
 run the incident review and diagnosis transaction above using `--kind integrity_breach`. Honest
 uncertainty or a truthful failure is not cheating.
 
-## DFS changes during phase 3
-
-The coordinator may:
-
-- remove one red marker after accepted evidence;
-- make an evidence-required, uniquely implied non-material mechanistic clarification when it
-  preserves the user outcome, terminology, permissions, and acceptance strength; record and
-  refreeze it;
-- after a stored worker blocker or unexpected-result finding and the source-grounded review above,
-  append the uniquely implied same-contract mechanism, ownership/proof detail, and necessary stable
-  red claims, validate the expansion, and refreeze it.
-
-Existing claims and accepted work are never renamed, deleted, reopened, or closed by expansion. A
-DFS expansion only inserts lines; it never rewrites existing `Status` or refreeze prose. A DFS
-mutation never substitutes for a deadline-triggered guidance mutation; if both conditions occur, run
-both lanes. Return to DE-67-2 and the user for changed product behavior/language/permissions, weaker
-acceptance, or multiple materially different admissible designs. Never mutate the DFS merely to make
-current work pass.
-
 ## Continue and stop
 
-Refill the work ledger from remaining red claims when the current batch is worked off. Mutation,
-rejected work, a missed deadline, a retired coordinator, or an internal tool failure is continuation,
-not project completion. Stop only when every DFS red marker is gone and integrated proof passes, the
-user revokes authority, a material owner choice requires phase 2, or the next act is genuinely outside
-the available permissions/environment after materially different routes were checked.
+Red DFS claims mean continue or return for a material owner choice. When every red marker is gone,
+the ledger is empty, and no incident or restart gate remains, the supervisor stops without another
+coordinator; a due random improvement review cannot manufacture post-contract work.

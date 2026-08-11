@@ -118,6 +118,58 @@ def _load_config(workspace: Path) -> dict[str, Any] | None:
     return payload
 
 
+def _worker_capabilities(
+    requested: Sequence[Sequence[str]], *, required: bool
+) -> list[dict[str, str]]:
+    if not requested:
+        if required:
+            raise SetupError("Record successfully probed Luna and Terra capabilities")
+        return []
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for pair in requested:
+        if len(pair) != 2:
+            raise SetupError("Worker capabilities use MODEL REASONING_EFFORT")
+        model, effort = (str(value).strip() for value in pair)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", model) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]*", effort
+        ):
+            raise SetupError("Worker capabilities use MODEL REASONING_EFFORT")
+        key = (model, effort)
+        if key in seen:
+            raise SetupError(f"Duplicate worker capability: {model}/{effort}")
+        seen.add(key)
+        result.append({"model": model, "reasoning_effort": effort})
+    if required:
+        models = {item["model"] for item in result}
+        required_models = {"gpt-5.6-luna", "gpt-5.6-terra"}
+        if not required_models.issubset(models):
+            raise SetupError("Record successfully probed Luna and Terra capabilities")
+        if len({item["reasoning_effort"] for item in result}) < 2:
+            raise SetupError("Prove more than one reasoning effort across the worker roster")
+    return result
+
+
+def _configured_worker_capabilities(config: dict[str, Any]) -> list[dict[str, str]]:
+    raw = config.get("worker_capabilities", [])
+    if not isinstance(raw, list):
+        raise SetupError("Existing worker capability roster is invalid")
+    pairs: list[tuple[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise SetupError("Existing worker capability roster is invalid")
+        pairs.append(
+            (
+                str(item.get("model", "")),
+                str(item.get("reasoning_effort", "")),
+            )
+        )
+    try:
+        return _worker_capabilities(pairs, required=False)
+    except SetupError as error:
+        raise SetupError("Existing worker capability roster is invalid") from error
+
+
 def _require_ignored_state(workspace: Path) -> None:
     result = _run_git(
         workspace,
@@ -360,6 +412,7 @@ def configure(
     *,
     bind_clock: bool,
     lineage: str | None = None,
+    worker_capabilities: Sequence[Sequence[str]] = (),
 ) -> dict[str, Any]:
     workspace = _workspace(workspace_path)
     _require_ignored_state(workspace)
@@ -375,6 +428,18 @@ def configure(
         targets,
         state_path,
     )
+    if bind_clock:
+        configured_workers = _worker_capabilities(
+            worker_capabilities, required=True
+        )
+    else:
+        if worker_capabilities:
+            raise SetupError("Worker capabilities are recorded only while binding the clock")
+        configured_workers = (
+            []
+            if existing_config is None
+            else _configured_worker_capabilities(existing_config)
+        )
     selected_lineage: str | None = None
     if bind_clock:
         _require_frozen_dfs(workspace)
@@ -407,6 +472,7 @@ def configure(
         "source_ref": source_ref,
         "upstream": upstream,
         "targets": targets,
+        "worker_capabilities": configured_workers,
         "clock": (
             None
             if selected_lineage is None
@@ -553,6 +619,14 @@ def build_parser() -> argparse.ArgumentParser:
         )
         if name == "setup":
             command.add_argument("--lineage")
+            command.add_argument(
+                "--worker-capability",
+                nargs=2,
+                action="append",
+                metavar=("MODEL", "REASONING_EFFORT"),
+                required=True,
+                help="Record one model/effort pair that a fresh native spawn probe passed",
+            )
     push = commands.add_parser("push", help="Push the exact configured committed HEAD")
     push.add_argument("--workspace", required=True)
     push.add_argument("--hook", action="store_true", help=argparse.SUPPRESS)
@@ -570,6 +644,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.target,
                 bind_clock=True,
                 lineage=arguments.lineage,
+                worker_capabilities=arguments.worker_capability,
             )
         elif arguments.command == "configure-push":
             result = configure(

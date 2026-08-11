@@ -246,9 +246,15 @@ class DeadlineHarnessTests(unittest.TestCase):
 
         summary = self.harness.list_tasks(now=20)
         verdicts = summary["recent_failure_verdicts"]
+        quiet = self.harness.coordinator_view(now=20)
+        startup = self.harness.coordinator_view(
+            include_recent_verdicts=True, now=20
+        )
 
         self.assertEqual(summary["pending_incident_reviews"], [])
         self.assertEqual(len(verdicts), 10)
+        self.assertNotIn("recent_failure_verdicts", quiet)
+        self.assertEqual(len(startup["recent_failure_verdicts"]), 10)
         self.assertEqual(
             [verdict["task_id"] for verdict in verdicts],
             [f"W-{number:03d}" for number in range(12, 2, -1)],
@@ -258,6 +264,10 @@ class DeadlineHarnessTests(unittest.TestCase):
             [f"short {number}" for number in range(12, 2, -1)],
         )
         for verdict in verdicts:
+            self.assertNotIn("evidence", verdict)
+            self.assertNotIn("reason", verdict)
+            self.assertNotIn("long_detail", verdict)
+        for verdict in startup["recent_failure_verdicts"]:
             self.assertNotIn("evidence", verdict)
             self.assertNotIn("reason", verdict)
             self.assertNotIn("long_detail", verdict)
@@ -522,8 +532,10 @@ class DeadlineHarnessTests(unittest.TestCase):
         payload = json.loads(output.getvalue())
         self.assertTrue(payload["recorded"])
         self.assertEqual(payload["incident"]["short_verdict"], "estimate unsound")
+        self.assertNotIn("long_detail", payload["incident"])
+        status = self.harness.status_task("project", "task", now=112)
         self.assertEqual(
-            payload["incident"]["long_detail"],
+            status["incidents"][0]["long_detail"],
             "Measured setup time contradicted the estimate premise.",
         )
 
@@ -765,15 +777,24 @@ class DeadlineHarnessTests(unittest.TestCase):
         listed = json.loads(list_output.getvalue())
         listed_task = listed["tasks"][0]
 
+        startup_output = io.StringIO()
+        with redirect_stdout(startup_output):
+            self.assertEqual(
+                main(["startup-view", "--state", str(state_path)]), 0
+            )
+        startup = json.loads(startup_output.getvalue())
+
         self.assertEqual(finding_payload["finding"]["kind"], "blocker")
+        self.assertNotIn("evidence", finding_payload["finding"])
         self.assertEqual(listed_task["state"], "worker_finding")
         self.assertNotIn("worker_finding", listed_task)
         self.assertEqual(listed_task["current_short_verdict"], "dependency absent")
+        self.assertNotIn("recent_failure_verdicts", listed)
         self.assertEqual(
-            listed["recent_failure_verdicts"][0]["short_verdict"],
+            startup["recent_failure_verdicts"][0]["short_verdict"],
             "dependency absent",
         )
-        self.assertNotIn("evidence", listed["recent_failure_verdicts"][0])
+        self.assertNotIn("evidence", startup["recent_failure_verdicts"][0])
 
     def test_restart_request_persists_and_blocks_only_new_task_ids(self) -> None:
         initial = self.harness.start_task(
@@ -937,8 +958,13 @@ class DeadlineHarnessTests(unittest.TestCase):
             )
         acknowledged = json.loads(ack_output.getvalue())
         self.assertTrue(acknowledged["recorded"])
-        self.assertFalse(acknowledged["coordinator_restart"]["pending"])
-        self.assertEqual(acknowledged["coordinator_restart"]["run_id"], "run-cli-1")
+        self.assertNotIn("coordinator_restart", acknowledged)
+        with DeadlineHarness(state_path) as harness:
+            restart = harness.coordinator_restart_status("project")[
+                "coordinator_restart"
+            ]
+        self.assertFalse(restart["pending"])
+        self.assertEqual(restart["run_id"], "run-cli-1")
 
     @staticmethod
     def complete_windows(

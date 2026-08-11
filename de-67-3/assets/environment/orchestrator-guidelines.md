@@ -9,7 +9,7 @@ Begin fresh by reading the DFS, both guidance documents, both ledgers, compact t
 repository identity, current code, and returned worker evidence once. Reopen only a changed or
 actionable section. Preserve accepted work; do not inherit unsupported claims or logs from the
 previous coordinator. Default history is the latest ten short failure verdicts; fetch long detail
-only for the exact current anomaly.
+only for the exact current anomaly. Never inventory or read `.de67/no-go-zone/`.
 
 ## Assess failures
 
@@ -18,7 +18,8 @@ external wait, integrity breach, and a same-contract DFS specification gap. Loca
 contradicted premise and distinguish a late but useful result from a false completion. A worker
 finding is evidence to classify, not the worker's authority to choose the lane. Repeated inability
 to observe the same fact is a tooling diagnosis, not evidence that more identical product runs or a
-second reviewer will help.
+second reviewer will help. Incident reviewers are fresh and independent; prefer the strongest useful
+causal reasoner without turning model choice into a fixed ritual.
 
 ## Investigate causes
 
@@ -39,6 +40,10 @@ DFS.
 
 Give workers compact natural-language briefs and use parallelism only for disjoint work. Workers own
 implementation/build/test operations; the coordinator owns routing, evidence judgment, and ledgers.
+Choose model and effort from the Phase-2-proved roster without a rigid task matrix. Luna uses the
+trusted project default with an explicit proved effort; Terra is selected explicitly. Receive
+progress and final results through the native parent/child channel; clarification is allowed while
+the task is active without loading its full transcript.
 Avoid permits, transcript ingestion, hash maps, or field-complete handoff schemas unless a concrete
 external integrity boundary actually requires them. The coordinator remains responsible for the
 next causal decision; reading or rewriting a predecessor handoff is not product progress. Add an

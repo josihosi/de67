@@ -593,20 +593,101 @@ def active_work_items(ledger_text: str) -> tuple[str, ...]:
     return tuple(items)
 
 
-def validate_work_ledger(ledger: Path, dfs: Path) -> tuple[str, ...]:
-    """Require at most ten active entries, each tied to one still-red DFS claim."""
+def _active_work_blocks(ledger_text: str) -> tuple[tuple[str, str], ...]:
+    lines = ledger_text.splitlines()
+    starts: list[tuple[int, str]] = []
+    for line_number, line in _outside_fences(ledger_text):
+        match = ACTIVE_ITEM.match(line)
+        if match:
+            starts.append(
+                (line_number - 1, _normalize_reference(match.group("reference")))
+            )
+    blocks: list[tuple[str, str]] = []
+    for index, (start, reference) in enumerate(starts):
+        end = starts[index + 1][0] if index + 1 < len(starts) else len(lines)
+        blocks.append((reference, "\n".join(lines[start:end])))
+    return tuple(blocks)
 
-    items = active_work_items(read_markdown(ledger))
+
+def _stored_task_rows(state: Path, lineage_id: str) -> tuple[tuple[str, str], ...]:
+    if not state.is_file():
+        raise GuardError(f"Deadline state does not exist: {state}")
+    try:
+        connection = sqlite3.connect(state.resolve().as_uri() + "?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        binding = connection.execute(
+            "SELECT lineage_id FROM lineage_binding WHERE singleton = 1"
+        ).fetchone()
+        if binding is None or binding["lineage_id"] != lineage_id:
+            raise GuardError("Work-ledger lineage does not match the deadline state")
+        rows = connection.execute(
+            "SELECT task_id, claim_id FROM tasks WHERE lineage_id = ?",
+            (lineage_id,),
+        ).fetchall()
+    except sqlite3.Error as error:
+        raise GuardError(f"Cannot read deadline state: {error}") from error
+    finally:
+        if "connection" in locals():
+            connection.close()
+    return tuple((str(row["task_id"]), str(row["claim_id"])) for row in rows)
+
+
+def _mentions_task(text: str, task_id: str) -> bool:
+    return re.search(
+        rf"(?<![A-Za-z0-9_-]){re.escape(task_id)}(?![A-Za-z0-9_-])",
+        text,
+    ) is not None
+
+
+def validate_work_ledger(
+    ledger: Path,
+    dfs: Path,
+    *,
+    state: Path | None = None,
+    lineage_id: str | None = None,
+) -> tuple[str, ...]:
+    """Require one current entry per red claim and reject stored attempt history."""
+
+    ledger_text = read_markdown(ledger)
+    blocks = _active_work_blocks(ledger_text)
+    items = tuple(reference for reference, _ in blocks)
     if len(items) > 10:
         raise GuardError(f"Work ledger has {len(items)} active items; maximum is 10")
 
     red_claims = red_dfs_claims(read_markdown(dfs))
+    selected_claims: list[str] = []
     for reference in items:
         matches = [claim for claim in red_claims if _same_claim(reference, claim)]
         if not matches:
             raise GuardError(f"Work item does not reference a still-red DFS claim: {reference}")
         if len(matches) > 1:
             raise GuardError(f"Work item reference is ambiguous in the DFS: {reference}")
+        selected_claims.append(matches[0])
+
+    stable_claims = [_stable_key(claim) for claim in selected_claims]
+    if len(stable_claims) != len(set(stable_claims)):
+        raise GuardError("Work ledger has more than one active item for the same DFS claim")
+
+    if (state is None) != (lineage_id is None):
+        raise GuardError("Work-ledger clock validation needs both state and lineage")
+    if state is not None and lineage_id is not None:
+        task_rows = _stored_task_rows(state, lineage_id)
+        for (reference, block), claim in zip(blocks, selected_claims):
+            mentioned = {
+                (task_id, task_claim)
+                for task_id, task_claim in task_rows
+                if _mentions_task(block, task_id)
+            }
+            if len(mentioned) > 1:
+                raise GuardError(
+                    f"Work item keeps multiple task identities instead of one current frontier: {reference}"
+                )
+            if mentioned:
+                _, task_claim = next(iter(mentioned))
+                if _stable_key(task_claim) != _stable_key(claim):
+                    raise GuardError(
+                        f"Work item mentions a task owned by another DFS claim: {reference}"
+                    )
     return items
 
 
@@ -663,6 +744,8 @@ def build_parser() -> argparse.ArgumentParser:
     ledger = commands.add_parser("work-ledger", help="Validate active work against red DFS claims")
     ledger.add_argument("--ledger", type=Path, required=True)
     ledger.add_argument("--dfs", type=Path, required=True)
+    ledger.add_argument("--state", type=Path, required=True)
+    ledger.add_argument("--lineage", required=True)
 
     completion = commands.add_parser("complete-dfs", help="Validate one accepted DFS claim")
     completion.add_argument("--before", type=Path, required=True)
@@ -713,7 +796,12 @@ def main(argv: list[str] | None = None) -> int:
             validate_consumed_mutation_ledger(arguments.ledger_candidate)
             print("ok: guideline mutation; changed " + ", ".join(changed))
         elif arguments.command == "work-ledger":
-            items = validate_work_ledger(arguments.ledger, arguments.dfs)
+            items = validate_work_ledger(
+                arguments.ledger,
+                arguments.dfs,
+                state=arguments.state,
+                lineage_id=arguments.lineage,
+            )
             print(f"ok: {len(items)} active work items")
         elif arguments.command == "complete-dfs":
             validate_accepted_task_state(

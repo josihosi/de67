@@ -25,6 +25,12 @@ from workspace_setup import (  # noqa: E402
 import workspace_setup  # noqa: E402
 
 
+VERIFIED_WORKERS = (
+    ("gpt-5.6-luna", "high"),
+    ("gpt-5.6-terra", "low"),
+)
+
+
 class WorkspaceSetupTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -113,6 +119,7 @@ class WorkspaceSetupTests(unittest.TestCase):
             [("origin", "dev")],
             bind_clock=True,
             lineage="stable-lineage",
+            worker_capabilities=VERIFIED_WORKERS,
         )
         initial_config = json.loads(
             (self.workspace / CONFIG_RELATIVE_PATH).read_text(encoding="utf-8")
@@ -122,6 +129,7 @@ class WorkspaceSetupTests(unittest.TestCase):
             self.workspace,
             [("origin", "dev")],
             bind_clock=True,
+            worker_capabilities=VERIFIED_WORKERS,
         )
         repeated_config = json.loads(
             (self.workspace / CONFIG_RELATIVE_PATH).read_text(encoding="utf-8")
@@ -136,6 +144,7 @@ class WorkspaceSetupTests(unittest.TestCase):
             self.workspace,
             [("origin", "dev"), ("checkpoint", "main")],
             bind_clock=True,
+            worker_capabilities=VERIFIED_WORKERS,
         )
         additive_config = json.loads(
             (self.workspace / CONFIG_RELATIVE_PATH).read_text(encoding="utf-8")
@@ -151,6 +160,7 @@ class WorkspaceSetupTests(unittest.TestCase):
                 self.workspace,
                 [("origin", "dev")],
                 bind_clock=True,
+                worker_capabilities=VERIFIED_WORKERS,
             )
         self.assertEqual(
             json.loads(
@@ -166,6 +176,7 @@ class WorkspaceSetupTests(unittest.TestCase):
             [("origin", "dev")],
             bind_clock=True,
             lineage="stable-lineage",
+            worker_capabilities=VERIFIED_WORKERS,
         )
         original_config = (self.workspace / CONFIG_RELATIVE_PATH).read_text(
             encoding="utf-8"
@@ -186,6 +197,7 @@ class WorkspaceSetupTests(unittest.TestCase):
                 self.workspace,
                 [("origin", "dev")],
                 bind_clock=True,
+                worker_capabilities=VERIFIED_WORKERS,
             )
         self.assertEqual(
             (self.workspace / CONFIG_RELATIVE_PATH).read_text(encoding="utf-8"),
@@ -199,6 +211,7 @@ class WorkspaceSetupTests(unittest.TestCase):
             [("origin", "dev")],
             bind_clock=True,
             lineage="stable-lineage",
+            worker_capabilities=VERIFIED_WORKERS,
         )
         original_config = (self.workspace / CONFIG_RELATIVE_PATH).read_text(
             encoding="utf-8"
@@ -211,6 +224,7 @@ class WorkspaceSetupTests(unittest.TestCase):
                 self.workspace,
                 [("origin", "other")],
                 bind_clock=True,
+                worker_capabilities=VERIFIED_WORKERS,
             )
         self.assertEqual(
             (self.workspace / CONFIG_RELATIVE_PATH).read_text(encoding="utf-8"),
@@ -412,6 +426,7 @@ class WorkspaceSetupTests(unittest.TestCase):
             [("origin", "dev")],
             bind_clock=True,
             lineage="feature-lineage",
+            worker_capabilities=VERIFIED_WORKERS,
         )
 
         self.assertEqual(result["clock"]["lineage"], "feature-lineage")
@@ -428,6 +443,78 @@ class WorkspaceSetupTests(unittest.TestCase):
             connection.close()
         self.assertEqual(bound, ("feature-lineage",))
 
+    def test_phase_two_records_only_successfully_probed_worker_pairs(self) -> None:
+        self.freeze_dfs()
+        passed = (("gpt-5.6-luna", "high"), ("gpt-5.6-terra", "low"))
+
+        configure(
+            self.workspace,
+            [("origin", "dev")],
+            bind_clock=True,
+            worker_capabilities=passed,
+        )
+
+        config = json.loads(
+            (self.workspace / CONFIG_RELATIVE_PATH).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            config["worker_capabilities"],
+            [
+                {"model": "gpt-5.6-luna", "reasoning_effort": "high"},
+                {"model": "gpt-5.6-terra", "reasoning_effort": "low"},
+            ],
+        )
+
+    def test_phase_two_requires_luna_terra_and_distinct_efforts(self) -> None:
+        self.freeze_dfs()
+
+        invalid_rosters = (
+            (),
+            (("gpt-5.6-luna", "high"),),
+            (("gpt-5.6-luna", "high"), ("gpt-5.6-terra", "high")),
+        )
+        for roster in invalid_rosters:
+            with self.subTest(roster=roster), self.assertRaises(SetupError):
+                configure(
+                    self.workspace,
+                    [("origin", "dev")],
+                    bind_clock=True,
+                    worker_capabilities=roster,
+                )
+
+        self.assertFalse((self.workspace / CONFIG_RELATIVE_PATH).exists())
+
+    def test_repeated_phase_two_setup_replaces_the_roster_with_fresh_probe_results(self) -> None:
+        self.freeze_dfs()
+        configure(
+            self.workspace,
+            [("origin", "dev")],
+            bind_clock=True,
+            worker_capabilities=VERIFIED_WORKERS,
+        )
+
+        replacement = (
+            ("gpt-5.6-luna", "low"),
+            ("gpt-5.6-terra", "medium"),
+        )
+        configure(
+            self.workspace,
+            [("origin", "dev")],
+            bind_clock=True,
+            worker_capabilities=replacement,
+        )
+
+        config = json.loads(
+            (self.workspace / CONFIG_RELATIVE_PATH).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            config["worker_capabilities"],
+            [
+                {"model": "gpt-5.6-luna", "reasoning_effort": "low"},
+                {"model": "gpt-5.6-terra", "reasoning_effort": "medium"},
+            ],
+        )
+
     def test_phase_two_setup_initializes_an_empty_sqlite_state_file(self) -> None:
         self.freeze_dfs()
         state_path = self.workspace / DEADLINE_STATE_RELATIVE_PATH
@@ -439,6 +526,7 @@ class WorkspaceSetupTests(unittest.TestCase):
             [("origin", "dev")],
             bind_clock=True,
             lineage="empty-state-lineage",
+            worker_capabilities=VERIFIED_WORKERS,
         )
 
         self.assertEqual(result["clock"]["lineage"], "empty-state-lineage")
@@ -463,6 +551,7 @@ class WorkspaceSetupTests(unittest.TestCase):
             self.workspace,
             [("primary", "dev")],
             bind_clock=True,
+            worker_capabilities=VERIFIED_WORKERS,
         )
 
         self.assertEqual(result["clock"]["lineage"], "origin:dev")

@@ -338,6 +338,68 @@ class MutationGuardTests(unittest.TestCase):
         items = guard.validate_work_ledger(ledger, dfs)
         self.assertEqual(items, ("R-001 — Implement the red claim",))
 
+    def test_work_ledger_rejects_two_items_for_one_claim(self) -> None:
+        dfs = self.write_dfs("# DFS\n\n- [ ] 🔴 R-001 — Still open\n")
+        ledger = self.write_ledger(
+            "# Work ledger\n\n## Active work\n\n"
+            "- [ ] R-001 — First route\n\n"
+            "- [ ] R-001 — Second route\n"
+        )
+
+        with self.assertRaisesRegex(guard.GuardError, "more than one active item"):
+            guard.validate_work_ledger(ledger, dfs)
+
+    def test_work_ledger_rejects_multiple_stored_task_identities(self) -> None:
+        dfs = self.write_dfs("# DFS\n\n- [ ] 🔴 R-001 — Still open\n")
+        state = self.root / "ledger-history.sqlite"
+        with deadline.DeadlineHarness(state) as harness:
+            harness.start_task("project", "R001-M1", "R-001", 10, now=0)
+            harness.report_worker_finding(
+                "project", "R001-M1", "unexpected", "first route contradicted", now=1
+            )
+            harness.start_task("project", "R001-M2", "R-001", 10, now=2)
+
+        historical = self.write_ledger(
+            "# Work ledger\n\n## Active work\n\n"
+            "- [ ] R-001 — Still open\n\n"
+            "  R001-M1 found the old premise. R001-M2 is the current route.\n"
+        )
+        with self.assertRaisesRegex(guard.GuardError, "multiple task identities"):
+            guard.validate_work_ledger(
+                historical, dfs, state=state, lineage_id="project"
+            )
+
+        current = self.write_ledger(
+            "# Work ledger\n\n## Active work\n\n"
+            "- [ ] R-001 — Still open\n\n"
+            "  Current causal frontier and active route belong to R001-M2.\n"
+        )
+        self.assertEqual(
+            guard.validate_work_ledger(
+                current, dfs, state=state, lineage_id="project"
+            ),
+            ("R-001 — Still open",),
+        )
+
+    def test_work_ledger_rejects_task_owned_by_another_claim(self) -> None:
+        dfs = self.write_dfs(
+            "# DFS\n\n"
+            "- [ ] 🔴 R-001 — First\n"
+            "- [ ] 🔴 R-002 — Second\n"
+        )
+        state = self.root / "ledger-owner.sqlite"
+        with deadline.DeadlineHarness(state) as harness:
+            harness.start_task("project", "second-task", "R-002", 10, now=0)
+        ledger = self.write_ledger(
+            "# Work ledger\n\n## Active work\n\n"
+            "- [ ] R-001 — First\n\n  Active route: second-task.\n"
+        )
+
+        with self.assertRaisesRegex(guard.GuardError, "another DFS claim"):
+            guard.validate_work_ledger(
+                ledger, dfs, state=state, lineage_id="project"
+            )
+
     def test_exact_selected_marker_removal_is_accepted(self) -> None:
         before = self.root / "before.md"
         after = self.root / "after.md"
@@ -812,6 +874,16 @@ class MutationGuardTests(unittest.TestCase):
     def test_documented_integrity_route_requires_exact_diagnosis(self) -> None:
         self.assertIn("`--kind integrity_breach`", SKILL_TEXT)
         self.assertIn("using `--kind integrity_breach`", SKILL_TEXT)
+
+    def test_documented_work_ledger_guard_uses_clock_identity(self) -> None:
+        command_lines = [
+            line
+            for line in SKILL_TEXT.splitlines()
+            if line.startswith("python ") and "mutation_guard.py work-ledger" in line
+        ]
+        self.assertEqual(len(command_lines), 1)
+        self.assertIn("--state", command_lines[0])
+        self.assertIn("--lineage", command_lines[0])
 
 
 if __name__ == "__main__":

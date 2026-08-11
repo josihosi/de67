@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -15,6 +16,10 @@ from pathlib import Path
 from typing import BinaryIO, Callable, Iterator, Mapping, Sequence
 
 from deadline_harness import DeadlineError, DeadlineHarness
+
+
+RED_DFS_CLAIM = re.compile(r"^- \[ \] \N{LARGE RED CIRCLE} ", re.MULTILINE)
+ACTIVE_LEDGER_ITEM = re.compile(r"^- \[ \] ", re.MULTILINE)
 
 
 class SupervisorError(RuntimeError):
@@ -116,6 +121,35 @@ def read_clock(state_path: Path, lineage_id: str) -> RestartState:
         return _restart_state(
             harness.coordinator_restart_status(lineage_id), lineage_id
         )
+
+
+def work_is_complete(
+    workspace: Path,
+    state_path: Path,
+    lineage_id: str,
+) -> bool:
+    """Derive completion from the DFS, current ledger, and live clock gates."""
+    dfs = workspace / ".de67" / "DFS.md"
+    ledger = workspace / ".de67" / "work-ledger.md"
+    if not dfs.is_file() or not ledger.is_file() or not state_path.is_file():
+        return False
+    if RED_DFS_CLAIM.search(dfs.read_text(encoding="utf-8")):
+        return False
+    if ACTIVE_LEDGER_ITEM.search(ledger.read_text(encoding="utf-8")):
+        return False
+
+    with DeadlineHarness(state_path) as harness:
+        harness.coordinator_restart_status(lineage_id)
+        clock = harness.list_tasks()
+    restart = clock["coordinator_restart"]
+    if clock["tasks"] or clock["pending_incident_reviews"]:
+        return False
+    if restart is not None and restart["pending"]:
+        return False
+
+    # The DFS is the product contract. A cadence that became due on its final
+    # terminal window cannot manufacture work after that contract is all green.
+    return True
 
 
 def coordinator_prompt(
@@ -283,6 +317,10 @@ def _run_supervisor_locked(
         raise SupervisorError("Lineage id must not be empty")
     if not runner_command:
         raise SupervisorError("Runner command must not be empty")
+
+    if work_is_complete(workdir, state, lineage_id):
+        return 0
+
     records.mkdir(parents=True, exist_ok=True)
 
     restart = read_clock(state, lineage_id)
@@ -346,6 +384,8 @@ def _run_supervisor_locked(
 
         if result.exit_code != 0:
             return result.exit_code if result.exit_code > 0 else 1
+        if work_is_complete(workdir, state, lineage_id):
+            return 0
         if not after.required:
             return 0
         if after.generation is None:

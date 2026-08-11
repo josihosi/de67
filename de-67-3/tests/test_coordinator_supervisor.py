@@ -95,6 +95,19 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
         completed.check_returncode()
     elif mode == "unacknowledged":
         pass
+    elif mode == "complete-program":
+        harness.complete_task(
+            os.environ["DE67_LINEAGE"], "seed", "final proof"
+        )
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        (root / "DFS.md").write_text(
+            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+            encoding="utf-8",
+        )
+        (root / "work-ledger.md").write_text(
+            "# Work ledger\n\n## Active work\n",
+            encoding="utf-8",
+        )
     elif mode == "fail-before-ack":
         raise SystemExit(7)
     else:
@@ -137,6 +150,20 @@ class CoordinatorSupervisorTests(unittest.TestCase):
 
     def runner_command(self) -> list[str]:
         return [sys.executable, str(self.fake_runner)]
+
+    def write_work_documents(self, *, red: bool = False, active: bool = False) -> None:
+        state_root = self.workspace / ".de67"
+        state_root.mkdir(exist_ok=True)
+        claim = "- [ ] \N{LARGE RED CIRCLE} R-001 \N{EM DASH} Open\n" if red else "- [x] R-001 \N{EM DASH} Done\n"
+        item = "- [ ] R-001 \N{EM DASH} Current route\n" if active else ""
+        (state_root / "DFS.md").write_text(
+            "# DFS\n\nStatus: Frozen\n\n" + claim,
+            encoding="utf-8",
+        )
+        (state_root / "work-ledger.md").write_text(
+            "# Work ledger\n\n## Active work\n\n" + item,
+            encoding="utf-8",
+        )
 
     def request_restart(self) -> int:
         with DeadlineHarness(self.state_path) as harness:
@@ -224,6 +251,166 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             summary = harness.list_tasks()
         self.assertEqual(summary["lineage_id"], "fresh-project")
         self.assertFalse(restart_required(summary["coordinator_restart"]))
+
+    def test_all_green_empty_work_returns_before_runner(self) -> None:
+        self.write_work_documents()
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "green", now=time.time())
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("unacknowledged"),
+        )
+
+        self.assertEqual(result, 0)
+        self.assertFalse(self.events.exists())
+        self.assertFalse(self.run_root.exists())
+
+    def test_final_wave_exits_without_manufacturing_a_successor(self) -> None:
+        self.write_work_documents(red=True, active=True)
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("complete-program"),
+            run_id_factory=lambda _generation: "final-wave-run",
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.read_events()), 1)
+        with DeadlineHarness(self.state_path) as harness:
+            restart = harness.coordinator_restart_status("project")[
+                "coordinator_restart"
+            ]
+        self.assertIsNone(restart)
+
+    def test_empty_ledger_with_red_dfs_still_launches(self) -> None:
+        self.write_work_documents(red=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "green", now=time.time())
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("unacknowledged"),
+            run_id_factory=lambda _generation: "red-work-run",
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.read_events()), 1)
+
+    def test_active_ledger_or_clock_gate_prevents_completion(self) -> None:
+        self.write_work_documents(active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "green", now=time.time())
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("unacknowledged"),
+            run_id_factory=lambda _generation: "active-ledger-run",
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.read_events()), 1)
+
+    def test_active_clock_prevents_completion(self) -> None:
+        self.write_work_documents()
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("unacknowledged"),
+            run_id_factory=lambda _generation: "active-clock-run",
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.read_events()), 1)
+
+    def test_pending_restart_prevents_completion(self) -> None:
+        self.write_work_documents()
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "green", now=time.time())
+            harness.request_coordinator_restart("project", "guarded mutation")
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("ack"),
+            run_id_factory=lambda _generation: "pending-restart-run",
+        )
+
+        self.assertEqual(result, 0)
+        events = self.read_events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["generation"], 1)
+
+    def test_pending_incident_prevents_completion(self) -> None:
+        self.write_work_documents()
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "late green", now=time.time() + 7200)
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("unacknowledged"),
+            run_id_factory=lambda _generation: "incident-run",
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.read_events()), 1)
+
+    def test_final_completion_supersedes_random_improvement_due(self) -> None:
+        self.write_work_documents()
+        with DeadlineHarness(self.state_path) as harness:
+            harness.connection.execute(
+                """
+                UPDATE random_mutation_cycles
+                SET interval_windows = 10, due_after_terminal_windows = 10
+                WHERE lineage_id = 'project' AND cycle_number = 1
+                """
+            )
+            harness.connection.commit()
+            harness.complete_task("project", "seed", "green", now=time.time())
+            for number in range(2, 11):
+                task_id = f"terminal-{number}"
+                harness.start_task("project", task_id, f"R-{number:03d}", 60, now=0)
+                result = harness.complete_task("project", task_id, "green", now=1)
+        self.assertTrue(result["random_mutation"]["due"])
+
+        supervised = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("unacknowledged"),
+        )
+
+        self.assertEqual(supervised, 0)
+        self.assertFalse(self.events.exists())
 
     def test_acknowledgement_argv_preserves_hostile_valid_values(self) -> None:
         hostile_root = self.root / "state and runs [literal]"

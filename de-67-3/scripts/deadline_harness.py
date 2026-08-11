@@ -715,6 +715,30 @@ class DeadlineHarness:
             "current_short_verdict": current_short_verdict,
         }
 
+    @staticmethod
+    def _pending_random_gate(
+        random_mutation: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if random_mutation is None or not random_mutation["due"]:
+            return None
+        return {
+            "cycle_number": random_mutation["cycle_number"],
+            "selected_lane": random_mutation["selected_lane"],
+            "due_task_id": random_mutation["due_task_id"],
+        }
+
+    @staticmethod
+    def _pending_restart_gate(
+        coordinator_restart: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if coordinator_restart is None or not coordinator_restart["pending"]:
+            return None
+        return {
+            "generation": coordinator_restart["generation"],
+            "pending": True,
+            "expected_run_id": coordinator_restart["expected_run_id"],
+        }
+
     def _pending_incident_reviews(self, lineage_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(
             """
@@ -924,6 +948,44 @@ class DeadlineHarness:
         except Exception:
             self.connection.rollback()
             raise
+
+    def coordinator_view(
+        self,
+        *,
+        include_recent_verdicts: bool = False,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Return only live work and gates, with optional short startup memory."""
+        summary = self.list_tasks(now=now)
+        result = {
+            "lineage_id": summary["lineage_id"],
+            "tasks": summary["tasks"],
+            "pending_incident_reviews": [
+                {
+                    "task_id": review["task_id"],
+                    "claim_id": review["claim_id"],
+                    "kind": review["kind"],
+                }
+                for review in summary["pending_incident_reviews"]
+            ],
+            "random_mutation": self._pending_random_gate(
+                summary["random_mutation"]
+            ),
+            "coordinator_restart": self._pending_restart_gate(
+                summary["coordinator_restart"]
+            ),
+        }
+        if include_recent_verdicts:
+            result["recent_failure_verdicts"] = [
+                {
+                    "task_id": verdict["task_id"],
+                    "claim_id": verdict["claim_id"],
+                    "kind": verdict["kind"],
+                    "short_verdict": verdict["short_verdict"],
+                }
+                for verdict in summary["recent_failure_verdicts"]
+            ]
+        return result
 
     def expire_task(
         self, lineage_id: str, task_id: str, *, now: float | None = None
@@ -1538,6 +1600,39 @@ def watch_task(
         return harness.expire_task(lineage_id, task_id)
 
 
+def quiet_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Remove stored narrative and bookkeeping from an ordinary CLI result."""
+    hidden = {
+        "acknowledged_at", "checked_at", "claimed_at", "completed_at",
+        "completed_terminal_windows", "completion_evidence", "cumulative_after",
+        "cumulative_before", "cumulative_miss_units", "due_after_terminal_windows",
+        "estimate_seconds", "evidence", "incidents", "integrity_reason",
+        "interval_windows", "long_detail", "reason", "recorded_at", "reported_at",
+        "requested_at", "resolution_evidence", "reviewed_at", "run_id", "started_at",
+        "worker_finding",
+    }
+
+    def project(name: str, value: Any) -> Any:
+        if value is None or value == []:
+            return None
+        if name == "random_mutation" and isinstance(value, dict) and not value["due"]:
+            return None
+        if name == "coordinator_restart" and isinstance(value, dict) and not value["pending"]:
+            return None
+        if isinstance(value, dict):
+            return {
+                key: projected
+                for key, item in value.items()
+                if key not in hidden
+                and (projected := project(key, item)) is not None
+            }
+        if isinstance(value, list):
+            return [project(name, item) for item in value]
+        return value
+
+    return project("result", result)
+
+
 def add_task_identity_flags(command: argparse.ArgumentParser) -> None:
     command.add_argument("--state", dest="command_state")
     command.add_argument("--lineage", required=True)
@@ -1592,9 +1687,15 @@ def build_parser() -> argparse.ArgumentParser:
     add_task_identity_flags(watch)
 
     list_command = commands.add_parser(
-        "list", help="Show compact bound-lineage startup state"
+        "list", help="Show current work and pending gates"
     )
     list_command.add_argument("--state", dest="command_state")
+
+    startup_view = commands.add_parser(
+        "startup-view",
+        help="Show current work, pending gates, and up to ten short prior verdicts",
+    )
+    startup_view.add_argument("--state", dest="command_state")
 
     resolve_random = commands.add_parser(
         "resolve-random-mutation",
@@ -1661,7 +1762,9 @@ def main(argv: list[str] | None = None) -> int:
                 elif arguments.command == "expire":
                     result = harness.expire_task(arguments.lineage, arguments.task)
                 elif arguments.command == "list":
-                    result = harness.list_tasks()
+                    result = harness.coordinator_view()
+                elif arguments.command == "startup-view":
+                    result = harness.coordinator_view(include_recent_verdicts=True)
                 elif arguments.command == "complete":
                     result = harness.complete_task(
                         arguments.lineage, arguments.task, arguments.evidence
@@ -1711,6 +1814,8 @@ def main(argv: list[str] | None = None) -> int:
                     )
             if arguments.command == "start" and result["created"]:
                 spawn_watcher(state_path, arguments.lineage, arguments.task)
+            if arguments.command not in {"status", "list", "startup-view"}:
+                result = quiet_result(result)
         print(json.dumps(result, sort_keys=True))
         return 0
     except (DeadlineError, sqlite3.Error, OSError) as error:

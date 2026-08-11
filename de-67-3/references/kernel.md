@@ -42,10 +42,15 @@ Focused tests can isolate a seam. They do not replace a required natural or inte
 
 The coordinator plans, dispatches, checks evidence, updates ledgers/DFS, diagnoses, and mutates
 guidance. Workers implement, build, test, or operate. A coordinator may perform read-only code
-investigation, but it does not quietly become an implementation worker.
+investigation, but it does not quietly become an implementation or proof worker. One clock task owns
+one fresh worker thread; a terminal task retires that thread. Workers receive a task-local prompt,
+never the coordinator or predecessor transcript.
 
 Parallel work is admissible only when code, state, dependencies, and proof surfaces do not collide.
 Unknown ownership is a dependency to investigate, not permission to race.
+
+One coordinator owns one dispatch wave. After its workers are dispositioned and the compact frontier
+is durable, the next wave belongs to a fresh coordinator.
 
 ## Per-task clock
 
@@ -183,3 +188,7 @@ their scratch review ledger. Coordinator logs are evidence, not context or liven
 pending restart blocks new dispatch until a supervisor-owned fresh coordinator acknowledges it. No
 miss, mutation, reviewer result, or coordinator retirement ends the DFS program while a red claim has
 an authorized materially different route.
+
+An empty work ledger with red DFS claims means refill. An all-green DFS with an empty ledger and no
+live clock gate is completion: the supervisor launches no coordinator, and a random improvement gate
+cannot manufacture work after the product contract is done.

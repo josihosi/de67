@@ -112,6 +112,26 @@ class DeadlineHarness:
                 resolution_evidence TEXT,
                 PRIMARY KEY (lineage_id, cycle_number)
             );
+
+            CREATE TABLE IF NOT EXISTS coordinator_restart_requests (
+                lineage_id TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK (generation > 0),
+                requested_at REAL NOT NULL,
+                reason TEXT NOT NULL,
+                claimed_at REAL,
+                expected_run_id TEXT,
+                acknowledged_at REAL,
+                run_id TEXT,
+                PRIMARY KEY (lineage_id, generation),
+                CHECK (
+                    (claimed_at IS NULL AND expected_run_id IS NULL) OR
+                    (claimed_at IS NOT NULL AND expected_run_id IS NOT NULL)
+                ),
+                CHECK (
+                    (acknowledged_at IS NULL AND run_id IS NULL) OR
+                    (acknowledged_at IS NOT NULL AND run_id IS NOT NULL)
+                )
+            );
             """
         )
         task_columns = {
@@ -138,6 +158,20 @@ class DeadlineHarness:
                 )
                 WHERE current.terminal_at IS NULL;
                 """
+            )
+        restart_columns = {
+            row["name"]
+            for row in self.connection.execute(
+                "PRAGMA table_info(coordinator_restart_requests)"
+            ).fetchall()
+        }
+        if "claimed_at" not in restart_columns:
+            self.connection.execute(
+                "ALTER TABLE coordinator_restart_requests ADD COLUMN claimed_at REAL"
+            )
+        if "expected_run_id" not in restart_columns:
+            self.connection.execute(
+                "ALTER TABLE coordinator_restart_requests ADD COLUMN expected_run_id TEXT"
             )
 
     def close(self) -> None:
@@ -205,6 +239,22 @@ class DeadlineHarness:
                 f"State database is bound to lineage {bound_lineage}; refusing {lineage_id}"
             )
 
+    def coordinator_restart_status(self, lineage_id: str) -> dict[str, Any]:
+        """Bind a fresh clock if needed and return only its restart baton."""
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        self._begin()
+        try:
+            self._bind_lineage(lineage_id)
+            result = {
+                "lineage_id": lineage_id,
+                "coordinator_restart": self._coordinator_restart_status(lineage_id),
+            }
+            self.connection.commit()
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
     def _task(self, lineage_id: str, task_id: str) -> sqlite3.Row:
         row = self.connection.execute(
             "SELECT * FROM tasks WHERE lineage_id = ? AND task_id = ?",
@@ -248,6 +298,65 @@ class DeadlineHarness:
             """,
             (lineage_id,),
         ).fetchone()
+
+    def _latest_coordinator_restart(self, lineage_id: str) -> sqlite3.Row | None:
+        return self.connection.execute(
+            """
+            SELECT * FROM coordinator_restart_requests
+            WHERE lineage_id = ?
+            ORDER BY generation DESC
+            LIMIT 1
+            """,
+            (lineage_id,),
+        ).fetchone()
+
+    @staticmethod
+    def _coordinator_restart_result(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "generation": row["generation"],
+            "pending": row["acknowledged_at"] is None,
+            "requested_at": row["requested_at"],
+            "reason": row["reason"],
+            "claimed_at": row["claimed_at"],
+            "expected_run_id": row["expected_run_id"],
+            "acknowledged_at": row["acknowledged_at"],
+            "run_id": row["run_id"],
+        }
+
+    def _coordinator_restart_status(
+        self, lineage_id: str
+    ) -> dict[str, Any] | None:
+        row = self._latest_coordinator_restart(lineage_id)
+        return self._coordinator_restart_result(row) if row is not None else None
+
+    def _request_coordinator_restart(
+        self,
+        lineage_id: str,
+        reason: str,
+        requested_at: float,
+    ) -> tuple[sqlite3.Row, bool]:
+        latest = self._latest_coordinator_restart(lineage_id)
+        if latest is not None and latest["acknowledged_at"] is None:
+            return latest, False
+        generation = 1 if latest is None else int(latest["generation"]) + 1
+        self.connection.execute(
+            """
+            INSERT INTO coordinator_restart_requests (
+                lineage_id, generation, requested_at, reason
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (lineage_id, generation, requested_at, reason),
+        )
+        created = self.connection.execute(
+            """
+            SELECT * FROM coordinator_restart_requests
+            WHERE lineage_id = ? AND generation = ?
+            """,
+            (lineage_id, generation),
+        ).fetchone()
+        if created is None:
+            raise DeadlineError("Failed to persist coordinator restart request")
+        return created, True
 
     def _ensure_random_cycle(self, lineage_id: str) -> sqlite3.Row:
         cycle = self._latest_random_cycle(lineage_id)
@@ -518,6 +627,17 @@ class DeadlineHarness:
                 (lineage_id, task_id),
             ).fetchone()
             random_mutation = self._random_mutation_status(lineage_id)
+            coordinator_restart = self._coordinator_restart_status(lineage_id)
+            if (
+                existing is None
+                and coordinator_restart is not None
+                and coordinator_restart["pending"]
+            ):
+                raise DeadlineError(
+                    "Coordinator restart generation "
+                    f"{coordinator_restart['generation']} is pending; "
+                    "acknowledge it before dispatching a new task"
+                )
             if existing is None and random_mutation["due"]:
                 raise DeadlineError(
                     "Random improvement review is due; resolve it before dispatching a new task"
@@ -540,6 +660,9 @@ class DeadlineHarness:
             result = self._status(lineage_id, task_id, started_at)
             result["created"] = created
             result["random_mutation"] = self._random_mutation_status(lineage_id)
+            result["coordinator_restart"] = self._coordinator_restart_status(
+                lineage_id
+            )
             self.connection.commit()
             return result
         except Exception:
@@ -601,6 +724,7 @@ class DeadlineHarness:
                 "checked_at": checked_at,
                 "cumulative_miss_units": self._cumulative_units(lineage_id),
                 "random_mutation": self._random_mutation_status(lineage_id),
+                "coordinator_restart": self._coordinator_restart_status(lineage_id),
                 "tasks": tasks,
                 "incidents": [
                     self._incident_result(incident, recorded=False)
@@ -781,6 +905,228 @@ class DeadlineHarness:
             self.connection.rollback()
             raise
 
+    def request_coordinator_restart(
+        self,
+        lineage_id: str,
+        reason: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        reason = self._nonempty_text(reason, "Coordinator restart reason")
+        requested_at = self._now(now)
+        self._begin()
+        try:
+            self._bind_lineage(lineage_id)
+            request, created = self._request_coordinator_restart(
+                lineage_id, reason, requested_at
+            )
+            result = {
+                "created": created,
+                "coordinator_restart": self._coordinator_restart_result(request),
+            }
+            self.connection.commit()
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def claim_coordinator_restart(
+        self,
+        lineage_id: str,
+        generation: int,
+        run_id: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Bind a pending generation to the supervisor-issued successor id."""
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        if isinstance(generation, bool) or not isinstance(generation, int):
+            raise DeadlineError("Coordinator restart generation must be a positive integer")
+        if generation <= 0:
+            raise DeadlineError("Coordinator restart generation must be a positive integer")
+        run_id = self._nonempty_text(run_id, "Coordinator run id")
+        claimed_at = self._now(now)
+        self._begin()
+        try:
+            self._bind_lineage(lineage_id)
+            request = self.connection.execute(
+                """
+                SELECT * FROM coordinator_restart_requests
+                WHERE lineage_id = ? AND generation = ?
+                """,
+                (lineage_id, generation),
+            ).fetchone()
+            if request is None:
+                raise DeadlineError(
+                    f"Unknown coordinator restart generation: {lineage_id}/{generation}"
+                )
+            if request["acknowledged_at"] is not None:
+                raise DeadlineError("Acknowledged coordinator restart cannot be claimed")
+            if request["expected_run_id"] is None:
+                self.connection.execute(
+                    """
+                    UPDATE coordinator_restart_requests
+                    SET claimed_at = ?, expected_run_id = ?
+                    WHERE lineage_id = ? AND generation = ?
+                    """,
+                    (claimed_at, run_id, lineage_id, generation),
+                )
+                recorded = True
+            elif request["expected_run_id"] == run_id:
+                recorded = False
+            else:
+                raise DeadlineError(
+                    "Coordinator restart is already claimed by a different run"
+                )
+            claimed = self.connection.execute(
+                """
+                SELECT * FROM coordinator_restart_requests
+                WHERE lineage_id = ? AND generation = ?
+                """,
+                (lineage_id, generation),
+            ).fetchone()
+            if claimed is None:
+                raise DeadlineError("Failed to read coordinator restart claim")
+            result = {
+                "recorded": recorded,
+                "coordinator_restart": self._coordinator_restart_result(claimed),
+            }
+            self.connection.commit()
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def release_coordinator_restart_claim(
+        self,
+        lineage_id: str,
+        generation: int,
+        run_id: str,
+    ) -> dict[str, Any]:
+        """Release one unacknowledged claim after its runner is confirmed gone."""
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        if isinstance(generation, bool) or not isinstance(generation, int):
+            raise DeadlineError("Coordinator restart generation must be a positive integer")
+        if generation <= 0:
+            raise DeadlineError("Coordinator restart generation must be a positive integer")
+        run_id = self._nonempty_text(run_id, "Coordinator run id")
+        self._begin()
+        try:
+            self._bind_lineage(lineage_id)
+            request = self.connection.execute(
+                """
+                SELECT * FROM coordinator_restart_requests
+                WHERE lineage_id = ? AND generation = ?
+                """,
+                (lineage_id, generation),
+            ).fetchone()
+            if request is None:
+                raise DeadlineError(
+                    f"Unknown coordinator restart generation: {lineage_id}/{generation}"
+                )
+            if request["acknowledged_at"] is not None:
+                raise DeadlineError("Acknowledged coordinator restart claim cannot be released")
+            if request["expected_run_id"] != run_id:
+                raise DeadlineError("Coordinator restart claim does not match that run")
+            self.connection.execute(
+                """
+                UPDATE coordinator_restart_requests
+                SET claimed_at = NULL, expected_run_id = NULL
+                WHERE lineage_id = ? AND generation = ?
+                """,
+                (lineage_id, generation),
+            )
+            released = self.connection.execute(
+                """
+                SELECT * FROM coordinator_restart_requests
+                WHERE lineage_id = ? AND generation = ?
+                """,
+                (lineage_id, generation),
+            ).fetchone()
+            if released is None:
+                raise DeadlineError("Failed to read released coordinator restart claim")
+            self.connection.commit()
+            return {
+                "released": True,
+                "coordinator_restart": self._coordinator_restart_result(released),
+            }
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def acknowledge_coordinator_restart(
+        self,
+        lineage_id: str,
+        generation: int,
+        run_id: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        if isinstance(generation, bool) or not isinstance(generation, int):
+            raise DeadlineError("Coordinator restart generation must be a positive integer")
+        if generation <= 0:
+            raise DeadlineError("Coordinator restart generation must be a positive integer")
+        run_id = self._nonempty_text(run_id, "Coordinator run id")
+        acknowledged_at = self._now(now)
+        self._begin()
+        try:
+            self._bind_lineage(lineage_id)
+            request = self.connection.execute(
+                """
+                SELECT * FROM coordinator_restart_requests
+                WHERE lineage_id = ? AND generation = ?
+                """,
+                (lineage_id, generation),
+            ).fetchone()
+            if request is None:
+                raise DeadlineError(
+                    f"Unknown coordinator restart generation: {lineage_id}/{generation}"
+                )
+            if request["expected_run_id"] is None:
+                raise DeadlineError(
+                    "Coordinator restart must be claimed by its supervisor before acknowledgement"
+                )
+            if request["expected_run_id"] != run_id:
+                raise DeadlineError(
+                    "Coordinator restart acknowledgement does not match its claimed run"
+                )
+            if request["acknowledged_at"] is None:
+                self.connection.execute(
+                    """
+                    UPDATE coordinator_restart_requests
+                    SET acknowledged_at = ?, run_id = ?
+                    WHERE lineage_id = ? AND generation = ?
+                    """,
+                    (acknowledged_at, run_id, lineage_id, generation),
+                )
+                recorded = True
+            elif request["run_id"] == run_id:
+                recorded = False
+            else:
+                raise DeadlineError(
+                    "Coordinator restart acknowledgement is immutable once recorded"
+                )
+            acknowledged = self.connection.execute(
+                """
+                SELECT * FROM coordinator_restart_requests
+                WHERE lineage_id = ? AND generation = ?
+                """,
+                (lineage_id, generation),
+            ).fetchone()
+            if acknowledged is None:
+                raise DeadlineError("Failed to read coordinator restart acknowledgement")
+            result = {
+                "recorded": recorded,
+                "coordinator_restart": self._coordinator_restart_result(acknowledged),
+            }
+            self.connection.commit()
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
     def resolve_random_mutation(
         self,
         lineage_id: str,
@@ -823,12 +1169,18 @@ class DeadlineHarness:
                     ),
                 )
                 recorded = True
+                restart, _ = self._request_coordinator_restart(
+                    lineage_id,
+                    f"random mutation cycle {cycle_number} resolved",
+                    self._now(None),
+                )
             else:
                 if cycle["resolution_evidence"] != evidence:
                     raise DeadlineError(
                         "Random mutation resolution is immutable once recorded"
                     )
                 recorded = False
+                restart = self._latest_coordinator_restart(lineage_id)
 
             next_cycle = self._ensure_random_cycle(lineage_id)
             result = {
@@ -837,6 +1189,11 @@ class DeadlineHarness:
                 "selected_lane": cycle["selected_lane"],
                 "resolution_evidence": evidence,
                 "random_mutation": self._random_cycle_result(next_cycle),
+                "coordinator_restart": (
+                    self._coordinator_restart_result(restart)
+                    if restart is not None
+                    else None
+                ),
             }
             self.connection.commit()
             return result
@@ -943,6 +1300,32 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_random.add_argument("--lineage", required=True)
     resolve_random.add_argument("--cycle", required=True, type=int)
     resolve_random.add_argument("--evidence", required=True)
+
+    request_restart = commands.add_parser(
+        "request-restart",
+        help="Request one durable fresh-coordinator handover",
+    )
+    request_restart.add_argument("--state", dest="command_state")
+    request_restart.add_argument("--lineage", required=True)
+    request_restart.add_argument("--reason", required=True)
+
+    acknowledge_restart = commands.add_parser(
+        "ack-restart",
+        help="Acknowledge one live fresh coordinator",
+    )
+    acknowledge_restart.add_argument("--state", dest="command_state")
+    acknowledge_restart.add_argument("--lineage", required=True)
+    acknowledge_restart.add_argument("--generation", required=True, type=int)
+    acknowledge_restart.add_argument("--run-id", required=True)
+
+    release_restart = commands.add_parser(
+        "release-restart-claim",
+        help="Release one dead unacknowledged successor claim",
+    )
+    release_restart.add_argument("--state", dest="command_state")
+    release_restart.add_argument("--lineage", required=True)
+    release_restart.add_argument("--generation", required=True, type=int)
+    release_restart.add_argument("--run-id", required=True)
     return parser
 
 
@@ -991,6 +1374,23 @@ def main(argv: list[str] | None = None) -> int:
                         arguments.lineage,
                         arguments.cycle,
                         arguments.evidence,
+                    )
+                elif arguments.command == "request-restart":
+                    result = harness.request_coordinator_restart(
+                        arguments.lineage,
+                        arguments.reason,
+                    )
+                elif arguments.command == "ack-restart":
+                    result = harness.acknowledge_coordinator_restart(
+                        arguments.lineage,
+                        arguments.generation,
+                        arguments.run_id,
+                    )
+                elif arguments.command == "release-restart-claim":
+                    result = harness.release_coordinator_restart_claim(
+                        arguments.lineage,
+                        arguments.generation,
+                        arguments.run_id,
                     )
                 else:
                     result = harness.record_integrity_breach(

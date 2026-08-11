@@ -77,7 +77,10 @@ incident
   -> if broader cadence: mutate orchestrator guidance too
   -> validate guidance + empty-ledger candidate
   -> promote mutation + empty ledger
-  -> fresh coordinator
+  -> clock records pending restart generation
+  -> old coordinator exits
+  -> external supervisor claims generation and starts that fresh coordinator
+  -> fresh coordinator acknowledges the baton
   -> continue from accepted product frontier
 ```
 
@@ -104,9 +107,11 @@ Completion, worker finding, deadline miss, and integrity breach are terminal win
 for the same task do not count again. The old coordinator gives the fixed lane and compact durable
 state to an independent reviewer, receives one to three ranked inefficiencies and a concrete patch,
 guards and applies the actual target, consumes the scratch ledger after a real mutation, resolves the
-cycle, and retires. The fresh coordinator consumes only durable state. A DFS draw permits only a
-source-grounded `dS`; when none is safe, exact DFS no-op is the only admissible resolution and the
-scratch ledger remains.
+cycle, queues a restart generation, and retires. An external supervisor, never the old coordinator,
+claims the generation and owns that successor process. The fresh coordinator consumes only durable
+state and acknowledges its claimed generation before new dispatch. A DFS draw permits only a
+source-grounded `dS`; when none is safe,
+exact DFS no-op is the only admissible resolution and the scratch ledger remains.
 
 ## Controlled DFS mutation
 
@@ -172,5 +177,7 @@ must improve the causal guidance before retry; mutation volume is not fitness.
 
 Accepted code and green claims form the product frontier. A failed candidate has no descendants.
 Deadline machine state remains auditable, while successful mutations consume their scratch review
-ledger. No miss, mutation, reviewer result, or coordinator retirement ends the DFS program while a
-red claim has an authorized materially different route.
+ledger. Coordinator logs are evidence, not context or liveness authority. A pending restart blocks
+new dispatch until a supervisor-owned fresh coordinator acknowledges it. No miss, mutation, reviewer
+result, or coordinator retirement ends the DFS program while a red claim has an authorized
+materially different route.

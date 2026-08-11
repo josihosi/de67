@@ -49,8 +49,11 @@ never the coordinator or predecessor transcript.
 Parallel work is admissible only when code, state, dependencies, and proof surfaces do not collide.
 Unknown ownership is a dependency to investigate, not permission to race.
 
-One coordinator owns one dispatch wave. After its workers are dispositioned and the compact frontier
-is durable, the next wave belongs to a fresh coordinator.
+One coordinator may own many sequential or disjoint parallel dispatch waves. After each result it
+dispositions the task, makes the compact frontier durable, and continues while authorized red work
+remains. Ordinary task completion, worker finding, acceptance, or ledger refill never requires a
+fresh coordinator. An applied mutation or another explicit restart event transfers ownership;
+abnormal process recovery remains the external supervisor's responsibility.
 
 ## Per-task clock
 

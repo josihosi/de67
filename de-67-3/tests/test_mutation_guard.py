@@ -33,6 +33,7 @@ ORCHESTRATOR_GUIDANCE = guard.read_markdown(
     guard.CANONICAL_GUIDELINES_ROOT / guard.ORCHESTRATOR_GUIDELINES
 )
 SKILL_TEXT = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+KERNEL_TEXT = (ROOT / "references" / "kernel.md").read_text(encoding="utf-8")
 
 
 class MutationGuardTests(unittest.TestCase):
@@ -884,6 +885,23 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(len(command_lines), 1)
         self.assertIn("--state", command_lines[0])
         self.assertIn("--lineage", command_lines[0])
+
+    def test_ordinary_task_results_keep_the_same_coordinator(self) -> None:
+        combined = SKILL_TEXT + "\n" + KERNEL_TEXT
+        normalized_skill = " ".join(SKILL_TEXT.split())
+        normalized_kernel = " ".join(KERNEL_TEXT.split())
+        self.assertNotIn("dispatch wave complete", combined)
+        self.assertNotIn("One coordinator owns one dispatch wave", combined)
+        self.assertIn("One coordinator may own many", SKILL_TEXT)
+        self.assertIn(
+            "Ordinary task completion, worker finding, acceptance, or ledger refill",
+            normalized_skill,
+        )
+        self.assertIn(
+            "Ordinary task completion, worker finding, acceptance, or ledger refill",
+            normalized_kernel,
+        )
+        self.assertIn("applied mutation or another explicit restart event", combined)
 
 
 if __name__ == "__main__":

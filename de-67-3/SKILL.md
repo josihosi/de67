@@ -88,17 +88,19 @@ Workers report through the native parent/child channel; the coordinator may clar
 without loading its transcript. Follow the kernel and mutable guidelines for parallelism, findings,
 and worker retirement.
 
-Remain live while the current dispatch wave is outstanding. Use the platform's non-polling worker wait or deadline wakeup
-when available, and act on whichever worker result or deadline arrives first. The detached SQLite
-watcher is durable interruption protection; it records a miss but does not replace the independent
-review and mutation transaction. A resumed coordinator reconciles any recorded incident immediately.
-After every worker in the current wave is dispositioned and the compact frontier is durable, do not
-open another task identity in that transcript. If the DFS is now complete, exit without requesting
-a successor. Otherwise request an ordinary coordinator restart and retire:
+Remain live while dispatched workers are outstanding. Use the platform's non-polling worker wait or
+deadline wakeup when available, and act on whichever worker result or deadline arrives first. The
+detached SQLite watcher is durable interruption protection; it records a miss but does not replace
+the independent review and mutation transaction. A resumed coordinator reconciles any recorded
+incident immediately.
 
-```text
-python <active-de-67-3-skill>/scripts/deadline_harness.py request-restart --state .de67/state/deadlines.sqlite3 --lineage PROJECT --reason "dispatch wave complete"
-```
+After each result, disposition the task and make the compact frontier durable. If no mutation or
+restart gate is pending and authorized red work remains, continue in the same coordinator with the
+next sequential or disjoint parallel task. One coordinator may own many dispatch waves. Ordinary
+task completion, worker finding, acceptance, or ledger refill does not request a coordinator
+restart. A fresh coordinator is required only after an applied mutation or another explicit restart
+event; abnormal process recovery remains the supervisor's responsibility. If the DFS is complete,
+exit without requesting a successor.
 
 ## Worker findings and the third mutation lane
 

@@ -52,16 +52,20 @@ accepted product transition, not by tests run, artifacts written, reviews comple
 
 After each incident, consume the independent diagnosis and all pending scratch suggestions, mutate
 the smallest relevant guidance, validate the target plus an empty-ledger candidate, promote both,
-and retire. A failed guard or application clears nothing. The successor is a fresh coordinator
-reading durable state, not a prose reconstruction of the predecessor. DFS expansion and
-deadline-guidance mutation are independent: perform both when the same evidence activates both.
+request a restart generation from the clock, and retire. A failed guard or application clears
+nothing. An external supervisor claims the restart generation and owns that successor process; the
+old coordinator never launches or acknowledges it. The successor reads durable state rather than a
+prose reconstruction of the predecessor and acknowledges its clock baton before new dispatch. DFS
+expansion and deadline-guidance mutation are
+independent: perform both when the same evidence activates both.
 
 When the harness reports a due random improvement review, block new dispatch. Give a genuinely
 independent reviewer the stored target, current guidance/DFS, compact recent deadline outcomes, and
 pending scratch. Require one to three ranked evidence-backed inefficiencies and a concrete patch.
 The old coordinator guards and applies only the stored target, consumes the ledger after a real
-mutation, resolves the cycle, and retires. Never reselect a DFS draw; use an exact guarded no-op when
-no source-grounded same-contract DFS expansion is safe.
+mutation, resolves the cycle so the clock queues the restart, and retires. Never reselect a DFS draw,
+launch the successor from the old coordinator, or treat a log's `RUNNING` text as liveness. Use an
+exact guarded no-op when no source-grounded same-contract DFS expansion is safe.
 
 ## Continue and stop
 

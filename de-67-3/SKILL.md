@@ -46,6 +46,34 @@ work:
 python <active-de-67-3-skill>/scripts/deadline_harness.py list --state .de67/state/deadlines.sqlite3
 ```
 
+For unattended work, start the coordinator through the external supervisor rather than as a bare
+coordinator process:
+
+```text
+python <active-de-67-3-skill>/scripts/coordinator_supervisor.py --state .de67/state/deadlines.sqlite3 --lineage PROJECT --workspace . --run-root .de67/state/coordinator-runs --runner <one-shot-runner>
+```
+
+The runner must accept `--cwd <workspace>` and a prompt on standard input. The supervisor owns each
+coordinator as a direct child, waits for it to exit, reads the clock once, and starts at most one
+successor for each pending restart generation. It does not inspect code, choose tasks, or judge
+evidence. The one-shot runner owns the transcript; the supervisor records only prompt, PID, status,
+and exit code. Never launch a successor from the retiring coordinator with a subagent, foreground
+tool call, `nohup`, or another raw child process.
+
+Keep the supervisor itself under durable host ownership (for example `launchd` on the Mac). If that
+host-owned process is killed unexpectedly, confirm its prior runner and descendants are gone before
+starting a replacement. A failed successor remains claimed and cannot be retried by a restarted
+supervisor. Only after that process-tree check may an operator release the exact dead run with
+`deadline_harness.py release-restart-claim`; the clock is a handover baton, not a general process
+manager.
+
+The clock is the handover baton. `coordinator_restart.pending` blocks new task identities until the
+external supervisor binds that generation to one successor run. The fresh coordinator reads the
+installed phase, durable project state, and repository identity, then executes the exact argv array
+in `DE67_COORDINATOR_ACK_ARGV_JSON` without shell interpolation. The retiring coordinator cannot
+acknowledge an unclaimed generation. A successor that exits before acknowledgement leaves the request
+pending and the supervisor stops truthfully instead of retrying or leaving a false `RUNNING` claim.
+
 If `random_mutation.due` is true, do not dispatch another task. Complete the random improvement
 transaction below first. Already-dispatched workers keep their original briefs and clocks.
 
@@ -114,8 +142,9 @@ python <active-de-67-3-skill>/scripts/mutation_guard.py expand-dfs --before <bef
 Only after validation may the coordinator promote and refreeze the DFS and replace the suggestion
 ledger with the empty candidate. Keep the blocked original claim red. Project a newly added
 prerequisite into the current work ledger only when it is necessary now and the active ceiling
-remains satisfied; otherwise it waits for a later refill. Retire the coordinator after a DFS
-expansion so a fresh coordinator reconciles the expanded contract.
+remains satisfied; otherwise it waits for a later refill. After checkpointing a DFS expansion,
+request a coordinator restart as described below and retire; the external supervisor launches the
+fresh coordinator that reconciles the expanded contract.
 
 ## Accept work
 
@@ -155,9 +184,13 @@ start this transaction:
    empty ledger, canonical headings, baseline, and exact stored incident with
    `mutation_guard.py guidelines ... --ledger-candidate <empty-ledger-candidate>`. The guard derives
    ordinary versus broader scope from SQLite; the coordinator never supplies the miss count.
-7. Promote the guarded guideline bodies and empty ledger together. If validation or application
-   fails, preserve the live ledger. Retire the current coordinator only after the real files change;
-   a fresh coordinator reads the mutated state and resumes from the accepted product frontier.
+7. Promote and checkpoint the guarded guideline bodies and empty ledger together. If validation or
+   application fails, preserve the live ledger. After the real files change, request the clock baton,
+   then retire; the external supervisor launches the fresh coordinator from the accepted frontier:
+
+```text
+python <active-de-67-3-skill>/scripts/deadline_harness.py request-restart --state .de67/state/deadlines.sqlite3 --lineage PROJECT --reason "deadline-guidance mutation applied"
+```
 
 Useful short verdicts include `goal unclear`, `task unclear`, `test undefined`, `test overdefined`,
 `test unachievable`, `wrong worker or model`, `tooling unchecked`, `estimate unsound`, `competing
@@ -198,13 +231,17 @@ When the stored cycle becomes due, the old coordinator blocks new dispatch and r
 python <active-de-67-3-skill>/scripts/mutation_guard.py random-review --baseline <baseline-dir> --candidate <candidate-dir> --state .de67/state/deadlines.sqlite3 --lineage PROJECT --cycle N --ledger-candidate <ledger-candidate>
 ```
 
-6. After an `applied` verdict, promote the real target and empty ledger together. On a guarded DFS
-   no-op, leave both DFS and scratch ledger unchanged. Then record the actual target/section and guard
-   evidence, end the old coordinator, and let a fresh coordinator consume only durable mutated state:
+6. After an `applied` verdict, promote and checkpoint the real target and empty ledger together. On a
+   guarded DFS no-op, leave both DFS and scratch ledger unchanged. Then record the actual
+   target/section and guard evidence. Resolution atomically queues a coordinator restart even for a
+   guarded DFS no-op:
 
 ```text
 python <active-de-67-3-skill>/scripts/deadline_harness.py resolve-random-mutation --state .de67/state/deadlines.sqlite3 --lineage PROJECT --cycle N --evidence "<guard result and actual target/section>"
 ```
+
+7. End the old coordinator. It does not launch its successor; the external supervisor consumes the
+   pending generation and starts a fresh coordinator from durable state.
 
 Failed validation changes and clears nothing, and the cadence gate stays due.
 
@@ -213,7 +250,7 @@ Failed validation changes and clears nothing, and the cadence gate stays due.
 The mnemonic is deliberately sharp: **one puppy dies for every deadline miss; three puppies die for
 cheating**. No harm is literal. Operationally, a miss adds one miss unit; a detected integrity breach
 adds three, invalidates the claimed completion, restores the red claim, and triggers both guidance
-mutations plus a fresh coordinator.
+mutations plus a clocked coordinator restart.
 
 Cheating means moving or resetting a deadline, weakening a DFS outcome or test to claim success,
 fabricating or hiding evidence, marking a red claim complete without accepted proof, or changing

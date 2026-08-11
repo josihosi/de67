@@ -356,6 +356,171 @@ class DeadlineHarnessTests(unittest.TestCase):
             listed_task["worker_finding"]["evidence"], "dependency is absent"
         )
 
+    def test_restart_request_persists_and_blocks_only_new_task_ids(self) -> None:
+        initial = self.harness.start_task(
+            "project", "existing", "R-001", 100, now=0
+        )
+        self.assertIsNone(initial["coordinator_restart"])
+
+        first = self.harness.request_coordinator_restart(
+            "project", "guarded guideline mutation", now=1
+        )
+        repeated = self.harness.request_coordinator_restart(
+            "project", "later request coalesces into the pending baton", now=2
+        )
+
+        self.assertTrue(first["created"])
+        self.assertFalse(repeated["created"])
+        self.assertEqual(first["coordinator_restart"]["generation"], 1)
+        self.assertTrue(repeated["coordinator_restart"]["pending"])
+        self.assertEqual(
+            repeated["coordinator_restart"]["reason"],
+            "guarded guideline mutation",
+        )
+        resumed = self.harness.start_task(
+            "project", "existing", "R-001", 100, now=3
+        )
+        self.assertFalse(resumed["created"])
+        self.assertTrue(resumed["coordinator_restart"]["pending"])
+        with self.assertRaisesRegex(DeadlineError, "restart generation 1 is pending"):
+            self.harness.start_task("project", "new", "R-002", 100, now=3)
+
+        self.harness.close()
+        self.harness = DeadlineHarness(self.state_path)
+        persisted = self.harness.list_tasks(now=3)["coordinator_restart"]
+        self.assertEqual(persisted["generation"], 1)
+        self.assertTrue(persisted["pending"])
+
+        with self.assertRaisesRegex(DeadlineError, "claimed by its supervisor"):
+            self.harness.acknowledge_coordinator_restart(
+                "project", 1, "retiring-coordinator", now=4
+            )
+        claimed = self.harness.claim_coordinator_restart(
+            "project", 1, "run-fresh-1", now=4
+        )
+        repeated_claim = self.harness.claim_coordinator_restart(
+            "project", 1, "run-fresh-1", now=5
+        )
+        self.assertTrue(claimed["recorded"])
+        self.assertFalse(repeated_claim["recorded"])
+        with self.assertRaisesRegex(DeadlineError, "different run"):
+            self.harness.claim_coordinator_restart(
+                "project", 1, "wrong-run", now=5
+            )
+        with self.assertRaisesRegex(DeadlineError, "does not match"):
+            self.harness.release_coordinator_restart_claim(
+                "project", 1, "wrong-run"
+            )
+
+        acknowledged = self.harness.acknowledge_coordinator_restart(
+            "project", 1, "run-fresh-1", now=4
+        )
+        repeated_ack = self.harness.acknowledge_coordinator_restart(
+            "project", 1, "run-fresh-1", now=5
+        )
+        self.assertTrue(acknowledged["recorded"])
+        self.assertFalse(repeated_ack["recorded"])
+        self.assertEqual(
+            repeated_ack["coordinator_restart"]["acknowledged_at"], 4
+        )
+        with self.assertRaisesRegex(DeadlineError, "claimed run"):
+            self.harness.acknowledge_coordinator_restart(
+                "project", 1, "different-run", now=6
+            )
+        with self.assertRaisesRegex(DeadlineError, "cannot be released"):
+            self.harness.release_coordinator_restart_claim(
+                "project", 1, "run-fresh-1"
+            )
+
+        started = self.harness.start_task("project", "new", "R-002", 100, now=6)
+        self.assertTrue(started["created"])
+        self.assertFalse(started["coordinator_restart"]["pending"])
+
+        next_request = self.harness.request_coordinator_restart(
+            "project", "next guarded mutation", now=7
+        )
+        self.assertTrue(next_request["created"])
+        self.assertEqual(next_request["coordinator_restart"]["generation"], 2)
+        generations = self.harness.connection.execute(
+            """
+            SELECT generation FROM coordinator_restart_requests
+            ORDER BY generation
+            """
+        ).fetchall()
+        self.assertEqual([row["generation"] for row in generations], [1, 2])
+
+    def test_restart_request_and_acknowledgement_cli(self) -> None:
+        state_path = Path(self.temporary.name) / "restart-cli.sqlite"
+        with DeadlineHarness(state_path) as harness:
+            harness.start_task("project", "existing", "R-001", 100, now=0)
+
+        request_output = io.StringIO()
+        with redirect_stdout(request_output):
+            self.assertEqual(
+                main(
+                    [
+                        "request-restart",
+                        "--state",
+                        str(state_path),
+                        "--lineage",
+                        "project",
+                        "--reason",
+                        "guarded DFS expansion",
+                    ]
+                ),
+                0,
+            )
+        requested = json.loads(request_output.getvalue())
+        self.assertTrue(requested["created"])
+        self.assertTrue(requested["coordinator_restart"]["pending"])
+
+        with DeadlineHarness(state_path) as harness:
+            harness.claim_coordinator_restart("project", 1, "dead-run-cli")
+        release_output = io.StringIO()
+        with redirect_stdout(release_output):
+            self.assertEqual(
+                main(
+                    [
+                        "release-restart-claim",
+                        "--state",
+                        str(state_path),
+                        "--lineage",
+                        "project",
+                        "--generation",
+                        "1",
+                        "--run-id",
+                        "dead-run-cli",
+                    ]
+                ),
+                0,
+            )
+        self.assertTrue(json.loads(release_output.getvalue())["released"])
+        with DeadlineHarness(state_path) as harness:
+            harness.claim_coordinator_restart("project", 1, "run-cli-1")
+
+        ack_output = io.StringIO()
+        with redirect_stdout(ack_output):
+            self.assertEqual(
+                main(
+                    [
+                        "ack-restart",
+                        "--state",
+                        str(state_path),
+                        "--lineage",
+                        "project",
+                        "--generation",
+                        "1",
+                        "--run-id",
+                        "run-cli-1",
+                    ]
+                ),
+                0,
+            )
+        acknowledged = json.loads(ack_output.getvalue())
+        self.assertTrue(acknowledged["recorded"])
+        self.assertFalse(acknowledged["coordinator_restart"]["pending"])
+        self.assertEqual(acknowledged["coordinator_restart"]["run_id"], "run-cli-1")
+
     @staticmethod
     def complete_windows(
         harness: DeadlineHarness,
@@ -498,9 +663,27 @@ class DeadlineHarnessTests(unittest.TestCase):
             )
         self.assertTrue(first["recorded"])
         self.assertFalse(repeated["recorded"])
+        self.assertTrue(first["coordinator_restart"]["pending"])
+        self.assertEqual(first["coordinator_restart"]["generation"], 1)
+        self.assertEqual(
+            repeated["coordinator_restart"]["generation"],
+            first["coordinator_restart"]["generation"],
+        )
+        restart_count = self.harness.connection.execute(
+            "SELECT COUNT(*) AS total FROM coordinator_restart_requests"
+        ).fetchone()["total"]
+        self.assertEqual(restart_count, 1)
         self.assertEqual(draw.call_count, 2)
         self.assertEqual(first["random_mutation"]["interval_windows"], 30)
         self.assertFalse(first["random_mutation"]["due"])
+        with self.assertRaisesRegex(DeadlineError, "restart generation 1 is pending"):
+            self.harness.start_task("project", "unblocked", "R-011", 10, now=5)
+        self.harness.claim_coordinator_restart(
+            "project", 1, "run-after-random-noop"
+        )
+        self.harness.acknowledge_coordinator_restart(
+            "project", 1, "run-after-random-noop"
+        )
         started = self.harness.start_task(
             "project", "unblocked", "R-011", 10, now=5
         )
@@ -553,6 +736,7 @@ class DeadlineHarnessTests(unittest.TestCase):
         connection = sqlite3.connect(state)
         try:
             connection.execute("DROP TABLE random_mutation_cycles")
+            connection.execute("DROP TABLE coordinator_restart_requests")
             connection.execute("ALTER TABLE tasks DROP COLUMN terminal_at")
             connection.commit()
         finally:

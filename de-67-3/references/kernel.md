@@ -1,197 +1,99 @@
 # DE-67-3 kernel
 
-This is the compact invariant layer. The two guideline bodies may evolve; these laws do not.
+This is the small hard layer. Roles and method tactics may evolve around it.
 
-## Working state
-
-```text
-S = (C, E, D, O, A, R)
-```
-
-- `C`: user-facing contract and project language.
-- `E`: current code and observed facts.
-- `D`: design decisions.
-- `O`: authoritative state owners and precedence over competing systems.
-- `A`: acceptance conditions and honest proof routes.
-- `R`: stable red work claims.
-
-The DFS owns `S`. The work ledger is only a current projection of `R`; accepted work disappears from
-it and needs no second narrative record.
+## State vector
 
 ```text
-active(work ledger) <= min(10, remaining_red(DFS))
+S = (U, E, D, O, P, R)
 ```
 
-Ten is an explicit ceiling. It is not a quota, batch target, or reason to combine tasks.
+- `U`: the user's outcome, language, permissions, and material choices.
+- `E`: current code and directly observed facts.
+- `D`: current design and execution strategy.
+- `O`: authoritative owners and precedence over competing state.
+- `P`: honest acceptance and proof routes.
+- `R`: unresolved work and closure gaps.
 
-## Necessity and proof
+The DFS represents `S`; code and direct evidence may contradict its current mechanics. A
+same-outcome candidate may refine `D`, `O`, `P`, or `R`. It may not silently change `U`.
 
-Admit a task, test, mutation, or review only when deleting it would leave a requested outcome unmet
-or unproven. Close it once the smallest reliable evidence proves it. Re-proving closed work or adding
-handoff fields that do not change the decision is waste.
+## Protected vector
 
-An honest proof route is:
+```text
+K = (U, honest(P), permission, item_clock, attempt_accounting)
+```
+
+Deleting or weakening any component of `K` makes a candidate inadmissible:
+
+- do not change the requested outcome, project language, permissions, or material owner choices;
+- do not fabricate, hide, relabel, or weaken evidence to obtain a green verdict;
+- once a ledger item is first dispatched, its lineage, claim id, item start, estimate, and deadline
+  do not move or reset under normal mutation;
+- retries use new task or attempt ids. Each attempt's recorded identity, dispatch, result, misses,
+  integrity incidents, findings, and accepted evidence remain accounted for even when strategy,
+  roles, tests, or DFS prose change.
+
+An accepted claim may be reopened by new contradictory evidence, but never erased as if its prior
+attempt and evidence did not occur. If accepted evidence is invalidated by a guarded reopen or an
+integrity breach, its DFS marker returns to red through the exact clock-backed transition before the
+claim re-enters the ledger.
+
+## Work vector
+
+```text
+unknown strategy -> exploration learning goal -> strategy + proof route
+strategy + proof route -> frozen closure gaps -> implement / observe / close
+```
+
+Exploration asks one causal question and ends with a usable strategy and honest proof route. Closure
+freezes one or more finite named gaps. Every closure attempt binds exactly one active gap revision.
+A completed or finding result consumes that revision: close it with matching completed evidence or
+append a materially changed description and proof route tied to that terminal attempt. Abandonment
+alone may retry the same revision. Gap revisions and closed dispositions are append-only.
+
+A later finding reopens exploration only when it falsifies a closure premise; it does not reset the
+item clock or attempt history. If later integrity evidence invalidates a closed gap's owning proof,
+retain that closed history and append an open successor gap. Acceptance remains invalid until the
+successor is proved and the guarded DFS claim is restored to red while work remains.
+
+Admit work only when deleting it would leave `U` unmet or `P` unproved. A proof follows the real
+route:
 
 ```text
 precondition -> authoritative owner -> transition -> observation -> artifact -> verdict
 ```
 
-Focused tests can isolate a seam. They do not replace a required natural or integrated route.
+Focused tests and debug probes may expose a seam. They do not replace an integrated route required
+by the outcome.
 
-## Roles and parallelism
-
-The coordinator plans, dispatches, checks evidence, updates ledgers/DFS, diagnoses, and mutates
-guidance. Workers implement, build, test, or operate. A coordinator may perform read-only code
-investigation, but it does not quietly become an implementation or proof worker. The coordinator may
-reuse a relevant worker or spawn another as it judges useful. Workers receive a task-local brief,
-never the coordinator or predecessor transcript; worker lifecycle is not a task outcome.
-
-Parallel work is admissible only when code, state, dependencies, and proof surfaces do not collide.
-Unknown ownership is a dependency to investigate, not permission to race.
-
-One coordinator may own many sequential or disjoint parallel dispatch waves. After each result it
-dispositions the task, makes the compact frontier durable, and continues while authorized red work
-remains. Ordinary task completion, worker finding, acceptance, or ledger refill never requires a
-fresh coordinator. An applied mutation or another explicit restart event transfers ownership;
-abnormal process recovery remains the external supervisor's responsibility.
-
-## Per-task clock
-
-For task `i`:
+## Candidate and promotion
 
 ```text
-deadline_i = actual_dispatch_i + evidence_based_estimate_i
+evidence -> isolated candidate -> independent check -> applicable guard -> promotion or rejection
 ```
 
-Once recorded, `actual_dispatch_i`, `deadline_i`, task identity, claim identity, and lineage cannot be
-reset or renamed. Completion after the deadline does not subtract the miss.
+Role modules, guidance, DFS mechanics, task design, tests, debug facilities, and orchestration are
+normal candidate surfaces. A candidate gains no authority by being broad, expensive, generated by a
+strong model, or internally consistent.
+
+The exact rare universal route may challenge the kernel, item-clock representation, attempt schema,
+guards, and supervisor architecture inside an isolated whole-method candidate. It never edits live
+clock or evidence state and never promotes itself. No candidate may weaken `U` or honest `P`, falsify
+evidence, exceed permissions or authority, erase recorded attempts, or claim that an inapplicable
+guard validated a larger candidate.
+
+## Ownership and completion
+
+Workers change or inspect the task-authorized product surface. The coordinator owns routing and the
+compact frontier. DFS and method mutations use their named roles. The external supervisor owns
+successor processes; a retiring coordinator never launches or acknowledges one.
+
+Completion is the fixed point:
 
 ```text
-deadline miss                 -> miss_units += 1
-integrity breach              -> miss_units += 3
-broader mutation is due       <=> floor(new_units / 3) > floor(old_units / 3)
+U honestly proved AND R empty AND no unresolved incident or restart gate
 ```
 
-Thus ordinary cumulative misses 3, 6, 9, ... mutate both guidance files. Every incident still gets
-its own independent causal review.
-
-## Mutation transaction
-
-```text
-incident
-  -> independent review
-  -> put verdict + diagnosis + suggestion in scratch ledger
-  -> consume pending suggestions into candidate guidance
-  -> mutate task/test guidance
-  -> if broader cadence: mutate orchestrator guidance too
-  -> validate guidance + empty-ledger candidate
-  -> promote mutation + empty ledger
-  -> clock records pending restart generation
-  -> old coordinator exits
-  -> external supervisor claims generation and starts that fresh coordinator
-  -> fresh coordinator acknowledges the baton
-  -> continue from accepted product frontier
-```
-
-The diagnosis identifies the first contradicted premise, not merely the last visible error. Inspect
-the real source owner, helpers, other readers/writers, callers, tests, relevant history, tooling, and
-the difference between a focused setup and natural execution.
-
-The suggestion ledger is consumable scratch, not history. A successful guarded mutation resets it to
-the empty skill template; a failed guard or application leaves it untouched.
-
-## Random improvement review
-
-For each lineage, privately and uniformly draw `k in [10, 30]` and one lane from task/test guidance,
-orchestrator guidance, and DFS. Persist the draw before exposing it. The first cycle starts at lineage
-terminal zero, including terminal facts backfilled from pre-cadence machine state; later cycles start
-at the resolution frontier.
-
-```text
-first terminal window for task i -> terminal_count += 1
-terminal_count = cycle_start + k -> random review due; block new dispatch
-```
-
-Completion, worker finding, deadline miss, and integrity breach are terminal windows; later outcomes
-for the same task do not count again. The old coordinator gives the fixed lane and compact durable
-state to an independent reviewer, receives one to three ranked inefficiencies and a concrete patch,
-guards and applies the actual target, consumes the scratch ledger after a real mutation, resolves the
-cycle, queues a restart generation, and retires. An external supervisor, never the old coordinator,
-claims the generation and owns that successor process. The fresh coordinator consumes only durable
-state and acknowledges its claimed generation before new dispatch. A DFS draw permits only a
-source-grounded `dS`; when none is safe,
-exact DFS no-op is the only admissible resolution and the scratch ledger remains.
-
-## Controlled DFS mutation
-
-Status mutation is exact:
-
-```text
-- [ ] 🔴 R-123 — requirement
-+ [x] R-123 — requirement
-```
-
-It is allowed only after accepted evidence. A non-material clarification `dS` is allowed only when:
-
-```text
-continuous(dS | S, evidence)
-  <=> deleting dS leaves the evidenced failure unclassified or its proof undefined
-      AND user contract and project language are unchanged
-      AND permissions and acceptance strength are unchanged
-      AND exactly one admissible refinement remains
-```
-
-When worker evidence cannot be classified by the current DFS:
-
-```text
-worker finding
-  -> source-grounded causal review
-  -> first contradicted DFS premise
-  -> minimal dS
-  -> necessity test
-  -> proof route and new stable red claim
-  -> structural validation
-  -> refreeze
-  -> fresh coordinator
-```
-
-The source review covers the production owner, helpers, primitives, callers, competing readers and
-writers, owning tests, relevant history, and natural execution. `dS` may append only a uniquely
-implied same-contract mechanism, ownership/precedence fact, proof route, and necessary red claim.
-Every existing DFS line remains byte-identical and in order, including `Status` and refreeze prose;
-`dS` is insertion-only. A worker reports evidence but cannot author `dS`.
-
-```text
-dS ∩ guidance_policy_change = ∅
-```
-
-A finding before its deadline can activate `dS` without a miss. A late finding can independently
-activate both `dS` and the deadline mutation. Task, test, tooling, evidence, or external-authority
-gaps are not specification gaps. Otherwise return to DE-67-2 for user-owned refreeze.
-
-## Fitness
-
-Fitness is lexicographic:
-
-```text
-deliver the requested behavior
-  > preserve correctness and proof
-  > reduce elapsed time, tokens, and handoff surface
-```
-
-An efficient wrong result is unfit. Among equally correct routes, prefer the leaner route. A failure
-must improve the causal guidance before retry; mutation volume is not fitness.
-
-## Persistence
-
-Accepted code and green claims form the product frontier. A failed candidate has no descendants.
-Every unresolved incident and incomplete claim remains discoverable without loading completed
-history; accepted tasks are represented only by their green DFS claims. Successful mutations consume
-their scratch review ledger. Coordinator logs are evidence, not context or liveness authority. A
-pending restart blocks new dispatch until a supervisor-owned fresh coordinator acknowledges it. No
-miss, mutation, reviewer result, or coordinator retirement ends the DFS program while a red claim has
-an authorized materially different route.
-
-An empty work ledger with red DFS claims means refill. An all-green DFS with an empty ledger and no
-live clock gate is completion: the supervisor launches no coordinator, and a random improvement gate
-cannot manufacture work after the product contract is done.
+No miss, mutation, reviewer result, or coordinator retirement ends delivery while an authorized
+materially different route remains. No cadence manufactures post-contract work after completion.

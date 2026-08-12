@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import sqlite3
 import sys
@@ -14,7 +15,14 @@ from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from deadline_harness import DeadlineError, DeadlineHarness, main  # noqa: E402
+from deadline_harness import (  # noqa: E402
+    DeadlineError,
+    DeadlineHarness,
+    build_parser,
+    main,
+    method_tree_digest,
+    protected_method_digest,
+)
 
 
 class DeadlineHarnessTests(unittest.TestCase):
@@ -26,6 +34,211 @@ class DeadlineHarnessTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.harness.close()
         self.temporary.cleanup()
+
+    def resolve_claim_miss(self, claim_id: str, *, diagnose: bool = True) -> None:
+        if diagnose:
+            self.harness.diagnose_claim_deadline(
+                "project",
+                claim_id,
+                "estimate unsound",
+                "The item clock expired before closure proof was accepted.",
+                now=3,
+            )
+        self.harness.resolve_deadline_mutation(
+            "project", claim_id, "micro", "micro guidance guarded", now=4
+        )
+        self.resolve_deadline_macro(
+            claim_id, "macro guidance guarded", now=5
+        )
+        restart = self.harness.coordinator_restart_status("project")[
+            "coordinator_restart"
+        ]
+        if restart is not None and restart["pending"]:
+            run_id = f"resolved-{claim_id}"
+            self.harness.claim_coordinator_restart(
+                "project", restart["generation"], run_id, now=5
+            )
+            self.harness.acknowledge_coordinator_restart(
+                "project", restart["generation"], run_id, now=5
+            )
+
+    def record_normal_receipt(
+        self,
+        task_id: str,
+        incident_kind: str,
+        *,
+        harness: DeadlineHarness | None = None,
+    ) -> str:
+        target = self.harness if harness is None else harness
+        task = target.connection.execute(
+            "SELECT claim_id FROM tasks WHERE lineage_id = 'project' AND task_id = ?",
+            (task_id,),
+        ).fetchone()
+        self.assertIsNotNone(task)
+        changed_paths = ["SKILL.md"]
+        contract = {
+            "lineage_id": "project",
+            "task_id": task_id,
+            "claim_id": task["claim_id"],
+            "incident_kind": incident_kind,
+            "candidate_digest": method_tree_digest(),
+            "changed_paths": changed_paths,
+            "protected_baseline_digest": protected_method_digest(),
+            "live_tree_digest": method_tree_digest(),
+        }
+        receipt_id = hashlib.sha256(
+            json.dumps(contract, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        target.connection.execute(
+            """
+            INSERT OR IGNORE INTO normal_method_receipts (
+                receipt_id, lineage_id, task_id, claim_id, incident_kind,
+                validated_at, candidate_digest, changed_paths,
+                protected_baseline_digest, live_tree_digest
+            ) VALUES (?, 'project', ?, ?, ?, 1, ?, ?, ?, ?)
+            """,
+            (
+                receipt_id,
+                task_id,
+                task["claim_id"],
+                incident_kind,
+                contract["candidate_digest"],
+                json.dumps(changed_paths, separators=(",", ":")),
+                contract["protected_baseline_digest"],
+                contract["live_tree_digest"],
+            ),
+        )
+        target.connection.commit()
+        return receipt_id
+
+    def resolve_deadline_macro(
+        self, claim_id: str, evidence: str, *, now: float
+    ) -> dict[str, object]:
+        incident = self.harness.connection.execute(
+            """
+            SELECT source_task_id FROM claim_deadline_incidents
+            WHERE lineage_id = 'project' AND claim_id = ?
+            """,
+            (claim_id,),
+        ).fetchone()
+        self.assertIsNotNone(incident)
+        receipt_id = self.record_normal_receipt(
+            str(incident["source_task_id"]), "deadline_miss"
+        )
+        return self.harness.resolve_deadline_mutation(
+            "project",
+            claim_id,
+            "macro",
+            evidence,
+            receipt_id=receipt_id,
+            now=now,
+        )
+
+    def resolve_integrity_macro(
+        self, task_id: str, evidence: str, *, now: float
+    ) -> dict[str, object]:
+        receipt_id = self.record_normal_receipt(task_id, "integrity_breach")
+        return self.harness.resolve_integrity_mutation(
+            "project",
+            task_id,
+            "macro",
+            evidence,
+            receipt_id=receipt_id,
+            now=now,
+        )
+
+    def establish_accepted_claim(
+        self, claim_id: str = "R-001", *, prefix: str = ""
+    ) -> None:
+        explore = f"{prefix}explore"
+        closure = f"{prefix}closure"
+        self.harness.start_task("project", explore, claim_id, 100, now=0)
+        self.harness.complete_task(
+            "project", explore, "exploration proved", now=1
+        )
+        self.harness.transition_claim_to_closure(
+            "project",
+            claim_id,
+            explore,
+            "The owner route returns the finished outcome.",
+            "Run the owner route and inspect its durable artifact.",
+            "Only owner-route closure remains.",
+            now=2,
+        )
+        self.harness.start_task(
+            "project", closure, claim_id, 100, phase="closure", now=3
+        )
+        self.harness.complete_task("project", closure, "closure proved", now=4)
+        self.harness.accept_claim(
+            "project", claim_id, closure, "closure evidence accepted", now=5
+        )
+
+    def record_universal_receipt(self, cycle_number: int = 1) -> str:
+        candidate_digest = "a" * 64
+        changed_paths = ["references/kernel.md"]
+        cycle = self.harness.connection.execute(
+            """
+            SELECT universal_capability_roster_digest
+            FROM random_mutation_cycles
+            WHERE lineage_id = 'project' AND cycle_number = ?
+            """,
+            (cycle_number,),
+        ).fetchone()
+        capability_roster_digest = cycle["universal_capability_roster_digest"]
+        receipt_contract = {
+            "lineage_id": "project",
+            "cycle_number": cycle_number,
+            "candidate_digest": candidate_digest,
+            "changed_paths": changed_paths,
+            "interval_windows": 30,
+            "selected_lane": "DFS.md",
+            "reviewer_model": "gpt-5.6-sol",
+            "reviewer_effort": "ultra",
+            "capability_roster_digest": capability_roster_digest,
+        }
+        receipt_id = hashlib.sha256(
+            json.dumps(
+                receipt_contract, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        self.harness.connection.execute(
+            """
+            INSERT INTO universal_review_receipts (
+                receipt_id, lineage_id, cycle_number, validated_at,
+                candidate_digest, changed_paths, interval_windows,
+                selected_lane, reviewer_model, reviewer_effort,
+                capability_roster_digest
+            ) VALUES (?, 'project', ?, 31, ?, ?, 30, 'DFS.md',
+                      'gpt-5.6-sol', 'ultra', ?)
+            """,
+            (
+                receipt_id,
+                cycle_number,
+                candidate_digest,
+                json.dumps(changed_paths),
+                capability_roster_digest,
+            ),
+        )
+        self.harness.connection.commit()
+        return receipt_id
+
+    def write_sol_ultra_capability(self) -> None:
+        (self.state_path.parent / "workspace.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "worker_capabilities": [
+                        {
+                            "model": "gpt-5.6-sol",
+                            "reasoning_effort": "ultra",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def test_repeated_start_preserves_identity_clock_and_estimate(self) -> None:
         first = self.harness.start_task("project", "task", "R-1", 10, now=100)
@@ -43,6 +256,32 @@ class DeadlineHarnessTests(unittest.TestCase):
             self.harness.start_task("project", "task", "R-2", 10, now=500)
         with self.assertRaises(DeadlineError):
             self.harness.start_task("project", "task", "R-1", 11, now=500)
+
+    def test_repeated_task_id_cannot_cross_a_phase_transition(self) -> None:
+        self.harness.start_task("project", "same", "R-1", 100, now=0)
+        self.harness.complete_task("project", "same", "learning", now=1)
+        self.harness.transition_claim_to_closure(
+            "project",
+            "R-1",
+            "same",
+            "Finished owner outcome.",
+            "Run the owner route.",
+            "Owner-route proof remains.",
+            now=2,
+        )
+
+        with self.assertRaisesRegex(DeadlineError, "dispatch phase"):
+            self.harness.start_task(
+                "project", "same", "R-1", 100, phase="closure", now=3
+            )
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "dispatch phase"):
+            self.harness.connection.execute(
+                """
+                UPDATE tasks SET phase_sequence_at_dispatch = 99
+                WHERE lineage_id = 'project' AND task_id = 'same'
+                """
+            )
+        self.harness.connection.rollback()
 
     def test_deadline_miss_is_recorded_once(self) -> None:
         self.harness.start_task("project", "task", "R-1", 10, now=100)
@@ -62,8 +301,9 @@ class DeadlineHarnessTests(unittest.TestCase):
         completed = self.harness.complete_task("project", "task", "test output", now=111)
         later = self.harness.status_task("project", "task", now=500)
 
-        self.assertTrue(completed["completion_accepted"])
-        self.assertEqual(completed["state"], "accepted")
+        self.assertTrue(completed["attempt_completed"])
+        self.assertFalse(completed["completion_accepted"])
+        self.assertEqual(completed["state"], "completed")
         self.assertTrue(completed["deadline_missed"])
         self.assertEqual(later["cumulative_miss_units"], 1)
         self.assertTrue(later["deadline_missed"])
@@ -79,7 +319,7 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertTrue(short["deadline_missed"])
         self.assertEqual(long["state"], "running")
         self.assertFalse(long["deadline_missed"])
-        self.assertTrue(completed["completion_accepted"])
+        self.assertTrue(completed["attempt_completed"])
         self.assertFalse(completed["deadline_missed"])
 
     def test_cumulative_misses_report_three_and_six_cadence(self) -> None:
@@ -90,6 +330,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             incidents.append(
                 self.harness.expire_task("project", task_id, now=2)["incident"]
             )
+            self.resolve_claim_miss(f"R-{number}")
 
         self.assertFalse(incidents[1]["cadence_crossed"])
         self.assertTrue(incidents[2]["cadence_crossed"])
@@ -101,7 +342,7 @@ class DeadlineHarnessTests(unittest.TestCase):
 
     def test_state_database_rejects_lineage_reset_but_allows_new_tasks(self) -> None:
         self.harness.start_task("alpha", "task", "R-A", 10, now=100)
-        self.harness.start_task("alpha", "retry", "R-A", 20, now=101)
+        self.harness.start_task("alpha", "retry", "R-A", 10, now=101)
         self.harness.close()
         self.harness = DeadlineHarness(self.state_path)
 
@@ -112,7 +353,8 @@ class DeadlineHarnessTests(unittest.TestCase):
         retry = self.harness.status_task("alpha", "retry", now=102)
         self.assertEqual(original["claim_id"], "R-A")
         self.assertEqual(retry["claim_id"], "R-A")
-        self.assertEqual(retry["deadline_at"], 121)
+        self.assertEqual(retry["deadline_at"], 110)
+        self.assertEqual(retry["started_at"], 100)
 
     def test_list_reconciles_multiple_tasks_and_miss_summary(self) -> None:
         self.harness.start_task("project", "late", "R-1", 10, now=100)
@@ -154,21 +396,66 @@ class DeadlineHarnessTests(unittest.TestCase):
 
     def test_list_omits_accepted_tasks_but_keeps_nonaccepted_current_work(self) -> None:
         with patch("deadline_harness.secrets.randbelow", side_effect=[20, 0]):
-            self.harness.start_task("project", "accepted", "R-001", 100, now=0)
-        self.harness.complete_task("project", "accepted", "green detail", now=1)
-
-        self.harness.start_task("project", "late-accepted", "R-002", 10, now=0)
+            self.harness.start_task(
+                "project", "accepted-basis", "R-001", 100, now=0
+            )
         self.harness.complete_task(
-            "project", "late-accepted", "late green detail", now=11
+            "project", "accepted-basis", "exploration green", now=1
+        )
+        self.harness.transition_claim_to_closure(
+            "project",
+            "R-001",
+            "accepted-basis",
+            "Prove the finite closure outcome.",
+            "Run the named closure check.",
+            "The named closure check remains.",
+            now=2,
+        )
+        self.harness.start_task(
+            "project", "accepted", "R-001", 100, phase="closure", now=3
+        )
+        self.harness.complete_task("project", "accepted", "closure green", now=4)
+        self.harness.accept_claim(
+            "project", "R-001", "accepted", "closure evidence accepted", now=5
+        )
+
+        self.harness.start_task(
+            "project", "accepted-2-basis", "R-002", 100, now=0
+        )
+        self.harness.complete_task(
+            "project", "accepted-2-basis", "exploration green", now=1
+        )
+        self.harness.transition_claim_to_closure(
+            "project",
+            "R-002",
+            "accepted-2-basis",
+            "Prove the second finite outcome.",
+            "Run the second closure check.",
+            "The second closure check remains.",
+            now=2,
+        )
+        self.harness.start_task(
+            "project", "late-accepted", "R-002", 100, phase="closure", now=3
+        )
+        self.harness.complete_task(
+            "project", "late-accepted", "second closure green", now=4
+        )
+        self.harness.accept_claim(
+            "project",
+            "R-002",
+            "late-accepted",
+            "second closure evidence accepted",
+            now=5,
         )
 
         self.harness.start_task("project", "breached", "R-003", 100, now=0)
+        self.harness.start_task("project", "finding", "R-004", 100, now=0)
+        self.harness.start_task("project", "running", "R-005", 100, now=0)
         self.harness.complete_task("project", "breached", "later invalidated", now=1)
         self.harness.record_integrity_breach(
             "project", "breached", "fabricated long reason", now=2
         )
 
-        self.harness.start_task("project", "finding", "R-004", 100, now=0)
         self.harness.report_worker_finding(
             "project",
             "finding",
@@ -177,8 +464,6 @@ class DeadlineHarnessTests(unittest.TestCase):
             short_verdict="dependency absent",
             now=3,
         )
-        self.harness.start_task("project", "running", "R-005", 100, now=0)
-
         with patch.object(
             self.harness, "_status", wraps=self.harness._status
         ) as status:
@@ -202,7 +487,7 @@ class DeadlineHarnessTests(unittest.TestCase):
         pending = summary["pending_incident_reviews"]
         self.assertEqual(
             {review["task_id"] for review in pending},
-            {"late-accepted", "breached"},
+            {"breached"},
         )
         self.assertEqual(
             [verdict["task_id"] for verdict in summary["recent_failure_verdicts"]],
@@ -231,6 +516,7 @@ class DeadlineHarnessTests(unittest.TestCase):
                         f"long incident diagnosis {number}",
                         now=100 + number,
                     )
+                    self.resolve_claim_miss(f"R-{number:03d}", diagnose=False)
                 else:
                     self.harness.start_task(
                         "project", task_id, f"R-{number:03d}", 100, now=0
@@ -304,7 +590,10 @@ class DeadlineHarnessTests(unittest.TestCase):
 
         summary = self.harness.list_tasks(now=3)
 
-        self.assertEqual(summary["tasks"], [])
+        self.assertEqual(
+            [task["task_id"] for task in summary["tasks"]], ["task"]
+        )
+        self.assertEqual(summary["tasks"][0]["state"], "worker_finding")
         self.assertEqual(summary["pending_incident_reviews"], [])
         self.assertEqual(
             summary["recent_failure_verdicts"],
@@ -352,7 +641,10 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.harness.complete_task(
             "project", "attempt-3", "The DFS claim is now proven.", now=6
         )
-        self.assertEqual(self.harness.list_tasks(now=7)["tasks"], [])
+        self.assertEqual(
+            [task["task_id"] for task in self.harness.list_tasks(now=7)["tasks"]],
+            ["attempt-3"],
+        )
 
     def test_accepted_subtask_does_not_hide_a_new_route_for_the_same_claim(self) -> None:
         self.harness.start_task("project", "partial", "R-001", 100, now=0)
@@ -368,27 +660,26 @@ class DeadlineHarnessTests(unittest.TestCase):
         )
 
     def test_list_supersedes_prior_deadline_miss_for_the_same_claim(self) -> None:
-        for number in (1, 2):
-            task_id = f"miss-{number}"
-            self.harness.start_task("project", task_id, "R-001", 1, now=number)
-            self.harness.expire_task("project", task_id, now=number + 1)
-            self.harness.diagnose_incident(
-                "project",
-                task_id,
-                "deadline_miss",
-                f"route {number} late",
-                f"Long diagnosis for route {number}.",
-                now=number + 1.25,
-            )
+        self.harness.start_task("project", "miss-1", "R-001", 1, now=0)
+        self.harness.expire_task("project", "miss-1", now=2)
+        self.resolve_claim_miss("R-001")
+        self.harness.abandon_attempt(
+            "project", "miss-1", "the next worker replaces this attempt", now=2.5
+        )
+
+        self.harness.start_task("project", "miss-2", "R-001", 1, now=3)
+        repeated = self.harness.expire_task("project", "miss-2", now=4)
 
         summary = self.harness.list_tasks(now=4)
+        self.assertFalse(repeated["incident"]["recorded"])
+        self.assertEqual(summary["cumulative_miss_units"], 1)
         self.assertEqual(
             [task["task_id"] for task in summary["tasks"]], ["miss-2"]
         )
         self.assertEqual(summary["pending_incident_reviews"], [])
         self.assertEqual(
             [item["task_id"] for item in summary["recent_failure_verdicts"]],
-            ["miss-2", "miss-1"],
+            ["miss-1"],
         )
 
     def test_seven_due_breaches_cannot_crowd_out_pending_incident_reviews(self) -> None:
@@ -398,26 +689,37 @@ class DeadlineHarnessTests(unittest.TestCase):
                 self.harness.start_task(
                     "project", task_id, f"R-{number:03d}", 1, now=0
                 )
+            for number in range(1, 8):
+                task_id = f"W-{number:03d}"
                 self.harness.record_integrity_breach(
                     "project", task_id, f"long breach reason {number}", now=2
                 )
+                self.resolve_claim_miss(f"R-{number:03d}")
 
         summary = self.harness.list_tasks(now=3)
         pending = summary["pending_incident_reviews"]
 
-        self.assertEqual(len(pending), 14)
+        self.assertEqual(len(pending), 7)
         self.assertEqual(
             {
                 (review["task_id"], review["kind"])
                 for review in pending
             },
             {
-                (f"W-{number:03d}", kind)
+                (f"W-{number:03d}", "integrity_breach")
                 for number in range(1, 8)
-                for kind in ("deadline_miss", "integrity_breach")
             },
         )
-        self.assertEqual(summary["recent_failure_verdicts"], [])
+        self.assertEqual(
+            {
+                (verdict["task_id"], verdict["kind"])
+                for verdict in summary["recent_failure_verdicts"]
+            },
+            {
+                (f"W-{number:03d}", "deadline_miss")
+                for number in range(1, 8)
+            },
+        )
 
     def test_due_integrity_breach_records_miss_before_three_breach_units(self) -> None:
         self.harness.start_task("project", "task", "R-1", 10, now=100)
@@ -532,7 +834,22 @@ class DeadlineHarnessTests(unittest.TestCase):
         payload = json.loads(output.getvalue())
         self.assertTrue(payload["recorded"])
         self.assertEqual(payload["incident"]["short_verdict"], "estimate unsound")
+        self.assertEqual(payload["claim_id"], "R-1")
+        self.assertEqual(payload["pending_components"], ["micro", "macro"])
         self.assertNotIn("long_detail", payload["incident"])
+        claim_incident = self.harness.connection.execute(
+            """
+            SELECT short_verdict, long_detail, reviewed_at
+            FROM claim_deadline_incidents
+            WHERE lineage_id = 'project' AND claim_id = 'R-1'
+            """
+        ).fetchone()
+        self.assertEqual(claim_incident["short_verdict"], "estimate unsound")
+        self.assertEqual(
+            claim_incident["long_detail"],
+            "Measured setup time contradicted the estimate premise.",
+        )
+        self.assertIsNotNone(claim_incident["reviewed_at"])
         status = self.harness.status_task("project", "task", now=112)
         self.assertEqual(
             status["incidents"][0]["long_detail"],
@@ -559,10 +876,11 @@ class DeadlineHarnessTests(unittest.TestCase):
             self.assertEqual(main(arguments), 0)
             self.assertEqual(main(arguments), 0)
 
-        spawn.assert_called_once_with(str(state_path), "project", "task")
+        spawn.assert_called_once_with(str(state_path), "project", "R-1")
 
     def test_integrity_breach_adds_three_once_and_invalidates_completion(self) -> None:
         self.harness.start_task("project", "first", "R-1", 100, now=0)
+        self.harness.start_task("project", "second", "R-2", 100, now=0)
         self.harness.complete_task("project", "first", "initial evidence", now=1)
 
         first = self.harness.record_integrity_breach(
@@ -581,7 +899,6 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertEqual(repeated["status"]["cumulative_miss_units"], 3)
         self.assertEqual(repeated["status"]["integrity_reason"], "fabricated result")
 
-        self.harness.start_task("project", "second", "R-2", 100, now=0)
         second = self.harness.record_integrity_breach(
             "project", "second", "hidden reset", now=4
         )
@@ -605,7 +922,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             self.harness.status_task("project", "task", now=101)["completion_accepted"]
         )
 
-    def test_on_time_worker_finding_stops_timer_without_accepting_task(self) -> None:
+    def test_on_time_worker_finding_terminalizes_attempt_but_claim_clock_continues(self) -> None:
         self.harness.start_task("project", "task", "R-1", 10, now=100)
 
         reported = self.harness.report_worker_finding(
@@ -619,7 +936,8 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertFalse(reported["status"]["completion_accepted"])
         self.assertFalse(reported["status"]["deadline_missed"])
         self.assertEqual(later["state"], "worker_finding")
-        self.assertEqual(later["cumulative_miss_units"], 0)
+        self.assertEqual(later["cumulative_miss_units"], 1)
+        self.assertTrue(later["deadline_mutation_pending"])
         self.assertEqual(later["worker_finding"]["kind"], "blocker")
         self.assertEqual(
             later["worker_finding"]["evidence"], "missing production dependency"
@@ -706,7 +1024,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             repeated["finding"]["short_verdict"], "production owner contradicted"
         )
         self.assertEqual(repeated["finding"]["reported_at"], 102)
-        self.assertEqual(repeated["status"]["cumulative_miss_units"], 0)
+        self.assertEqual(repeated["status"]["cumulative_miss_units"], 1)
         for kind, evidence in (
             ("blocker", "observed result"),
             ("unexpected", "different evidence"),
@@ -1062,14 +1380,15 @@ class DeadlineHarnessTests(unittest.TestCase):
 
             self.harness.start_task("project", "miss", "R-008", 10, now=0)
             self.harness.expire_task("project", "miss", now=11)
+            self.resolve_claim_miss("R-008")
             self.harness.complete_task("project", "miss", "late green", now=12)
 
             self.harness.start_task("project", "breach", "R-009", 10, now=0)
+            self.harness.start_task("project", "completion", "R-010", 10, now=0)
             self.harness.record_integrity_breach(
                 "project", "breach", "fabricated evidence", now=1
             )
 
-            self.harness.start_task("project", "completion", "R-010", 10, now=0)
             result = self.harness.complete_task(
                 "project", "completion", "green", now=1
             )
@@ -1349,6 +1668,32 @@ class DeadlineHarnessTests(unittest.TestCase):
             )
             harness.start_task("project", "window-13", "R-013", 100, now=0)
             harness.expire_task("project", "window-13", now=101)
+            harness.diagnose_claim_deadline(
+                "project", "R-013", "late", "legacy miss diagnosis", now=102
+            )
+            harness.resolve_deadline_mutation(
+                "project", "R-013", "micro", "micro guarded", now=103
+            )
+            receipt = harness.connection.execute(
+                "SELECT source_task_id FROM claim_deadline_incidents WHERE lineage_id = 'project' AND claim_id = 'R-013'"
+            ).fetchone()
+            self.assertIsNotNone(receipt)
+            receipt_id = self.record_normal_receipt(
+                str(receipt["source_task_id"]), "deadline_miss", harness=harness
+            )
+            harness.resolve_deadline_mutation(
+                "project", "R-013", "macro", "macro guarded",
+                receipt_id=receipt_id, now=104
+            )
+            restart = harness.coordinator_restart_status("project")[
+                "coordinator_restart"
+            ]
+            harness.claim_coordinator_restart(
+                "project", restart["generation"], "legacy-resume", now=104
+            )
+            harness.acknowledge_coordinator_restart(
+                "project", restart["generation"], "legacy-resume", now=104
+            )
             harness.start_task("project", "window-14", "R-014", 100, now=0)
             harness.record_integrity_breach(
                 "project", "window-14", "legacy breach", now=14
@@ -1359,11 +1704,11 @@ class DeadlineHarnessTests(unittest.TestCase):
             legacy
         ) as migrated:
             schedule = migrated.list_tasks(now=2)["random_mutation"]
-            self.assertEqual(schedule["completed_terminal_windows"], 14)
+            self.assertEqual(schedule["completed_terminal_windows"], 13)
             self.assertEqual(schedule["due_after_terminal_windows"], 10)
             self.assertEqual(schedule["due_task_id"], "window-10")
             self.assertTrue(schedule["due"])
-            with self.assertRaisesRegex(DeadlineError, "resolve it before dispatching"):
+            with self.assertRaisesRegex(DeadlineError, "Integrity mutation is pending"):
                 migrated.start_task("project", "blocked", "R-015", 10, now=3)
         self.harness = DeadlineHarness(self.state_path)
 
@@ -1387,6 +1732,1707 @@ class DeadlineHarnessTests(unittest.TestCase):
             )
             self.assertEqual(result["random_mutation"]["due_after_terminal_windows"], 10)
         self.harness = DeadlineHarness(self.state_path)
+
+    def test_claim_clock_survives_attempts_closure_and_reopen(self) -> None:
+        first = self.harness.start_task(
+            "project", "explore", "R-001", 50, now=100
+        )
+        self.harness.complete_task(
+            "project", "explore", "exploration evidence", now=105
+        )
+        closure = self.harness.transition_claim_to_closure(
+            "project",
+            "R-001",
+            "explore",
+            "Prove the finite outcome.",
+            "Run the named closure check.",
+            "The named closure check remains open.",
+            now=106,
+        )
+        attempt = self.harness.start_task(
+            "project", "close", "R-001", 50, phase="closure", now=110
+        )
+
+        self.assertEqual(first["claim_started_at"], 100)
+        self.assertEqual(first["attempt_dispatched_at"], 100)
+        self.assertEqual(attempt["claim_started_at"], 100)
+        self.assertEqual(attempt["attempt_dispatched_at"], 110)
+        self.assertEqual(attempt["deadline_at"], 150)
+        self.assertEqual(attempt["phase_sequence_at_dispatch"], 2)
+        self.assertEqual(closure["deadline_at"], 150)
+        with self.assertRaisesRegex(DeadlineError, "cannot change"):
+            self.harness.start_task(
+                "project", "changed-clock", "R-001", 51, now=111
+            )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.harness.connection.execute(
+                """
+                UPDATE claim_clocks SET deadline_at = 999
+                WHERE lineage_id = 'project' AND claim_id = 'R-001'
+                """
+            )
+        self.harness.connection.rollback()
+
+        self.harness.close()
+        self.harness = DeadlineHarness(self.state_path)
+        persisted = self.harness.status_task("project", "close", now=120)
+        view = self.harness.coordinator_view(now=120)
+
+        self.assertEqual(persisted["claim_started_at"], 100)
+        self.assertEqual(persisted["attempt_dispatched_at"], 110)
+        self.assertEqual(persisted["deadline_at"], 150)
+        self.assertEqual(view["claim_clock_migration_conflicts"], [])
+
+    def test_deadline_miss_is_claim_scoped_and_does_not_terminalize_attempt(self) -> None:
+        self.harness.start_task("project", "finding", "R-001", 5, now=100)
+        self.harness.start_task("project", "running", "R-001", 5, now=101)
+        self.harness.report_worker_finding(
+            "project",
+            "finding",
+            "unexpected",
+            "The exploration route was falsified.",
+            now=102,
+        )
+
+        missed = self.harness.status_task("project", "running", now=106)
+        repeated = self.harness.status_task("project", "finding", now=107)
+        counts = self.harness.connection.execute(
+            """
+            SELECT
+              (SELECT COUNT(*) FROM claim_deadline_incidents) AS claim_misses,
+              (SELECT COUNT(*) FROM incidents WHERE kind = 'deadline_miss') AS legacy_misses,
+              (SELECT COUNT(*) FROM tasks WHERE attempt_terminal_at IS NOT NULL) AS terminals
+            """
+        ).fetchone()
+
+        self.assertTrue(missed["deadline_missed"])
+        self.assertIsNone(missed["attempt_terminal_at"])
+        self.assertEqual(repeated["cumulative_miss_units"], 1)
+        self.assertEqual(dict(counts), {
+            "claim_misses": 1,
+            "legacy_misses": 1,
+            "terminals": 1,
+        })
+        with self.assertRaisesRegex(DeadlineError, "Deadline mutation is pending"):
+            self.harness.start_task(
+                "project", "blocked", "R-001", 5, now=108
+            )
+
+        diagnosis = self.harness.diagnose_claim_deadline(
+            "project",
+            "R-001",
+            "estimate premise failed",
+            "The immutable item clock expired before closure acceptance.",
+            now=109,
+        )
+        micro = self.harness.resolve_deadline_mutation(
+            "project", "R-001", "micro", "micro guidance changed", now=110
+        )
+        macro = self.resolve_deadline_macro(
+            "R-001", "macro method changed", now=111
+        )
+        repeated_macro = self.resolve_deadline_macro(
+            "R-001", "macro method changed", now=112
+        )
+        restart_count = self.harness.connection.execute(
+            "SELECT COUNT(*) AS total FROM coordinator_restart_requests"
+        ).fetchone()["total"]
+
+        self.assertTrue(diagnosis["recorded"])
+        self.assertEqual(micro["pending_components"], ["macro"])
+        self.assertIsNone(micro["coordinator_restart"])
+        self.assertEqual(macro["pending_components"], [])
+        self.assertTrue(macro["coordinator_restart"]["pending"])
+        self.assertFalse(repeated_macro["recorded"])
+        self.assertEqual(restart_count, 1)
+        self.assertEqual(
+            self.harness.list_tasks(now=112)["pending_incident_reviews"], []
+        )
+
+    def test_dispatch_after_expiry_persists_miss_and_is_blocked(self) -> None:
+        self.harness.start_task("project", "first", "R-001", 5, now=100)
+
+        with self.assertRaisesRegex(DeadlineError, "Deadline mutation is pending"):
+            self.harness.start_task(
+                "project", "must-not-dispatch", "R-001", 5, now=106
+            )
+
+        self.assertIsNone(
+            self.harness.connection.execute(
+                "SELECT 1 FROM tasks WHERE task_id = 'must-not-dispatch'"
+            ).fetchone()
+        )
+        self.assertEqual(
+            self.harness.connection.execute(
+                "SELECT COUNT(*) AS total FROM claim_deadline_incidents"
+            ).fetchone()["total"],
+            1,
+        )
+        gate = self.harness.coordinator_view(now=106)[
+            "pending_deadline_mutations"
+        ]
+        self.assertEqual(gate[0]["pending_components"], ["micro", "macro"])
+
+    def test_two_dispatched_attempts_after_expiry_create_one_claim_miss(self) -> None:
+        self.harness.start_task("project", "first", "R-001", 5, now=100)
+        self.harness.start_task("project", "second", "R-001", 5, now=101)
+
+        first = self.harness.complete_task(
+            "project", "first", "late first completion", now=106
+        )
+        second = self.harness.complete_task(
+            "project", "second", "late second completion", now=107
+        )
+        counts = self.harness.connection.execute(
+            """
+            SELECT
+              (SELECT COUNT(*) FROM claim_deadline_incidents) AS claim_misses,
+              (SELECT COUNT(*) FROM incidents WHERE kind = 'deadline_miss') AS legacy_misses,
+              (SELECT COALESCE(SUM(units), 0) FROM incidents) AS units,
+              (SELECT COUNT(*) FROM tasks WHERE attempt_terminal_at IS NOT NULL) AS terminals
+            """
+        ).fetchone()
+
+        self.assertTrue(first["deadline_missed"])
+        self.assertTrue(second["deadline_missed"])
+        self.assertEqual(dict(counts), {
+            "claim_misses": 1,
+            "legacy_misses": 1,
+            "units": 1,
+            "terminals": 2,
+        })
+
+    def test_post_acceptance_attempt_remains_visible(self) -> None:
+        self.establish_accepted_claim()
+
+        self.harness.start_task(
+            "project", "post-acceptance-check", "R-001", 100,
+            phase="closure", now=5
+        )
+        view = self.harness.coordinator_view(now=5)
+
+        self.assertEqual(
+            [task["task_id"] for task in view["tasks"]],
+            ["post-acceptance-check"],
+        )
+        self.assertEqual(view["tasks"][0]["state"], "running")
+
+    def test_acceptance_rejects_a_live_sibling_until_it_is_terminal(self) -> None:
+        self.harness.start_task("project", "explore", "R-001", 100, now=0)
+        self.harness.complete_task("project", "explore", "strategy proved", now=1)
+        self.harness.transition_claim_to_closure(
+            "project",
+            "R-001",
+            "explore",
+            "The owner route finishes.",
+            "Observe the owner route.",
+            "One closure proof remains.",
+            now=2,
+        )
+        self.harness.start_task(
+            "project", "winner", "R-001", 100, phase="closure", now=3
+        )
+        with self.assertRaisesRegex(DeadlineError, "already has a live attempt"):
+            self.harness.start_task(
+                "project", "live-sibling", "R-001", 100,
+                phase="closure", now=3,
+            )
+        self.harness.connection.execute(
+            """
+            INSERT INTO tasks (
+                lineage_id, task_id, claim_id, estimate_seconds,
+                started_at, deadline_at, phase_at_dispatch,
+                phase_sequence_at_dispatch, closure_gap_id,
+                closure_gap_revision
+            )
+            SELECT lineage_id, 'live-sibling', claim_id, estimate_seconds,
+                   started_at, deadline_at, phase_at_dispatch,
+                   phase_sequence_at_dispatch, closure_gap_id,
+                   closure_gap_revision
+            FROM tasks WHERE lineage_id = 'project' AND task_id = 'winner'
+            """
+        )
+        self.harness.connection.commit()
+        self.harness.complete_task("project", "winner", "closure proved", now=4)
+
+        with self.assertRaisesRegex(DeadlineError, "live-sibling"):
+            self.harness.accept_claim(
+                "project", "R-001", "winner", "accepted proof", now=5
+            )
+
+        self.harness.abandon_attempt(
+            "project", "live-sibling", "winner supplied the proof", now=6
+        )
+        accepted = self.harness.accept_claim(
+            "project", "R-001", "winner", "accepted proof", now=7
+        )
+        self.assertTrue(accepted["recorded"])
+
+    def test_failed_late_acceptance_preserves_the_new_deadline_miss(self) -> None:
+        self.harness.start_task("project", "explore", "R-LATE", 5, now=0)
+        self.harness.complete_task("project", "explore", "strategy proved", now=1)
+        self.harness.transition_claim_to_closure(
+            "project",
+            "R-LATE",
+            "explore",
+            "The owner route finishes.",
+            "Observe the owner route.",
+            "One closure proof remains.",
+            now=2,
+        )
+        self.harness.start_task(
+            "project", "winner", "R-LATE", 5, phase="closure", now=3
+        )
+        self.harness.connection.execute(
+            """
+            INSERT INTO tasks (
+                lineage_id, task_id, claim_id, estimate_seconds,
+                started_at, deadline_at, phase_at_dispatch,
+                phase_sequence_at_dispatch, closure_gap_id,
+                closure_gap_revision
+            )
+            SELECT lineage_id, 'live-sibling', claim_id, estimate_seconds,
+                   started_at, deadline_at, phase_at_dispatch,
+                   phase_sequence_at_dispatch, closure_gap_id,
+                   closure_gap_revision
+            FROM tasks WHERE lineage_id = 'project' AND task_id = 'winner'
+            """
+        )
+        self.harness.connection.commit()
+        self.harness.complete_task("project", "winner", "closure proved", now=4)
+
+        with self.assertRaisesRegex(DeadlineError, "live-sibling"):
+            self.harness.accept_claim(
+                "project", "R-LATE", "winner", "accepted proof", now=6
+            )
+
+        incident = self.harness.connection.execute(
+            """
+            SELECT * FROM claim_deadline_incidents
+            WHERE lineage_id = 'project' AND claim_id = 'R-LATE'
+            """
+        ).fetchone()
+        acceptance = self.harness.connection.execute(
+            """
+            SELECT 1 FROM claim_acceptances
+            WHERE lineage_id = 'project' AND claim_id = 'R-LATE'
+            """
+        ).fetchone()
+        self.assertIsNotNone(incident)
+        self.assertEqual(incident["source_task_id"], "winner")
+        self.assertIsNone(acceptance)
+
+    def test_post_acceptance_finding_stays_visible(self) -> None:
+        self.establish_accepted_claim()
+        self.harness.start_task(
+            "project", "late-sibling", "R-001", 100,
+            phase="closure", now=6
+        )
+        self.harness.report_worker_finding(
+            "project",
+            "late-sibling",
+            "unexpected",
+            "A post-acceptance owner observation contradicted the route.",
+            now=7,
+        )
+
+        view = self.harness.coordinator_view(now=8)
+        self.assertEqual(
+            [task["task_id"] for task in view["tasks"]],
+            ["late-sibling"],
+        )
+        self.assertEqual(view["tasks"][0]["state"], "worker_finding")
+
+    def test_reopened_claim_stays_visible_until_new_closure_acceptance(self) -> None:
+        self.establish_accepted_claim()
+        self.harness.start_task(
+            "project", "closure-check", "R-001", 100,
+            phase="closure", now=6
+        )
+        self.harness.report_worker_finding(
+            "project",
+            "closure-check",
+            "unexpected",
+            "The owner route returns the finished outcome premise is contradicted.",
+            now=7,
+        )
+        self.harness.reopen_claim_exploration(
+            "project",
+            "R-001",
+            "closure-check",
+            "The owner route returns the finished outcome",
+            now=8,
+        )
+        self.harness.start_task("project", "reexplore", "R-001", 100, now=9)
+        self.harness.complete_task(
+            "project", "reexplore", "replacement strategy proved", now=10
+        )
+
+        reopened = self.harness.coordinator_view(now=10)[
+            "reopened_unaccepted_claims"
+        ]
+        self.assertEqual([item["claim_id"] for item in reopened], ["R-001"])
+        self.assertEqual(reopened[0]["phase"], "exploration")
+        details = self.harness.claim_invalidation_details("project", "R-001")
+        self.assertEqual(details["accepted_task_id"], "closure")
+        self.assertEqual(details["trigger"]["kind"], "closure_reopen")
+        self.assertEqual(details["trigger"]["task_id"], "closure-check")
+        self.assertIn(
+            "owner route returns",
+            details["trigger"]["contradicted_premise"],
+        )
+        self.assertEqual(
+            self.harness.coordinator_view(now=10)[
+                "invalidated_unaccepted_claims"
+            ][0]["trigger_kind"],
+            "closure_reopen",
+        )
+        self.harness.transition_claim_to_closure(
+            "project",
+            "R-001",
+            "reexplore",
+            "The repaired owner route returns the finished outcome.",
+            "Run the repaired owner route and inspect its artifact.",
+            "Only repaired closure remains.",
+            now=11,
+        )
+        self.assertEqual(
+            [
+                item["claim_id"]
+                for item in self.harness.coordinator_view(now=11)[
+                    "reopened_unaccepted_claims"
+                ]
+            ],
+            ["R-001"],
+        )
+        self.harness.start_task(
+            "project", "reclosure", "R-001", 100,
+            phase="closure", now=12
+        )
+        self.harness.complete_task(
+            "project", "reclosure", "repaired closure proved", now=13
+        )
+        self.harness.accept_claim(
+            "project", "R-001", "reclosure", "repaired evidence accepted",
+            now=14
+        )
+
+        self.assertEqual(
+            self.harness.coordinator_view(now=14)["reopened_unaccepted_claims"],
+            [],
+        )
+
+    def test_closure_reopen_and_acceptance_are_bound_to_phase_epochs(self) -> None:
+        self.harness.start_task("project", "explore-1", "R-001", 100, now=0)
+        self.harness.complete_task(
+            "project", "explore-1", "first exploration proof", now=1
+        )
+        self.harness.transition_claim_to_closure(
+            "project",
+            "R-001",
+            "explore-1",
+            "The solver returns feasible.",
+            "Run the exact solver route.",
+            "Only the exact solver route remains.",
+            now=2,
+        )
+        self.harness.start_task(
+            "project", "closure-1", "R-001", 100, phase="closure", now=3
+        )
+        self.harness.complete_task(
+            "project", "closure-1", "first closure proof", now=4
+        )
+        self.harness.accept_claim(
+            "project", "R-001", "closure-1", "owner accepted closure", now=5
+        )
+        self.harness.start_task(
+            "project", "closure-check", "R-001", 100, phase="closure", now=6
+        )
+        self.harness.report_worker_finding(
+            "project",
+            "closure-check",
+            "unexpected",
+            "The solver returns feasible premise is false on the retained fixture.",
+            now=7,
+        )
+
+        with self.assertRaisesRegex(DeadlineError, "active closure contract"):
+            self.harness.reopen_claim_exploration(
+                "project", "R-001", "closure-check", "retained fixture", now=8
+            )
+        reopened = self.harness.reopen_claim_exploration(
+            "project",
+            "R-001",
+            "closure-check",
+            "The solver returns feasible",
+            now=8,
+        )
+        self.assertEqual(reopened["phase"], "exploration")
+        self.assertFalse(
+            self.harness.status_task("project", "closure-1", now=8)[
+                "completion_accepted"
+            ]
+        )
+
+        self.harness.start_task("project", "explore-2", "R-001", 100, now=9)
+        self.harness.complete_task(
+            "project", "explore-2", "second exploration proof", now=10
+        )
+        with self.assertRaisesRegex(DeadlineError, "current exploration epoch"):
+            self.harness.transition_claim_to_closure(
+                "project",
+                "R-001",
+                "explore-1",
+                "Stale outcome.",
+                "Stale evidence route.",
+                "Stale remaining gap.",
+                now=11,
+            )
+        self.harness.transition_claim_to_closure(
+            "project",
+            "R-001",
+            "explore-2",
+            "Prove the repaired solver outcome.",
+            "Run the repaired solver route.",
+            "Only the repaired solver route remains.",
+            now=11,
+        )
+        with self.assertRaisesRegex(DeadlineError, "active closure epoch"):
+            self.harness.accept_claim(
+                "project", "R-001", "closure-1", "stale acceptance", now=12
+            )
+        self.harness.start_task(
+            "project", "closure-2", "R-001", 100, phase="closure", now=12
+        )
+        self.harness.complete_task(
+            "project", "closure-2", "second closure proof", now=13
+        )
+        accepted = self.harness.accept_claim(
+            "project", "R-001", "closure-2", "repaired closure accepted", now=14
+        )
+
+        self.assertEqual(accepted["closure_sequence"], 4)
+        rows = self.harness.connection.execute(
+            """
+            SELECT task_id, closure_sequence, invalidated_at
+            FROM claim_acceptances ORDER BY acceptance_number
+            """
+        ).fetchall()
+        self.assertEqual(
+            [(row["task_id"], row["closure_sequence"]) for row in rows],
+            [("closure-1", 2), ("closure-2", 4)],
+        )
+        self.assertIsNotNone(rows[0]["invalidated_at"])
+        self.assertIsNone(rows[1]["invalidated_at"])
+
+    def test_breach_invalidates_a_valid_closure_acceptance(self) -> None:
+        self.harness.start_task("project", "explore", "R-001", 100, now=0)
+        self.harness.complete_task("project", "explore", "explored", now=1)
+        self.harness.transition_claim_to_closure(
+            "project",
+            "R-001",
+            "explore",
+            "Prove closure.",
+            "Run closure.",
+            "Closure remains.",
+            now=2,
+        )
+        self.harness.start_task(
+            "project", "closure", "R-001", 100, phase="closure", now=3
+        )
+        self.harness.complete_task("project", "closure", "closed", now=4)
+        self.harness.accept_claim(
+            "project", "R-001", "closure", "accepted proof", now=5
+        )
+
+        breached = self.harness.record_integrity_breach(
+            "project", "closure", "closure evidence was fabricated", now=6
+        )
+        acceptance = self.harness.connection.execute(
+            "SELECT * FROM claim_acceptances WHERE task_id = 'closure'"
+        ).fetchone()
+
+        self.assertFalse(breached["status"]["completion_accepted"])
+        self.assertIsNotNone(acceptance["invalidated_at"])
+        self.assertEqual(
+            acceptance["invalidation_reason"], "closure evidence was fabricated"
+        )
+        details = self.harness.claim_invalidation_details("project", "R-001")
+        self.assertEqual(details["acceptance_evidence"], "accepted proof")
+        self.assertEqual(details["trigger"]["kind"], "integrity_breach")
+        self.assertEqual(details["trigger"]["task_id"], "closure")
+        self.assertEqual(
+            [task["task_id"] for task in self.harness.list_tasks(now=6)["tasks"]],
+            ["closure"],
+        )
+
+    def test_abandoned_attempt_cannot_later_report_a_finding(self) -> None:
+        self.harness.start_task("project", "attempt", "R-001", 100, now=0)
+        abandoned = self.harness.abandon_attempt(
+            "project", "attempt", "worker was replaced", now=1
+        )
+
+        with self.assertRaisesRegex(DeadlineError, "terminal outcome"):
+            self.harness.report_worker_finding(
+                "project", "attempt", "blocker", "late finding", now=2
+            )
+        with self.assertRaisesRegex(DeadlineError, "terminal outcome"):
+            self.harness.complete_task(
+                "project", "attempt", "late completion", now=2
+            )
+
+        self.assertEqual(abandoned["state"], "abandoned")
+        self.assertFalse(abandoned["attempt_completed"])
+        self.assertEqual(abandoned["attempt_terminal_kind"], "abandoned")
+        self.assertEqual(
+            abandoned["random_mutation"]["completed_terminal_windows"], 1
+        )
+
+    def test_random_cadence_carries_terminal_overflow_to_next_boundary(self) -> None:
+        with patch(
+            "deadline_harness.secrets.randbelow", side_effect=[0, 0, 0, 1]
+        ):
+            for number in range(1, 21):
+                self.harness.start_task(
+                    "project", f"window-{number}", f"R-{number:03d}", 100, now=0
+                )
+            for number in range(1, 13):
+                self.harness.complete_task(
+                    "project", f"window-{number}", "green", now=number
+                )
+            first = self.harness.list_tasks(now=13)["random_mutation"]
+            resolved = self.harness.resolve_random_mutation(
+                "project", 1, "ordinary guarded mutation", now=13
+            )
+            for number in range(13, 21):
+                self.harness.complete_task(
+                    "project", f"window-{number}", "green", now=number
+                )
+            second = self.harness.list_tasks(now=21)["random_mutation"]
+
+        self.assertEqual(first["completed_terminal_windows"], 12)
+        self.assertEqual(first["due_after_terminal_windows"], 10)
+        self.assertEqual(
+            resolved["random_mutation"]["due_after_terminal_windows"], 20
+        )
+        self.assertFalse(resolved["random_mutation"]["due"])
+        self.assertEqual(second["completed_terminal_windows"], 20)
+        self.assertEqual(second["due_after_terminal_windows"], 20)
+        self.assertTrue(second["due"])
+        self.assertEqual(second["due_task_id"], "window-20")
+
+    def test_interval_thirty_dfs_requires_ordinary_and_universal_before_restart(self) -> None:
+        self.write_sol_ultra_capability()
+        with patch(
+            "deadline_harness.secrets.randbelow", side_effect=[20, 2, 0, 0]
+        ), patch("deadline_harness.time.time", return_value=12345):
+            for number in range(1, 31):
+                self.harness.start_task(
+                    "project", f"window-{number}", f"R-{number:03d}", 100, now=0
+                )
+            for number in range(1, 31):
+                self.harness.complete_task(
+                    "project", f"window-{number}", "green", now=number
+                )
+            due = self.harness.list_tasks(now=31)["random_mutation"]
+            ordinary = self.harness.resolve_random_mutation(
+                "project",
+                1,
+                "ordinary DFS mutation guarded",
+                component="ordinary",
+                now=31,
+            )
+            receipt_id = self.record_universal_receipt()
+            universal = self.harness.resolve_random_mutation(
+                "project",
+                1,
+                "universal mutation guarded across all mutable surfaces",
+                component="universal",
+                receipt_id=receipt_id,
+                now=32,
+            )
+            with self.assertRaisesRegex(DeadlineError, "already been consumed"):
+                self.harness.resolve_random_mutation(
+                    "project",
+                    1,
+                    "universal mutation guarded across all mutable surfaces",
+                    component="universal",
+                    receipt_id=receipt_id,
+                    now=33,
+                )
+
+        self.assertEqual(due["interval_windows"], 30)
+        self.assertEqual(due["selected_lane"], "DFS.md")
+        self.assertTrue(due["universal_signature_seen"])
+        self.assertTrue(due["universal_required"])
+        self.assertEqual(due["universal_capability_status"], "available")
+        self.assertEqual(due["universal_capability_checked_at"], 12345)
+        self.assertEqual(due["pending_components"], ["ordinary", "universal"])
+        self.assertEqual(ordinary["random_mutation"]["cycle_number"], 1)
+        self.assertEqual(ordinary["random_mutation"]["pending_components"], ["universal"])
+        self.assertIsNone(ordinary["coordinator_restart"])
+        self.assertTrue(universal["coordinator_restart"]["pending"])
+        self.assertEqual(universal["universal_receipt_id"], receipt_id)
+        self.assertEqual(
+            self.harness.connection.execute(
+                "SELECT COUNT(*) AS total FROM coordinator_restart_requests"
+            ).fetchone()["total"],
+            1,
+        )
+
+    def test_rare_trigger_without_due_time_capability_is_visible_and_nonblocking(self) -> None:
+        with patch(
+            "deadline_harness.secrets.randbelow", side_effect=[20, 2, 0, 0]
+        ), patch("deadline_harness.time.time", return_value=23456):
+            for number in range(1, 31):
+                self.harness.start_task(
+                    "project", f"window-{number}", f"R-{number:03d}", 100, now=0
+                )
+            for number in range(1, 31):
+                self.harness.complete_task(
+                    "project", f"window-{number}", "green", now=number
+                )
+            due = self.harness.coordinator_view(now=31)["random_mutation"]
+            self.write_sol_ultra_capability()
+            frozen = self.harness.coordinator_view(now=31)["random_mutation"]
+            resolved = self.harness.resolve_random_mutation(
+                "project", 1, "ordinary DFS mutation guarded",
+                component="ordinary", now=31,
+            )
+
+        self.assertTrue(due["universal_signature_seen"])
+        self.assertFalse(due["universal_required"])
+        self.assertEqual(due["universal_capability_status"], "unavailable")
+        self.assertEqual(due["universal_capability_checked_at"], 23456)
+        self.assertIn("workspace roster is missing", due["universal_capability_reason"])
+        self.assertEqual(due["pending_components"], ["ordinary"])
+        self.assertFalse(frozen["universal_required"])
+        self.assertEqual(frozen["universal_capability_status"], "unavailable")
+        self.assertEqual(
+            frozen["universal_capability_checked_at"],
+            due["universal_capability_checked_at"],
+        )
+        self.assertTrue(resolved["coordinator_restart"]["pending"])
+        cycle = self.harness.connection.execute(
+            """
+            SELECT * FROM random_mutation_cycles
+            WHERE lineage_id = 'project' AND cycle_number = 1
+            """
+        ).fetchone()
+        self.assertIsNotNone(cycle["resolution_evidence"])
+        self.assertIsNone(cycle["universal_resolution_evidence"])
+        self.assertEqual(cycle["universal_capability_status"], "unavailable")
+
+    def test_legacy_ordinary_only_rare_cycle_cannot_become_zero_action_due_gate(self) -> None:
+        with patch(
+            "deadline_harness.secrets.randbelow", side_effect=[20, 2, 0, 0]
+        ):
+            for number in range(1, 31):
+                self.harness.start_task(
+                    "project", f"window-{number}", f"R-{number:03d}", 100, now=0
+                )
+            for number in range(1, 31):
+                self.harness.complete_task(
+                    "project", f"window-{number}", "green", now=number
+                )
+        self.harness.connection.execute(
+            "DROP TRIGGER random_cycle_capability_snapshot_is_immutable"
+        )
+        self.harness.connection.execute(
+            """
+            UPDATE random_mutation_cycles
+            SET ordinary_resolution_evidence = 'legacy ordinary proof',
+                universal_required = 1,
+                universal_capability_status = NULL,
+                universal_capability_reason = NULL,
+                universal_capability_checked_at = NULL,
+                universal_capability_roster_digest = NULL,
+                resolution_evidence = NULL,
+                restart_generation = NULL
+            WHERE lineage_id = 'project' AND cycle_number = 1
+            """
+        )
+        self.harness.connection.commit()
+
+        with patch("deadline_harness.time.time", return_value=34567):
+            view = self.harness.coordinator_view(now=31)
+
+        cycle = self.harness.connection.execute(
+            """
+            SELECT * FROM random_mutation_cycles
+            WHERE lineage_id = 'project' AND cycle_number = 1
+            """
+        ).fetchone()
+        self.assertIsNone(view["random_mutation"])
+        self.assertTrue(view["coordinator_restart"]["pending"])
+        self.assertIsNotNone(cycle["resolution_evidence"])
+        self.assertFalse(cycle["universal_required"])
+        self.assertEqual(cycle["universal_capability_status"], "unavailable")
+        self.assertEqual(cycle["universal_capability_checked_at"], 34567)
+
+    def test_v1_diagnosis_does_not_grandfather_unproved_mutation_components(self) -> None:
+        self.harness.close()
+        legacy = Path(self.temporary.name) / "diagnosed-v1.sqlite"
+        connection = sqlite3.connect(legacy)
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE tasks (
+                    lineage_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    claim_id TEXT NOT NULL,
+                    estimate_seconds REAL NOT NULL,
+                    started_at REAL NOT NULL,
+                    deadline_at REAL NOT NULL,
+                    completed_at REAL,
+                    completion_evidence TEXT,
+                    integrity_breached_at REAL,
+                    integrity_reason TEXT,
+                    PRIMARY KEY (lineage_id, task_id)
+                );
+                CREATE TABLE incidents (
+                    incident_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    lineage_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    recorded_at REAL NOT NULL,
+                    reason TEXT,
+                    short_verdict TEXT,
+                    long_detail TEXT,
+                    reviewed_at REAL,
+                    units INTEGER NOT NULL,
+                    cumulative_before INTEGER NOT NULL,
+                    cumulative_after INTEGER NOT NULL,
+                    cadence_threshold INTEGER,
+                    UNIQUE (lineage_id, task_id, kind)
+                );
+                CREATE TABLE worker_findings (
+                    lineage_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    reported_at REAL NOT NULL,
+                    evidence TEXT NOT NULL,
+                    PRIMARY KEY (lineage_id, task_id)
+                );
+                CREATE TABLE lineage_binding (
+                    singleton INTEGER PRIMARY KEY,
+                    lineage_id TEXT NOT NULL
+                );
+                INSERT INTO lineage_binding VALUES (1, 'project');
+                INSERT INTO tasks VALUES
+                  ('project', 'legacy', 'R-001', 10, 0, 10, NULL, NULL, NULL, NULL);
+                INSERT INTO incidents (
+                    lineage_id, task_id, kind, recorded_at, reason,
+                    short_verdict, long_detail, reviewed_at,
+                    units, cumulative_before, cumulative_after, cadence_threshold
+                ) VALUES (
+                    'project', 'legacy', 'deadline_miss', 11, NULL,
+                    'estimate unsound', 'Legacy diagnosis only.', 12,
+                    1, 0, 1, NULL
+                );
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with patch(
+            "deadline_harness.secrets.randbelow", side_effect=[20, 0]
+        ), DeadlineHarness(legacy) as migrated:
+            view = migrated.coordinator_view(now=20)
+            self.assertEqual(view["pending_incident_reviews"], [])
+            self.assertEqual(
+                view["pending_deadline_mutations"],
+                [
+                    {
+                        "claim_id": "R-001",
+                        "source_task_id": "legacy",
+                        "recorded_at": 11,
+                        "reviewed": True,
+                        "pending_components": ["micro", "macro"],
+                        "restart_generation": None,
+                    }
+                ],
+            )
+            self.assertEqual(
+                migrated.connection.execute(
+                    "SELECT COUNT(*) AS total FROM deadline_mutation_components"
+                ).fetchone()["total"],
+                0,
+            )
+        self.harness = DeadlineHarness(self.state_path)
+
+    def test_divergent_v1_clocks_block_and_require_explicit_reconciliation(self) -> None:
+        self.harness.close()
+        legacy = Path(self.temporary.name) / "divergent-v1.sqlite"
+        connection = sqlite3.connect(legacy)
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE tasks (
+                    lineage_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    claim_id TEXT NOT NULL,
+                    estimate_seconds REAL NOT NULL,
+                    started_at REAL NOT NULL,
+                    deadline_at REAL NOT NULL,
+                    completed_at REAL,
+                    completion_evidence TEXT,
+                    integrity_breached_at REAL,
+                    integrity_reason TEXT,
+                    PRIMARY KEY (lineage_id, task_id)
+                );
+                CREATE TABLE incidents (
+                    incident_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    lineage_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    recorded_at REAL NOT NULL,
+                    reason TEXT,
+                    units INTEGER NOT NULL,
+                    cumulative_before INTEGER NOT NULL,
+                    cumulative_after INTEGER NOT NULL,
+                    cadence_threshold INTEGER,
+                    UNIQUE (lineage_id, task_id, kind)
+                );
+                CREATE TABLE worker_findings (
+                    lineage_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    reported_at REAL NOT NULL,
+                    evidence TEXT NOT NULL,
+                    PRIMARY KEY (lineage_id, task_id)
+                );
+                CREATE TABLE lineage_binding (
+                    singleton INTEGER PRIMARY KEY,
+                    lineage_id TEXT NOT NULL
+                );
+                INSERT INTO lineage_binding VALUES (1, 'project');
+                INSERT INTO tasks VALUES
+                  ('project', 'legacy-a', 'R-001', 10, 0, 10, NULL, NULL, NULL, NULL),
+                  ('project', 'legacy-b', 'R-001', 20, 1, 21, NULL, NULL, NULL, NULL),
+                  ('project', 'legacy-c', 'R-002', 15, 2, 17, NULL, NULL, NULL, NULL),
+                  ('project', 'legacy-d', 'R-002', 25, 3, 28, NULL, NULL, NULL, NULL);
+                INSERT INTO incidents (
+                    lineage_id, task_id, kind, recorded_at, reason, units,
+                    cumulative_before, cumulative_after, cadence_threshold
+                ) VALUES (
+                    'project', 'legacy-a', 'deadline_miss', 11, NULL, 1, 0, 1, NULL
+                );
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with patch(
+            "deadline_harness.secrets.randbelow", side_effect=[20, 0]
+        ), DeadlineHarness(legacy) as migrated:
+            view = migrated.coordinator_view(now=5)
+            self.assertEqual(
+                view["claim_clock_migration_conflicts"],
+                [
+                    {
+                        "claim_id": "R-001",
+                        "detected_at": view["claim_clock_migration_conflicts"][0][
+                            "detected_at"
+                        ],
+                        "legacy_clock_option_count": 2,
+                    },
+                    {
+                        "claim_id": "R-002",
+                        "detected_at": view["claim_clock_migration_conflicts"][1][
+                            "detected_at"
+                        ],
+                        "legacy_clock_option_count": 2,
+                    },
+                ],
+            )
+            with self.assertRaisesRegex(DeadlineError, "divergent legacy"):
+                migrated.start_task(
+                    "project", "legacy-a", "R-001", 10, now=50
+                )
+            with self.assertRaisesRegex(DeadlineError, "divergent legacy"):
+                migrated.start_task("project", "new", "R-001", 10, now=50)
+
+            estimated = migrated.resolve_claim_clock_migration(
+                "project",
+                "R-002",
+                "No authoritative legacy item clock existed; create the first one.",
+                estimate_seconds=30,
+                now=50,
+            )
+            new_attempt = migrated.start_task(
+                "project", "new-r2", "R-002", 30, now=51
+            )
+            with self.assertRaisesRegex(DeadlineError, "legacy deadline miss"):
+                migrated.resolve_claim_clock_migration(
+                    "project",
+                    "R-001",
+                    "A new clock would detach the recorded miss.",
+                    estimate_seconds=30,
+                    now=52,
+                )
+            details = migrated.claim_clock_migration_details("project", "R-001")
+            self.assertEqual(
+                [item["task_id"] for item in details["legacy_clock_options"]],
+                ["legacy-a", "legacy-b"],
+            )
+            self.assertEqual(details["required_source_task_id"], "legacy-a")
+            self.assertEqual(
+                details["earliest_legacy_deadline_miss"]["recorded_at"], 11
+            )
+            with self.assertRaisesRegex(DeadlineError, "earliest exact deadline miss"):
+                migrated.resolve_claim_clock_migration(
+                    "project",
+                    "R-001",
+                    "The later clock must not absorb the earlier miss.",
+                    source_task_id="legacy-b",
+                    now=52,
+                )
+            sourced = migrated.resolve_claim_clock_migration(
+                "project",
+                "R-001",
+                "Adopt the exact legacy clock that owns the recorded miss.",
+                source_task_id="legacy-a",
+                now=52,
+            )
+
+            self.assertEqual(
+                (estimated["started_at"], estimated["deadline_at"]), (50, 80)
+            )
+            self.assertEqual(new_attempt["attempt_dispatched_at"], 51)
+            self.assertEqual(new_attempt["deadline_at"], 80)
+            self.assertEqual(
+                (sourced["started_at"], sourced["deadline_at"]), (0, 10)
+            )
+            self.assertEqual(
+                migrated.connection.execute(
+                    "SELECT COUNT(*) AS total FROM claim_deadline_incidents"
+                ).fetchone()["total"],
+                1,
+            )
+            originals = migrated.connection.execute(
+                """
+                SELECT task_id, estimate_seconds, started_at, deadline_at
+                FROM tasks WHERE task_id LIKE 'legacy-%' ORDER BY task_id
+                """
+            ).fetchall()
+            self.assertEqual(
+                [tuple(row) for row in originals],
+                [
+                    ("legacy-a", 10, 0, 10),
+                    ("legacy-b", 20, 1, 21),
+                    ("legacy-c", 15, 2, 17),
+                    ("legacy-d", 25, 3, 28),
+                ],
+            )
+
+        with patch(
+            "deadline_harness.secrets.randbelow",
+            side_effect=AssertionError("persisted v2 state must not redraw"),
+        ), DeadlineHarness(legacy) as reopened:
+            self.assertEqual(
+                reopened.coordinator_view(now=53)[
+                    "claim_clock_migration_conflicts"
+                ],
+                [],
+            )
+        self.harness = DeadlineHarness(self.state_path)
+
+    def test_clock_migration_cli_starts_detached_claim_watcher(self) -> None:
+        output = io.StringIO()
+        resolved = {
+            "lineage_id": "project",
+            "claim_id": "R-001",
+            "resolution_kind": "new_item_clock",
+            "deadline_at": 100,
+        }
+        with patch.object(
+            DeadlineHarness,
+            "resolve_claim_clock_migration",
+            return_value=resolved,
+        ), patch("deadline_harness.spawn_watcher") as spawn, redirect_stdout(output):
+            exit_code = main(
+                [
+                    "resolve-clock-migration",
+                    "--state",
+                    str(self.state_path),
+                    "--lineage",
+                    "project",
+                    "--claim",
+                    "R-001",
+                    "--reason",
+                    "Create the explicit item clock.",
+                    "--estimate-seconds",
+                    "30",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        spawn.assert_called_once_with(str(self.state_path), "project", "R-001")
+        self.assertEqual(json.loads(output.getvalue())["resolution_kind"], "new_item_clock")
+
+    def test_clock_migration_details_cli_keeps_exact_clock_values(self) -> None:
+        output = io.StringIO()
+        details = {
+            "lineage_id": "project",
+            "claim_id": "R-001",
+            "legacy_clock_options": [
+                {
+                    "task_id": "legacy-a",
+                    "estimate_seconds": 10,
+                    "started_at": 0,
+                    "deadline_at": 10,
+                }
+            ],
+            "required_source_task_id": "legacy-a",
+        }
+        with patch.object(
+            DeadlineHarness,
+            "claim_clock_migration_details",
+            return_value=details,
+        ), redirect_stdout(output):
+            exit_code = main(
+                [
+                    "clock-migration-details",
+                    "--state",
+                    str(self.state_path),
+                    "--lineage",
+                    "project",
+                    "--claim",
+                    "R-001",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(output.getvalue()), details)
+
+    def test_named_closure_gaps_decrease_to_zero_before_acceptance(self) -> None:
+        self.harness.start_task("project", "explore", "R-GAPS", 100, now=0)
+        self.harness.complete_task("project", "explore", "strategy known", now=1)
+        self.harness.transition_claim_to_closure(
+            "project",
+            "R-GAPS",
+            "explore",
+            "Prove both controls.",
+            "Run the retained route.",
+            gaps=[
+                ("G-A", "Prove control A.", "Run fixture A."),
+                ("G-B", "Prove control B.", "Run fixture B."),
+            ],
+            now=2,
+        )
+        with self.assertRaisesRegex(DeadlineError, "name exactly one active gap"):
+            self.harness.start_task(
+                "project", "ambiguous", "R-GAPS", 100, phase="closure", now=3
+            )
+        with self.assertRaisesRegex(DeadlineError, "unknown, closed"):
+            self.harness.start_task(
+                "project", "missing", "R-GAPS", 100,
+                phase="closure", gap_id="G-MISSING", now=3,
+            )
+
+        self.harness.start_task(
+            "project", "a", "R-GAPS", 100,
+            phase="closure", gap_id="G-A", now=3,
+        )
+        self.harness.complete_task("project", "a", "A passed", now=4)
+        closed = self.harness.close_closure_gap(
+            "project", "R-GAPS", "G-A", "a", "A accepted", now=5
+        )
+        self.assertEqual(closed["remaining_gap_ids"], ["G-B"])
+
+        self.harness.start_task(
+            "project", "b", "R-GAPS", 100,
+            phase="closure", gap_id="G-B", now=6,
+        )
+        self.harness.complete_task("project", "b", "B passed", now=7)
+        accepted = self.harness.accept_claim(
+            "project", "R-GAPS", "b", "both controls accepted", now=8
+        )
+        self.assertEqual(accepted["closure_gap_id"], "G-B")
+        self.assertEqual(
+            [gap for gap in self.harness.coordinator_view(now=9)["closure_gaps"]
+             if gap["status"] == "open"],
+            [],
+        )
+
+    def test_terminal_gap_revision_needs_closure_or_material_revision(self) -> None:
+        self.harness.start_task("project", "explore", "R-REV", 100, now=0)
+        self.harness.complete_task("project", "explore", "strategy known", now=1)
+        self.harness.transition_claim_to_closure(
+            "project", "R-REV", "explore", "Prove it.", "Run route.",
+            "One proof remains.", now=2,
+        )
+        self.harness.start_task(
+            "project", "finding", "R-REV", 100, phase="closure", now=3
+        )
+        self.harness.report_worker_finding(
+            "project", "finding", "unexpected", "Route lacked the owner signal.", now=4
+        )
+        with self.assertRaisesRegex(DeadlineError, "evidence-bound revision"):
+            self.harness.start_task(
+                "project", "finding-retry", "R-REV", 100, phase="closure", now=5
+            )
+        with self.assertRaisesRegex(DeadlineError, "materially change both"):
+            self.harness.revise_closure_gap(
+                "project", "R-REV", "G-001", "finding",
+                "One proof remains.", "Run an owner-visible route.", now=5,
+            )
+        revised = self.harness.revise_closure_gap(
+            "project", "R-REV", "G-001", "finding",
+            "Prove the owner signal reaches the product boundary.",
+            "Run the owner-visible route and inspect its artifact.", now=5,
+        )
+        self.assertEqual(revised["revision"], 2)
+        self.assertEqual(revised["basis_task_id"], "finding")
+        self.assertEqual(
+            self.harness.connection.execute(
+                "SELECT COUNT(*) AS total FROM closure_gap_revisions"
+            ).fetchone()["total"],
+            2,
+        )
+
+        self.harness.start_task(
+            "project", "completed", "R-REV", 100, phase="closure", now=6
+        )
+        self.harness.complete_task(
+            "project", "completed", "route still incomplete", now=7
+        )
+        with self.assertRaisesRegex(DeadlineError, "evidence-bound revision"):
+            self.harness.start_task(
+                "project", "completed-retry", "R-REV", 100,
+                phase="closure", now=8,
+            )
+
+    def test_compact_views_keep_latest_result_for_each_active_closure_gap(self) -> None:
+        self.harness.start_task("project", "explore", "R-COMPACT", 100, now=0)
+        self.harness.complete_task("project", "explore", "strategy known", now=1)
+        self.harness.transition_claim_to_closure(
+            "project",
+            "R-COMPACT",
+            "explore",
+            "Prove both owner controls.",
+            "Run each owner route.",
+            gaps=[
+                ("G-A", "Prove A.", "Run route A."),
+                ("G-B", "Prove B.", "Run route B."),
+            ],
+            now=2,
+        )
+        self.harness.start_task(
+            "project", "proof-a", "R-COMPACT", 100,
+            phase="closure", gap_id="G-A", now=3,
+        )
+        self.harness.complete_task("project", "proof-a", "A result", now=4)
+        self.harness.start_task(
+            "project", "proof-b", "R-COMPACT", 100,
+            phase="closure", gap_id="G-B", now=5,
+        )
+
+        listed = self.harness.list_tasks(now=6)["tasks"]
+        startup = self.harness.coordinator_view(now=6)["tasks"]
+
+        self.assertEqual(
+            [(task["closure_gap_id"], task["state"]) for task in listed],
+            [("G-A", "completed"), ("G-B", "running")],
+        )
+        self.assertEqual(startup, listed)
+
+    def test_second_live_attempt_for_same_gap_revision_requires_abandonment(self) -> None:
+        self.harness.start_task("project", "explore", "R-LIVE", 100, now=0)
+        self.harness.complete_task("project", "explore", "strategy known", now=1)
+        self.harness.transition_claim_to_closure(
+            "project", "R-LIVE", "explore", "Prove it.", "Run it.",
+            "Proof remains.", now=2,
+        )
+        self.harness.start_task(
+            "project", "first", "R-LIVE", 100, phase="closure", now=3
+        )
+        with self.assertRaisesRegex(DeadlineError, "already has a live attempt"):
+            self.harness.start_task(
+                "project", "overlap", "R-LIVE", 100, phase="closure", now=4
+            )
+        self.harness.abandon_attempt("project", "first", "worker gone", now=5)
+        replacement = self.harness.start_task(
+            "project", "replacement", "R-LIVE", 100, phase="closure", now=6
+        )
+        self.assertEqual(replacement["closure_gap_revision"], 1)
+
+    def test_abandoned_gap_attempt_can_retry_same_revision(self) -> None:
+        self.harness.start_task("project", "explore", "R-ABANDON", 100, now=0)
+        self.harness.complete_task("project", "explore", "strategy known", now=1)
+        self.harness.transition_claim_to_closure(
+            "project", "R-ABANDON", "explore", "Prove it.", "Run it.",
+            "Proof remains.", now=2,
+        )
+        first = self.harness.start_task(
+            "project", "first", "R-ABANDON", 100, phase="closure", now=3
+        )
+        self.harness.abandon_attempt("project", "first", "worker gone", now=4)
+        retried = self.harness.start_task(
+            "project", "retry", "R-ABANDON", 100, phase="closure", now=5
+        )
+        self.assertEqual(first["closure_gap_revision"], 1)
+        self.assertEqual(retried["closure_gap_revision"], 1)
+
+    def test_v2_gap_migration_is_additive_and_preserves_valid_acceptance(self) -> None:
+        self.establish_accepted_claim("R-MIGRATE")
+        self.harness.close()
+        connection = sqlite3.connect(self.state_path)
+        try:
+            connection.executescript(
+                """
+                DROP TABLE closure_gap_revisions;
+                DROP TABLE closure_gaps;
+                UPDATE tasks SET closure_gap_id = NULL, closure_gap_revision = NULL;
+                PRAGMA user_version = 2;
+                """
+            )
+            before = connection.execute(
+                "SELECT * FROM tasks WHERE task_id = 'closure'"
+            ).fetchone()
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.harness = DeadlineHarness(self.state_path)
+        after = self.harness.connection.execute(
+            "SELECT * FROM tasks WHERE task_id = 'closure'"
+        ).fetchone()
+        gap = self.harness.connection.execute(
+            "SELECT * FROM closure_gaps WHERE claim_id = 'R-MIGRATE'"
+        ).fetchone()
+        self.assertEqual(tuple(before), tuple(after))
+        self.assertEqual(gap["gap_id"], "G-001")
+        self.assertEqual(gap["closed_by_task_id"], "closure")
+        self.assertEqual(gap["closure_evidence"], "closure evidence accepted")
+        self.assertEqual(
+            self.harness.connection.execute("PRAGMA user_version").fetchone()[0], 5
+        )
+
+    def test_breach_of_closed_final_gap_appends_actionable_successor(self) -> None:
+        self.establish_accepted_claim("R-BREACH")
+        original = dict(
+            self.harness.connection.execute(
+                "SELECT * FROM closure_gaps WHERE claim_id = 'R-BREACH'"
+            ).fetchone()
+        )
+        result = self.harness.record_integrity_breach(
+            "project", "closure", "artifact checksum was fabricated", now=6
+        )
+        successor = result["successor_closure_gap"]
+        self.assertTrue(successor["recorded"])
+        original_after = dict(
+            self.harness.connection.execute(
+                """SELECT * FROM closure_gaps
+                   WHERE claim_id = 'R-BREACH' AND gap_id = 'G-001'"""
+            ).fetchone()
+        )
+        self.assertEqual(original, original_after)
+        reopened = self.harness.connection.execute(
+            """SELECT * FROM closure_gaps
+               WHERE claim_id = 'R-BREACH' AND gap_id = ?""",
+            (successor["gap_id"],),
+        ).fetchone()
+        self.assertIsNone(reopened["closed_at"])
+        self.assertEqual(reopened["successor_of_gap_id"], "G-001")
+        self.assertEqual(reopened["successor_of_revision"], 1)
+        view = self.harness.coordinator_view(now=7)
+        self.assertIn("R-BREACH", {
+            claim["claim_id"] for claim in view["invalidated_unaccepted_claims"]
+        })
+        self.assertIn(successor["gap_id"], {
+            gap["gap_id"] for gap in view["closure_gaps"]
+            if gap["status"] == "open"
+        })
+        repeated = self.harness.record_integrity_breach(
+            "project", "closure", "artifact checksum was fabricated", now=8
+        )
+        self.assertIsNone(repeated["successor_closure_gap"])
+        self.assertEqual(
+            self.harness.connection.execute(
+                "SELECT COUNT(*) FROM closure_gaps WHERE claim_id = 'R-BREACH'"
+            ).fetchone()[0],
+            2,
+        )
+
+    def test_pre_v3_accepted_database_backfills_closure_epoch_before_trigger(self) -> None:
+        self.establish_accepted_claim("R-OLD")
+        self.harness.close()
+        connection = sqlite3.connect(self.state_path)
+        try:
+            connection.executescript(
+                """
+                PRAGMA foreign_keys = OFF;
+                DROP TRIGGER IF EXISTS claim_acceptance_core_is_immutable;
+                DROP TRIGGER IF EXISTS claim_acceptance_closure_sequence_is_immutable;
+                ALTER TABLE claim_acceptances RENAME TO claim_acceptances_v3;
+                CREATE TABLE claim_acceptances (
+                    lineage_id TEXT NOT NULL,
+                    claim_id TEXT NOT NULL,
+                    acceptance_number INTEGER NOT NULL CHECK (acceptance_number > 0),
+                    task_id TEXT NOT NULL,
+                    accepted_at REAL NOT NULL,
+                    evidence TEXT NOT NULL,
+                    invalidated_at REAL,
+                    invalidation_reason TEXT,
+                    PRIMARY KEY (lineage_id, claim_id, acceptance_number)
+                );
+                INSERT INTO claim_acceptances (
+                    lineage_id, claim_id, acceptance_number, task_id,
+                    accepted_at, evidence, invalidated_at, invalidation_reason
+                )
+                SELECT lineage_id, claim_id, acceptance_number, task_id,
+                       accepted_at, evidence, invalidated_at, invalidation_reason
+                FROM claim_acceptances_v3;
+                DROP TABLE claim_acceptances_v3;
+                PRAGMA user_version = 2;
+                """
+            )
+            self.assertNotIn(
+                "closure_sequence",
+                {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(claim_acceptances)"
+                    ).fetchall()
+                },
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM claim_acceptances"
+                ).fetchone()[0],
+                1,
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.harness = DeadlineHarness(self.state_path)
+        accepted = self.harness.connection.execute(
+            "SELECT * FROM claim_acceptances WHERE claim_id = 'R-OLD'"
+        ).fetchone()
+        self.assertEqual(accepted["closure_sequence"], 2)
+        self.assertEqual(accepted["task_id"], "closure")
+        self.assertIsNone(accepted["invalidated_at"])
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "closure epoch"):
+            self.harness.connection.execute(
+                """
+                UPDATE claim_acceptances SET closure_sequence = 999
+                WHERE claim_id = 'R-OLD'
+                """
+            )
+        self.harness.connection.rollback()
+
+    def test_breach_of_any_accepted_gap_proof_invalidates_multi_gap_acceptance(self) -> None:
+        self.harness.start_task("project", "explore", "R-MULTI", 100, now=0)
+        self.harness.complete_task("project", "explore", "strategy known", now=1)
+        self.harness.transition_claim_to_closure(
+            "project",
+            "R-MULTI",
+            "explore",
+            "Prove both controls.",
+            "Run both owner routes.",
+            gaps=[
+                ("G-A", "Prove control A.", "Run fixture A."),
+                ("G-B", "Prove control B.", "Run fixture B."),
+            ],
+            now=2,
+        )
+        self.harness.start_task(
+            "project", "proof-a", "R-MULTI", 100,
+            phase="closure", gap_id="G-A", now=3,
+        )
+        self.harness.complete_task("project", "proof-a", "A passed", now=4)
+        self.harness.close_closure_gap(
+            "project", "R-MULTI", "G-A", "proof-a", "A accepted", now=5
+        )
+        self.harness.start_task(
+            "project", "proof-b", "R-MULTI", 100,
+            phase="closure", gap_id="G-B", now=6,
+        )
+        self.harness.complete_task("project", "proof-b", "B passed", now=7)
+        self.harness.accept_claim(
+            "project", "R-MULTI", "proof-b", "A and B accepted", now=8
+        )
+
+        breached = self.harness.record_integrity_breach(
+            "project", "proof-a", "fixture A artifact was forged", now=9
+        )
+
+        acceptance = self.harness.connection.execute(
+            "SELECT * FROM claim_acceptances WHERE claim_id = 'R-MULTI'"
+        ).fetchone()
+        self.assertIsNotNone(acceptance["invalidated_at"])
+        self.assertIn("proof-a", acceptance["invalidation_reason"])
+        successor = breached["successor_closure_gap"]
+        self.assertEqual(successor["gap_id"], "G-A~B1")
+        gaps = self.harness.connection.execute(
+            """
+            SELECT gap_id, closed_by_task_id, successor_of_gap_id,
+                   successor_of_revision, reopen_reason
+            FROM closure_gaps WHERE claim_id = 'R-MULTI' ORDER BY gap_id
+            """
+        ).fetchall()
+        gaps_by_id = {row["gap_id"]: row for row in gaps}
+        self.assertEqual(gaps_by_id["G-A"]["closed_by_task_id"], "proof-a")
+        self.assertEqual(gaps_by_id["G-B"]["closed_by_task_id"], "proof-b")
+        self.assertEqual(gaps_by_id["G-A~B1"]["successor_of_gap_id"], "G-A")
+        self.assertEqual(gaps_by_id["G-A~B1"]["successor_of_revision"], 1)
+        self.assertEqual(
+            gaps_by_id["G-A~B1"]["reopen_reason"],
+            "fixture A artifact was forged",
+        )
+        details = self.harness.claim_invalidation_details("project", "R-MULTI")
+        self.assertEqual(details["accepted_task_id"], "proof-b")
+        self.assertEqual(details["trigger"]["task_id"], "proof-a")
+        view = self.harness.coordinator_view(now=10)
+        self.assertEqual(
+            view["invalidated_unaccepted_claims"][0]["trigger_task_id"],
+            "proof-a",
+        )
+
+    def test_macro_receipt_is_exact_live_and_not_cross_incident_replayable(self) -> None:
+        self.harness.start_task("project", "late", "R-LATE", 1, now=0)
+        self.harness.start_task("project", "breach", "R-BREACH", 100, now=0)
+        self.harness.expire_task("project", "late", now=2)
+        self.harness.diagnose_claim_deadline(
+            "project", "R-LATE", "late", "The item clock expired.", now=3
+        )
+        self.harness.resolve_deadline_mutation(
+            "project", "R-LATE", "micro", "finite recovery", now=4
+        )
+        with self.assertRaisesRegex(DeadlineError, "guard-issued"):
+            self.harness.resolve_deadline_mutation(
+                "project", "R-LATE", "macro", "method changed", now=5
+            )
+        with self.assertRaisesRegex(DeadlineError, "exact incident"):
+            self.harness.resolve_deadline_mutation(
+                "project",
+                "R-LATE",
+                "macro",
+                "method changed",
+                receipt_id="f" * 64,
+                now=5,
+            )
+
+        receipt_id = self.record_normal_receipt("late", "deadline_miss")
+        resolved = self.harness.resolve_deadline_mutation(
+            "project",
+            "R-LATE",
+            "macro",
+            "method changed",
+            receipt_id=receipt_id,
+            now=5,
+        )
+        self.assertEqual(resolved["receipt_id"], receipt_id)
+
+        self.harness.record_integrity_breach(
+            "project", "breach", "forged proof", now=2
+        )
+        self.harness.diagnose_incident(
+            "project",
+            "breach",
+            "integrity_breach",
+            "forged",
+            "The proof route had false provenance.",
+            now=3,
+        )
+        self.harness.resolve_integrity_mutation(
+            "project", "breach", "micro", "replace proof", now=4
+        )
+        with self.assertRaisesRegex(DeadlineError, "exact incident"):
+            self.harness.resolve_integrity_mutation(
+                "project",
+                "breach",
+                "macro",
+                "method guard",
+                receipt_id=receipt_id,
+                now=5,
+            )
+
+    def test_on_time_integrity_gate_persists_and_requires_two_components(self) -> None:
+        self.harness.start_task("project", "breached", "R-I", 100, now=0)
+        self.harness.record_integrity_breach(
+            "project", "breached", "proof was fabricated", now=1
+        )
+        self.assertEqual(
+            self.harness.coordinator_view(now=2)["pending_integrity_mutations"],
+            [
+                {
+                    "task_id": "breached",
+                    "claim_id": "R-I",
+                    "recorded_at": 1,
+                    "reviewed": False,
+                    "pending_components": ["micro", "macro"],
+                    "restart_generation": None,
+                }
+            ],
+        )
+        with self.assertRaisesRegex(DeadlineError, "Integrity mutation is pending"):
+            self.harness.start_task("project", "blocked", "R-NEXT", 100, now=2)
+        self.harness.close()
+        self.harness = DeadlineHarness(self.state_path)
+        self.assertEqual(
+            self.harness.coordinator_view(now=2)["pending_integrity_mutations"][0][
+                "pending_components"
+            ],
+            ["micro", "macro"],
+        )
+        with self.assertRaisesRegex(DeadlineError, "independent diagnosis"):
+            self.harness.resolve_integrity_mutation(
+                "project", "breached", "micro", "recovery", now=3
+            )
+        diagnosed = self.harness.diagnose_incident(
+            "project",
+            "breached",
+            "integrity_breach",
+            "proof route untrusted",
+            "The artifact had no independent provenance.",
+            now=3,
+        )
+        self.assertEqual(diagnosed["pending_components"], ["micro", "macro"])
+        micro = self.harness.resolve_integrity_mutation(
+            "project", "breached", "micro", "replace the proof route", now=4
+        )
+        self.assertEqual(micro["pending_components"], ["macro"])
+        with self.assertRaisesRegex(DeadlineError, "Integrity mutation is pending"):
+            self.harness.start_task("project", "still-blocked", "R-NEXT", 100, now=4)
+        macro = self.resolve_integrity_macro(
+            "breached", "guarded provenance requirement", now=5
+        )
+        repeated = self.resolve_integrity_macro(
+            "breached", "guarded provenance requirement", now=6
+        )
+        self.assertEqual(macro["pending_components"], [])
+        self.assertFalse(repeated["recorded"])
+        self.assertEqual(
+            self.harness.connection.execute(
+                "SELECT COUNT(*) FROM coordinator_restart_requests"
+            ).fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            self.harness.coordinator_view(now=6)["pending_integrity_mutations"],
+            [],
+        )
+
+    def test_deadline_and_integrity_mutations_coexist_without_conflation(self) -> None:
+        self.harness.start_task("project", "both", "R-BOTH", 1, now=0)
+        self.harness.record_integrity_breach(
+            "project", "both", "late proof was fabricated", now=2
+        )
+        self.harness.diagnose_claim_deadline(
+            "project", "R-BOTH", "clock missed", "Closure outlived its item clock.", now=3
+        )
+        self.harness.diagnose_incident(
+            "project", "both", "integrity_breach", "proof invalid",
+            "The late artifact had false provenance.", now=3,
+        )
+        self.harness.resolve_deadline_mutation(
+            "project", "R-BOTH", "micro", "deadline micro", now=4
+        )
+        deadline_done = self.resolve_deadline_macro(
+            "R-BOTH", "deadline macro", now=5
+        )
+        mid = self.harness.coordinator_view(now=5)
+        self.assertEqual(mid["pending_deadline_mutations"], [])
+        self.assertEqual(
+            mid["pending_integrity_mutations"][0]["pending_components"],
+            ["micro", "macro"],
+        )
+        self.harness.resolve_integrity_mutation(
+            "project", "both", "micro", "integrity micro", now=6
+        )
+        integrity_done = self.resolve_integrity_macro(
+            "both", "integrity macro", now=7
+        )
+        self.assertEqual(
+            deadline_done["coordinator_restart"]["generation"],
+            integrity_done["coordinator_restart"]["generation"],
+        )
+        self.assertEqual(
+            self.harness.connection.execute(
+                "SELECT COUNT(*) FROM coordinator_restart_requests"
+            ).fetchone()[0],
+            1,
+        )
+
+    def test_new_claim_attempt_cli_surface_has_explicit_required_flags(self) -> None:
+        parser = build_parser()
+        commands = {
+            "transition-closure": [
+                "--lineage", "project", "--claim", "R-001",
+                "--basis-task", "W-001", "--outcome", "outcome",
+                "--evidence", "evidence", "--remaining-gap", "gap",
+            ],
+            "reopen-exploration": [
+                "--lineage", "project", "--claim", "R-001",
+                "--basis-task", "W-002", "--contradicted-premise", "premise",
+            ],
+            "accept-claim": [
+                "--lineage", "project", "--claim", "R-001",
+                "--task", "W-003", "--evidence", "accepted",
+            ],
+            "close-gap": [
+                "--lineage", "project", "--claim", "R-001", "--gap", "G-001",
+                "--task", "W-003", "--evidence", "accepted",
+            ],
+            "revise-gap": [
+                "--lineage", "project", "--claim", "R-001", "--gap", "G-001",
+                "--basis-task", "W-003", "--description", "changed gap",
+                "--proof-route", "changed route",
+            ],
+            "abandon-attempt": [
+                "--lineage", "project", "--task", "W-004",
+                "--reason", "replaced",
+            ],
+            "diagnose-claim-deadline": [
+                "--lineage", "project", "--claim", "R-001",
+                "--short-verdict", "late", "--diagnosis", "diagnosis",
+            ],
+            "resolve-deadline-mutation": [
+                "--lineage", "project", "--claim", "R-001",
+                "--component", "micro", "--evidence", "guarded",
+            ],
+            "resolve-integrity-mutation": [
+                "--lineage", "project", "--task", "W-003",
+                "--component", "micro", "--evidence", "guarded",
+            ],
+            "resolve-clock-migration": [
+                "--lineage", "project", "--claim", "R-001",
+                "--reason", "adopt", "--source-task", "W-001",
+            ],
+            "clock-migration-details": [
+                "--lineage", "project", "--claim", "R-001",
+            ],
+            "claim-invalidation-details": [
+                "--lineage", "project", "--claim", "R-001",
+            ],
+            "resolve-random-mutation": [
+                "--lineage", "project", "--cycle", "1",
+                "--component", "universal", "--receipt", "receipt-id",
+                "--evidence", "guarded",
+            ],
+        }
+
+        for command, flags in commands.items():
+            with self.subTest(command=command):
+                parsed = parser.parse_args([command, "--state", "state.sqlite", *flags])
+                self.assertEqual(parsed.command, command)
+
+        named = parser.parse_args(
+            [
+                "transition-closure", "--state", "state.sqlite",
+                "--lineage", "project", "--claim", "R-001",
+                "--basis-task", "W-001", "--outcome", "outcome",
+                "--evidence", "proof route", "--gap", "G-001::first",
+                "--gap", "G-002::second",
+            ]
+        )
+        self.assertEqual(named.named_gaps, ["G-001::first", "G-002::second"])
 
 
 if __name__ == "__main__":

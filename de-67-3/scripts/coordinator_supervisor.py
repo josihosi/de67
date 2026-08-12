@@ -20,6 +20,10 @@ from deadline_harness import DeadlineError, DeadlineHarness
 
 RED_DFS_CLAIM = re.compile(r"^- \[ \] \N{LARGE RED CIRCLE} ", re.MULTILINE)
 ACTIVE_LEDGER_ITEM = re.compile(r"^- \[ \] ", re.MULTILINE)
+PHASE3_ROOT = Path(__file__).resolve().parents[1]
+KERNEL_PATH = PHASE3_ROOT / "references" / "kernel.md"
+ROLE_ROOT = PHASE3_ROOT / "references" / "roles"
+COORDINATOR_ROLE_PATH = ROLE_ROOT / "coordinator.md"
 
 
 class SupervisorError(RuntimeError):
@@ -142,7 +146,21 @@ def work_is_complete(
         harness.coordinator_restart_status(lineage_id)
         clock = harness.list_tasks()
     restart = clock["coordinator_restart"]
-    if clock["tasks"] or clock["pending_incident_reviews"]:
+    unresolved_tasks = [
+        task for task in clock["tasks"] if task.get("state") != "completed"
+    ]
+    if (
+        unresolved_tasks
+        or clock["pending_incident_reviews"]
+        or clock.get("pending_deadline_mutations")
+        or clock.get("pending_integrity_mutations")
+        or clock.get("claim_clock_migration_conflicts")
+        or clock.get("reopened_unaccepted_claims")
+        or any(
+            gap.get("status") == "open"
+            for gap in clock.get("closure_gaps", [])
+        )
+    ):
         return False
     if restart is not None and restart["pending"]:
         return False
@@ -160,8 +178,12 @@ def coordinator_prompt(
     generation: int | None,
 ) -> str:
     lines = [
-        f"Run DE-67-3 as a fresh coordinator in {workspace}.",
-        "Read the installed DE-67-3 skill, current code and Git state, and only durable .de67 state; do not read predecessor logs or narrative handoffs.",
+        f"Act as a fresh Phase-3 delivery coordinator in {workspace}.",
+        "Read only these DE-67 method files at entry:",
+        f"- {KERNEL_PATH}",
+        f"- {COORDINATOR_ROLE_PATH}",
+        "Do not read the phase router or sibling role modules unless the coordinator module routes a concrete event to one of them.",
+        "Read current code and Git state plus only relevant durable .de67 state; do not read predecessor logs or narrative handoffs.",
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every deadline-harness command; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
     ]

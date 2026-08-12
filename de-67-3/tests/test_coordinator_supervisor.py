@@ -14,10 +14,16 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from coordinator_supervisor import (  # noqa: E402
+    COORDINATOR_ROLE_PATH,
+    KERNEL_PATH,
+    PHASE3_ROOT,
+    ROLE_ROOT,
     SupervisorError,
     _supervisor_lock,
+    coordinator_prompt,
     read_clock,
     run_supervisor,
+    work_is_complete,
 )
 from deadline_harness import DeadlineHarness  # noqa: E402
 
@@ -183,6 +189,25 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             for line in self.events.read_text(encoding="utf-8").splitlines()
         ]
 
+    def test_supervisor_prompt_routes_only_the_coordinator_role(self) -> None:
+        prompt = coordinator_prompt(
+            self.workspace.resolve(),
+            self.state_path.resolve(),
+            "project",
+            "prompt-test-run",
+            None,
+        )
+
+        self.assertIn(str(KERNEL_PATH), prompt)
+        self.assertIn(str(COORDINATOR_ROLE_PATH), prompt)
+        self.assertNotIn(str(PHASE3_ROOT / "SKILL.md"), prompt)
+        self.assertNotIn("Read the installed DE-67-3 skill", prompt)
+        self.assertNotIn("Run DE-67-3", prompt)
+        self.assertIn("Do not read the phase router", prompt)
+        for role_path in ROLE_ROOT.glob("*.md"):
+            if role_path != COORDINATOR_ROLE_PATH:
+                self.assertNotIn(str(role_path), prompt)
+
     def test_external_parent_continues_two_restart_generations_once_each(self) -> None:
         run_ids = iter(("initial-run", "generation-1-run", "generation-2-run"))
 
@@ -270,6 +295,22 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertFalse(self.events.exists())
         self.assertFalse(self.run_root.exists())
 
+    def test_green_documents_cannot_hide_an_open_named_closure_gap(self) -> None:
+        self.write_work_documents()
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "strategy known", now=time.time())
+            harness.transition_claim_to_closure(
+                "project",
+                "R-000",
+                "seed",
+                "Prove the product outcome.",
+                "Run the owner route.",
+                gaps=[("G-001", "Owner-route proof remains.", "Run owner route.")],
+                now=time.time(),
+            )
+
+        self.assertFalse(work_is_complete(self.workspace, self.state_path, "project"))
+
     def test_final_wave_exits_without_manufacturing_a_successor(self) -> None:
         self.write_work_documents(red=True, active=True)
 
@@ -343,6 +384,70 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(len(self.read_events()), 1)
 
+    def test_reopened_unaccepted_claim_prevents_green_dfs_completion(self) -> None:
+        self.write_work_documents()
+        base = time.time()
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "explored", now=base)
+            harness.transition_claim_to_closure(
+                "project",
+                "R-000",
+                "seed",
+                "The owner route returns the finished outcome.",
+                "Run the owner route and inspect its artifact.",
+                "Only closure remains.",
+                now=base + 1,
+            )
+            harness.start_task(
+                "project", "closure", "R-000", 3600,
+                phase="closure", now=base + 2
+            )
+            harness.complete_task(
+                "project", "closure", "closure proved", now=base + 3
+            )
+            harness.accept_claim(
+                "project", "R-000", "closure", "accepted proof", now=base + 4
+            )
+            harness.start_task(
+                "project", "closure-check", "R-000", 3600,
+                phase="closure", now=base + 5
+            )
+            harness.report_worker_finding(
+                "project",
+                "closure-check",
+                "unexpected",
+                "The owner route returns the finished outcome premise is false.",
+                now=base + 6,
+            )
+            harness.reopen_claim_exploration(
+                "project",
+                "R-000",
+                "closure-check",
+                "The owner route returns the finished outcome",
+                now=base + 7,
+            )
+            harness.start_task(
+                "project", "reexplore", "R-000", 3600, now=base + 8
+            )
+            harness.complete_task(
+                "project", "reexplore", "replacement strategy proved",
+                now=base + 9
+            )
+
+        self.assertFalse(work_is_complete(self.workspace, self.state_path, "project"))
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("unacknowledged"),
+            run_id_factory=lambda _generation: "reopened-claim-run",
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.read_events()), 1)
+
     def test_pending_restart_prevents_completion(self) -> None:
         self.write_work_documents()
         with DeadlineHarness(self.state_path) as harness:
@@ -382,6 +487,28 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(len(self.read_events()), 1)
 
+    def test_pending_integrity_mutation_prevents_completion(self) -> None:
+        self.write_work_documents()
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "green", now=time.time())
+            summary = harness.list_tasks()
+        summary["tasks"] = [
+            {"task_id": "seed", "claim_id": "R-000", "state": "completed"}
+        ]
+        summary["pending_incident_reviews"] = []
+        summary["pending_integrity_mutations"] = [
+            {
+                "task_id": "proof-breach",
+                "claim_id": "R-000",
+                "pending_components": ["micro", "macro"],
+            }
+        ]
+
+        with patch.object(DeadlineHarness, "list_tasks", return_value=summary):
+            self.assertFalse(
+                work_is_complete(self.workspace, self.state_path, "project")
+            )
+
     def test_final_completion_supersedes_random_improvement_due(self) -> None:
         self.write_work_documents()
         with DeadlineHarness(self.state_path) as harness:
@@ -396,8 +523,17 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             harness.complete_task("project", "seed", "green", now=time.time())
             for number in range(2, 11):
                 task_id = f"terminal-{number}"
-                harness.start_task("project", task_id, f"R-{number:03d}", 60, now=0)
-                result = harness.complete_task("project", task_id, "green", now=1)
+                dispatched_at = time.time()
+                harness.start_task(
+                    "project",
+                    task_id,
+                    f"R-{number:03d}",
+                    3600,
+                    now=dispatched_at,
+                )
+                result = harness.complete_task(
+                    "project", task_id, "green", now=dispatched_at + 1
+                )
         self.assertTrue(result["random_mutation"]["due"])
 
         supervised = run_supervisor(

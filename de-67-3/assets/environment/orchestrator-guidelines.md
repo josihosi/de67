@@ -1,15 +1,17 @@
 # Orchestrator guidelines
 
-The headings in this document are frozen. Text beneath them is mutable on the broader mutation
-cadence or after an integrity breach.
+The headings in this document are frozen. Text beneath them may change after an evidence-backed
+deadline or integrity review and through a guarded random normal-method candidate.
 
 ## Read state
 
-Begin fresh by reading the DFS, both guidance documents, both ledgers, compact timer status,
-repository identity, current code, and returned worker evidence once. Reopen only a changed or
-actionable section. Preserve accepted work; do not inherit unsupported claims or logs from the
-previous coordinator. Default history is the latest ten short failure verdicts; fetch long detail
-only for the exact current anomaly. Never inventory or read `.de67/no-go-zone/`.
+Begin fresh by reading compact timer status, the DFS red-claim index, both ledgers' current state,
+repository identity, current Git/code state, and returned worker evidence at the level needed to
+route the first event. Thereafter open only the active role module and changed or actionable
+guideline heading. Preserve attempt accounting and accepted evidence; do not inherit unsupported
+claims or logs from the previous coordinator. Default history is the latest ten short failure
+verdicts; fetch long detail only for the exact current anomaly. Never inventory or read
+`.de67/no-go-zone/`.
 
 ## Assess failures
 
@@ -19,7 +21,8 @@ contradicted premise and distinguish a late but useful result from a false compl
 finding is evidence to classify, not the worker's authority to choose the lane. Repeated inability
 to observe the same fact is a tooling diagnosis, not evidence that more identical product runs or a
 second reviewer will help. Incident reviewers are fresh and independent; prefer the strongest useful
-causal reasoner without turning model choice into a fixed ritual.
+causal reasoner without turning model choice into a fixed ritual. Every deadline miss yields a micro
+recovery for the current item and a macro candidate for the method that produced the miss.
 
 ## Investigate causes
 
@@ -27,14 +30,19 @@ Inspect the authoritative owner, its helpers and callers, every competing reader
 state, owning tests, relevant history, and the natural execution path. Require changed causal evidence
 before repeating a route. Expand the DFS only when this review leaves exactly one necessary
 same-contract refinement; task, test, tooling, evidence, and external-authority gaps stay out of it.
+Treat diagnosis as an exploration learning goal. Once a changed strategy and proof route exist,
+freeze stable ids, descriptions, and proof routes for every finite closure gap. Dispatch exactly one
+active gap revision per closure attempt. A completed or finding result must close or materially
+revise that gap before another attempt; abandonment alone permits the same revision.
 
 ## Plan the work ledger
 
 When the current batch is empty, project no more than ten necessary still-red DFS claims into the
-work ledger. Re-read code and define tests at planning time. Remove accepted items without a batch
-summary or archive; their checked DFS claims are the record. For a still-red claim, replace old task
-notes with only the current causal frontier and active route. Keep task mechanics out of the frozen
-DFS.
+work ledger. Mark each current item as exploration or closure. Exploration keeps one learning goal
+and exits with a strategy plus proof route; closure keeps the frozen remaining gaps and next action.
+Re-read code and define tests at planning time. Remove accepted items without a batch summary or
+archive. For a still-red claim, replace old task notes with only the current causal frontier and
+active route. Keep attempt history in the clock rather than duplicating it in the ledger.
 
 ## Coordinate workers
 
@@ -46,39 +54,60 @@ progress and final results through the native parent/child channel; clarificatio
 the task is active without loading its full transcript.
 Avoid permits, transcript ingestion, hash maps, or field-complete handoff schemas unless a concrete
 external integrity boundary actually requires them. The coordinator remains responsible for the
-next causal decision; reading or rewriting a predecessor handoff is not product progress. Add an
-independent high-reasoning review only when a deadline incident or genuinely new ambiguity requires
-one, and give it the smallest evidence that can change the decision.
+next causal decision; reading or rewriting a predecessor handoff is not product progress. Route
+deadline, random, DFS, and rare universal events to their named modules. Add independent
+high-reasoning work only when the evidence or named role requires it, and give it the smallest state
+that can change the decision.
 
 ## Accept work and update DFS
 
-Judge the real diff and honest test. Only then remove the claim's red marker and its active work item.
-Preserve failure evidence without preserving failed product mutations as the accepted frontier. A
-validated DFS expansion appends necessary mechanisms, proof, and stable red claims while preserving
-every existing claim and accepted result; it never closes the blocked claim. Count progress by a new
-accepted product transition, not by tests run, artifacts written, reviews completed, or handoffs read.
+Judge the real diff and honest test. Close nonfinal named gaps with their bound evidence. Accept the
+claim only through the final gap, which closes atomically; any other open gap blocks acceptance.
+Only then remove the claim's red marker and its active work item.
+Preserve prior evidence and attempt accounting without treating a failed product mutation as the
+accepted frontier. Send closure and source-grounded DFS questions to the DFS steward. A broader DFS
+candidate may challenge mechanisms, proof routes, or claim structure, but it cannot change the user
+outcome, permissions, or honest proof. Count progress by a new accepted product transition, not by
+tests run, artifacts written, reviews completed, or handoffs read.
+An integrity breach against a closed gap's owning proof preserves the closed disposition, appends an
+open successor gap, invalidates affected acceptance, and routes the DFS claim back to red.
 
 ## Mutate and hand over
 
-After each incident, consume the independent diagnosis and all pending scratch suggestions, mutate
-the smallest relevant guidance, validate the target plus an empty-ledger candidate, promote both,
-request a restart generation from the clock, and retire. A failed guard or application clears
-nothing. An external supervisor claims the restart generation and owns that successor process; the
-old coordinator never launches or acknowledges it. The successor reads durable state rather than a
-prose reconstruction of the predecessor and acknowledges its clock baton before new dispatch. DFS
-expansion and deadline-guidance mutation are
-independent: perform both when the same evidence activates both.
+After each incident, require both the micro item recovery and macro method-learning candidate. The
+normal candidate surface includes role modules, guideline bodies, DFS mechanics, task/test/debug
+design, and orchestration. The normal method guard may cover the Phase-3 router, role modules,
+assets/guidance, tests and debug tools, and nonprotected orchestration scripts. It protects the
+kernel, deadline harness, mutation guard, and their hard tests as well as the item clock and attempt
+accounting. Every deadline miss returns a finite local recovery plus one causal, repeatable method
+candidate; change only the implicated surface. Apply only the portion covered by explicit authority and an
+applicable guard; keep the remainder isolated and never claim a narrow guard validated it. A failed
+guard or application clears nothing. After a guarded promotion, request a restart and retire. The
+external supervisor owns the successor; the old coordinator never launches or acknowledges it. DFS
+and deadline mutations remain independent when the same evidence activates both.
 
 When the harness reports a due random improvement review, block new dispatch. Give a genuinely
 independent reviewer the stored target, current guidance/DFS, the latest ten short failure verdicts,
-and pending scratch. Require one to three ranked evidence-backed inefficiencies and a concrete patch.
-The old coordinator guards and applies only the stored target, consumes the ledger after a real
-mutation, resolves the cycle so the clock queues the restart, and retires. Never reselect a DFS draw,
-launch the successor from the old coordinator, or treat a log's `RUNNING` text as liveness. Use an
-exact guarded no-op when no source-grounded same-contract DFS expansion is safe.
+and pending scratch. The stored ordinary attempt cadence remains the private `[10, 30]` draw; do not
+redraw it. Require one to three ranked evidence-backed inefficiencies, the legacy stored-lane target
+change or guarded DFS no-op, and optionally an accompanying broad normal-method candidate. The old
+coordinator applies only what the joint guard validates, consumes the ledger after a real mutation,
+resolves the cycle so the clock queues the restart, and retires. Never reselect a DFS draw, launch
+the successor from the old coordinator, or treat a log's `RUNNING` text as liveness.
+
+When the persisted draw is exactly `k = 30` with lane `DFS.md` and the workspace roster proves
+`gpt-5.6-sol` at `ultra`, the same cycle additionally requires the rare universal role. It prepares
+an isolated whole-skill and optional DFS candidate that may challenge even kernel, clock, guard, and
+supervisor architecture. It cannot edit live state, promote itself, weaken outcome or proof,
+falsify evidence, change permissions or authority, or erase attempts. The clock snapshots capability
+when the exact draw becomes due. If Sol/ultra is unproved then, expose the trigger and unavailable
+reason without arming that component; let the ordinary review close the cycle. Never substitute a
+weaker review, rewrite the roster, or reinterpret the frozen snapshot.
 
 ## Continue and stop
 
-Continue after misses, rejected attempts, mutations, and coordinator retirement. Stop only for an
-all-green DFS with integrated proof, revoked authority, a material phase-2 owner choice, or a genuine
-permission/environment blocker after materially different routes are exhausted.
+Continue after misses, rejected attempts, mutations, and coordinator retirement while an authorized
+materially different route remains. Stop for honestly proved user outcome with no closure gaps or
+live gates, revoked authority, a material Phase-2 owner choice, or a genuine permission/environment
+blocker after materially different routes are exhausted. A due random review does not manufacture
+post-contract work.

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import io
 import importlib.util
+import json
 from pathlib import Path
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -34,6 +36,17 @@ ORCHESTRATOR_GUIDANCE = guard.read_markdown(
 )
 SKILL_TEXT = (ROOT / "SKILL.md").read_text(encoding="utf-8")
 KERNEL_TEXT = (ROOT / "references" / "kernel.md").read_text(encoding="utf-8")
+ROLE_ROOT = ROOT / "references" / "roles"
+COORDINATOR_TEXT = (ROLE_ROOT / "coordinator.md").read_text(encoding="utf-8")
+DEADLINE_MUTATOR_TEXT = (ROLE_ROOT / "deadline-mutator.md").read_text(
+    encoding="utf-8"
+)
+DFS_STEWARD_TEXT = (ROLE_ROOT / "dfs-steward.md").read_text(encoding="utf-8")
+RANDOM_MUTATOR_TEXT = (ROLE_ROOT / "random-mutator.md").read_text(encoding="utf-8")
+UNIVERSAL_MUTATOR_TEXT = (ROLE_ROOT / "universal-mutator.md").read_text(
+    encoding="utf-8"
+)
+WORKER_TEXT = (ROLE_ROOT / "worker.md").read_text(encoding="utf-8")
 
 
 class MutationGuardTests(unittest.TestCase):
@@ -116,18 +129,19 @@ class MutationGuardTests(unittest.TestCase):
                 self.baseline, self.candidate, broader_mutation=False
             )
 
-    def test_ordinary_miss_changes_only_task_guidance(self) -> None:
+    def test_incident_guidance_may_change_any_evidence_backed_subset(self) -> None:
         self.mutate_task()
         changed = guard.validate_guideline_mutation(
-            self.baseline, self.candidate, broader_mutation=False
+            self.baseline, self.candidate, broader_mutation=True
         )
         self.assertEqual(changed, (guard.TASK_GUIDELINES,))
 
+        self.setUp_candidate_again()
         self.mutate_orchestrator()
-        with self.assertRaisesRegex(guard.GuardError, "ordinary miss"):
-            guard.validate_guideline_mutation(
-                self.baseline, self.candidate, broader_mutation=False
-            )
+        changed = guard.validate_guideline_mutation(
+            self.baseline, self.candidate, broader_mutation=True
+        )
+        self.assertEqual(changed, (guard.ORCHESTRATOR_GUIDELINES,))
 
     def test_incident_mutations_reject_whitespace_only_ledger_consumption(self) -> None:
         task_path = self.candidate / guard.TASK_GUIDELINES
@@ -150,13 +164,13 @@ class MutationGuardTests(unittest.TestCase):
                 self.baseline, self.candidate, broader_mutation=True
             )
 
-    def test_broader_mutation_requires_both_guidelines(self) -> None:
-        self.mutate_task()
-        with self.assertRaisesRegex(guard.GuardError, "must change both"):
+    def test_incident_guideline_candidate_requires_a_real_change(self) -> None:
+        with self.assertRaisesRegex(guard.GuardError, "makes no change"):
             guard.validate_guideline_mutation(
                 self.baseline, self.candidate, broader_mutation=True
             )
 
+        self.mutate_task()
         self.mutate_orchestrator()
         changed = guard.validate_guideline_mutation(
             self.baseline,
@@ -169,20 +183,20 @@ class MutationGuardTests(unittest.TestCase):
         state = self.root / "incidents.sqlite"
         with deadline.DeadlineHarness(state) as harness:
             for number in range(1, 4):
-                task = f"miss-{number}"
                 harness.start_task(
-                    "project", task, f"R-{number:03d}", 1, now=0
+                    "project", f"miss-{number}", f"R-{number:03d}", 1, now=0
                 )
+            harness.start_task("project", "breach", "R-004", 10, now=0)
+            for number in range(1, 4):
+                task = f"miss-{number}"
                 harness.expire_task("project", task, now=2)
-                harness.diagnose_incident(
+                harness.diagnose_claim_deadline(
                     "project",
-                    task,
-                    "deadline_miss",
+                    f"R-{number:03d}",
                     f"miss {number}",
                     f"Independent diagnosis for miss {number}.",
                     now=3,
                 )
-            harness.start_task("project", "breach", "R-004", 10, now=0)
             harness.record_integrity_breach(
                 "project", "breach", "fabricated evidence", now=1
             )
@@ -223,22 +237,48 @@ class MutationGuardTests(unittest.TestCase):
             )
         return result, stdout.getvalue() + stderr.getvalue()
 
-    def test_guidelines_cli_derives_second_and_third_miss_scope(self) -> None:
+    def test_guidelines_cli_accepts_one_causal_macro_change_on_every_miss(self) -> None:
         state = self.incident_state()
         self.mutate_task()
 
         result, output = self.run_guidelines_cli(state, "miss-2", "deadline_miss")
         self.assertEqual(result, 0, output)
         self.assertIn(guard.TASK_GUIDELINES, output)
-
-        result, output = self.run_guidelines_cli(state, "miss-3", "deadline_miss")
-        self.assertEqual(result, 1)
-        self.assertIn("must change both", output)
-
-        self.mutate_orchestrator()
-        result, output = self.run_guidelines_cli(state, "miss-3", "deadline_miss")
-        self.assertEqual(result, 0, output)
-        self.assertIn(guard.ORCHESTRATOR_GUIDELINES, output)
+        receipt_id = output.rsplit("receipt ", 1)[1].strip()
+        connection = sqlite3.connect(state)
+        connection.row_factory = sqlite3.Row
+        try:
+            receipt = connection.execute(
+                "SELECT * FROM normal_method_receipts WHERE receipt_id = ?",
+                (receipt_id,),
+            ).fetchone()
+            self.assertIsNotNone(receipt)
+            self.assertEqual(receipt["lineage_id"], "project")
+            self.assertEqual(receipt["task_id"], "miss-2")
+            self.assertEqual(receipt["claim_id"], "R-002")
+            self.assertEqual(receipt["incident_kind"], "deadline_miss")
+            self.assertEqual(receipt["live_tree_digest"], guard.method_tree_digest())
+            self.assertEqual(
+                receipt["protected_baseline_digest"],
+                guard.protected_method_digest(),
+            )
+            self.assertNotEqual(
+                receipt["candidate_digest"], receipt["live_tree_digest"]
+            )
+            changed_paths = json.loads(receipt["changed_paths"])
+            self.assertIn(
+                f"assets/environment/{guard.TASK_GUIDELINES}", changed_paths
+            )
+            self.assertFalse(
+                set(changed_paths) & set(guard.NORMAL_METHOD_PROTECTED_FILES)
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    "UPDATE normal_method_receipts SET candidate_digest = ?",
+                    ("f" * 64,),
+                )
+        finally:
+            connection.close()
 
     def test_guidelines_cli_derives_integrity_scope(self) -> None:
         state = self.incident_state()
@@ -448,14 +488,38 @@ class MutationGuardTests(unittest.TestCase):
     ) -> Path:
         state = self.root / f"{name}.sqlite"
         with deadline.DeadlineHarness(state) as harness:
-            harness.start_task(lineage, task, claim, 10, now=0)
+            exploration_task = f"{task}-exploration"
+            harness.start_task(lineage, exploration_task, claim, 10, now=0)
+            harness.complete_task(
+                lineage,
+                exploration_task,
+                "exploration found a finite strategy and proof route",
+                now=1,
+            )
+            harness.transition_claim_to_closure(
+                lineage,
+                claim,
+                exploration_task,
+                "requested behavior works through the production owner",
+                "focused regression plus natural runtime route",
+                "implement and prove the remaining production transition",
+                now=2,
+            )
+            harness.start_task(lineage, task, claim, 10, phase="closure", now=3)
+            harness.complete_task(
+                lineage, task, "coordinator accepted the real test", now=4
+            )
             if accepted:
-                harness.complete_task(
-                    lineage, task, "coordinator accepted the real test", now=1
+                harness.accept_claim(
+                    lineage,
+                    claim,
+                    task,
+                    "closure outcome and natural proof route are satisfied",
+                    now=5,
                 )
             if breached:
                 harness.record_integrity_breach(
-                    lineage, task, "completion evidence was fabricated", now=2
+                    lineage, task, "completion evidence was fabricated", now=6
                 )
         return state
 
@@ -517,6 +581,195 @@ class MutationGuardTests(unittest.TestCase):
         result, output = self.run_complete_cli(breached)
         self.assertEqual(result, 1)
         self.assertIn("integrity breach", output)
+
+    def reopening_files(
+        self, *, collateral: bool = False
+    ) -> tuple[Path, Path]:
+        before = self.root / "reopen-before.md"
+        after = self.root / "reopen-after.md"
+        before.write_text(
+            "# DFS\n\n"
+            "The product outcome and proof route stay unchanged.\n\n"
+            "- [x] R-001 — First\n"
+            "- [x] R-002 — Other accepted claim\n",
+            encoding="utf-8",
+        )
+        candidate = (
+            "# DFS\n\n"
+            "The product outcome and proof route stay unchanged.\n\n"
+            "- [ ] 🔴 R-001 — First\n"
+            "- [x] R-002 — Other accepted claim\n"
+        )
+        if collateral:
+            candidate = candidate.replace(
+                "- [x] R-002 — Other accepted claim",
+                "- [ ] 🔴 R-002 — Other accepted claim",
+            )
+        after.write_text(candidate, encoding="utf-8")
+        return before, after
+
+    def invalidated_state(self, name: str, trigger: str) -> Path:
+        state = self.deadline_state(name)
+        with deadline.DeadlineHarness(state) as harness:
+            if trigger == "integrity_breach":
+                harness.record_integrity_breach(
+                    "project",
+                    "task",
+                    "accepted proof was fabricated",
+                    now=6,
+                )
+            elif trigger == "closure_reopen":
+                harness.start_task(
+                    "project",
+                    "closure-finding",
+                    "R-001",
+                    10,
+                    phase="closure",
+                    now=6,
+                )
+                harness.report_worker_finding(
+                    "project",
+                    "closure-finding",
+                    "unexpected",
+                    "The requested behavior works through the production owner premise is false.",
+                    now=7,
+                )
+                harness.reopen_claim_exploration(
+                    "project",
+                    "R-001",
+                    "closure-finding",
+                    "requested behavior works through the production owner",
+                    now=8,
+                )
+            else:
+                raise AssertionError(f"unsupported trigger: {trigger}")
+        return state
+
+    def run_reopen_cli(
+        self,
+        state: Path,
+        *,
+        claim: str = "R-001",
+        collateral: bool = False,
+    ) -> tuple[int, str]:
+        before, after = self.reopening_files(collateral=collateral)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            result = guard.main(
+                [
+                    "reopen-dfs",
+                    "--before",
+                    str(before),
+                    "--after",
+                    str(after),
+                    "--claim",
+                    claim,
+                    "--state",
+                    str(state),
+                    "--lineage",
+                    "project",
+                ]
+            )
+        return result, stdout.getvalue() + stderr.getvalue()
+
+    def test_reopen_dfs_accepts_exact_reopen_and_integrity_invalidations(self) -> None:
+        for trigger in ("closure_reopen", "integrity_breach"):
+            with self.subTest(trigger=trigger):
+                state = self.invalidated_state(trigger, trigger)
+                result, output = self.run_reopen_cli(state)
+                self.assertEqual(result, 0, output)
+                self.assertIn(f"from {trigger}", output)
+
+                _, reopened_dfs = self.reopening_files()
+                ledger = self.write_ledger(
+                    "# Work ledger\n\n## Active work\n\n"
+                    "- [ ] R-001 — First\n"
+                )
+                self.assertEqual(
+                    guard.validate_work_ledger(
+                        ledger,
+                        reopened_dfs,
+                        state=state,
+                        lineage_id="project",
+                    ),
+                    ("R-001 — First",),
+                )
+
+    def test_reopen_dfs_accepts_breach_of_an_earlier_multi_gap_proof(self) -> None:
+        state = self.root / "multi-gap-breach.sqlite"
+        with deadline.DeadlineHarness(state) as harness:
+            harness.start_task("project", "explore", "R-001", 100, now=0)
+            harness.complete_task("project", "explore", "strategy", now=1)
+            harness.transition_claim_to_closure(
+                "project",
+                "R-001",
+                "explore",
+                "Prove both controls.",
+                "Run both fixtures.",
+                gaps=[
+                    ("G-A", "Prove A.", "Run fixture A."),
+                    ("G-B", "Prove B.", "Run fixture B."),
+                ],
+                now=2,
+            )
+            harness.start_task(
+                "project", "proof-a", "R-001", 100,
+                phase="closure", gap_id="G-A", now=3,
+            )
+            harness.complete_task("project", "proof-a", "A passed", now=4)
+            harness.close_closure_gap(
+                "project", "R-001", "G-A", "proof-a", "A accepted", now=5
+            )
+            harness.start_task(
+                "project", "proof-b", "R-001", 100,
+                phase="closure", gap_id="G-B", now=6,
+            )
+            harness.complete_task("project", "proof-b", "B passed", now=7)
+            harness.accept_claim(
+                "project", "R-001", "proof-b", "both accepted", now=8
+            )
+            harness.record_integrity_breach(
+                "project", "proof-a", "fixture A was forged", now=9
+            )
+
+        result, output = self.run_reopen_cli(state)
+
+        self.assertEqual(result, 0, output)
+        self.assertIn("from integrity_breach", output)
+
+    def test_reopen_dfs_rejects_valid_or_unsupported_invalidation(self) -> None:
+        valid = self.deadline_state("still-valid")
+        result, output = self.run_reopen_cli(valid)
+        self.assertEqual(result, 1)
+        self.assertIn("currently valid acceptance", output)
+
+        unsupported = self.deadline_state("unsupported")
+        connection = sqlite3.connect(unsupported)
+        try:
+            connection.execute(
+                """
+                UPDATE claim_acceptances
+                SET invalidated_at = 9, invalidation_reason = 'manual tamper'
+                WHERE lineage_id = 'project' AND claim_id = 'R-001'
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        result, output = self.run_reopen_cli(unsupported)
+        self.assertEqual(result, 1)
+        self.assertIn("no durable reopen or integrity trigger", output)
+
+    def test_reopen_dfs_rejects_wrong_claim_and_collateral_status_change(self) -> None:
+        state = self.invalidated_state("reopen-rejections", "integrity_breach")
+        result, output = self.run_reopen_cli(state, claim="R-002")
+        self.assertEqual(result, 1)
+        self.assertIn("no recorded acceptance", output)
+
+        result, output = self.run_reopen_cli(state, collateral=True)
+        self.assertEqual(result, 1)
+        self.assertIn("must only change", output)
 
     @staticmethod
     def expansion_dfs(*, new_claim: str = "- [ ] 🔴 R-003 — New prerequisite\n") -> str:
@@ -860,10 +1113,380 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("not due", output)
 
+    def method_candidate_roots(self) -> tuple[Path, Path]:
+        baseline = self.root / "method-baseline"
+        candidate = self.root / "method-candidate"
+        shutil.copytree(ROOT, baseline)
+        shutil.copytree(ROOT, candidate)
+        return baseline, candidate
+
+    def test_normal_method_mutation_has_broad_surface_but_not_clock_or_guard(self) -> None:
+        baseline, candidate = self.method_candidate_roots()
+        skill = candidate / "SKILL.md"
+        skill.write_text(
+            skill.read_text(encoding="utf-8") + "\n<!-- focused routing refinement -->\n",
+            encoding="utf-8",
+        )
+        probe = candidate / "scripts" / "candidate_probe.py"
+        probe.write_text("print('observation')\n", encoding="utf-8")
+
+        changed = guard.validate_method_mutation(
+            baseline, candidate, universal=False
+        )
+
+        self.assertIn("SKILL.md", changed)
+        self.assertIn("scripts/candidate_probe.py", changed)
+
+        clock = candidate / "scripts" / "deadline_harness.py"
+        clock.write_text(
+            clock.read_text(encoding="utf-8") + "\n# reset deadline\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(guard.GuardError, "hard clock/guard"):
+            guard.validate_method_mutation(baseline, candidate, universal=False)
+
+    def test_normal_method_fake_matching_protected_baseline_is_rejected(self) -> None:
+        baseline, candidate = self.method_candidate_roots()
+        for root in (baseline, candidate):
+            clock = root / "scripts" / "deadline_harness.py"
+            clock.write_text(
+                clock.read_text(encoding="utf-8") + "\n# matching fake baseline\n",
+                encoding="utf-8",
+            )
+
+        with self.assertRaisesRegex(guard.GuardError, "active live protected"):
+            guard.validate_method_mutation(baseline, candidate, universal=False)
+
+    def test_normal_method_mutation_rejects_unrelated_surface(self) -> None:
+        baseline, candidate = self.method_candidate_roots()
+        (candidate / "README.md").write_text("replacement\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(guard.GuardError, "outside its broad mutable surface"):
+            guard.validate_method_mutation(baseline, candidate, universal=False)
+
+    def test_normal_method_mutation_preserves_guideline_asset_headings(self) -> None:
+        baseline, candidate = self.method_candidate_roots()
+        guideline = (
+            candidate
+            / "assets"
+            / "environment"
+            / guard.TASK_GUIDELINES
+        )
+        original = guideline.read_text(encoding="utf-8")
+        mutations = (
+            ("rename", "## Task preparation", "## Prepare tasks"),
+            ("delete", "## Task preparation\n", ""),
+        )
+        for name, old, new in mutations:
+            with self.subTest(name=name):
+                guideline.write_text(
+                    original.replace(old, new, 1),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(
+                    guard.GuardError, "candidate headings"
+                ):
+                    guard.validate_method_mutation(
+                        baseline, candidate, universal=False
+                    )
+
+    def test_universal_method_candidate_may_challenge_the_hard_kernel(self) -> None:
+        baseline, candidate = self.method_candidate_roots()
+        kernel = candidate / "references" / "kernel.md"
+        kernel.write_text(
+            kernel.read_text(encoding="utf-8") + "\n<!-- universal candidate -->\n",
+            encoding="utf-8",
+        )
+
+        changed = guard.validate_method_mutation(
+            baseline, candidate, universal=True
+        )
+
+        self.assertEqual(changed, ("references/kernel.md",))
+
+    def universal_review_state(
+        self, lane_index: int = 2, *, capability_effort: str = "ultra"
+    ) -> tuple[Path, int]:
+        (self.root / "workspace.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "worker_capabilities": [
+                        {
+                            "model": "gpt-5.6-sol",
+                            "reasoning_effort": capability_effort,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        state = self.root / f"universal-{lane_index}-{capability_effort}.sqlite"
+        with patch.object(
+            deadline.secrets, "randbelow", side_effect=[20, lane_index]
+        ), deadline.DeadlineHarness(state) as harness:
+            for number in range(1, 31):
+                task = f"terminal-{number}"
+                harness.start_task(
+                    "project", task, f"R-{number:03d}", 100, now=0
+                )
+                harness.complete_task("project", task, "terminal evidence", now=1)
+            cycle = harness.list_tasks(now=2)["random_mutation"]["cycle_number"]
+        return state, cycle
+
+    def run_universal_review_cli(
+        self,
+        state: Path,
+        cycle: int,
+        baseline: Path,
+        candidate: Path,
+    ) -> tuple[int, str]:
+        workspace_config = self.root / "workspace.json"
+        if not workspace_config.exists():
+            workspace_config.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "worker_capabilities": [
+                            {
+                                "model": "gpt-5.6-sol",
+                                "reasoning_effort": "ultra",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            result = guard.main(
+                [
+                    "universal-review",
+                    "--baseline",
+                    str(baseline),
+                    "--candidate",
+                    str(candidate),
+                    "--state",
+                    str(state),
+                    "--workspace-config",
+                    str(workspace_config),
+                    "--lineage",
+                    "project",
+                    "--cycle",
+                    str(cycle),
+                ]
+            )
+        return result, stdout.getvalue() + stderr.getvalue()
+
+    def test_universal_review_cli_requires_exact_k30_dfs_signature(self) -> None:
+        baseline, candidate = self.method_candidate_roots()
+        kernel = candidate / "references" / "kernel.md"
+        kernel.write_text(
+            kernel.read_text(encoding="utf-8") + "\n<!-- isolated redesign -->\n",
+            encoding="utf-8",
+        )
+
+        state, cycle = self.universal_review_state()
+        result, output = self.run_universal_review_cli(
+            state, cycle, baseline, candidate
+        )
+        self.assertEqual(result, 0, output)
+        self.assertIn("universal review cycle", output)
+        self.assertRegex(output, r"receipt [0-9a-f]{64}")
+
+        state, cycle = self.universal_review_state(lane_index=1)
+        result, output = self.run_universal_review_cli(
+            state, cycle, baseline, candidate
+        )
+        self.assertEqual(result, 1)
+        self.assertIn("persisted 30-attempt DFS draw", output)
+
+        state, cycle = self.universal_review_state(capability_effort="xhigh")
+        result, output = self.run_universal_review_cli(
+            state, cycle, baseline, candidate
+        )
+        self.assertEqual(result, 1)
+        self.assertIn("deferred at due time", output)
+        self.assertIn("no persisted gpt-5.6-sol/ultra probe", output)
+
+    def test_universal_receipt_is_atomic_immutable_and_required_for_resolution(self) -> None:
+        baseline, candidate = self.method_candidate_roots()
+        kernel = candidate / "references" / "kernel.md"
+        kernel.write_text(
+            kernel.read_text(encoding="utf-8") + "\n<!-- receipt candidate -->\n",
+            encoding="utf-8",
+        )
+        state, cycle = self.universal_review_state()
+
+        result, output = self.run_universal_review_cli(
+            state, cycle, baseline, candidate
+        )
+
+        self.assertEqual(result, 0, output)
+        receipt_id = output.rsplit("receipt ", 1)[1].strip()
+        connection = sqlite3.connect(state)
+        connection.row_factory = sqlite3.Row
+        try:
+            receipt = connection.execute(
+                "SELECT * FROM universal_review_receipts WHERE receipt_id = ?",
+                (receipt_id,),
+            ).fetchone()
+            self.assertEqual(receipt["lineage_id"], "project")
+            self.assertEqual(receipt["cycle_number"], cycle)
+            self.assertEqual(receipt["interval_windows"], 30)
+            self.assertEqual(receipt["selected_lane"], "DFS.md")
+            self.assertEqual(receipt["reviewer_model"], "gpt-5.6-sol")
+            self.assertEqual(receipt["reviewer_effort"], "ultra")
+            self.assertEqual(
+                receipt["capability_roster_digest"],
+                connection.execute(
+                    """
+                    SELECT universal_capability_roster_digest
+                    FROM random_mutation_cycles
+                    WHERE lineage_id = 'project' AND cycle_number = ?
+                    """,
+                    (cycle,),
+                ).fetchone()[0],
+            )
+            self.assertEqual(
+                json.loads(receipt["changed_paths"]),
+                ["references/kernel.md"],
+            )
+            self.assertEqual(len(receipt["candidate_digest"]), 64)
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+                connection.execute(
+                    "UPDATE universal_review_receipts SET candidate_digest = ?",
+                    ("b" * 64,),
+                )
+            connection.rollback()
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+                connection.execute(
+                    "DELETE FROM universal_review_receipts WHERE receipt_id = ?",
+                    (receipt_id,),
+                )
+            connection.rollback()
+        finally:
+            connection.close()
+
+        with deadline.DeadlineHarness(state) as harness:
+            with self.assertRaisesRegex(
+                deadline.DeadlineError, "validated receipt id"
+            ):
+                harness.resolve_random_mutation(
+                    "project", cycle, "arbitrary success string",
+                    component="universal",
+                )
+            with self.assertRaisesRegex(
+                deadline.DeadlineError, "does not match"
+            ):
+                harness.resolve_random_mutation(
+                    "project", cycle, "fabricated receipt annotation",
+                    component="universal", receipt_id="f" * 64,
+                )
+            resolved = harness.resolve_random_mutation(
+                "project", cycle, "candidate retained for independent review",
+                component="universal", receipt_id=receipt_id,
+            )
+            self.assertEqual(resolved["universal_receipt_id"], receipt_id)
+            with self.assertRaisesRegex(
+                deadline.DeadlineError, "already been consumed"
+            ):
+                harness.resolve_random_mutation(
+                    "project", cycle, "replay",
+                    component="universal", receipt_id=receipt_id,
+                )
+            harness.connection.execute(
+                """
+                INSERT INTO random_mutation_cycles (
+                    lineage_id, cycle_number, interval_windows,
+                    due_after_terminal_windows, selected_lane, due_task_id,
+                    universal_required
+                ) VALUES ('project', 2, 30, 60, 'DFS.md', 'terminal-30', 1)
+                """
+            )
+            harness.connection.commit()
+            with self.assertRaisesRegex(
+                deadline.DeadlineError, "does not match this lineage and cycle"
+            ):
+                harness.resolve_random_mutation(
+                    "project", 2, "cross-cycle replay",
+                    component="universal", receipt_id=receipt_id,
+                )
+
+    def test_universal_review_uses_frozen_due_time_capability_snapshot(self) -> None:
+        baseline, candidate = self.method_candidate_roots()
+        kernel = candidate / "references" / "kernel.md"
+        kernel.write_text(
+            kernel.read_text(encoding="utf-8") + "\n<!-- frozen snapshot -->\n",
+            encoding="utf-8",
+        )
+        state, cycle = self.universal_review_state()
+        (self.root / "workspace.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "worker_capabilities": [
+                        {
+                            "model": "gpt-5.6-sol",
+                            "reasoning_effort": "xhigh",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result, output = self.run_universal_review_cli(
+            state, cycle, baseline, candidate
+        )
+
+        self.assertEqual(result, 0, output)
+        self.assertIn("universal review cycle", output)
+
+    def test_failed_universal_guard_persists_no_receipt(self) -> None:
+        baseline, candidate = self.method_candidate_roots()
+        state, cycle = self.universal_review_state()
+
+        result, output = self.run_universal_review_cli(
+            state, cycle, baseline, candidate
+        )
+
+        self.assertEqual(result, 1)
+        self.assertIn("makes no change", output)
+        connection = sqlite3.connect(state)
+        try:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM universal_review_receipts"
+                ).fetchone()[0],
+                0,
+            )
+        finally:
+            connection.close()
+
+    def test_universal_dfs_redesign_preserves_the_accepted_frontier(self) -> None:
+        before, candidate = self.expansion_files(
+            self.expansion_dfs().replace(
+                "Existing next work",
+                "Redesigned remaining mechanism",
+            )
+        )
+        self.assertTrue(guard.validate_universal_dfs_mutation(before, candidate))
+
+        before, candidate = self.expansion_files(
+            self.expansion_dfs().replace(
+                "Accepted frontier",
+                "Rewritten accepted frontier",
+            )
+        )
+        with self.assertRaisesRegex(guard.GuardError, "accepted claim R-000"):
+            guard.validate_universal_dfs_mutation(before, candidate)
+
     def test_documented_random_commands_use_the_tested_cli_surface(self) -> None:
         command_lines = [
             line
-            for line in SKILL_TEXT.splitlines()
+            for line in RANDOM_MUTATOR_TEXT.splitlines()
             if "mutation_guard.py random-review" in line
             or "deadline_harness.py resolve-random-mutation" in line
         ]
@@ -872,14 +1495,33 @@ class MutationGuardTests(unittest.TestCase):
         self.assertIn("--ledger-candidate", command_lines[0])
         self.assertIn("--evidence", command_lines[1])
 
+        universal_resolution = [
+            line
+            for line in UNIVERSAL_MUTATOR_TEXT.splitlines()
+            if "deadline_harness.py resolve-random-mutation" in line
+        ]
+        self.assertEqual(len(universal_resolution), 1)
+        self.assertIn("--receipt", universal_resolution[0])
+
     def test_documented_integrity_route_requires_exact_diagnosis(self) -> None:
-        self.assertIn("`--kind integrity_breach`", SKILL_TEXT)
-        self.assertIn("using `--kind integrity_breach`", SKILL_TEXT)
+        normalized = " ".join(DEADLINE_MUTATOR_TEXT.split())
+        self.assertIn("diagnose --task W-001 --kind integrity_breach", normalized)
+        self.assertIn("integrity incident", DEADLINE_MUTATOR_TEXT)
+        self.assertIn("resolve-integrity-mutation", DEADLINE_MUTATOR_TEXT)
+        macro_commands = [
+            line
+            for line in DEADLINE_MUTATOR_TEXT.splitlines()
+            if line.startswith("python ")
+            and "--component macro" in line
+            and "resolve-" in line
+        ]
+        self.assertEqual(len(macro_commands), 2)
+        self.assertTrue(all("--receipt" in line for line in macro_commands))
 
     def test_documented_work_ledger_guard_uses_clock_identity(self) -> None:
         command_lines = [
             line
-            for line in SKILL_TEXT.splitlines()
+            for line in DFS_STEWARD_TEXT.splitlines()
             if line.startswith("python ") and "mutation_guard.py work-ledger" in line
         ]
         self.assertEqual(len(command_lines), 1)
@@ -887,24 +1529,18 @@ class MutationGuardTests(unittest.TestCase):
         self.assertIn("--lineage", command_lines[0])
 
     def test_ordinary_task_results_keep_the_same_coordinator(self) -> None:
-        combined = SKILL_TEXT + "\n" + KERNEL_TEXT
-        normalized_skill = " ".join(SKILL_TEXT.split())
-        normalized_kernel = " ".join(KERNEL_TEXT.split())
+        combined = SKILL_TEXT + "\n" + KERNEL_TEXT + "\n" + COORDINATOR_TEXT
+        normalized = " ".join(combined.split())
         self.assertNotIn("dispatch wave complete", combined)
         self.assertNotIn("One coordinator owns one dispatch wave", combined)
-        self.assertIn("One coordinator may own many", SKILL_TEXT)
         self.assertIn(
-            "Ordinary task completion, worker finding, acceptance, or ledger refill",
-            normalized_skill,
+            "One coordinator may own many sequential or disjoint dispatch waves",
+            normalized,
         )
-        self.assertIn(
-            "Ordinary task completion, worker finding, acceptance, or ledger refill",
-            normalized_kernel,
-        )
-        self.assertIn("applied mutation or another explicit restart event", combined)
+        self.assertIn("After an applied guarded method or DFS mutation", combined)
 
     def test_worker_lifecycle_is_not_a_task_requirement(self) -> None:
-        combined = SKILL_TEXT + "\n" + KERNEL_TEXT
+        combined = SKILL_TEXT + "\n" + KERNEL_TEXT + "\n" + WORKER_TEXT
         self.assertNotIn("Every task uses a fresh", combined)
         self.assertNotIn("one fresh worker thread", combined)
         self.assertNotIn("terminal task retires", combined)

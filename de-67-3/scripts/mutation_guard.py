@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 from pathlib import Path
 import re
 import sqlite3
 import sys
+import time
 
 
 TASK_GUIDELINES = "test-and-task-guidelines.md"
@@ -36,6 +39,28 @@ PROTECTED_DFS_SECTIONS = (
     "## Functional contract",
     "## Project language and terminology",
 )
+METHOD_REQUIRED_FILES = (
+    "SKILL.md",
+    "references/kernel.md",
+    "scripts/deadline_harness.py",
+    "scripts/mutation_guard.py",
+)
+NORMAL_METHOD_PROTECTED_FILES = (
+    "references/kernel.md",
+    "scripts/deadline_harness.py",
+    "scripts/mutation_guard.py",
+    "tests/test_deadline_harness.py",
+    "tests/test_mutation_guard.py",
+)
+NORMAL_METHOD_MUTABLE_ROOTS = (
+    "SKILL.md",
+    "agents/",
+    "assets/environment/",
+    "references/roles/",
+    "scripts/",
+    "tests/",
+)
+IGNORED_METHOD_PARTS = {".git", "__pycache__", ".pytest_cache"}
 
 
 class GuardError(RuntimeError):
@@ -46,6 +71,200 @@ def read_markdown(path: Path) -> str:
     if not path.is_file():
         raise GuardError(f"Missing Markdown file: {path}")
     return path.read_text(encoding="utf-8")
+
+
+def _method_files(root: Path) -> dict[str, bytes]:
+    """Read a candidate skill tree without following links or Git/runtime debris."""
+
+    if not root.is_dir():
+        raise GuardError(f"Method candidate root does not exist: {root}")
+    result: dict[str, bytes] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if any(part in IGNORED_METHOD_PARTS for part in relative.parts):
+            continue
+        if path.is_symlink():
+            raise GuardError(f"Method candidates cannot contain symlinks: {relative.as_posix()}")
+        if path.is_file():
+            result[relative.as_posix()] = path.read_bytes()
+    return result
+
+
+def _files_digest(files: dict[str, bytes]) -> str:
+    digest = hashlib.sha256()
+    for relative, content in sorted(files.items()):
+        encoded = relative.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
+def method_tree_digest(root: Path = SKILL_ROOT) -> str:
+    return _files_digest(_method_files(root))
+
+
+def protected_method_digest(root: Path = SKILL_ROOT) -> str:
+    files = _method_files(root)
+    protected = {
+        relative: files[relative]
+        for relative in NORMAL_METHOD_PROTECTED_FILES
+        if relative in files
+    }
+    if len(protected) != len(NORMAL_METHOD_PROTECTED_FILES):
+        missing = sorted(set(NORMAL_METHOD_PROTECTED_FILES) - set(protected))
+        raise GuardError(
+            "Active method tree is missing protected files: " + ", ".join(missing)
+        )
+    return _files_digest(protected)
+
+
+def normal_method_candidate_snapshot(
+    guideline_candidate_root: Path,
+    ledger_candidate: Path,
+    method_candidate_root: Path | None,
+) -> tuple[str, str, str, tuple[str, ...]]:
+    """Bind a normal candidate to the active tree and its hard protected files."""
+
+    live = _method_files(SKILL_ROOT)
+    candidate = (
+        dict(live)
+        if method_candidate_root is None
+        else _method_files(method_candidate_root)
+    )
+    overlays = {
+        f"assets/environment/{name}": (guideline_candidate_root / name).read_bytes()
+        for name in GUIDELINE_FILES
+    }
+    overlays[f"assets/environment/{MUTATION_LEDGER}"] = ledger_candidate.read_bytes()
+    if method_candidate_root is None:
+        candidate.update(overlays)
+    else:
+        mismatched = [
+            relative
+            for relative, content in overlays.items()
+            if candidate.get(relative) != content
+        ]
+        if mismatched:
+            raise GuardError(
+                "Method candidate must contain the exact guarded guideline and ledger candidates: "
+                + ", ".join(sorted(mismatched))
+            )
+
+    protected = [
+        relative
+        for relative in NORMAL_METHOD_PROTECTED_FILES
+        if candidate.get(relative) != live.get(relative)
+    ]
+    if protected:
+        raise GuardError(
+            "Normal method mutation cannot change the active hard clock/guard surface: "
+            + ", ".join(protected)
+        )
+    changed_paths = tuple(
+        sorted(
+            relative
+            for relative in set(live) | set(candidate)
+            if live.get(relative) != candidate.get(relative)
+        )
+    )
+    if not changed_paths:
+        raise GuardError("Deadline macro mutation candidate makes no live-tree change")
+    outside = [
+        relative for relative in changed_paths if not _normal_method_path_allowed(relative)
+    ]
+    if outside:
+        raise GuardError(
+            "Normal method mutation changed a path outside its broad mutable surface: "
+            + ", ".join(outside)
+        )
+    return (
+        _files_digest(candidate),
+        protected_method_digest(),
+        _files_digest(live),
+        changed_paths,
+    )
+
+
+def _normal_method_path_allowed(relative: str) -> bool:
+    return any(
+        relative == root or (root.endswith("/") and relative.startswith(root))
+        for root in NORMAL_METHOD_MUTABLE_ROOTS
+    )
+
+
+def validate_method_mutation(
+    baseline_root: Path,
+    candidate_root: Path,
+    *,
+    universal: bool,
+    require_change: bool = True,
+) -> tuple[str, ...]:
+    """Validate a broad method candidate while keeping the normal hard kernel small."""
+
+    supplied_baseline = _method_files(baseline_root)
+    candidate = _method_files(candidate_root)
+    for relative in METHOD_REQUIRED_FILES:
+        if relative not in candidate:
+            raise GuardError(f"Method candidate is missing required file: {relative}")
+
+    if universal:
+        baseline = supplied_baseline
+    else:
+        baseline = _method_files(SKILL_ROOT)
+        baseline_mismatch = [
+            relative
+            for relative in NORMAL_METHOD_PROTECTED_FILES
+            if supplied_baseline.get(relative) != baseline.get(relative)
+        ]
+        if baseline_mismatch:
+            raise GuardError(
+                "Normal method baseline is not the active live protected surface: "
+                + ", ".join(baseline_mismatch)
+            )
+
+    changed = tuple(
+        sorted(
+            relative
+            for relative in set(baseline) | set(candidate)
+            if baseline.get(relative) != candidate.get(relative)
+        )
+    )
+    if require_change and not changed:
+        raise GuardError("Method mutation candidate makes no change")
+    if universal:
+        return changed
+
+    protected = [
+        relative
+        for relative in NORMAL_METHOD_PROTECTED_FILES
+        if baseline.get(relative) != candidate.get(relative)
+    ]
+    if protected:
+        raise GuardError(
+            "Normal method mutation cannot change the hard clock/guard surface: "
+            + ", ".join(protected)
+        )
+    outside = [relative for relative in changed if not _normal_method_path_allowed(relative)]
+    if outside:
+        raise GuardError(
+            "Normal method mutation changed a path outside its broad mutable surface: "
+            + ", ".join(outside)
+        )
+    for name in GUIDELINE_FILES:
+        relative = f"assets/environment/{name}"
+        if relative not in baseline or relative not in candidate:
+            raise GuardError(
+                f"Normal method candidate must preserve guideline asset: {relative}"
+            )
+        try:
+            before = baseline[relative].decode("utf-8")
+            after = candidate[relative].decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise GuardError(f"Guideline asset is not UTF-8: {relative}") from error
+        _require_frozen_headings(name, before, after)
+    return changed
 
 
 def validate_consumed_mutation_ledger(candidate: Path) -> None:
@@ -95,6 +314,7 @@ def validate_guideline_mutation(
     candidate_root: Path,
     *,
     broader_mutation: bool,
+    require_change: bool = True,
 ) -> tuple[str, ...]:
     """Validate mutable bodies while keeping every guideline heading frozen."""
 
@@ -108,21 +328,13 @@ def validate_guideline_mutation(
         if baseline != candidate:
             changed.append(name)
 
-    changed_set = set(changed)
     for name in changed:
         baseline = read_markdown(baseline_root / name)
         candidate = read_markdown(candidate_root / name)
         if _meaningful_markdown(baseline) == _meaningful_markdown(candidate):
             raise GuardError(f"{name} mutation cannot be whitespace-only")
-    if broader_mutation:
-        if changed_set != set(GUIDELINE_FILES):
-            raise GuardError(
-                "A third-miss or integrity mutation must change both guideline bodies"
-            )
-    elif changed_set != {TASK_GUIDELINES}:
-        raise GuardError(
-            "An ordinary miss must change task/test guidance and leave orchestrator guidance unchanged"
-        )
+    if require_change and not changed:
+        raise GuardError("Incident guideline candidate makes no change")
     return tuple(changed)
 
 
@@ -130,12 +342,12 @@ def _meaningful_markdown(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def random_review_from_state(
+def random_review_details_from_state(
     state: str | Path,
     lineage_id: str,
     cycle_number: int,
-) -> str:
-    """Read one exact due random-review lane without changing machine state."""
+) -> sqlite3.Row:
+    """Read one exact due random-review draw without changing machine state."""
 
     state_path = Path(state).expanduser()
     if not state_path.is_file():
@@ -145,7 +357,12 @@ def random_review_from_state(
         connection.row_factory = sqlite3.Row
         row = connection.execute(
             """
-            SELECT selected_lane, due_task_id, resolution_evidence
+            SELECT interval_windows, selected_lane, due_task_id,
+                   resolution_evidence, ordinary_resolution_evidence,
+                   universal_required, universal_resolution_evidence,
+                   universal_capability_status, universal_capability_reason,
+                   universal_capability_checked_at,
+                   universal_capability_roster_digest
             FROM random_mutation_cycles
             WHERE lineage_id = ? AND cycle_number = ?
             """,
@@ -168,7 +385,457 @@ def random_review_from_state(
     lane = str(row["selected_lane"])
     if lane not in RANDOM_MUTATION_LANES:
         raise GuardError(f"Unsupported random mutation lane: {lane}")
-    return lane
+    return row
+
+
+def random_review_from_state(
+    state: str | Path,
+    lineage_id: str,
+    cycle_number: int,
+) -> str:
+    """Read one exact due ordinary random-review lane."""
+
+    row = random_review_details_from_state(state, lineage_id, cycle_number)
+    if row["ordinary_resolution_evidence"] is not None:
+        raise GuardError("Ordinary random review is already resolved")
+    return str(row["selected_lane"])
+
+
+def require_universal_random_review(
+    state: str | Path,
+    lineage_id: str,
+    cycle_number: int,
+) -> sqlite3.Row:
+    """Require the rare signature derived from the existing authorized draw."""
+
+    row = random_review_details_from_state(state, lineage_id, cycle_number)
+    if (
+        int(row["interval_windows"]) != 30
+        or row["selected_lane"] != DFS_FILE
+    ):
+        raise GuardError(
+            "Universal review is due only for the persisted 30-attempt DFS draw"
+        )
+    if not bool(row["universal_required"]):
+        reason = row["universal_capability_reason"] or (
+            "the due-time workspace roster did not prove gpt-5.6-sol/ultra"
+        )
+        raise GuardError(f"Universal review was deferred at due time: {reason}")
+    if (
+        row["universal_capability_status"] != "available"
+        or row["universal_capability_checked_at"] is None
+        or not isinstance(row["universal_capability_roster_digest"], str)
+        or len(row["universal_capability_roster_digest"]) != 64
+    ):
+        raise GuardError(
+            "Universal review lacks an immutable due-time Sol/ultra capability snapshot"
+        )
+    if row["universal_resolution_evidence"] is not None:
+        raise GuardError("Universal random review is already resolved")
+    return row
+
+
+def require_universal_reviewer_capability(cycle: sqlite3.Row) -> str:
+    """Return the immutable due-time roster digest that authorized this cycle."""
+
+    digest = cycle["universal_capability_roster_digest"]
+    if (
+        cycle["universal_capability_status"] != "available"
+        or cycle["universal_capability_checked_at"] is None
+        or not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        raise GuardError(
+            "Universal review lacks an immutable due-time Sol/ultra capability snapshot"
+        )
+    return digest
+
+
+def universal_candidate_digest(
+    candidate_root: Path, dfs_candidate: Path | None = None
+) -> str:
+    """Digest the complete isolated candidate, including an optional DFS."""
+
+    digest = hashlib.sha256()
+    for relative, content in sorted(_method_files(candidate_root).items()):
+        encoded = relative.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    if dfs_candidate is not None:
+        content = dfs_candidate.read_bytes()
+        label = b"\0paired-DFS.md"
+        digest.update(len(label).to_bytes(8, "big"))
+        digest.update(label)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
+def _ensure_normal_method_receipt_schema(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS normal_method_receipts (
+            receipt_id TEXT PRIMARY KEY,
+            lineage_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            claim_id TEXT NOT NULL,
+            incident_kind TEXT NOT NULL CHECK (
+                incident_kind IN ('deadline_miss', 'integrity_breach')
+            ),
+            validated_at REAL NOT NULL,
+            candidate_digest TEXT NOT NULL,
+            changed_paths TEXT NOT NULL,
+            protected_baseline_digest TEXT NOT NULL,
+            live_tree_digest TEXT NOT NULL,
+            UNIQUE (lineage_id, task_id, incident_kind, receipt_id),
+            FOREIGN KEY (lineage_id, task_id)
+                REFERENCES tasks(lineage_id, task_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS normal_method_receipts_cannot_change
+        BEFORE UPDATE ON normal_method_receipts
+        BEGIN
+            SELECT RAISE(ABORT, 'normal method receipts are append-only');
+        END
+        """
+    )
+    connection.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS normal_method_receipts_cannot_be_deleted
+        BEFORE DELETE ON normal_method_receipts
+        BEGIN
+            SELECT RAISE(ABORT, 'normal method receipts are append-only');
+        END
+        """
+    )
+
+
+def persist_normal_method_receipt(
+    state: str | Path,
+    lineage_id: str,
+    task_id: str,
+    incident_kind: str,
+    candidate_digest: str,
+    changed_paths: tuple[str, ...],
+    protected_baseline_digest: str,
+    live_tree_digest: str,
+) -> str:
+    """Atomically recheck one diagnosed incident and append its method receipt."""
+
+    if incident_kind not in INCIDENT_KINDS:
+        raise GuardError(f"Unsupported incident kind: {incident_kind}")
+    if not changed_paths or changed_paths != tuple(sorted(set(changed_paths))):
+        raise GuardError("Normal method receipt requires stable changed-path evidence")
+    if method_tree_digest() != live_tree_digest:
+        raise GuardError("Active Phase-3 tree changed during method validation")
+    if protected_method_digest() != protected_baseline_digest:
+        raise GuardError("Active Phase-3 protected files changed during method validation")
+    state_path = Path(state).expanduser()
+    if not state_path.is_file():
+        raise GuardError(f"Deadline state does not exist: {state_path}")
+    paths_json = json.dumps(list(changed_paths), separators=(",", ":"))
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(state_path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        _ensure_normal_method_receipt_schema(connection)
+        if incident_kind == "deadline_miss":
+            incident = connection.execute(
+                """
+                SELECT task.claim_id, incident.reviewed_at
+                FROM claim_deadline_incidents AS incident
+                JOIN tasks AS task
+                  ON task.lineage_id = incident.lineage_id
+                 AND task.task_id = incident.source_task_id
+                WHERE incident.lineage_id = ? AND incident.source_task_id = ?
+                """,
+                (lineage_id, task_id),
+            ).fetchone()
+            already_resolved = connection.execute(
+                """
+                SELECT 1 FROM deadline_mutation_components AS component
+                JOIN claim_deadline_incidents AS incident
+                  ON incident.lineage_id = component.lineage_id
+                 AND incident.claim_id = component.claim_id
+                WHERE incident.lineage_id = ? AND incident.source_task_id = ?
+                  AND component.component = 'macro'
+                """,
+                (lineage_id, task_id),
+            ).fetchone()
+        else:
+            incident = connection.execute(
+                """
+                SELECT task.claim_id, incident.reviewed_at
+                FROM incidents AS incident
+                JOIN tasks AS task
+                  ON task.lineage_id = incident.lineage_id
+                 AND task.task_id = incident.task_id
+                WHERE incident.lineage_id = ? AND incident.task_id = ?
+                  AND incident.kind = 'integrity_breach'
+                """,
+                (lineage_id, task_id),
+            ).fetchone()
+            already_resolved = connection.execute(
+                """
+                SELECT 1 FROM integrity_mutation_components
+                WHERE lineage_id = ? AND task_id = ? AND component = 'macro'
+                """,
+                (lineage_id, task_id),
+            ).fetchone()
+        if incident is None:
+            raise GuardError(
+                f"Missing stored {incident_kind} incident for {lineage_id}/{task_id}"
+            )
+        if incident["reviewed_at"] is None:
+            raise GuardError(
+                "The exact incident needs an independent diagnosis before mutation"
+            )
+        if already_resolved is not None:
+            raise GuardError("The exact incident macro mutation is already resolved")
+        claim_id = str(incident["claim_id"])
+        contract = {
+            "lineage_id": lineage_id,
+            "task_id": task_id,
+            "claim_id": claim_id,
+            "incident_kind": incident_kind,
+            "candidate_digest": candidate_digest,
+            "changed_paths": list(changed_paths),
+            "protected_baseline_digest": protected_baseline_digest,
+            "live_tree_digest": live_tree_digest,
+        }
+        receipt_id = hashlib.sha256(
+            json.dumps(contract, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO normal_method_receipts (
+                receipt_id, lineage_id, task_id, claim_id, incident_kind,
+                validated_at, candidate_digest, changed_paths,
+                protected_baseline_digest, live_tree_digest
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                receipt_id,
+                lineage_id,
+                task_id,
+                claim_id,
+                incident_kind,
+                time.time(),
+                candidate_digest,
+                paths_json,
+                protected_baseline_digest,
+                live_tree_digest,
+            ),
+        )
+        receipt = connection.execute(
+            "SELECT * FROM normal_method_receipts WHERE receipt_id = ?",
+            (receipt_id,),
+        ).fetchone()
+        if (
+            receipt is None
+            or receipt["lineage_id"] != lineage_id
+            or receipt["task_id"] != task_id
+            or receipt["claim_id"] != claim_id
+            or receipt["incident_kind"] != incident_kind
+            or receipt["candidate_digest"] != candidate_digest
+            or receipt["changed_paths"] != paths_json
+            or receipt["protected_baseline_digest"] != protected_baseline_digest
+            or receipt["live_tree_digest"] != live_tree_digest
+        ):
+            raise GuardError("Normal method receipt conflicts with persisted state")
+        connection.commit()
+        return receipt_id
+    except GuardError:
+        if connection is not None:
+            connection.rollback()
+        raise
+    except (OSError, sqlite3.Error) as error:
+        if connection is not None:
+            connection.rollback()
+        raise GuardError(f"Cannot persist normal method receipt: {error}") from error
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _ensure_universal_receipt_schema(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS universal_review_receipts (
+            receipt_id TEXT PRIMARY KEY,
+            lineage_id TEXT NOT NULL,
+            cycle_number INTEGER NOT NULL CHECK (cycle_number > 0),
+            validated_at REAL NOT NULL,
+            candidate_digest TEXT NOT NULL,
+            changed_paths TEXT NOT NULL,
+            interval_windows INTEGER NOT NULL CHECK (interval_windows = 30),
+            selected_lane TEXT NOT NULL CHECK (selected_lane = 'DFS.md'),
+            reviewer_model TEXT NOT NULL CHECK (reviewer_model = 'gpt-5.6-sol'),
+            reviewer_effort TEXT NOT NULL CHECK (reviewer_effort = 'ultra'),
+            capability_roster_digest TEXT,
+            UNIQUE (lineage_id, cycle_number, receipt_id),
+            FOREIGN KEY (lineage_id, cycle_number)
+                REFERENCES random_mutation_cycles(lineage_id, cycle_number)
+        )
+        """
+    )
+    receipt_columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(universal_review_receipts)"
+        ).fetchall()
+    }
+    if "capability_roster_digest" not in receipt_columns:
+        connection.execute(
+            "ALTER TABLE universal_review_receipts ADD COLUMN capability_roster_digest TEXT"
+        )
+    connection.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS universal_review_receipts_cannot_change
+        BEFORE UPDATE ON universal_review_receipts
+        BEGIN
+            SELECT RAISE(ABORT, 'universal review receipts are append-only');
+        END
+        """
+    )
+    connection.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS universal_review_receipts_cannot_be_deleted
+        BEFORE DELETE ON universal_review_receipts
+        BEGIN
+            SELECT RAISE(ABORT, 'universal review receipts are append-only');
+        END
+        """
+    )
+
+
+def persist_universal_review_receipt(
+    state: str | Path,
+    lineage_id: str,
+    cycle_number: int,
+    candidate_digest: str,
+    changed_paths: tuple[str, ...],
+    capability_roster_digest: str,
+) -> str:
+    """Atomically recheck the rare trigger and append one validated receipt."""
+
+    if not changed_paths:
+        raise GuardError("Universal review receipt requires changed candidate paths")
+    state_path = Path(state).expanduser()
+    if not state_path.is_file():
+        raise GuardError(f"Deadline state does not exist: {state_path}")
+    paths_json = json.dumps(list(changed_paths), separators=(",", ":"))
+    receipt_contract = {
+        "lineage_id": lineage_id,
+        "cycle_number": cycle_number,
+        "candidate_digest": candidate_digest,
+        "changed_paths": list(changed_paths),
+        "interval_windows": 30,
+        "selected_lane": DFS_FILE,
+        "reviewer_model": "gpt-5.6-sol",
+        "reviewer_effort": "ultra",
+        "capability_roster_digest": capability_roster_digest,
+    }
+    receipt_id = hashlib.sha256(
+        json.dumps(receipt_contract, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(state_path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        _ensure_universal_receipt_schema(connection)
+        cycle = connection.execute(
+            """
+            SELECT interval_windows, selected_lane, due_task_id,
+                   resolution_evidence, universal_required,
+                   universal_resolution_evidence,
+                   universal_capability_status,
+                   universal_capability_checked_at,
+                   universal_capability_roster_digest
+            FROM random_mutation_cycles
+            WHERE lineage_id = ? AND cycle_number = ?
+            """,
+            (lineage_id, cycle_number),
+        ).fetchone()
+        if cycle is None:
+            raise GuardError(
+                f"Missing random mutation cycle for {lineage_id}/{cycle_number}"
+            )
+        if (
+            cycle["due_task_id"] is None
+            or cycle["resolution_evidence"] is not None
+            or cycle["universal_resolution_evidence"] is not None
+            or int(cycle["interval_windows"]) != 30
+            or cycle["selected_lane"] != DFS_FILE
+            or not bool(cycle["universal_required"])
+            or cycle["universal_capability_status"] != "available"
+            or cycle["universal_capability_checked_at"] is None
+            or cycle["universal_capability_roster_digest"]
+                != capability_roster_digest
+        ):
+            raise GuardError(
+                "Universal receipt requires the still-due persisted 30-attempt DFS draw"
+            )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO universal_review_receipts (
+                receipt_id, lineage_id, cycle_number, validated_at,
+                candidate_digest, changed_paths, interval_windows,
+                selected_lane, reviewer_model, reviewer_effort,
+                capability_roster_digest
+            ) VALUES (?, ?, ?, ?, ?, ?, 30, 'DFS.md', 'gpt-5.6-sol', 'ultra', ?)
+            """,
+            (
+                receipt_id,
+                lineage_id,
+                cycle_number,
+                time.time(),
+                candidate_digest,
+                paths_json,
+                capability_roster_digest,
+            ),
+        )
+        receipt = connection.execute(
+            """
+            SELECT * FROM universal_review_receipts
+            WHERE receipt_id = ? AND lineage_id = ? AND cycle_number = ?
+            """,
+            (receipt_id, lineage_id, cycle_number),
+        ).fetchone()
+        if (
+            receipt is None
+            or receipt["candidate_digest"] != candidate_digest
+            or receipt["changed_paths"] != paths_json
+            or receipt["capability_roster_digest"] != capability_roster_digest
+        ):
+            raise GuardError("Universal review receipt conflicts with persisted state")
+        connection.commit()
+        return receipt_id
+    except GuardError:
+        if connection is not None:
+            connection.rollback()
+        raise
+    except (OSError, sqlite3.Error) as error:
+        if connection is not None:
+            connection.rollback()
+        raise GuardError(f"Cannot persist universal review receipt: {error}") from error
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 def validate_random_review_mutation(
@@ -239,14 +906,24 @@ def broader_mutation_from_incident(
     try:
         connection = sqlite3.connect(state_path.resolve().as_uri() + "?mode=ro", uri=True)
         connection.row_factory = sqlite3.Row
-        row = connection.execute(
-            """
-            SELECT cadence_threshold, short_verdict, long_detail, reviewed_at
-            FROM incidents
-            WHERE lineage_id = ? AND task_id = ? AND kind = ?
-            """,
-            (lineage_id, task_id, incident_kind),
-        ).fetchone()
+        if incident_kind == "deadline_miss":
+            row = connection.execute(
+                """
+                SELECT short_verdict, long_detail, reviewed_at
+                FROM claim_deadline_incidents
+                WHERE lineage_id = ? AND source_task_id = ?
+                """,
+                (lineage_id, task_id),
+            ).fetchone()
+        else:
+            row = connection.execute(
+                """
+                SELECT short_verdict, long_detail, reviewed_at
+                FROM incidents
+                WHERE lineage_id = ? AND task_id = ? AND kind = ?
+                """,
+                (lineage_id, task_id, incident_kind),
+            ).fetchone()
     except sqlite3.Error as error:
         raise GuardError(f"Cannot read deadline state: {error}") from error
     finally:
@@ -265,7 +942,7 @@ def broader_mutation_from_incident(
         raise GuardError(
             "The exact incident needs an independent short and long diagnosis before mutation"
         )
-    return incident_kind == "integrity_breach" or row["cadence_threshold"] is not None
+    return True
 
 
 def _outside_fences(text: str):
@@ -318,7 +995,7 @@ def validate_accepted_task_state(
     task_id: str,
     selected_claim: str,
 ) -> str:
-    """Require accepted, matching, breach-free task state before DFS closure."""
+    """Require claim acceptance from one matching, breach-free closure attempt."""
 
     state_path = Path(state).expanduser()
     if not state_path.is_file():
@@ -330,9 +1007,11 @@ def validate_accepted_task_state(
         row = connection.execute(
             """
             SELECT tasks.claim_id,
-                   tasks.completed_at,
+                   tasks.phase_at_dispatch,
+                   tasks.attempt_terminal_kind,
                    tasks.completion_evidence,
                    tasks.integrity_breached_at,
+                   claim_acceptances.evidence AS acceptance_evidence,
                    EXISTS (
                        SELECT 1 FROM incidents
                        WHERE incidents.lineage_id = tasks.lineage_id
@@ -340,6 +1019,11 @@ def validate_accepted_task_state(
                          AND incidents.kind = 'integrity_breach'
                    ) AS has_integrity_incident
             FROM tasks
+            LEFT JOIN claim_acceptances
+              ON claim_acceptances.lineage_id = tasks.lineage_id
+             AND claim_acceptances.claim_id = tasks.claim_id
+             AND claim_acceptances.task_id = tasks.task_id
+             AND claim_acceptances.invalidated_at IS NULL
             WHERE tasks.lineage_id = ? AND tasks.task_id = ?
             """,
             (lineage_id, task_id),
@@ -358,12 +1042,121 @@ def validate_accepted_task_state(
         )
     if row["integrity_breached_at"] is not None or row["has_integrity_incident"]:
         raise GuardError("An integrity breach invalidates DFS completion")
-    if row["completed_at"] is None:
-        raise GuardError("Deadline task has not been accepted")
-    evidence = row["completion_evidence"]
+    if (
+        row["phase_at_dispatch"] != "closure"
+        or row["attempt_terminal_kind"] != "completed"
+    ):
+        raise GuardError("Claim acceptance requires a completed closure attempt")
+    evidence = row["acceptance_evidence"]
     if evidence is None or not str(evidence).strip():
-        raise GuardError("Accepted deadline task has no completion evidence")
+        raise GuardError("Deadline claim has not been accepted")
+    if row["completion_evidence"] is None or not str(
+        row["completion_evidence"]
+    ).strip():
+        raise GuardError("Accepted closure attempt has no completion evidence")
     return expected_claim
+
+
+def validate_invalidated_claim_state(
+    state: str | Path,
+    lineage_id: str,
+    selected_claim: str,
+) -> tuple[str, str]:
+    """Require one latest invalidated acceptance with its durable trigger."""
+
+    state_path = Path(state).expanduser()
+    if not state_path.is_file():
+        raise GuardError(f"Deadline state does not exist: {state_path}")
+    expected_claim = _selected_claim_id(selected_claim)
+    try:
+        connection = sqlite3.connect(state_path.resolve().as_uri() + "?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        acceptance = connection.execute(
+            """
+            SELECT * FROM claim_acceptances
+            WHERE lineage_id = ? AND claim_id = ?
+            ORDER BY acceptance_number DESC
+            LIMIT 1
+            """,
+            (lineage_id, expected_claim),
+        ).fetchone()
+        valid = connection.execute(
+            """
+            SELECT 1 FROM claim_acceptances
+            WHERE lineage_id = ? AND claim_id = ? AND invalidated_at IS NULL
+            LIMIT 1
+            """,
+            (lineage_id, expected_claim),
+        ).fetchone()
+        trigger = None
+        if acceptance is not None and acceptance["invalidated_at"] is not None:
+            trigger = connection.execute(
+                """
+                SELECT 'integrity_breach' AS trigger_kind,
+                       incidents.task_id AS trigger_task_id
+                FROM incidents
+                JOIN tasks
+                  ON tasks.lineage_id = incidents.lineage_id
+                 AND tasks.task_id = incidents.task_id
+                WHERE incidents.lineage_id = ?
+                  AND tasks.claim_id = ?
+                  AND incidents.kind = 'integrity_breach'
+                  AND incidents.recorded_at = ?
+                  AND (
+                    incidents.task_id = ?
+                    OR EXISTS (
+                        SELECT 1 FROM closure_gaps AS gap
+                        WHERE gap.lineage_id = incidents.lineage_id
+                          AND gap.claim_id = tasks.claim_id
+                          AND gap.closure_sequence = ?
+                          AND gap.closed_by_task_id = incidents.task_id
+                    )
+                  )
+                UNION ALL
+                SELECT 'closure_reopen' AS trigger_kind,
+                       event.basis_task_id AS trigger_task_id
+                FROM claim_phase_events AS event
+                JOIN worker_findings AS finding
+                  ON finding.lineage_id = event.lineage_id
+                 AND finding.task_id = event.basis_task_id
+                WHERE event.lineage_id = ?
+                  AND event.claim_id = ?
+                  AND event.phase = 'exploration'
+                  AND event.sequence > COALESCE(?, 0)
+                  AND event.recorded_at = ?
+                LIMIT 1
+                """,
+                (
+                    lineage_id,
+                    expected_claim,
+                    acceptance["invalidated_at"],
+                    acceptance["task_id"],
+                    acceptance["closure_sequence"],
+                    lineage_id,
+                    expected_claim,
+                    acceptance["closure_sequence"],
+                    acceptance["invalidated_at"],
+                ),
+            ).fetchone()
+    except sqlite3.Error as error:
+        raise GuardError(f"Cannot read claim invalidation state: {error}") from error
+    finally:
+        if "connection" in locals():
+            connection.close()
+
+    if acceptance is None:
+        raise GuardError(f"Claim has no recorded acceptance: {lineage_id}/{expected_claim}")
+    if valid is not None:
+        raise GuardError("A currently valid acceptance prevents DFS reopening")
+    if acceptance["invalidated_at"] is None:
+        raise GuardError("Latest claim acceptance has not been invalidated")
+    if not str(acceptance["evidence"] or "").strip():
+        raise GuardError("Invalidated claim acceptance has no durable evidence")
+    if not str(acceptance["invalidation_reason"] or "").strip():
+        raise GuardError("Invalidated claim acceptance has no durable reason")
+    if trigger is None:
+        raise GuardError("Claim invalidation has no durable reopen or integrity trigger")
+    return expected_claim, str(trigger["trigger_kind"])
 
 
 def worker_finding_from_state(
@@ -728,6 +1521,75 @@ def validate_dfs_completion(before: Path, after: Path, selected_claim: str) -> s
     return label
 
 
+def validate_dfs_reopen(before: Path, after: Path, selected_claim: str) -> str:
+    """Allow exactly one invalidated accepted marker to return to red work."""
+
+    baseline = read_markdown(before)
+    candidate = read_markdown(after)
+    selected = _normalize_reference(selected_claim)
+    lines = baseline.splitlines(keepends=True)
+    matches: list[tuple[int, re.Match[str], str]] = []
+    for index, line in enumerate(lines):
+        body = line.rstrip("\r\n")
+        match = STABLE_CLAIM.match(body)
+        if match and match.group("status").lower() == "x" and match.group("red") is None:
+            label = _normalize_reference(match.group("label"))
+            if _same_claim(selected, label):
+                matches.append((index, match, label))
+
+    if len(matches) != 1:
+        raise GuardError(
+            f"Selected claim must identify exactly one accepted DFS claim: {selected}"
+        )
+
+    index, match, label = matches[0]
+    original = lines[index]
+    body = original.rstrip("\r\n")
+    ending = original[len(body) :]
+    lines[index] = (
+        f"- [ ] 🔴 {match.group('label')}"
+        f"{match.group('trailing')}{ending}"
+    )
+    expected = "".join(lines)
+    if candidate != expected:
+        raise GuardError(
+            "DFS reopening must only change the selected '[x]' marker to '[ ] 🔴'"
+        )
+    return label
+
+
+def validate_universal_dfs_mutation(before: Path, candidate: Path) -> bool:
+    """Allow a redesigned red map while preserving contract and accepted frontier."""
+
+    baseline = read_markdown(before)
+    proposed = read_markdown(candidate)
+    if baseline == proposed:
+        return False
+    for heading in PROTECTED_DFS_SECTIONS:
+        if _exact_markdown_section(baseline, heading) != _exact_markdown_section(
+            proposed, heading
+        ):
+            raise GuardError(f"Universal DFS candidate cannot change {heading}")
+
+    baseline_records = _stable_claim_records(baseline)
+    candidate_records = _stable_claim_records(proposed)
+    candidate_by_id = _claims_by_id(candidate_records, "Candidate")
+    accepted = [record for record in baseline_records if record[1].lower() == "x"]
+    positions = {record[0]: index for index, record in enumerate(candidate_records)}
+    prior_position = -1
+    for record in accepted:
+        replacement = candidate_by_id.get(record[0])
+        if replacement is None or replacement[3] != record[3]:
+            raise GuardError(
+                f"Universal DFS candidate cannot delete or rewrite accepted claim {record[0]}"
+            )
+        position = positions[record[0]]
+        if position <= prior_position:
+            raise GuardError("Universal DFS candidate cannot reorder accepted claims")
+        prior_position = position
+    return True
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -740,6 +1602,8 @@ def build_parser() -> argparse.ArgumentParser:
     guidelines.add_argument("--task", required=True)
     guidelines.add_argument("--incident-kind", choices=INCIDENT_KINDS, required=True)
     guidelines.add_argument("--ledger-candidate", type=Path, required=True)
+    guidelines.add_argument("--method-baseline", type=Path)
+    guidelines.add_argument("--method-candidate", type=Path)
 
     ledger = commands.add_parser("work-ledger", help="Validate active work against red DFS claims")
     ledger.add_argument("--ledger", type=Path, required=True)
@@ -754,6 +1618,16 @@ def build_parser() -> argparse.ArgumentParser:
     completion.add_argument("--state", type=Path, required=True)
     completion.add_argument("--lineage", required=True)
     completion.add_argument("--task", required=True)
+
+    reopen = commands.add_parser(
+        "reopen-dfs",
+        help="Validate one currently invalidated accepted claim returning to red",
+    )
+    reopen.add_argument("--before", type=Path, required=True)
+    reopen.add_argument("--after", type=Path, required=True)
+    reopen.add_argument("--claim", required=True)
+    reopen.add_argument("--state", type=Path, required=True)
+    reopen.add_argument("--lineage", required=True)
 
     expansion = commands.add_parser(
         "expand-dfs", help="Validate expansion from one stored worker finding"
@@ -775,6 +1649,21 @@ def build_parser() -> argparse.ArgumentParser:
     random_review.add_argument("--lineage", required=True)
     random_review.add_argument("--cycle", type=int, required=True)
     random_review.add_argument("--ledger-candidate", type=Path, required=True)
+    random_review.add_argument("--method-baseline", type=Path)
+    random_review.add_argument("--method-candidate", type=Path)
+
+    universal_review = commands.add_parser(
+        "universal-review",
+        help="Validate an isolated whole-method candidate for a due rare review",
+    )
+    universal_review.add_argument("--baseline", type=Path, required=True)
+    universal_review.add_argument("--candidate", type=Path, required=True)
+    universal_review.add_argument("--state", type=Path, required=True)
+    universal_review.add_argument("--workspace-config", type=Path, required=True)
+    universal_review.add_argument("--lineage", required=True)
+    universal_review.add_argument("--cycle", type=int, required=True)
+    universal_review.add_argument("--dfs-before", type=Path)
+    universal_review.add_argument("--dfs-candidate", type=Path)
     return parser
 
 
@@ -792,9 +1681,52 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.baseline,
                 arguments.candidate,
                 broader_mutation=broader_mutation,
+                require_change=False,
             )
+            if (arguments.method_baseline is None) != (
+                arguments.method_candidate is None
+            ):
+                raise GuardError(
+                    "Deadline method validation needs both baseline and candidate roots"
+                )
+            method_changed: tuple[str, ...] = ()
+            if arguments.method_baseline is not None:
+                method_changed = validate_method_mutation(
+                    arguments.method_baseline,
+                    arguments.method_candidate,
+                    universal=False,
+                    require_change=False,
+                )
+            if not changed and not method_changed:
+                raise GuardError(
+                    "Deadline macro mutation needs an evidence-backed guideline or method change"
+                )
             validate_consumed_mutation_ledger(arguments.ledger_candidate)
-            print("ok: guideline mutation; changed " + ", ".join(changed))
+            (
+                candidate_digest,
+                protected_baseline_digest,
+                live_tree_digest,
+                changed_paths,
+            ) = normal_method_candidate_snapshot(
+                arguments.candidate,
+                arguments.ledger_candidate,
+                arguments.method_candidate,
+            )
+            receipt_id = persist_normal_method_receipt(
+                arguments.state,
+                arguments.lineage,
+                arguments.task,
+                arguments.incident_kind,
+                candidate_digest,
+                changed_paths,
+                protected_baseline_digest,
+                live_tree_digest,
+            )
+            print(
+                "ok: guarded incident macro mutation; candidate changed "
+                + ", ".join(changed_paths)
+                + f"; receipt {receipt_id}"
+            )
         elif arguments.command == "work-ledger":
             items = validate_work_ledger(
                 arguments.ledger,
@@ -814,6 +1746,16 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.before, arguments.after, arguments.claim
             )
             print(f"ok: completed {claim}")
+        elif arguments.command == "reopen-dfs":
+            _, trigger_kind = validate_invalidated_claim_state(
+                arguments.state,
+                arguments.lineage,
+                arguments.claim,
+            )
+            claim = validate_dfs_reopen(
+                arguments.before, arguments.after, arguments.claim
+            )
+            print(f"ok: reopened {claim} from {trigger_kind}")
         elif arguments.command == "expand-dfs":
             task_claim, finding_kind = worker_finding_from_state(
                 arguments.state,
@@ -830,7 +1772,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"ok: {finding_kind} finding expanded {task_claim}; added "
                 + ", ".join(added)
             )
-        else:
+        elif arguments.command == "random-review":
             lane = random_review_from_state(
                 arguments.state,
                 arguments.lineage,
@@ -841,17 +1783,75 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.candidate,
                 selected_lane=lane,
             )
-            if changed:
+            if (arguments.method_baseline is None) != (
+                arguments.method_candidate is None
+            ):
+                raise GuardError(
+                    "Random method validation needs both baseline and candidate roots"
+                )
+            method_changed: tuple[str, ...] = ()
+            if arguments.method_baseline is not None:
+                method_changed = validate_method_mutation(
+                    arguments.method_baseline,
+                    arguments.method_candidate,
+                    universal=False,
+                    require_change=False,
+                )
+            all_changed = (*changed, *method_changed)
+            if all_changed:
                 validate_consumed_mutation_ledger(arguments.ledger_candidate)
-            if changed:
+            if all_changed:
                 print(
                     f"ok: random review cycle {arguments.cycle}; changed "
-                    + ", ".join(changed)
+                    + ", ".join(all_changed)
                 )
             else:
                 print(
                     f"ok: random review cycle {arguments.cycle}; guarded DFS no-op"
                 )
+        else:
+            cycle = require_universal_random_review(
+                arguments.state,
+                arguments.lineage,
+                arguments.cycle,
+            )
+            capability_roster_digest = require_universal_reviewer_capability(cycle)
+            changed = validate_method_mutation(
+                arguments.baseline,
+                arguments.candidate,
+                universal=True,
+                require_change=False,
+            )
+            if (arguments.dfs_before is None) != (arguments.dfs_candidate is None):
+                raise GuardError(
+                    "Universal DFS validation needs both baseline and candidate files"
+                )
+            dfs_changed = False
+            if arguments.dfs_before is not None:
+                dfs_changed = validate_universal_dfs_mutation(
+                    arguments.dfs_before,
+                    arguments.dfs_candidate,
+                )
+            if not changed and not dfs_changed:
+                raise GuardError("Universal mutation candidate makes no change")
+            changed_labels = (*changed, *((DFS_FILE,) if dfs_changed else ()))
+            candidate_digest = universal_candidate_digest(
+                arguments.candidate,
+                arguments.dfs_candidate,
+            )
+            receipt_id = persist_universal_review_receipt(
+                arguments.state,
+                arguments.lineage,
+                arguments.cycle,
+                candidate_digest,
+                tuple(changed_labels),
+                capability_roster_digest,
+            )
+            print(
+                f"ok: universal review cycle {arguments.cycle}; candidate changed "
+                + ", ".join(changed_labels)
+                + f"; receipt {receipt_id}"
+            )
     except (GuardError, OSError, UnicodeError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

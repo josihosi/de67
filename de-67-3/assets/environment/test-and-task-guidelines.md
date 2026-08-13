@@ -40,10 +40,14 @@ item deadline; an attempt terminal does not stop the item clock.
 
 ## Worker and model selection
 
-Use the weakest sufficient Phase-2-proved model and effort for understood implementation. Give one
-self-contained brief per task containing the claim's validated DFS slice ids and extracted text;
-workers do not rediscover the DFS index or preload the whole DFS. Select Luna through the trusted project default and Terra explicitly;
-the effort remains task-specific. Use a stronger implementation-capable model for ambiguous
+Use the weakest sufficient Phase-2-proved model and effort for understood implementation. Ordinary
+workers may use Luna, Terra, or Sol according to task fit, but the exact `gpt-5.6-sol` / `ultra`
+pair is reserved exclusively for mutation roles and is never an ordinary exploration,
+implementation, build, test, debug, or operation worker. Give one self-contained brief per task
+containing the claim's validated DFS slice ids and extracted text; workers do not rediscover the DFS
+index or preload the whole DFS. Select Luna through the trusted project default and Terra or an
+eligible non-ultra Sol explicitly; the effort remains task-specific. Use a stronger
+implementation-capable model for ambiguous
 ownership, causal diagnosis, risky cross-cutting work, or an exploration learning goal that requires
 it. Choose or change the route and worker from the task, current evidence, context fit, and
 coordination cost. A small read-only code-mapping worker is optional when ownership is genuinely

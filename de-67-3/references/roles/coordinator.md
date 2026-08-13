@@ -142,7 +142,9 @@ according to task fit, evidence, context health, and coordination cost. Only a n
 Josef's selected mutation reviewer is a fresh `gpt-5.6-sol` worker at `ultra`. Use that exact
 profile for deadline, integrity, ordinary random, and eligible rare universal mutation roles. This
 does not broaden a normal mutation's protected surface or turn an unavailable rare trigger into an
-eligible one; role authority and guards remain unchanged.
+eligible one; role authority and guards remain unchanged. Never use the exact `gpt-5.6-sol` /
+`ultra` pair for an ordinary worker. Ordinary workers may be Luna, Terra, or Sol according to task
+fit, but ordinary Sol uses a Phase-2-proved non-ultra effort.
 
 Bind the immutable ledger-item clock at its first actual dispatch and record every attempt:
 

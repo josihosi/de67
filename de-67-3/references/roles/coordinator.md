@@ -102,6 +102,10 @@ Choose model and effort from the Phase-2-proved roster. Reuse a relevant worker 
 according to task fit, evidence, context health, and coordination cost. Only a new worker requires
 `fork_turns="none"` and a self-contained brief.
 
+The exact `gpt-5.6-sol` / `ultra` pair is reserved for mutation roles. Never use it for an ordinary
+worker. Ordinary workers may be Luna, Terra, or Sol according to task fit, but ordinary Sol uses a
+Phase-2-proved non-ultra effort.
+
 Bind the immutable ledger-item clock at its first actual dispatch and record every attempt:
 
 ```text

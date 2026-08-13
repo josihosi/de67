@@ -1546,6 +1546,13 @@ class MutationGuardTests(unittest.TestCase):
         self.assertNotIn("terminal task retires", combined)
         self.assertNotIn("worker retirement", combined)
 
+    def test_sol_ultra_is_reserved_for_mutation_roles(self) -> None:
+        self.assertIn("exact `gpt-5.6-sol` / `ultra`", TASK_GUIDANCE)
+        self.assertIn("reserved exclusively for mutation roles", TASK_GUIDANCE)
+        self.assertIn("reserved for mutation roles", COORDINATOR_TEXT)
+        self.assertIn("`ultra` pair is mutation-only", WORKER_TEXT)
+        self.assertIn("Ordinary workers may be Luna, Terra, or Sol", WORKER_TEXT)
+
 
 if __name__ == "__main__":
     unittest.main()

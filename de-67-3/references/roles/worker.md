@@ -5,6 +5,11 @@ W_i = (mode, claim, item clock, attempt id, question or gaps, surface, proof rou
       -> product evidence or immutable finding
 ```
 
+Ordinary workers may be Luna, Terra, or Sol according to task fit. The exact `gpt-5.6-sol` /
+`ultra` pair is mutation-only. If dispatched under that pair for exploration, implementation,
+build, test, debug, or operation work, stop before acting and return the role mismatch to the
+coordinator.
+
 Read this module, the self-contained task brief, and only the code, state, tests, tools, and current
 guideline sections needed by that task. Do not read the coordinator or predecessor transcript.
 

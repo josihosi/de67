@@ -204,6 +204,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertNotIn("Read the installed DE-67-3 skill", prompt)
         self.assertNotIn("Run DE-67-3", prompt)
         self.assertIn("Do not read the phase router", prompt)
+        self.assertIn("extract its guarded claim-bound DFS slices", prompt)
+        self.assertIn("do not preload the whole DFS", prompt)
         for role_path in ROLE_ROOT.glob("*.md"):
             if role_path != COORDINATOR_ROLE_PATH:
                 self.assertNotIn(str(role_path), prompt)

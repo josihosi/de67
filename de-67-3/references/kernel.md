@@ -18,6 +18,14 @@ S = (U, E, D, O, P, R)
 The DFS represents `S`; code and direct evidence may contradict its current mechanics. A
 same-outcome candidate may refine `D`, `O`, `P`, or `R`. It may not silently change `U`.
 
+The compact work ledger points to one or more durable, claim-bound DFS slices. Slice markers are
+structural indexes, not product semantics: the guard allocates their stable ids and proves that
+marking changes no DFS content. Delivery coordinators and product workers read the ledger and use
+only those extracted slices. Reading the whole DFS is reserved for first-time slice placement,
+invalid slice state, or a concrete finding whose necessary context lies outside the current slices.
+DFS stewards and mutators may inspect the whole relevant DFS when their named candidate-validation
+route requires it.
+
 ## Protected vector
 
 ```text
@@ -88,6 +96,10 @@ guard validated a larger candidate.
 Workers change or inspect the task-authorized product surface. The coordinator owns routing and the
 compact frontier. DFS and method mutations use their named roles. The external supervisor owns
 successor processes; a retiring coordinator never launches or acknowledges one.
+
+DFS slice markers remain as durable reopen and history indexes after acceptance. Removing the
+accepted item from the active ledger removes its live pointers; it does not rewrite the DFS merely
+to delete markers.
 
 Completion is the fixed point:
 

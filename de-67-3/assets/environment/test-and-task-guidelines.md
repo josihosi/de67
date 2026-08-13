@@ -35,7 +35,8 @@ to stop and report expected versus observed behavior when direct evidence invali
 ## Worker and model selection
 
 Use the weakest sufficient Phase-2-proved model and effort for understood implementation. Give one
-self-contained brief per task. Select Luna through the trusted project default and Terra explicitly;
+self-contained brief per task containing the claim's validated DFS slice ids and extracted text;
+workers do not rediscover the DFS index or preload the whole DFS. Select Luna through the trusted project default and Terra explicitly;
 the effort remains task-specific. Use a stronger implementation-capable model for ambiguous
 ownership, causal diagnosis, risky cross-cutting work, or an exploration learning goal that requires
 it. Choose or change the route and worker from the task, current evidence, context fit, and

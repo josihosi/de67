@@ -31,11 +31,16 @@ Prepare only the selected red-to-green status change, then validate it:
 python <active-de-67-3-skill>/scripts/mutation_guard.py complete-dfs --before <before-DFS> --after <candidate-DFS> --claim R-001 --state .de67/state/deadlines.sqlite3 --lineage PROJECT --task W-001
 ```
 
-After promotion, remove the accepted active item and validate the compact ledger:
+After promotion, remove the accepted active item, including its live `DFS slices` pointer line, and
+validate the compact ledger:
 
 ```text
 python <active-de-67-3-skill>/scripts/mutation_guard.py work-ledger --ledger .de67/work-ledger.md --dfs .de67/DFS.md --state .de67/state/deadlines.sqlite3 --lineage PROJECT
 ```
+
+Do not delete its DFS slice markers. They are durable structural indexes for history and guarded
+reopen, not active work. When an invalidated claim returns to the ledger, reuse its valid slices and
+add a guarded new slice only when the new evidence requires context outside them.
 
 ## Restore invalidated work
 
@@ -52,8 +57,8 @@ Prepare only that claim's accepted-to-red marker transition and validate it agai
 python <active-de-67-3-skill>/scripts/mutation_guard.py reopen-dfs --before <before-DFS> --after <candidate-DFS> --claim R-001 --state .de67/state/deadlines.sqlite3 --lineage PROJECT
 ```
 
-Promote the guarded DFS, add exactly that red claim back to the compact work ledger, and validate the
-ledger. A closure-premise finding continues in exploration and a later transition freezes a new set
+Promote the guarded DFS, add exactly that red claim and its slice pointers back to the compact work
+ledger, and validate the ledger. A closure-premise finding continues in exploration and a later transition freezes a new set
 of named gaps. An integrity breach of gap-owning proof leaves the old closed disposition intact and
 creates an open successor gap in the existing closure epoch unless it also falsifies the frozen premise. The
 guard rejects collateral DFS edits, a still-valid acceptance, or an invalidation without a durable

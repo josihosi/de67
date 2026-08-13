@@ -5,8 +5,15 @@ W_i = (mode, claim, item clock, attempt id, question or gaps, surface, proof rou
       -> product evidence or immutable finding
 ```
 
-Read this module, the self-contained task brief, and only the code, state, tests, tools, and current
-guideline sections needed by that task. Do not read the coordinator or predecessor transcript.
+Read this module, the self-contained task brief with its extracted claim-bound DFS slices, and only
+the code, state, tests, tools, and current guideline sections needed by that task. Do not read the
+whole DFS, coordinator transcript, or predecessor transcript. If direct evidence shows that the
+slice omitted necessary contract context, make a bounded nonterminal context request to the live
+coordinator; do not widen your own reading boundary silently. The coordinator may extract or add a
+guarded slice and return it to the same attempt when task, outcome, and proof stay unchanged. Record
+a finding only when the missing context actually falsifies a task premise. If the one-shot worker
+cannot receive more context, the coordinator abandons it with that exact reason and redispatches;
+do not consume a closure revision with a fake product finding.
 
 ## Exploration
 

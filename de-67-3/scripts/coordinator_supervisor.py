@@ -183,6 +183,7 @@ def coordinator_prompt(
         f"- {KERNEL_PATH}",
         f"- {COORDINATOR_ROLE_PATH}",
         "Do not read the phase router or sibling role modules unless the coordinator module routes a concrete event to one of them.",
+        "Read the active ledger and extract its guarded claim-bound DFS slices; do not preload the whole DFS unless the coordinator module's indexing or recovery condition applies.",
         "Read current code and Git state plus only relevant durable .de67 state; do not read predecessor logs or narrative handoffs.",
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every deadline-harness command; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",

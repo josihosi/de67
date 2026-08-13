@@ -15,9 +15,10 @@ pending, stop and route that component to the universal mutator. When it returns
 this ordinary stored-lane review for the same cycle. Do not resolve one component as the other or
 redraw either obligation.
 
-Use a fresh independent reviewer. Read the selected target, the current DFS information necessary
-to preserve the outcome, the latest ten short failure verdicts, and pending suggestions. Fetch long
-evidence only for an exact anomaly that can change the decision.
+Use a fresh independent `gpt-5.6-sol` reviewer at `ultra`, Josef's selected mutation profile. Read
+the selected target, the current DFS information necessary to preserve the outcome, the latest ten
+short failure verdicts, and pending suggestions. Fetch long evidence only for an exact anomaly that
+can change the decision. The selected profile does not expand this ordinary lane's authority.
 
 Return one to three concrete inefficiencies ranked by causal importance, direct evidence, a small
 candidate for the stored lane, an optional accompanying broad normal-method candidate, and proposed

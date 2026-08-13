@@ -5,13 +5,14 @@ deadline or integrity review and through a guarded random normal-method candidat
 
 ## Read state
 
-Begin fresh by reading compact timer status, the DFS red-claim index, both ledgers' current state,
-repository identity, current Git/code state, and returned worker evidence at the level needed to
-route the first event. Thereafter open only the active role module and changed or actionable
-guideline heading. Preserve attempt accounting and accepted evidence; do not inherit unsupported
-claims or logs from the previous coordinator. Default history is the latest ten short failure
-verdicts; fetch long detail only for the exact current anomaly. Never inventory or read
-`.de67/no-go-zone/`.
+Begin fresh by reading compact timer status, the active work ledger and validated claim-bound DFS
+slices, both ledgers' current state, repository identity, current Git/code state, and returned worker
+evidence at the level needed to route the first event. A legacy item without slice pointers enters
+the one-time bootstrap route; only that route, invalid slice state, or a concrete context gap reads
+the whole DFS. Thereafter open only the active role module and changed or actionable guideline
+heading. Preserve attempt accounting and accepted evidence; do not inherit unsupported claims or
+logs from the previous coordinator. Default history is the latest ten short failure verdicts; fetch
+long detail only for the exact current anomaly. Never inventory or read `.de67/no-go-zone/`.
 
 ## Assess failures
 
@@ -38,11 +39,14 @@ revise that gap before another attempt; abandonment alone permits the same revis
 ## Plan the work ledger
 
 When the current batch is empty, project no more than ten necessary still-red DFS claims into the
-work ledger. Mark each current item as exploration or closure. Exploration keeps one learning goal
-and exits with a strategy plus proof route; closure keeps the frozen remaining gaps and next action.
-Re-read code and define tests at planning time. Remove accepted items without a batch summary or
-archive. For a still-red claim, replace old task notes with only the current causal frontier and
-active route. Keep attempt history in the clock rather than duplicating it in the ledger.
+work ledger. Give every active item one pointer line naming its guarded, claim-bound DFS slices.
+Multiple slices carry non-contiguous outcome, owner, acceptance, and proof context without loading
+unrelated DFS text. Mark each current item as exploration or closure. Exploration keeps one learning
+goal and exits with a strategy plus proof route; closure keeps the frozen remaining gaps and next
+action. Re-read code and define tests at planning time. Remove accepted items and their live pointer
+line without a batch summary or archive; leave durable DFS markers in place for history and reopen.
+For a still-red claim, replace old task notes with only the current causal frontier and active route.
+Keep attempt history in the clock rather than duplicating it in the ledger.
 
 ## Coordinate workers
 
@@ -86,9 +90,11 @@ guard or application clears nothing. After a guarded promotion, request a restar
 external supervisor owns the successor; the old coordinator never launches or acknowledges it. DFS
 and deadline mutations remain independent when the same evidence activates both.
 
-When the harness reports a due random improvement review, block new dispatch. Give a genuinely
-independent reviewer the stored target, current guidance/DFS, the latest ten short failure verdicts,
-and pending scratch. The stored ordinary attempt cadence remains the private `[10, 30]` draw; do not
+When the harness reports a due random improvement review, block new dispatch. Give a fresh
+`gpt-5.6-sol` reviewer at `ultra`, Josef's selected mutation profile, the stored target, current
+guidance/DFS, the latest ten short failure verdicts, and pending scratch. Use the same profile for
+deadline and integrity mutation reviews. Model choice changes no lane authority or guard. The
+stored ordinary attempt cadence remains the private `[10, 30]` draw; do not
 redraw it. Require one to three ranked evidence-backed inefficiencies, the legacy stored-lane target
 change or guarded DFS no-op, and optionally an accompanying broad normal-method candidate. The old
 coordinator applies only what the joint guard validates, consumes the ledger after a real mutation,

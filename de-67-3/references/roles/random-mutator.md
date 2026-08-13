@@ -26,10 +26,13 @@ treatment of pending suggestions. The method candidate may affect the Phase-3 ro
 assets/guidance, tests and debug tools, or nonprotected orchestration scripts. It preserves the
 kernel, deadline harness, mutation guard, their hard tests, item clocks, and attempt accounting.
 
-Prepare baseline and candidate directories containing the two guideline files and DFS. Change only
-the stored target there. For a DFS draw, use a source-grounded same-outcome candidate or the exact
-guarded no-op when no honest change is available. If broad method learning is supported, also
-prepare whole-method baseline and candidate directories and pass both optional flags:
+Prepare baseline and candidate directories containing the two canonical guideline assets plus the
+workspace DFS. Change only the stored target there. A guideline draw promotes only the matching
+`de67-lab/de-67-3/assets/environment/` file; a DFS draw promotes only `.de67/DFS.md`. Never create or
+mutate workspace-local guideline copies. For a DFS draw, use a source-grounded same-outcome candidate
+or the exact guarded no-op when no honest change is available. If broad method learning is supported,
+copy the complete active Phase-3 tree as both the starting baseline and candidate, change only the
+candidate, and pass both optional flags:
 
 ```text
 python <active-de-67-3-skill>/scripts/mutation_guard.py random-review --baseline <lane-baseline-dir> --candidate <lane-candidate-dir> --state .de67/state/deadlines.sqlite3 --lineage PROJECT --cycle N --ledger-candidate <ledger-candidate> --method-baseline <active-live-method-snapshot> --method-candidate <complete-method-candidate>
@@ -37,13 +40,13 @@ python <active-de-67-3-skill>/scripts/mutation_guard.py random-review --baseline
 
 The legacy selected-lane target must still change, except for its guarded DFS no-op; a method
 candidate accompanies rather than replaces that decision. After an applied verdict, promote and
-checkpoint the validated target, broad method candidate when present, and empty scratch ledger. A
-guarded DFS no-op changes neither the DFS nor scratch ledger. Record every applied component and
-guard evidence:
+checkpoint method changes only in `de67-lab`; checkpoint a DFS change only in the product repository;
+then consume the workspace scratch ledger. A guarded DFS no-op changes neither the DFS nor scratch
+ledger. Record the applied component and guard evidence:
 
 ```text
 python <active-de-67-3-skill>/scripts/deadline_harness.py resolve-random-mutation --state .de67/state/deadlines.sqlite3 --lineage PROJECT --cycle N --component ordinary --evidence "<guard result and actual target/section>"
 ```
 
-Resolution queues the fresh-coordinator generation. Return to the old coordinator so it can retire;
-do not launch the successor. Failed validation resolves nothing.
+Resolution queues one fresh-coordinator generation. Return to the old coordinator so it can retire;
+it never launches the successor. Failed validation resolves nothing.

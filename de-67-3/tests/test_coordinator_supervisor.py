@@ -206,6 +206,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("Do not read the phase router", prompt)
         self.assertIn("extract its guarded claim-bound DFS slices", prompt)
         self.assertIn("do not preload the whole DFS", prompt)
+        self.assertIn("Canonical mutable method guidance is only under", prompt)
+        self.assertIn("Never read, create, or mutate workspace-local copies", prompt)
         for role_path in ROLE_ROOT.glob("*.md"):
             if role_path != COORDINATOR_ROLE_PATH:
                 self.assertNotIn(str(role_path), prompt)

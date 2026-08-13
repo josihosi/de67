@@ -1,6 +1,6 @@
 # DE-67
 
-> *Six becomes seven by finishing what it started.*
+When things become 67, you must de67.
 
 Sometimes work stops proceeding in order: the plan grows sideways, tests repeat, agents hand the
 problem around, and the finish line quietly moves away. DE-67 turns that drift back into a path from

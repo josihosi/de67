@@ -56,12 +56,16 @@ strict ledger validation. Add another
 guarded slice only when a concrete finding proves necessary context lies outside the current set.
 The tool, not the clock or model, allocates ids.
 
-Useful mutable sections are selected by heading rather than loaded as a ritual:
+Useful mutable sections are selected by heading from the active skill's
+`assets/environment/` directory rather than loaded as a ritual:
 
 - task preparation, task definition, worker choice, test definition, and estimation from
   `test-and-task-guidelines.md`;
 - read state, plan the ledger, coordinate workers, accept work, and continue/stop from
   `orchestrator-guidelines.md`.
+
+Do not read or update workspace-local guideline copies. `.de67/` owns the DFS, work ledger,
+mutation-suggestion scratch, and clock state; `de67-lab/de-67-3` alone owns method guidance.
 
 ## Choose exploration or closure
 

@@ -85,13 +85,32 @@ tooling, observation capability, or causal evidence. Close nonfinal named gaps o
 bound completed attempts. Claim acceptance closes the last open gap atomically and is blocked while
 any other gap remains. If later integrity evidence invalidates gap-owning proof, retain its closed
 record and work the appended open successor gap.
+When proof executes a compiled artifact, independently bind the exact invoked path and artifact
+identity to the unchanged relevant production/test snapshot and successful build that produced it;
+a version string or free-form "changed executable" claim does not establish provenance. Reject
+acceptance if those relevant inputs changed between build and run or the binding cannot be checked.
+For save/load or round-trip proof, inspect the fixture's serialized pre-state and the owning
+serializer/deserializer normalization for the relevant fields, execute the exact equality assertion
+in that bound artifact, and name the first field divergence on failure; a green command summary
+without that source-and-state inspection is not proof.
 
 ## Deadline estimation
 
 Estimate the whole ledger item from its first dispatch through honest claim acceptance, including
 exploration uncertainty, tooling/setup, implementation, build, proof, dependencies, and relevant
-prior tasks. State the reason in the work ledger. The claim-level ledger-item timer begins at its
-first actual worker dispatch. Later attempts receive new task ids without rebasing the item's start,
+prior tasks. State the reason in the work ledger. Before first dispatch, inspect persisted cadence
+and restart state against the item's required exploration terminal and finite closure-gap map. If
+that route can cross a mandatory mutation review or coordinator handover, name the dependency and
+include its review, checkpoint, supervisor handoff, and successor-startup route using relevant
+measured lifecycle evidence; if the route is not yet measurable, resolve that setup uncertainty
+before starting the item. Before every attempt after first dispatch—including same-coordinator gap
+transitions and successor-startup dispatches—calculate and report inherited remaining item time from
+the stored deadline and current clock, then compare it with the evidence-derived next-gap route
+estimate. If that estimate is not yet evidence-derived, resolve the setup uncertainty before
+dispatch. If the remaining time is insufficient, preserve the clock
+and finite recovery, expose the estimate or external-wait failure, and continue useful work without
+presenting it as on-time; a restart never authorizes rebasing. The claim-level ledger-item timer
+begins at its first actual worker dispatch. Later attempts receive new task ids without rebasing the item's start,
 estimate, or deadline; attempt-local durations guide coordination only. Findings and completed
 attempts do not stop the item clock, and honest late work still counts as a miss. Every miss creates both a micro recovery with
 a finite next-attempt map and a repeatable macro method candidate. Change only the method surfaces

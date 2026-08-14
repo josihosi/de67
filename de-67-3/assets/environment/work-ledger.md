@@ -16,6 +16,12 @@ lineage, claim, item start, estimate, or deadline. A finding may reopen explorat
 replaces that item identity or erases an attempt record. Delete an item when the outcome is accepted;
 do not duplicate transcripts, chronological task history, or batch summaries here.
 
+Every active item has exactly one indented pointer line containing one or more stable ids allocated
+by `mutation_guard.py mark-dfs-slices`. Multiple ids preserve non-contiguous claim, acceptance, and
+proof sections without loading the text between them. The markers remain in the DFS after
+acceptance; deleting the active item removes only these live pointers.
+
 ## Active work
 
-<!-- Example: - [ ] R-001 — Closure: make the named owner perform the DFS transition. -->
+<!-- Example item: - [ ] R-001 — Closure: make the named owner perform the DFS transition. -->
+<!-- Example pointer:   - DFS slices: `R-001-S001`, `R-001-S002` -->

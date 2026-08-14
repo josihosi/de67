@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -47,6 +48,9 @@ UNIVERSAL_MUTATOR_TEXT = (ROLE_ROOT / "universal-mutator.md").read_text(
     encoding="utf-8"
 )
 WORKER_TEXT = (ROLE_ROOT / "worker.md").read_text(encoding="utf-8")
+WORK_LEDGER_TEXT = (
+    ROOT / "assets" / "environment" / "work-ledger.md"
+).read_text(encoding="utf-8")
 
 
 class MutationGuardTests(unittest.TestCase):
@@ -72,6 +76,9 @@ class MutationGuardTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_canonical_work_ledger_template_has_no_fake_active_item(self) -> None:
+        self.assertEqual(guard.active_work_items(WORK_LEDGER_TEXT), ())
 
     @staticmethod
     def write_guidelines(root: Path, task_text: str, orchestrator_text: str) -> None:
@@ -321,13 +328,44 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("independent short and long diagnosis", output)
 
-    def write_dfs(self, text: str) -> Path:
+    def write_dfs(self, text: str, *, with_slices: bool = True) -> Path:
         path = self.root / "DFS.md"
+        if with_slices:
+            rendered: list[str] = []
+            for line in text.splitlines(keepends=True):
+                match = guard.STABLE_CLAIM.match(line.rstrip("\r\n"))
+                if match is not None:
+                    claim_id = guard._selected_claim_id(match.group("label"))
+                    ending = "\r\n" if line.endswith("\r\n") else "\n"
+                    rendered.append(
+                        f"<!-- DE67:DFS-SLICE:BEGIN id={claim_id}-S001 "
+                        f"claim={claim_id} -->{ending}"
+                    )
+                    rendered.append(line)
+                    rendered.append(
+                        f"<!-- DE67:DFS-SLICE:END id={claim_id}-S001 "
+                        f"claim={claim_id} -->{ending}"
+                    )
+                else:
+                    rendered.append(line)
+            text = "".join(rendered)
         path.write_text(text, encoding="utf-8")
         return path
 
-    def write_ledger(self, text: str) -> Path:
+    def write_ledger(self, text: str, *, with_slices: bool = True) -> Path:
         path = self.root / "work-ledger.md"
+        if with_slices:
+            rendered = []
+            for line in text.splitlines(keepends=True):
+                rendered.append(line)
+                match = guard.ACTIVE_ITEM.match(line.rstrip("\r\n"))
+                if match is not None:
+                    claim_id = guard._selected_claim_id(match.group("reference"))
+                    ending = "\r\n" if line.endswith("\r\n") else "\n"
+                    rendered.append(
+                        f"  - DFS slices: `{claim_id}-S001`{ending}"
+                    )
+            text = "".join(rendered)
         path.write_text(text, encoding="utf-8")
         return path
 
@@ -440,6 +478,271 @@ class MutationGuardTests(unittest.TestCase):
             guard.validate_work_ledger(
                 ledger, dfs, state=state, lineage_id="project"
             )
+
+    def slice_dfs(self) -> Path:
+        return self.write_dfs(
+            "# DFS\n\n"
+            "Shared contract.\n"
+            "Shared proof rule.\n\n"
+            "- [ ] 🔴 R-001 — First outcome\n"
+            "- [ ] 🔴 R-002 — Second outcome\n"
+            "- [ ] 🔴 R-003 — Third outcome\n"
+            "Tail context.\n",
+            with_slices=False,
+        )
+
+    def test_dfs_slice_insertion_is_stable_atomic_in_place_and_extracts_content(self) -> None:
+        dfs = self.slice_dfs()
+        semantic = dfs.read_bytes()
+
+        allocated = guard.insert_dfs_slices(
+            dfs, dfs, "R-001", ((3, 4), (6, 6))
+        )
+
+        self.assertEqual(allocated, ("R-001-S001", "R-001-S002"))
+        self.assertEqual(
+            guard.strip_dfs_slice_markers(guard._read_utf8_exact(dfs)).encode(),
+            semantic,
+        )
+        extracted = guard.extract_dfs_slices(dfs, "R-001", allocated)
+        self.assertEqual(
+            extracted,
+            os.linesep.join(
+                (
+                    "Shared contract.",
+                    "Shared proof rule.",
+                    "- [ ] 🔴 R-001 — First outcome",
+                    "",
+                )
+            ),
+        )
+        self.assertNotIn("DE67:DFS-SLICE", extracted)
+
+        first_render = dfs.read_bytes()
+        repeated = guard.insert_dfs_slices(
+            dfs, dfs, "R-001", ((3, 4), (6, 6))
+        )
+        self.assertEqual(repeated, allocated)
+        self.assertEqual(dfs.read_bytes(), first_render)
+
+    def test_dfs_slices_allow_nested_and_identical_other_claims_but_reject_crossing(self) -> None:
+        dfs = self.slice_dfs()
+        self.assertEqual(
+            guard.insert_dfs_slices(dfs, dfs, "R-001", ((3, 4),)),
+            ("R-001-S001",),
+        )
+        self.assertEqual(
+            guard.insert_dfs_slices(dfs, dfs, "R-002", ((3, 4),)),
+            ("R-002-S001",),
+        )
+        slices = guard.parse_dfs_slices(dfs.read_text(encoding="utf-8"))
+        self.assertEqual({item.slice_id for item in slices}, {"R-001-S001", "R-002-S001"})
+        self.assertEqual(
+            guard.extract_dfs_slices(dfs, "R-002", ("R-002-S001",)),
+            os.linesep.join(("Shared contract.", "Shared proof rule.", "")),
+        )
+
+        with self.assertRaisesRegex(guard.GuardError, "crosses existing slice"):
+            guard.insert_dfs_slices(dfs, dfs, "R-003", ((4, 5),))
+
+    def test_dfs_slice_parser_rejects_crossed_duplicate_and_fenced_markers(self) -> None:
+        crossed = (
+            "<!-- DE67:DFS-SLICE:BEGIN id=R-001-S001 claim=R-001 -->\n"
+            "<!-- DE67:DFS-SLICE:BEGIN id=R-002-S001 claim=R-002 -->\n"
+            "content\n"
+            "<!-- DE67:DFS-SLICE:END id=R-001-S001 claim=R-001 -->\n"
+            "<!-- DE67:DFS-SLICE:END id=R-002-S001 claim=R-002 -->\n"
+        )
+        with self.assertRaisesRegex(guard.GuardError, "crossed"):
+            guard.parse_dfs_slices(crossed)
+
+        duplicate = (
+            "<!-- DE67:DFS-SLICE:BEGIN id=R-001-S001 claim=R-001 -->\n"
+            "one\n"
+            "<!-- DE67:DFS-SLICE:END id=R-001-S001 claim=R-001 -->\n"
+            "<!-- DE67:DFS-SLICE:BEGIN id=R-001-S001 claim=R-001 -->\n"
+            "two\n"
+            "<!-- DE67:DFS-SLICE:END id=R-001-S001 claim=R-001 -->\n"
+        )
+        with self.assertRaisesRegex(guard.GuardError, "Duplicate"):
+            guard.parse_dfs_slices(duplicate)
+
+        with self.assertRaisesRegex(guard.GuardError, "fenced block"):
+            guard.parse_dfs_slices(
+                "```\n<!-- DE67:DFS-SLICE:BEGIN id=R-001-S001 claim=R-001 -->\n```\n"
+            )
+
+    def test_anchor_only_candidate_cannot_smuggle_semantic_dfs_edits(self) -> None:
+        before = self.slice_dfs()
+        candidate = self.root / "slice-candidate.md"
+        guard.insert_dfs_slices(before, candidate, "R-001", ((3, 4),))
+        self.assertEqual(
+            guard.validate_dfs_slice_candidate(before, candidate),
+            ("R-001-S001",),
+        )
+        candidate.write_text(
+            candidate.read_text(encoding="utf-8").replace(
+                "Shared contract.", "Changed contract."
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(guard.GuardError, "other than validated marker"):
+            guard.validate_dfs_slice_candidate(before, candidate)
+
+    def test_work_ledger_slice_status_bootstraps_then_strictly_binds_claim(self) -> None:
+        dfs = self.slice_dfs()
+        guard.insert_dfs_slices(dfs, dfs, "R-001", ((3, 4),))
+        pointerless = self.write_ledger(
+            "# Work ledger\n\n## Active work\n\n- [ ] R-001 — First outcome\n",
+            with_slices=False,
+        )
+        self.assertEqual(
+            guard.dfs_slice_status(pointerless, dfs)[0][1], "missing"
+        )
+        with self.assertRaisesRegex(guard.GuardError, "has no DFS slices"):
+            guard.validate_work_ledger(pointerless, dfs)
+
+        completed_pointer_is_not_in_active_block = self.write_ledger(
+            "# Work ledger\n\n## Active work\n\n"
+            "- [ ] R-001 — First outcome\n"
+            "- [x] R-002 — Second outcome\n"
+            "  - DFS slices: `R-001-S001`\n",
+            with_slices=False,
+        )
+        self.assertEqual(
+            guard.dfs_slice_status(
+                completed_pointer_is_not_in_active_block, dfs
+            )[0][1],
+            "missing",
+        )
+
+        ready = self.write_ledger(
+            "# Work ledger\n\n## Active work\n\n"
+            "- [ ] R-001 — First outcome\n"
+            "  - DFS slices: `R-001-S001`\n",
+            with_slices=False,
+        )
+        self.assertEqual(guard.dfs_slice_status(ready, dfs)[0][1], "ready")
+        self.assertEqual(
+            guard.validate_work_ledger(ready, dfs),
+            ("R-001 — First outcome",),
+        )
+
+        missing = self.write_ledger(
+            "# Work ledger\n\n## Active work\n\n"
+            "- [ ] R-001 — First outcome\n"
+            "  - DFS slices: `R-001-S999`\n",
+            with_slices=False,
+        )
+        self.assertEqual(guard.dfs_slice_status(missing, dfs)[0][1], "invalid")
+        with self.assertRaisesRegex(guard.GuardError, "missing DFS slice"):
+            guard.validate_work_ledger(missing, dfs)
+
+        guard.insert_dfs_slices(dfs, dfs, "R-002", ((7, 7),))
+        wrong_owner = self.write_ledger(
+            "# Work ledger\n\n## Active work\n\n"
+            "- [ ] R-001 — First outcome\n"
+            "  - DFS slices: `R-002-S001`\n",
+            with_slices=False,
+        )
+        with self.assertRaisesRegex(guard.GuardError, "another claim"):
+            guard.validate_work_ledger(wrong_owner, dfs)
+
+    def test_dfs_slice_cli_marks_statuses_and_extracts_only_context(self) -> None:
+        dfs = self.slice_dfs()
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            result = guard.main(
+                [
+                    "mark-dfs-slices", "--source", str(dfs), "--output", str(dfs),
+                    "--claim", "R-001", "--range", "3:4", "--range", "6:6",
+                ]
+            )
+        self.assertEqual(result, 0, stdout.getvalue())
+        self.assertIn("R-001-S002", stdout.getvalue())
+
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            result = guard.main(
+                [
+                    "extract-dfs-slices", "--dfs", str(dfs), "--claim", "R-001",
+                    "--slice", "R-001-S002",
+                ]
+            )
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            stdout.getvalue(),
+            os.linesep.join(("- [ ] 🔴 R-001 — First outcome", "")),
+        )
+
+        ledger = self.write_ledger(
+            "# Work ledger\n\n## Active work\n\n- [ ] R-001 — First outcome\n",
+            with_slices=False,
+        )
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            result = guard.main(
+                ["dfs-slice-status", "--ledger", str(ledger), "--dfs", str(dfs)]
+            )
+        self.assertEqual(result, 0)
+        self.assertIn("missing: R-001", stdout.getvalue())
+
+    def test_dfs_slice_cli_writes_utf8_under_a_legacy_windows_code_page(self) -> None:
+        dfs = self.slice_dfs()
+        guard.insert_dfs_slices(dfs, dfs, "R-001", ((6, 6),))
+        encoded = io.BytesIO()
+        legacy_stdout = io.TextIOWrapper(encoded, encoding="cp1252")
+
+        with patch.object(guard.sys, "stdout", legacy_stdout):
+            result = guard.main(
+                [
+                    "extract-dfs-slices", "--dfs", str(dfs), "--claim", "R-001",
+                    "--slice", "R-001-S001",
+                ]
+            )
+            legacy_stdout.flush()
+
+        self.assertEqual(result, 0)
+        self.assertIn("🔴".encode("utf-8"), encoded.getvalue())
+
+    def test_dfs_slice_marker_lock_fails_fast_and_is_always_cleaned_up(self) -> None:
+        dfs = self.slice_dfs()
+        original = dfs.read_bytes()
+        lock = dfs.parent / f".{dfs.name}.de67-dfs-slices.lock"
+        lock.write_text("held\n", encoding="utf-8")
+        with self.assertRaisesRegex(guard.GuardError, "locked by another"):
+            guard.insert_dfs_slices(dfs, dfs, "R-001", ((3, 4),))
+        self.assertEqual(dfs.read_bytes(), original)
+        lock.unlink()
+
+        with self.assertRaisesRegex(guard.GuardError, "Invalid inclusive"):
+            guard.insert_dfs_slices(dfs, dfs, "R-001", ((0, 4),))
+        self.assertFalse(lock.exists())
+        guard.insert_dfs_slices(dfs, dfs, "R-001", ((3, 4),))
+        self.assertFalse(lock.exists())
+
+    def test_universal_dfs_candidate_preserves_every_durable_slice_binding(self) -> None:
+        before = self.root / "universal-sliced-before.md"
+        candidate = self.root / "universal-sliced-candidate.md"
+        before.write_text(self.expansion_dfs(), encoding="utf-8")
+        claim_line = next(
+            number
+            for number, line in enumerate(
+                guard._read_utf8_exact(before).splitlines(), start=1
+            )
+            if "R-002" in line and guard.STABLE_CLAIM.match(line)
+        )
+        guard.insert_dfs_slices(
+            before, before, "R-002", ((claim_line, claim_line),)
+        )
+        candidate.write_bytes(
+            guard.strip_dfs_slice_markers(
+                guard._read_utf8_exact(before)
+            ).encode("utf-8")
+        )
+
+        with self.assertRaisesRegex(guard.GuardError, "durable slice R-002-S001"):
+            guard.validate_universal_dfs_mutation(before, candidate)
 
     def test_exact_selected_marker_removal_is_accepted(self) -> None:
         before = self.root / "before.md"
@@ -682,6 +985,9 @@ class MutationGuardTests(unittest.TestCase):
                 self.assertIn(f"from {trigger}", output)
 
                 _, reopened_dfs = self.reopening_files()
+                guard.insert_dfs_slices(
+                    reopened_dfs, reopened_dfs, "R-001", ((5, 5),)
+                )
                 ledger = self.write_ledger(
                     "# Work ledger\n\n## Active work\n\n"
                     "- [ ] R-001 — First\n"
@@ -1547,9 +1853,12 @@ class MutationGuardTests(unittest.TestCase):
         self.assertNotIn("worker retirement", combined)
 
     def test_sol_ultra_is_reserved_for_mutation_roles(self) -> None:
-        self.assertIn("exact `gpt-5.6-sol` / `ultra`", TASK_GUIDANCE)
+        normalized_task_guidance = " ".join(TASK_GUIDANCE.split())
+        self.assertIn(
+            "exact `gpt-5.6-sol` / `ultra` pair", normalized_task_guidance
+        )
         self.assertIn("reserved exclusively for mutation roles", TASK_GUIDANCE)
-        self.assertIn("reserved for mutation roles", COORDINATOR_TEXT)
+        self.assertIn("Never use the exact `gpt-5.6-sol` /", COORDINATOR_TEXT)
         self.assertIn("`ultra` pair is mutation-only", WORKER_TEXT)
         self.assertIn("Ordinary workers may be Luna, Terra, or Sol", WORKER_TEXT)
 

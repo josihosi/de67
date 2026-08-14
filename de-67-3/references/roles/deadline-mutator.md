@@ -6,8 +6,9 @@ M_deadline = exact incident + task evidence
              -> guarded promotion and/or isolated candidates
 ```
 
-This is a fresh independent causal review. It is not the missed worker and does not inherit that
-worker's or coordinator's explanation as fact.
+This is a fresh independent causal review by `gpt-5.6-sol` at `ultra`, Josef's selected mutation
+reviewer. It is not the missed worker and does not inherit that worker's or coordinator's
+explanation as fact. Model strength adds no authority and does not expand the normal guard.
 
 Every deadline miss produces both outputs:
 
@@ -34,7 +35,7 @@ erase the missed attempt.
 ## Record the incident
 
 Put the short verdict, one causal paragraph, direct evidence, micro recovery, macro candidate, and
-affected surface in `mutation-suggestions.md`. Attach a deadline diagnosis to its stable claim:
+affected surface in `.de67/mutation-suggestions.md`. Attach a deadline diagnosis to its stable claim:
 
 ```text
 python <active-de-67-3-skill>/scripts/deadline_harness.py diagnose-claim-deadline --state .de67/state/deadlines.sqlite3 --lineage PROJECT --claim R-001 --short-verdict "<failure mode>" --diagnosis "<first contradicted premise and direct evidence>"
@@ -52,10 +53,12 @@ outcome, proof, permissions, item clock, or attempt accounting. Normal mutation 
 `references/kernel.md`, `scripts/deadline_harness.py`, `scripts/mutation_guard.py`, and their hard
 tests.
 
-Apply only the portion covered by a current authority and guard. Snapshot both live guideline files,
-prepare candidate copies plus an empty scratch-ledger candidate, and snapshot the whole
-Phase-3 method into baseline and repeatable candidate directories. Run the guideline and broad
-normal-method review as one transaction:
+Apply only the portion covered by a current authority and guard. Snapshot the two canonical
+guideline assets from the active Phase-3 skill, prepare candidate copies plus an empty
+scratch-ledger candidate, and snapshot the complete active Phase-3 method into baseline and
+repeatable candidate directories. The method baseline must be byte-identical to the complete active
+tree. Build the candidate by changing that snapshot only; never seed it from workspace-local
+guidelines or another checkout. Run the guideline and broad normal-method review as one transaction:
 
 ```text
 python <active-de-67-3-skill>/scripts/mutation_guard.py guidelines --baseline <guideline-baseline-dir> --candidate <guideline-candidate-dir> --state .de67/state/deadlines.sqlite3 --lineage PROJECT --task W-001 --incident-kind <incident-kind> --ledger-candidate <empty-ledger-candidate> --method-baseline <active-live-method-snapshot> --method-candidate <complete-method-candidate>
@@ -68,8 +71,10 @@ isolated with its proof plan.
 
 On success the guard atomically stores and prints a digest-bound receipt for this exact lineage,
 task, incident kind, candidate, active live tree, and protected baseline. Apply the complete guarded
-candidate so it becomes the active Phase-3 tree. Free-form evidence cannot replace the receipt, and
-one receipt cannot cross incidents.
+candidate only to the canonical `de67-lab/de-67-3` tree, checkpoint it in `de67-lab`, and use only
+that repository's routine push. Never edit or commit `.de67/test-and-task-guidelines.md` or
+`.de67/orchestrator-guidelines.md`. Free-form evidence cannot replace the receipt, and one receipt
+cannot cross incidents.
 
 After applying the finite local recovery, resolve `micro`; after guarded promotion and checkpoint,
 resolve `macro` with its exact guard and applied-candidate evidence:

@@ -19,16 +19,53 @@ python <active-de-67-3-skill>/scripts/deadline_harness.py startup-view --state .
 ```
 
 If `DE67_COORDINATOR_ACK_ARGV_JSON` exists, execute that exact argument array without a shell before
-new dispatch. Read the DFS red-claim index, active ledger, pending suggestions, workspace binding,
-actual Git state, and only current code or guideline sections needed for the next decision. Do not
-read predecessor logs or every role module.
+new dispatch. Read the active ledger, pending suggestions, workspace binding, actual Git state, and
+only current code or guideline sections needed for the next decision. Inspect slice status first:
 
-Useful mutable sections are selected by heading rather than loaded as a ritual:
+```text
+python <active-de-67-3-skill>/scripts/mutation_guard.py dfs-slice-status --ledger .de67/work-ledger.md --dfs .de67/DFS.md
+```
+
+`missing` is an explicit legacy bootstrap state, never completion permission. If every active item
+is ready, validate the strict ledger and use each item's claim-bound slice ids to extract its DFS
+context:
+
+```text
+python <active-de-67-3-skill>/scripts/mutation_guard.py work-ledger --ledger .de67/work-ledger.md --dfs .de67/DFS.md --state .de67/state/deadlines.sqlite3 --lineage PROJECT
+python <active-de-67-3-skill>/scripts/mutation_guard.py extract-dfs-slices --dfs .de67/DFS.md --claim R-001 --slice R-001-S001 --slice R-001-S002
+```
+
+Do not preload the whole DFS, predecessor logs, or every role module. The extraction command emits
+the marked blocks in ledger order and rejects missing, malformed, crossed, duplicate, or
+other-claim pointers.
+
+If any still-red item is missing slices, perform one bootstrap indexing pass: read the DFS once,
+select every non-contiguous range needed to preserve every active item's outcome, owner, acceptance
+criteria, and proof route, and let the guard allocate the ids:
+
+```text
+python <active-de-67-3-skill>/scripts/mutation_guard.py mark-dfs-slices --source .de67/DFS.md --output .de67/DFS.md --claim R-001 --range 80:104 --range 310:321
+```
+
+Ranges are inclusive logical DFS lines and exclude existing marker lines. The command proves a
+marker-only change, rechecks the source, and atomically replaces it; do not hand-edit or manually
+promote a candidate. A red claim uses the exact DFS form `- [ ] 🔴 R-001 — ...`. Record all
+returned ids on exactly one exact indented ledger line, including the bullet and backticks:
+``  - DFS slices: `R-001-S001`, `R-001-S002` ``. Repeat for every missing active item, then require
+strict ledger validation. Add another
+guarded slice only when a concrete finding proves necessary context lies outside the current set.
+The tool, not the clock or model, allocates ids.
+
+Useful mutable sections are selected by heading from the active skill's
+`assets/environment/` directory rather than loaded as a ritual:
 
 - task preparation, task definition, worker choice, test definition, and estimation from
   `test-and-task-guidelines.md`;
 - read state, plan the ledger, coordinate workers, accept work, and continue/stop from
   `orchestrator-guidelines.md`.
+
+Do not read or update workspace-local guideline copies. `.de67/` owns the DFS, work ledger,
+mutation-suggestion scratch, and clock state; `de67-lab/de-67-3` alone owns method guidance.
 
 ## Choose exploration or closure
 
@@ -102,9 +139,12 @@ Choose model and effort from the Phase-2-proved roster. Reuse a relevant worker 
 according to task fit, evidence, context health, and coordination cost. Only a new worker requires
 `fork_turns="none"` and a self-contained brief.
 
-The exact `gpt-5.6-sol` / `ultra` pair is reserved for mutation roles. Never use it for an ordinary
-worker. Ordinary workers may be Luna, Terra, or Sol according to task fit, but ordinary Sol uses a
-Phase-2-proved non-ultra effort.
+Josef's selected mutation reviewer is a fresh `gpt-5.6-sol` worker at `ultra`. Use that exact
+profile for deadline, integrity, ordinary random, and eligible rare universal mutation roles. This
+does not broaden a normal mutation's protected surface or turn an unavailable rare trigger into an
+eligible one; role authority and guards remain unchanged. Never use the exact `gpt-5.6-sol` /
+`ultra` pair for an ordinary worker. Ordinary workers may be Luna, Terra, or Sol according to task
+fit, but ordinary Sol uses a Phase-2-proved non-ultra effort.
 
 Bind the immutable ledger-item clock at its first actual dispatch and record every attempt:
 
@@ -132,9 +172,10 @@ python <active-de-67-3-skill>/scripts/deadline_harness.py revise-gap --state .de
 
 Only an abandoned attempt may retry the same revision.
 
-The brief names exploration or closure, one claim, the exact question or gaps, code and state
-boundaries, the honest proof route, and the current attempt identity. A retry uses a new task id but
-does not restart the claim's ledger-item clock. Unknown overlap serializes.
+The brief names exploration or closure, one claim, its slice ids and extracted DFS text, the exact
+question or gaps, code and state boundaries, the honest proof route, and the current attempt
+identity. Do not make the worker rediscover the DFS index. A retry uses a new task id but does not
+restart the claim's ledger-item clock. Unknown overlap serializes.
 
 Remain live while workers are outstanding. Use the native non-polling wait or deadline wakeup and
 act on the first worker or clock event. Do not ingest a full transcript to clarify an active task.
@@ -153,9 +194,10 @@ that gap and records claim acceptance atomically. Never accept while another nam
 Treat an integrity-created successor gap in `startup-view.closure_gaps` as live red work while
 preserving the invalidated closed disposition.
 
-After the steward closes an item, delete it from the ledger and continue. Checkpoint accepted work
-with an ordinary commit; the configured hook owns its exact routine push. Never force or repair
-history after a rejected push.
+After the steward closes an item, delete its active ledger block and therefore its live slice
+pointers, then continue. Leave the guarded markers in the DFS as durable reopen and history indexes.
+Checkpoint accepted work with an ordinary commit; the configured hook owns its exact routine push.
+Never force or repair history after a rejected push.
 
 After an applied guarded method or DFS mutation requests a restart, make the compact frontier
 durable and retire. Do not launch or acknowledge the successor.

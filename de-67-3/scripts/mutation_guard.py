@@ -6,11 +6,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
 import sys
+import tempfile
 import time
+from typing import NamedTuple
 
 
 TASK_GUIDELINES = "test-and-task-guidelines.md"
@@ -28,6 +31,20 @@ FENCE = re.compile(r"^[ \t]*(?P<marker>`{3,}|~{3,})")
 CLAIM_REFERENCE = r"R-[A-Za-z0-9._-]+[ \t]+—[ \t]+\S.*?"
 CLAIM_ID = re.compile(r"^R-[A-Za-z0-9._-]+$")
 ACTIVE_ITEM = re.compile(rf"^- \[ \] (?P<reference>{CLAIM_REFERENCE})[ \t]*$")
+DFS_SLICE_ID_PATTERN = r"R-[A-Za-z0-9._-]+-S[0-9]{3,}"
+DFS_SLICE_ID = re.compile(rf"^{DFS_SLICE_ID_PATTERN}$")
+DFS_SLICE_MARKER = re.compile(
+    rf"^<!-- DE67:DFS-SLICE:(?P<kind>BEGIN|END) "
+    rf"id=(?P<id>{DFS_SLICE_ID_PATTERN}) "
+    rf"claim=(?P<claim>R-[A-Za-z0-9._-]+) -->$"
+)
+DFS_SLICE_MARKER_TOKEN = "DE67:DFS-SLICE:"
+DFS_SLICE_LEDGER_TOKEN = "DFS slices:"
+DFS_SLICE_LEDGER = re.compile(
+    rf"^[ \t]+- DFS slices:[ \t]+"
+    rf"(?P<ids>`{DFS_SLICE_ID_PATTERN}`(?:,[ \t]*`{DFS_SLICE_ID_PATTERN}`)*)"
+    rf"[ \t]*$"
+)
 RED_CLAIM = re.compile(
     rf"^(?P<lead>- )\[ \] 🔴 (?P<label>{CLAIM_REFERENCE})(?P<trailing>[ \t]*)$"
 )
@@ -65,6 +82,18 @@ IGNORED_METHOD_PARTS = {".git", "__pycache__", ".pytest_cache"}
 
 class GuardError(RuntimeError):
     """The proposed Markdown state breaks a frozen DE-67 invariant."""
+
+
+class DfsSlice(NamedTuple):
+    """One validated durable DFS context slice."""
+
+    slice_id: str
+    claim_id: str
+    begin_index: int
+    end_index: int
+    logical_start: int
+    logical_end: int
+    content: str
 
 
 def read_markdown(path: Path) -> str:
@@ -1368,6 +1397,421 @@ def validate_random_dfs_mutation(before: Path, candidate: Path) -> tuple[str, ..
     )
 
 
+def _read_utf8_exact(path: Path) -> str:
+    if not path.is_file():
+        raise GuardError(f"Missing Markdown file: {path}")
+    return path.read_bytes().decode("utf-8")
+
+
+def _atomic_write_utf8(path: Path, text: str) -> None:
+    """Replace one output only after its complete UTF-8 payload is durable."""
+
+    if not path.parent.is_dir():
+        raise GuardError(f"Output directory does not exist: {path.parent}")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.de67-",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(text.encode("utf-8"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        if path.exists():
+            os.chmod(temporary, path.stat().st_mode)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _write_stdout_utf8(text: str) -> None:
+    """Emit extracted DFS text without inheriting a legacy console code page."""
+
+    binary = getattr(sys.stdout, "buffer", None)
+    if binary is None:
+        sys.stdout.write(text)
+        return
+    binary.write(text.encode("utf-8"))
+    binary.flush()
+
+
+def parse_dfs_slices(dfs_text: str) -> tuple[DfsSlice, ...]:
+    """Validate and return every durable properly nested DFS slice marker pair."""
+
+    lines = dfs_text.splitlines(keepends=True)
+    markers: dict[int, re.Match[str]] = {}
+    fence_character: str | None = None
+    for index, line in enumerate(lines):
+        body = line.rstrip("\r\n")
+        fence = FENCE.match(body)
+        if fence:
+            character = fence.group("marker")[0]
+            if fence_character is None:
+                fence_character = character
+            elif fence_character == character:
+                fence_character = None
+        if DFS_SLICE_MARKER_TOKEN not in body:
+            continue
+        if fence_character is not None or fence is not None:
+            raise GuardError(
+                f"DFS slice marker token is not allowed in a fenced block on line {index + 1}"
+            )
+        marker = DFS_SLICE_MARKER.fullmatch(body)
+        if marker is None:
+            raise GuardError(f"Malformed DFS slice marker on line {index + 1}")
+        if not marker.group("id").startswith(f"{marker.group('claim')}-S"):
+            raise GuardError(
+                f"DFS slice id is not bound to its marker claim on line {index + 1}"
+            )
+        markers[index] = marker
+
+    slices: list[DfsSlice] = []
+    active: list[tuple[str, str, int, int]] = []
+    seen_ids: set[str] = set()
+    logical_line = 0
+    for index, line in enumerate(lines):
+        marker = markers.get(index)
+        if marker is None:
+            logical_line += 1
+            continue
+        kind = marker.group("kind")
+        slice_id = marker.group("id")
+        claim_id = marker.group("claim")
+        if kind == "BEGIN":
+            if slice_id in seen_ids:
+                raise GuardError(f"Duplicate DFS slice marker id: {slice_id}")
+            seen_ids.add(slice_id)
+            active.append((slice_id, claim_id, index, logical_line))
+            continue
+        if not active:
+            raise GuardError(f"DFS slice END has no matching BEGIN: {slice_id}")
+        begin_id, begin_claim, begin_index, logical_before = active[-1]
+        if slice_id != begin_id or claim_id != begin_claim:
+            raise GuardError(
+                "DFS slice markers are crossed or bind different ids/claims"
+            )
+        logical_start = logical_before + 1
+        logical_end = logical_line
+        if logical_end < logical_start:
+            raise GuardError(f"DFS slice is empty: {slice_id}")
+        slices.append(
+            DfsSlice(
+                slice_id=slice_id,
+                claim_id=claim_id,
+                begin_index=begin_index,
+                end_index=index,
+                logical_start=logical_start,
+                logical_end=logical_end,
+                content="".join(
+                    nested_line
+                    for nested_line in lines[begin_index + 1 : index]
+                    if DFS_SLICE_MARKER_TOKEN
+                    not in nested_line.rstrip("\r\n")
+                ),
+            )
+        )
+        active.pop()
+    if active:
+        raise GuardError(f"DFS slice BEGIN has no matching END: {active[-1][0]}")
+    bindings: set[tuple[str, int, int]] = set()
+    for item in slices:
+        binding = (item.claim_id, item.logical_start, item.logical_end)
+        if binding in bindings:
+            raise GuardError(
+                "A claim cannot bind two DFS slice ids to the same logical range: "
+                f"{item.claim_id} {item.logical_start}:{item.logical_end}"
+            )
+        bindings.add(binding)
+    return tuple(slices)
+
+
+def strip_dfs_slice_markers(dfs_text: str) -> str:
+    """Return exact DFS text with only validated marker lines removed."""
+
+    parse_dfs_slices(dfs_text)
+    return "".join(
+        line
+        for line in dfs_text.splitlines(keepends=True)
+        if DFS_SLICE_MARKER_TOKEN not in line.rstrip("\r\n")
+    )
+
+
+def validate_dfs_slice_candidate(before: Path, candidate: Path) -> tuple[str, ...]:
+    """Prove an anchor-only candidate preserves every semantic DFS byte."""
+
+    baseline = _read_utf8_exact(before)
+    proposed = _read_utf8_exact(candidate)
+    baseline_slices = parse_dfs_slices(baseline)
+    candidate_slices = parse_dfs_slices(proposed)
+    if strip_dfs_slice_markers(baseline) != strip_dfs_slice_markers(proposed):
+        raise GuardError(
+            "DFS slice candidate changes content other than validated marker lines"
+        )
+    candidate_by_id = {item.slice_id: item for item in candidate_slices}
+    for item in baseline_slices:
+        replacement = candidate_by_id.get(item.slice_id)
+        if replacement is None or (
+            replacement.claim_id,
+            replacement.logical_start,
+            replacement.logical_end,
+            replacement.content,
+        ) != (
+            item.claim_id,
+            item.logical_start,
+            item.logical_end,
+            item.content,
+        ):
+            raise GuardError(
+                f"DFS slice candidate removes or rebinds durable slice {item.slice_id}"
+            )
+    baseline_ids = {item.slice_id for item in baseline_slices}
+    return tuple(
+        item.slice_id for item in candidate_slices if item.slice_id not in baseline_ids
+    )
+
+
+def _slice_id(
+    claim_id: str,
+    occupied: set[str],
+) -> str:
+    prefix = f"{claim_id}-S"
+    used_ordinals = [
+        int(slice_id[len(prefix) :])
+        for slice_id in occupied
+        if slice_id.startswith(prefix) and slice_id[len(prefix) :].isdigit()
+    ]
+    ordinal = max(used_ordinals, default=0) + 1
+    candidate = f"{prefix}{ordinal:03d}"
+    if candidate in occupied:
+        raise GuardError(f"Cannot allocate a collision-free DFS slice id: {candidate}")
+    return candidate
+
+
+def _line_ending(line: str) -> str:
+    if line.endswith("\r\n"):
+        return "\r\n"
+    if line.endswith("\n"):
+        return "\n"
+    if line.endswith("\r"):
+        return "\r"
+    return ""
+
+
+def _acquire_dfs_path_locks(paths: tuple[Path, ...]) -> tuple[tuple[int, Path], ...]:
+    acquired: list[tuple[int, Path]] = []
+    lock_paths = sorted(
+        {
+            path.parent / f".{path.name}.de67-dfs-slices.lock"
+            for path in paths
+        },
+        key=lambda path: str(path.resolve()),
+    )
+    try:
+        for lock_path in lock_paths:
+            try:
+                descriptor = os.open(
+                    lock_path,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o600,
+                )
+            except FileExistsError as error:
+                raise GuardError(
+                    f"DFS slice path is locked by another marker operation: {lock_path}"
+                ) from error
+            acquired.append((descriptor, lock_path))
+            os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii"))
+    except Exception:
+        _release_dfs_path_locks(tuple(acquired))
+        raise
+    return tuple(acquired)
+
+
+def _release_dfs_path_locks(locks: tuple[tuple[int, Path], ...]) -> None:
+    for descriptor, lock_path in reversed(locks):
+        try:
+            os.close(descriptor)
+        finally:
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def insert_dfs_slices(
+    source: Path,
+    output: Path,
+    selected_claim: str,
+    ranges: tuple[tuple[int, int], ...],
+) -> tuple[str, ...]:
+    """Lock, validate, and atomically insert durable DFS slice markers."""
+
+    locks = _acquire_dfs_path_locks((source, output))
+    try:
+        return _insert_dfs_slices_locked(source, output, selected_claim, ranges)
+    finally:
+        _release_dfs_path_locks(locks)
+
+
+def _insert_dfs_slices_locked(
+    source: Path,
+    output: Path,
+    selected_claim: str,
+    ranges: tuple[tuple[int, int], ...],
+) -> tuple[str, ...]:
+    """Allocate stable ids and atomically insert markers around logical lines."""
+
+    if not ranges:
+        raise GuardError("DFS slice insertion needs at least one inclusive line range")
+    claim_id = _selected_claim_id(selected_claim)
+    baseline = _read_utf8_exact(source)
+    existing = parse_dfs_slices(baseline)
+    semantic = strip_dfs_slice_markers(baseline)
+    claim_records = [
+        record for record in _stable_claim_records(semantic) if record[0] == claim_id
+    ]
+    if len(claim_records) != 1:
+        raise GuardError(
+            f"DFS slice claim must identify exactly one stable DFS claim: {claim_id}"
+        )
+
+    semantic_lines = semantic.splitlines(keepends=True)
+    normalized_ranges = tuple(sorted(ranges))
+    prior_end = 0
+    for start, end in normalized_ranges:
+        if start < 1 or end < start or end > len(semantic_lines):
+            raise GuardError(
+                f"Invalid inclusive DFS slice range {start}:{end}; "
+                f"logical DFS has {len(semantic_lines)} lines"
+            )
+        if start <= prior_end:
+            raise GuardError("DFS slice ranges must be disjoint and non-overlapping")
+        prior_end = end
+
+    occupied = {item.slice_id for item in existing}
+    selected_ids: list[str] = []
+    all_bindings = [
+        (item.slice_id, item.claim_id, item.logical_start, item.logical_end)
+        for item in existing
+    ]
+    for start, end in normalized_ranges:
+        overlaps = [
+            item
+            for item in existing
+            if start <= item.logical_end and item.logical_start <= end
+        ]
+        exact = [
+            item
+            for item in overlaps
+            if item.logical_start == start and item.logical_end == end
+        ]
+        if exact:
+            same_claim = [item for item in exact if item.claim_id == claim_id]
+            if same_claim:
+                selected_ids.append(same_claim[0].slice_id)
+                continue
+        if any(item.claim_id == claim_id for item in overlaps):
+            raise GuardError(
+                f"DFS slices for {claim_id} must be non-overlapping; "
+                f"range {start}:{end} overlaps an existing slice"
+            )
+        crossing = [
+            item
+            for item in overlaps
+            if not (
+                (start <= item.logical_start and item.logical_end <= end)
+                or (item.logical_start <= start and end <= item.logical_end)
+            )
+        ]
+        if crossing:
+            item = crossing[0]
+            raise GuardError(
+                f"DFS slice range {start}:{end} crosses existing slice "
+                f"{item.slice_id} at {item.logical_start}:{item.logical_end}"
+            )
+
+        newline = _line_ending(semantic_lines[end - 1])
+        if not newline:
+            raise GuardError(
+                "Cannot place a line marker after a selected final line without a line ending"
+            )
+        slice_id = _slice_id(claim_id, occupied)
+        occupied.add(slice_id)
+        selected_ids.append(slice_id)
+        all_bindings.append((slice_id, claim_id, start, end))
+
+    opens: dict[int, list[tuple[str, str, int, int]]] = {}
+    closes: dict[int, list[tuple[str, str, int, int]]] = {}
+    for binding in all_bindings:
+        opens.setdefault(binding[2], []).append(binding)
+        closes.setdefault(binding[3], []).append(binding)
+    for bindings in opens.values():
+        bindings.sort(key=lambda binding: (-binding[3], binding[0]))
+    for bindings in closes.values():
+        bindings.sort(key=lambda binding: binding[0], reverse=True)
+        bindings.sort(key=lambda binding: binding[2], reverse=True)
+
+    candidate_parts: list[str] = []
+    for logical_line, line in enumerate(semantic_lines, start=1):
+        newline = _line_ending(line)
+        for slice_id, binding_claim, _, _ in opens.get(logical_line, ()):
+            candidate_parts.append(
+                f"<!-- DE67:DFS-SLICE:BEGIN id={slice_id} "
+                f"claim={binding_claim} -->{newline}"
+            )
+        candidate_parts.append(line)
+        for slice_id, binding_claim, _, _ in closes.get(logical_line, ()):
+            candidate_parts.append(
+                f"<!-- DE67:DFS-SLICE:END id={slice_id} "
+                f"claim={binding_claim} -->{newline}"
+            )
+    candidate = "".join(candidate_parts)
+
+    temporary_candidate = output.parent / f".{output.name}.de67-validation-{time.time_ns()}"
+    try:
+        temporary_candidate.write_bytes(candidate.encode("utf-8"))
+        validate_dfs_slice_candidate(source, temporary_candidate)
+    finally:
+        if temporary_candidate.exists():
+            temporary_candidate.unlink()
+    if _read_utf8_exact(source) != baseline:
+        raise GuardError("DFS source changed while slice markers were being prepared")
+    _atomic_write_utf8(output, candidate)
+    return tuple(selected_ids)
+
+
+def extract_dfs_slices(
+    dfs: Path,
+    selected_claim: str,
+    slice_ids: tuple[str, ...],
+) -> str:
+    """Return only the requested validated marked blocks in request order."""
+
+    if not slice_ids:
+        raise GuardError("DFS slice extraction needs at least one slice id")
+    if len(slice_ids) != len(set(slice_ids)):
+        raise GuardError("DFS slice extraction cannot request a duplicate id")
+    claim_id = _selected_claim_id(selected_claim)
+    text = _read_utf8_exact(dfs)
+    lines = text.splitlines(keepends=True)
+    by_id = {item.slice_id: item for item in parse_dfs_slices(text)}
+    blocks: list[str] = []
+    for slice_id in slice_ids:
+        if not DFS_SLICE_ID.fullmatch(slice_id):
+            raise GuardError(f"Malformed DFS slice id: {slice_id}")
+        item = by_id.get(slice_id)
+        if item is None:
+            raise GuardError(f"DFS slice does not exist: {slice_id}")
+        if item.claim_id != claim_id:
+            raise GuardError(
+                f"DFS slice {slice_id} belongs to another claim: {item.claim_id}"
+            )
+        blocks.append(item.content)
+    return "".join(blocks)
+
+
 def red_dfs_claims(dfs_text: str) -> tuple[str, ...]:
     claims: list[str] = []
     for _, line in _outside_fences(dfs_text):
@@ -1389,17 +1833,93 @@ def active_work_items(ledger_text: str) -> tuple[str, ...]:
 def _active_work_blocks(ledger_text: str) -> tuple[tuple[str, str], ...]:
     lines = ledger_text.splitlines()
     starts: list[tuple[int, str]] = []
+    boundaries: list[int] = []
     for line_number, line in _outside_fences(ledger_text):
+        if STABLE_CLAIM.match(line):
+            boundaries.append(line_number - 1)
         match = ACTIVE_ITEM.match(line)
         if match:
             starts.append(
                 (line_number - 1, _normalize_reference(match.group("reference")))
             )
     blocks: list[tuple[str, str]] = []
-    for index, (start, reference) in enumerate(starts):
-        end = starts[index + 1][0] if index + 1 < len(starts) else len(lines)
+    for start, reference in starts:
+        end = next(
+            (boundary for boundary in boundaries if boundary > start),
+            len(lines),
+        )
         blocks.append((reference, "\n".join(lines[start:end])))
     return tuple(blocks)
+
+
+def _ledger_slice_ids(block: str, reference: str) -> tuple[str, ...]:
+    pointer_lines = [
+        line for line in block.splitlines() if DFS_SLICE_LEDGER_TOKEN in line
+    ]
+    if not pointer_lines:
+        raise GuardError(f"Active work item has no DFS slices: {reference}")
+    if len(pointer_lines) != 1:
+        raise GuardError(
+            f"Active work item must have exactly one DFS slices line: {reference}"
+        )
+    match = DFS_SLICE_LEDGER.fullmatch(pointer_lines[0])
+    if match is None:
+        raise GuardError(f"Malformed DFS slices line for active item: {reference}")
+    slice_ids = tuple(re.findall(r"`([^`]+)`", match.group("ids")))
+    if not slice_ids or len(slice_ids) != len(set(slice_ids)):
+        raise GuardError(
+            f"Active work item needs unique DFS slice ids: {reference}"
+        )
+    return slice_ids
+
+
+def dfs_slice_status(
+    ledger: Path,
+    dfs: Path,
+) -> tuple[tuple[str, str, str], ...]:
+    """Report bootstrap status without weakening strict work-ledger validation."""
+
+    ledger_text = read_markdown(ledger)
+    blocks = _active_work_blocks(ledger_text)
+    dfs_text = read_markdown(dfs)
+    red_claims = red_dfs_claims(dfs_text)
+    slices_by_id = {item.slice_id: item for item in parse_dfs_slices(dfs_text)}
+    statuses: list[tuple[str, str, str]] = []
+    for reference, block in blocks:
+        matches = [claim for claim in red_claims if _same_claim(reference, claim)]
+        if len(matches) != 1:
+            statuses.append(
+                (reference, "invalid", "not exactly one still-red DFS claim")
+            )
+            continue
+        claim_id = _selected_claim_id(matches[0])
+        pointer_lines = [
+            line for line in block.splitlines() if DFS_SLICE_LEDGER_TOKEN in line
+        ]
+        if not pointer_lines:
+            statuses.append((reference, "missing", "no DFS slices line"))
+            continue
+        try:
+            slice_ids = _ledger_slice_ids(block, reference)
+        except GuardError as error:
+            statuses.append((reference, "invalid", str(error)))
+            continue
+        problem = ""
+        for slice_id in slice_ids:
+            item = slices_by_id.get(slice_id)
+            if item is None:
+                problem = f"missing DFS slice {slice_id}"
+                break
+            if item.claim_id != claim_id:
+                problem = (
+                    f"DFS slice {slice_id} belongs to another claim {item.claim_id}"
+                )
+                break
+        if problem:
+            statuses.append((reference, "invalid", problem))
+        else:
+            statuses.append((reference, "ready", ", ".join(slice_ids)))
+    return tuple(statuses)
 
 
 def _stored_task_rows(state: Path, lineage_id: str) -> tuple[tuple[str, str], ...]:
@@ -1447,15 +1967,32 @@ def validate_work_ledger(
     if len(items) > 10:
         raise GuardError(f"Work ledger has {len(items)} active items; maximum is 10")
 
-    red_claims = red_dfs_claims(read_markdown(dfs))
+    dfs_text = read_markdown(dfs)
+    red_claims = red_dfs_claims(dfs_text)
+    slices = parse_dfs_slices(dfs_text)
+    slices_by_id = {item.slice_id: item for item in slices}
     selected_claims: list[str] = []
-    for reference in items:
+    for reference, block in blocks:
         matches = [claim for claim in red_claims if _same_claim(reference, claim)]
         if not matches:
             raise GuardError(f"Work item does not reference a still-red DFS claim: {reference}")
         if len(matches) > 1:
             raise GuardError(f"Work item reference is ambiguous in the DFS: {reference}")
-        selected_claims.append(matches[0])
+        claim = matches[0]
+        claim_id = _selected_claim_id(claim)
+        slice_ids = _ledger_slice_ids(block, reference)
+        for slice_id in slice_ids:
+            item = slices_by_id.get(slice_id)
+            if item is None:
+                raise GuardError(
+                    f"Active work item references missing DFS slice {slice_id}: {reference}"
+                )
+            if item.claim_id != claim_id:
+                raise GuardError(
+                    f"Active work item references DFS slice {slice_id} owned by another claim: "
+                    f"{item.claim_id}"
+                )
+        selected_claims.append(claim)
 
     stable_claims = [_stable_key(claim) for claim in selected_claims]
     if len(stable_claims) != len(set(stable_claims)):
@@ -1587,7 +2124,28 @@ def validate_universal_dfs_mutation(before: Path, candidate: Path) -> bool:
         if position <= prior_position:
             raise GuardError("Universal DFS candidate cannot reorder accepted claims")
         prior_position = position
+    baseline_slices = {
+        item.slice_id: item
+        for item in parse_dfs_slices(baseline)
+    }
+    candidate_slices = {
+        item.slice_id: item for item in parse_dfs_slices(proposed)
+    }
+    for slice_id, item in baseline_slices.items():
+        replacement = candidate_slices.get(slice_id)
+        if replacement is None or replacement.claim_id != item.claim_id:
+            raise GuardError(
+                "Universal DFS candidate cannot remove or rebind durable "
+                f"slice {slice_id}"
+            )
     return True
+
+
+def _inclusive_range(value: str) -> tuple[int, int]:
+    match = re.fullmatch(r"([0-9]+):([0-9]+)", value)
+    if match is None:
+        raise argparse.ArgumentTypeError("range must be START:END using inclusive lines")
+    return int(match.group(1)), int(match.group(2))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1610,6 +2168,35 @@ def build_parser() -> argparse.ArgumentParser:
     ledger.add_argument("--dfs", type=Path, required=True)
     ledger.add_argument("--state", type=Path, required=True)
     ledger.add_argument("--lineage", required=True)
+
+    slice_status = commands.add_parser(
+        "dfs-slice-status",
+        help="Report ready, missing, or invalid active-item DFS slice pointers",
+    )
+    slice_status.add_argument("--ledger", type=Path, required=True)
+    slice_status.add_argument("--dfs", type=Path, required=True)
+
+    mark_slices = commands.add_parser(
+        "mark-dfs-slices",
+        help="Atomically add durable claim-bound DFS slice markers",
+    )
+    mark_slices.add_argument("--source", type=Path, required=True)
+    mark_slices.add_argument("--output", type=Path, required=True)
+    mark_slices.add_argument("--claim", required=True)
+    mark_slices.add_argument(
+        "--range", dest="ranges", action="append", type=_inclusive_range, required=True
+    )
+
+    extract_slices = commands.add_parser(
+        "extract-dfs-slices",
+        help="Extract only selected validated DFS slice content",
+    )
+    extract_slices.add_argument("--dfs", type=Path, required=True)
+    extract_slices.add_argument("--claim", required=True)
+    extract_slices.add_argument(
+        "--slice", dest="slice_ids", action="append", required=True
+    )
+    extract_slices.add_argument("--output", type=Path)
 
     completion = commands.add_parser("complete-dfs", help="Validate one accepted DFS claim")
     completion.add_argument("--before", type=Path, required=True)
@@ -1735,6 +2322,34 @@ def main(argv: list[str] | None = None) -> int:
                 lineage_id=arguments.lineage,
             )
             print(f"ok: {len(items)} active work items")
+        elif arguments.command == "dfs-slice-status":
+            statuses = dfs_slice_status(arguments.ledger, arguments.dfs)
+            for reference, status, detail in statuses:
+                print(f"{status}: {reference}: {detail}")
+            if any(status == "invalid" for _, status, _ in statuses):
+                return 1
+        elif arguments.command == "mark-dfs-slices":
+            slice_ids = insert_dfs_slices(
+                arguments.source,
+                arguments.output,
+                arguments.claim,
+                tuple(arguments.ranges),
+            )
+            print("ok: DFS slices " + ", ".join(slice_ids))
+        elif arguments.command == "extract-dfs-slices":
+            extracted = extract_dfs_slices(
+                arguments.dfs,
+                arguments.claim,
+                tuple(arguments.slice_ids),
+            )
+            if arguments.output is None:
+                _write_stdout_utf8(extracted)
+            else:
+                _atomic_write_utf8(arguments.output, extracted)
+                print(
+                    f"ok: wrote {len(arguments.slice_ids)} DFS slices to "
+                    f"{arguments.output}"
+                )
         elif arguments.command == "complete-dfs":
             validate_accepted_task_state(
                 arguments.state,

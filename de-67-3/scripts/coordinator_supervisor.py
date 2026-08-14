@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -21,13 +22,41 @@ from deadline_harness import DeadlineError, DeadlineHarness
 RED_DFS_CLAIM = re.compile(r"^- \[ \] \N{LARGE RED CIRCLE} ", re.MULTILINE)
 ACTIVE_LEDGER_ITEM = re.compile(r"^- \[ \] ", re.MULTILINE)
 PHASE3_ROOT = Path(__file__).resolve().parents[1]
+METHOD_REPO_ROOT = PHASE3_ROOT.parent
 KERNEL_PATH = PHASE3_ROOT / "references" / "kernel.md"
 ROLE_ROOT = PHASE3_ROOT / "references" / "roles"
 COORDINATOR_ROLE_PATH = ROLE_ROOT / "coordinator.md"
+METHOD_GUIDANCE_ROOT = PHASE3_ROOT / "assets" / "environment"
 
 
 class SupervisorError(RuntimeError):
     """Raised when coordinator ownership or restart state is inconsistent."""
+
+
+def require_canonical_method_checkout() -> Path:
+    """Keep prompting, guarding, and promotion on one de67-lab checkout."""
+
+    repository = METHOD_REPO_ROOT.resolve()
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repository), "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise SupervisorError(
+            "Coordinator supervisor must run from the canonical de67-lab Git checkout"
+        ) from error
+    try:
+        top_level = Path(completed.stdout.strip()).resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise SupervisorError("Canonical de67-lab Git root cannot be resolved") from error
+    if top_level != repository or (repository / "de-67-3").resolve() != PHASE3_ROOT.resolve():
+        raise SupervisorError(
+            "Coordinator method files are not the canonical de67-lab Phase-3 tree"
+        )
+    return repository
 
 
 @dataclass(frozen=True)
@@ -43,6 +72,12 @@ class ChildResult:
     run_id: str
     run_dir: Path
     exit_code: int
+
+
+@dataclass(frozen=True)
+class SupervisionEvent:
+    restart: RestartState
+    signature: str
 
 
 def _write(path: Path, value: str) -> None:
@@ -127,6 +162,106 @@ def read_clock(state_path: Path, lineage_id: str) -> RestartState:
         )
 
 
+def _gate_signature(
+    pending_reviews: Sequence[object],
+    pending_mutations: Sequence[object],
+) -> str:
+    return "gate:" + json.dumps(
+        {
+            "reviews": pending_reviews,
+            "mutations": pending_mutations,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def wait_for_supervision_event(
+    state_path: Path,
+    lineage_id: str,
+    *,
+    now: Callable[[], float] = time.time,
+    sleep: Callable[[float], None] = time.sleep,
+    handled_signatures: set[str] | None = None,
+) -> SupervisionEvent | None:
+    """Wait without polling until durable clock state requires a successor."""
+    with DeadlineHarness(state_path) as harness:
+        summary = harness.list_tasks(now=now())
+        restart = _restart_state(summary, lineage_id)
+        if restart.required:
+            return SupervisionEvent(restart, f"restart:{restart.generation}")
+
+        pending_reviews = summary["pending_incident_reviews"]
+        pending_mutations = [
+            *summary.get("pending_deadline_mutations", []),
+            *summary.get("pending_integrity_mutations", []),
+        ]
+        if pending_reviews or pending_mutations:
+            signature = _gate_signature(pending_reviews, pending_mutations)
+            if handled_signatures is not None and signature in handled_signatures:
+                raise SupervisorError(
+                    "A coordinator returned without resolving supervision event "
+                    f"{signature}"
+                )
+            requested = harness.request_coordinator_restart(
+                lineage_id,
+                "supervisor observed a persisted incident or mutation gate",
+                now=now(),
+            )["coordinator_restart"]
+            return SupervisionEvent(
+                _restart_state(
+                    {"lineage_id": lineage_id, "coordinator_restart": requested},
+                    lineage_id,
+                ),
+                signature,
+            )
+
+        deadlines = [
+            (float(task["deadline_at"]), str(task["claim_id"]))
+            for task in summary["tasks"]
+            if task.get("deadline_at") is not None
+        ]
+        if not deadlines:
+            return None
+        deadline_at, claim_id = min(deadlines)
+
+    sleep(max(0.0, deadline_at - now()))
+
+    with DeadlineHarness(state_path) as harness:
+        expired = harness.expire_claim(
+            lineage_id,
+            claim_id,
+            now=max(deadline_at, now()),
+        )
+        if expired["incident"] is None:
+            return None
+        summary = harness.list_tasks(now=max(deadline_at, now()))
+        signature = _gate_signature(
+            summary["pending_incident_reviews"],
+            [
+                *summary.get("pending_deadline_mutations", []),
+                *summary.get("pending_integrity_mutations", []),
+            ],
+        )
+        if handled_signatures is not None and signature in handled_signatures:
+            raise SupervisorError(
+                "A coordinator returned without resolving supervision event "
+                f"{signature}"
+            )
+        requested = harness.request_coordinator_restart(
+            lineage_id,
+            f"claim {claim_id} reached its immutable deadline",
+            now=max(deadline_at, now()),
+        )["coordinator_restart"]
+    return SupervisionEvent(
+        _restart_state(
+            {"lineage_id": lineage_id, "coordinator_restart": requested},
+            lineage_id,
+        ),
+        signature,
+    )
+
+
 def work_is_complete(
     workspace: Path,
     state_path: Path,
@@ -182,7 +317,11 @@ def coordinator_prompt(
         "Read only these DE-67 method files at entry:",
         f"- {KERNEL_PATH}",
         f"- {COORDINATOR_ROLE_PATH}",
+        f"Canonical method repository: {METHOD_REPO_ROOT}.",
+        f"Canonical mutable method guidance is only under {METHOD_GUIDANCE_ROOT}.",
+        "Never read, create, or mutate workspace-local copies of test-and-task-guidelines.md or orchestrator-guidelines.md.",
         "Do not read the phase router or sibling role modules unless the coordinator module routes a concrete event to one of them.",
+        "Read the active ledger and extract its guarded claim-bound DFS slices; do not preload the whole DFS unless the coordinator module's indexing or recovery condition applies.",
         "Read current code and Git state plus only relevant durable .de67 state; do not read predecessor logs or narrative handoffs.",
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every deadline-harness command; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
@@ -249,6 +388,7 @@ def run_child(
             "DE67_DEADLINE_STATE": str(state_path),
             "DE67_LINEAGE": lineage_id,
             "DE67_WORKSPACE": str(workspace),
+            "DE67_METHOD_REPO": str(METHOD_REPO_ROOT.resolve()),
             "DE67_SUPERVISOR_PID": str(os.getpid()),
         }
     )
@@ -329,6 +469,7 @@ def _run_supervisor_locked(
     *,
     extra_env: Mapping[str, str] | None = None,
     run_id_factory: Callable[[int | None], str] = _default_run_id,
+    event_waiter: Callable[[Path, str], SupervisionEvent | None] | None = None,
 ) -> int:
     state = Path(state_path).expanduser().resolve()
     workdir = Path(workspace).expanduser().resolve()
@@ -339,6 +480,9 @@ def _run_supervisor_locked(
         raise SupervisorError("Lineage id must not be empty")
     if not runner_command:
         raise SupervisorError("Runner command must not be empty")
+    wait_for_event = event_waiter or wait_for_supervision_event
+
+    require_canonical_method_checkout()
 
     if work_is_complete(workdir, state, lineage_id):
         return 0
@@ -348,6 +492,7 @@ def _run_supervisor_locked(
     restart = read_clock(state, lineage_id)
     generation = restart.generation if restart.required else None
     attempted_generations: set[int] = set()
+    handled_events: set[str] = set()
 
     while True:
         if generation is not None:
@@ -409,7 +554,23 @@ def _run_supervisor_locked(
         if work_is_complete(workdir, state, lineage_id):
             return 0
         if not after.required:
-            return 0
+            if event_waiter is None:
+                event = wait_for_supervision_event(
+                    state,
+                    lineage_id,
+                    handled_signatures=handled_events,
+                )
+            else:
+                event = wait_for_event(state, lineage_id)
+            if event is None:
+                return 0
+            if event.signature in handled_events:
+                raise SupervisorError(
+                    "A coordinator returned without resolving supervision event "
+                    f"{event.signature}"
+                )
+            handled_events.add(event.signature)
+            after = event.restart
         if after.generation is None:
             _mark_protocol_failure(result, "Required coordinator restart lacks a generation")
             return 1
@@ -432,6 +593,7 @@ def run_supervisor(
     *,
     extra_env: Mapping[str, str] | None = None,
     run_id_factory: Callable[[int | None], str] = _default_run_id,
+    event_waiter: Callable[[Path, str], SupervisionEvent | None] | None = None,
 ) -> int:
     state = Path(state_path).expanduser().resolve()
     with _supervisor_lock(state):
@@ -443,6 +605,7 @@ def run_supervisor(
             run_root,
             extra_env=extra_env,
             run_id_factory=run_id_factory,
+            event_waiter=event_waiter,
         )
 
 
@@ -452,6 +615,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lineage", required=True)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--run-root", required=True)
+    parser.add_argument("--coordinator-model", default="gpt-5.6-sol")
+    parser.add_argument(
+        "--coordinator-reasoning-effort",
+        choices=("low", "medium", "high", "xhigh", "max", "ultra"),
+        default="low",
+    )
     parser.add_argument(
         "--runner",
         nargs=argparse.REMAINDER,
@@ -469,6 +638,12 @@ def main(argv: list[str] | None = None) -> int:
             arguments.workspace,
             arguments.runner or (),
             arguments.run_root,
+            extra_env={
+                "DE67_COORDINATOR_MODEL": arguments.coordinator_model,
+                "DE67_COORDINATOR_REASONING_EFFORT": (
+                    arguments.coordinator_reasoning_effort
+                ),
+            },
         )
     except (DeadlineError, SupervisorError, OSError) as error:
         print(f"coordinator supervisor: {error}", file=sys.stderr)

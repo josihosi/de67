@@ -14,9 +14,11 @@ Read `references/kernel.md`, inspect `.de67/state/workspace.json`, and verify th
 records `Frozen` or `Refrozen` against an inspected source baseline. A missing configuration,
 draft DFS, unresolved material owner choice, or changed user outcome returns to DE-67-2.
 
-Copy each missing guideline or ledger from `assets/environment/` individually. Never overwrite an
-existing project file with a template. Machine state stays under `.de67/state/`; the DFS, ledgers,
-and guidelines are ordinary project artifacts.
+Copy each missing ledger from `assets/environment/` individually. Never overwrite an existing
+project file with a template. Machine state stays under `.de67/state/`; the DFS and ledgers are
+ordinary project artifacts. Method guidance lives only in this Phase-3 skill under
+`assets/environment/`. Never read, create, or mutate workspace-local guideline copies; legacy
+`.de67/test-and-task-guidelines.md` and `.de67/orchestrator-guidelines.md` are not active policy.
 
 ## Disclose one role
 
@@ -52,6 +54,8 @@ isolated for independent review or owner authorization.
 Installed skill resources, enforcement scripts, and live clock state are never edited
 opportunistically during a delivery run. A candidate is not authority, and neither a mutator nor a
 coordinator may self-promote, weaken outcome or proof, falsify evidence, or exceed authority.
+Guarded normal method promotion changes and checkpoints only the canonical `de67-lab` Phase-3 tree.
+It never synchronizes a workspace-local policy file into the skill.
 
 ## Terminal routing
 

@@ -22,7 +22,14 @@ capability. Do not repeat an unchanged opaque run.
 
 ## Task definition
 
-Describe the desired outcome in natural language and bind the task to one red DFS claim. For
+Describe the desired outcome in natural language and bind the task to one red DFS claim. Before any
+candidate product edit or dispatch, identify the production owner, its direct callers, and its
+owning tests; pre-existing candidate work does not substitute for that read-only map. For
+one natural route that has produced contradictory results, bind the next attempt to one verified
+source/build artifact and require it to capture the first named state mutation between the upstream
+selector or precondition and the intended authoritative consumer before any further ownership or
+ordering edit. Name every competing writer and intended precedence in the task; a standalone
+selector or helper result is upstream evidence, not proof that the downstream transition ran. For
 exploration, state the unknown and the evidence that will yield a strategy and proof route. For
 closure, give every finite gap a stable id, description, and proof route. Bind one attempt to exactly
 one current gap revision and state the evidence that closes it. A completed or finding terminal
@@ -31,15 +38,21 @@ tied to that evidence. Only an abandoned attempt may repeat a revision. Name the
 debug, tool, documentation, and orchestration surfaces without turning that list into a fixed file
 allowlist. State material permission boundaries. Do not demand a fixed receipt shape. Ask the worker
 to stop and report expected versus observed behavior when direct evidence invalidates a premise.
+Terminalize an exploration attempt as completed only when its result supplies a changed strategy and
+honest proof route ready for immediate closure freezing. A result that disproves required geometry or
+output, or exposes an external-authority prerequisite, is a finding to reconcile before the immutable
+item deadline; an attempt terminal does not stop the item clock.
 
 ## Worker and model selection
 
 Use the weakest sufficient Phase-2-proved model and effort for understood implementation. Ordinary
 workers may use Luna, Terra, or Sol according to task fit, but the exact `gpt-5.6-sol` / `ultra`
 pair is reserved exclusively for mutation roles and is never an ordinary exploration,
-implementation, build, test, debug, or operation worker. Give one self-contained brief per task.
-Select Luna through the trusted project default and Terra or an eligible non-ultra Sol explicitly;
-the effort remains task-specific. Use a stronger implementation-capable model for ambiguous
+implementation, build, test, debug, or operation worker. Give one self-contained brief per task
+containing the claim's validated DFS slice ids and extracted text; workers do not rediscover the DFS
+index or preload the whole DFS. Select Luna through the trusted project default and Terra or an
+eligible non-ultra Sol explicitly; the effort remains task-specific. Use a stronger
+implementation-capable model for ambiguous
 ownership, causal diagnosis, risky cross-cutting work, or an exploration learning goal that requires
 it. Choose or change the route and worker from the task, current evidence, context fit, and
 coordination cost. A small read-only code-mapping worker is optional when ownership is genuinely
@@ -69,10 +82,12 @@ record and work the appended open successor gap.
 
 ## Deadline estimation
 
-Estimate from inspected scope, measured tooling/setup time, dependencies, and relevant prior tasks.
-State the reason in the work ledger. The claim-level ledger-item timer begins at its first actual
-worker dispatch. Later attempts receive new task ids without rebasing the item's start, estimate, or
-deadline, and honest late work still counts as a miss. Every miss creates both a micro recovery with
+Estimate the whole ledger item from its first dispatch through honest claim acceptance, including
+exploration uncertainty, tooling/setup, implementation, build, proof, dependencies, and relevant
+prior tasks. State the reason in the work ledger. The claim-level ledger-item timer begins at its
+first actual worker dispatch. Later attempts receive new task ids without rebasing the item's start,
+estimate, or deadline; attempt-local durations guide coordination only. Findings and completed
+attempts do not stop the item clock, and honest late work still counts as a miss. Every miss creates both a micro recovery with
 a finite next-attempt map and a repeatable macro method candidate. Change only the method surfaces
 the incident evidence actually implicates; mutation volume is not fitness.
 Normal candidates may change the Phase-3 router, role modules, assets/guidance, tests and debug

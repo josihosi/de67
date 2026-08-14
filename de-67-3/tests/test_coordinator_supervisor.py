@@ -18,11 +18,14 @@ from coordinator_supervisor import (  # noqa: E402
     KERNEL_PATH,
     PHASE3_ROOT,
     ROLE_ROOT,
+    SupervisionEvent,
     SupervisorError,
     _supervisor_lock,
+    build_parser,
     coordinator_prompt,
     read_clock,
     run_supervisor,
+    wait_for_supervision_event,
     work_is_complete,
 )
 from deadline_harness import DeadlineHarness  # noqa: E402
@@ -143,9 +146,94 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             harness.start_task(
                 "project", "seed", "R-000", 3600, now=time.time()
             )
+        self.waiter = patch(
+            "coordinator_supervisor.wait_for_supervision_event",
+            return_value=None,
+        )
+        self.waiter.start()
 
     def tearDown(self) -> None:
+        self.waiter.stop()
         self.temporary.cleanup()
+
+    def test_clock_event_waits_once_and_requests_a_successor(self) -> None:
+        base = time.time()
+        with DeadlineHarness(self.state_path) as harness:
+            deadline = harness._claim("project", "R-000")["deadline_at"]
+        sleeps: list[float] = []
+
+        event = wait_for_supervision_event(
+            self.state_path,
+            "project",
+            now=lambda: base,
+            sleep=sleeps.append,
+        )
+
+        self.assertIsInstance(event, SupervisionEvent)
+        assert event is not None
+        self.assertAlmostEqual(sleeps[0], float(deadline) - base, places=3)
+        self.assertTrue(event.signature.startswith("gate:"))
+        self.assertTrue(event.restart.required)
+        self.assertEqual(event.restart.generation, 1)
+        with DeadlineHarness(self.state_path) as harness:
+            summary = harness.list_tasks(now=float(deadline))
+        self.assertEqual(
+            summary["pending_incident_reviews"][0]["kind"], "deadline_miss"
+        )
+
+    def test_pending_incident_requests_a_successor_without_sleeping(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            deadline = float(harness._claim("project", "R-000")["deadline_at"])
+            harness.expire_claim("project", "R-000", now=deadline)
+        sleeps: list[float] = []
+
+        event = wait_for_supervision_event(
+            self.state_path,
+            "project",
+            now=lambda: deadline,
+            sleep=sleeps.append,
+        )
+
+        self.assertIsNotNone(event)
+        self.assertEqual(sleeps, [])
+        assert event is not None
+        self.assertTrue(event.restart.required)
+        self.assertTrue(event.signature.startswith("gate:"))
+
+    def test_unchanged_incident_does_not_create_a_second_successor(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            deadline = float(harness._claim("project", "R-000")["deadline_at"])
+            harness.expire_claim("project", "R-000", now=deadline)
+        first = wait_for_supervision_event(
+            self.state_path,
+            "project",
+            now=lambda: deadline,
+            sleep=lambda _seconds: None,
+        )
+        assert first is not None and first.restart.generation is not None
+        with DeadlineHarness(self.state_path) as harness:
+            harness.claim_coordinator_restart(
+                "project", first.restart.generation, "successor-1", now=deadline
+            )
+            harness.acknowledge_coordinator_restart(
+                "project", first.restart.generation, "successor-1", now=deadline
+            )
+
+        with self.assertRaisesRegex(SupervisorError, "without resolving"):
+            wait_for_supervision_event(
+                self.state_path,
+                "project",
+                now=lambda: deadline,
+                sleep=lambda _seconds: None,
+                handled_signatures={first.signature},
+            )
+
+        with DeadlineHarness(self.state_path) as harness:
+            restart = harness.coordinator_restart_status("project")[
+                "coordinator_restart"
+            ]
+        self.assertEqual(restart["generation"], 1)
+        self.assertFalse(restart["pending"])
 
     def environment(self, mode: str) -> dict[str, str]:
         return {
@@ -204,9 +292,28 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertNotIn("Read the installed DE-67-3 skill", prompt)
         self.assertNotIn("Run DE-67-3", prompt)
         self.assertIn("Do not read the phase router", prompt)
+        self.assertIn("extract its guarded claim-bound DFS slices", prompt)
+        self.assertIn("do not preload the whole DFS", prompt)
+        self.assertIn("Canonical mutable method guidance is only under", prompt)
+        self.assertIn("Never read, create, or mutate workspace-local copies", prompt)
         for role_path in ROLE_ROOT.glob("*.md"):
             if role_path != COORDINATOR_ROLE_PATH:
                 self.assertNotIn(str(role_path), prompt)
+
+    def test_cli_defaults_coordinator_to_sol_low_without_changing_runner_args(self) -> None:
+        arguments = build_parser().parse_args(
+            [
+                "--state", "state.sqlite3",
+                "--lineage", "project",
+                "--workspace", "workspace",
+                "--run-root", "runs",
+                "--runner", "runner", "--runner-owned-option",
+            ]
+        )
+
+        self.assertEqual(arguments.coordinator_model, "gpt-5.6-sol")
+        self.assertEqual(arguments.coordinator_reasoning_effort, "low")
+        self.assertEqual(arguments.runner, ["runner", "--runner-owned-option"])
 
     def test_external_parent_continues_two_restart_generations_once_each(self) -> None:
         run_ids = iter(("initial-run", "generation-1-run", "generation-2-run"))

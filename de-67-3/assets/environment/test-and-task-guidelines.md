@@ -15,6 +15,12 @@ likely collision surfaces before parallel dispatch.
 
 Confirm the required tool, environment, command, and smallest runnable route before estimating or
 dispatching. Treat setup uncertainty as work to resolve, not as invisible worker time.
+For macOS GUI work, normalize execution authority before classifying proof as blocked: record the
+executable identity and delivery mode for each approved route, and bind the task to the selected
+route only after it performs one harmless real operation, not merely a permission query. A denied
+local-only diagnostic such as `--no-remote` blocks only that identity and route and does not veto a
+healthy canonical bridge; check other approved routes capable of the same proof before declaring a
+machine-wide or claim-level blocker. The preflight earns no gameplay or claim credit by itself.
 Validate brittle flags, dates, fixtures, and output paths before they consume an implementation
 deadline. When the current route cannot expose the needed production fact, make the missing
 observation the exploration goal and add the smallest useful logging, probe, fixture, or debug

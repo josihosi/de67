@@ -103,9 +103,11 @@ and restart state against the item's required exploration terminal and finite cl
 that route can cross a mandatory mutation review or coordinator handover, name the dependency and
 include its review, checkpoint, supervisor handoff, and successor-startup route using relevant
 measured lifecycle evidence; if the route is not yet measurable, resolve that setup uncertainty
-before starting the item. On every successor startup, calculate and report inherited remaining item
-time from the stored deadline and current clock before dispatch, then compare it with the
-evidence-derived next-gap route estimate. If the remaining time is insufficient, preserve the clock
+before starting the item. Before every attempt after first dispatch—including same-coordinator gap
+transitions and successor-startup dispatches—calculate and report inherited remaining item time from
+the stored deadline and current clock, then compare it with the evidence-derived next-gap route
+estimate. If that estimate is not yet evidence-derived, resolve the setup uncertainty before
+dispatch. If the remaining time is insufficient, preserve the clock
 and finite recovery, expose the estimate or external-wait failure, and continue useful work without
 presenting it as on-time; a restart never authorizes rebasing. The claim-level ledger-item timer
 begins at its first actual worker dispatch. Later attempts receive new task ids without rebasing the item's start,

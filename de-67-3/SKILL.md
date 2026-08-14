@@ -10,8 +10,8 @@ This file routes Phase 3; it is not the coordinator procedure.
 The invocation authorizes implementation of the frozen DFS in the named working repository. Do not
 read `de-67-1/` or `de-67-2/`. Never inventory, search, or read `.de67/no-go-zone/`.
 
-Read `references/kernel.md`, inspect `.de67/state/workspace.json`, and verify that `.de67/DFS.md`
-records `Frozen` or `Refrozen` against an inspected source baseline. A missing configuration,
+Read `../references/msw-kernel.md` and `references/kernel.md` completely, then inspect
+`.de67/state/workspace.json` and verify that `.de67/DFS.md` records `Frozen` or `Refrozen` against an inspected source baseline. A missing configuration,
 draft DFS, unresolved material owner choice, or changed user outcome returns to DE-67-2.
 
 Copy each missing ledger from `assets/environment/` individually. Never overwrite an existing

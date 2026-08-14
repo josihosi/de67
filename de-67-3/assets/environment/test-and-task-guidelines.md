@@ -25,6 +25,11 @@ capability. Do not repeat an unchanged opaque run.
 Describe the desired outcome in natural language and bind the task to one red DFS claim. Before any
 candidate product edit or dispatch, identify the production owner, its direct callers, and its
 owning tests; pre-existing candidate work does not substitute for that read-only map. For
+one natural route that has produced contradictory results, bind the next attempt to one verified
+source/build artifact and require it to capture the first named state mutation between the upstream
+selector or precondition and the intended authoritative consumer before any further ownership or
+ordering edit. Name every competing writer and intended precedence in the task; a standalone
+selector or helper result is upstream evidence, not proof that the downstream transition ran. For
 exploration, state the unknown and the evidence that will yield a strategy and proof route. For
 closure, give every finite gap a stable id, description, and proof route. Bind one attempt to exactly
 one current gap revision and state the evidence that closes it. A completed or finding terminal

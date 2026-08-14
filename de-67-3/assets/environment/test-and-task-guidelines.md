@@ -85,6 +85,14 @@ tooling, observation capability, or causal evidence. Close nonfinal named gaps o
 bound completed attempts. Claim acceptance closes the last open gap atomically and is blocked while
 any other gap remains. If later integrity evidence invalidates gap-owning proof, retain its closed
 record and work the appended open successor gap.
+When proof executes a compiled artifact, independently bind the exact invoked path and artifact
+identity to the unchanged relevant production/test snapshot and successful build that produced it;
+a version string or free-form "changed executable" claim does not establish provenance. Reject
+acceptance if those relevant inputs changed between build and run or the binding cannot be checked.
+For save/load or round-trip proof, inspect the fixture's serialized pre-state and the owning
+serializer/deserializer normalization for the relevant fields, execute the exact equality assertion
+in that bound artifact, and name the first field divergence on failure; a green command summary
+without that source-and-state inspection is not proof.
 
 ## Deadline estimation
 

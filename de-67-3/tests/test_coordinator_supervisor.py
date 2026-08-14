@@ -21,6 +21,7 @@ from coordinator_supervisor import (  # noqa: E402
     SupervisionEvent,
     SupervisorError,
     _supervisor_lock,
+    build_parser,
     coordinator_prompt,
     read_clock,
     run_supervisor,
@@ -298,6 +299,21 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         for role_path in ROLE_ROOT.glob("*.md"):
             if role_path != COORDINATOR_ROLE_PATH:
                 self.assertNotIn(str(role_path), prompt)
+
+    def test_cli_defaults_coordinator_to_sol_low_without_changing_runner_args(self) -> None:
+        arguments = build_parser().parse_args(
+            [
+                "--state", "state.sqlite3",
+                "--lineage", "project",
+                "--workspace", "workspace",
+                "--run-root", "runs",
+                "--runner", "runner", "--runner-owned-option",
+            ]
+        )
+
+        self.assertEqual(arguments.coordinator_model, "gpt-5.6-sol")
+        self.assertEqual(arguments.coordinator_reasoning_effort, "low")
+        self.assertEqual(arguments.runner, ["runner", "--runner-owned-option"])
 
     def test_external_parent_continues_two_restart_generations_once_each(self) -> None:
         run_ids = iter(("initial-run", "generation-1-run", "generation-2-run"))

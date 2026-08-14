@@ -615,6 +615,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lineage", required=True)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--run-root", required=True)
+    parser.add_argument("--coordinator-model", default="gpt-5.6-sol")
+    parser.add_argument(
+        "--coordinator-reasoning-effort",
+        choices=("low", "medium", "high", "xhigh", "max", "ultra"),
+        default="low",
+    )
     parser.add_argument(
         "--runner",
         nargs=argparse.REMAINDER,
@@ -632,6 +638,12 @@ def main(argv: list[str] | None = None) -> int:
             arguments.workspace,
             arguments.runner or (),
             arguments.run_root,
+            extra_env={
+                "DE67_COORDINATOR_MODEL": arguments.coordinator_model,
+                "DE67_COORDINATOR_REASONING_EFFORT": (
+                    arguments.coordinator_reasoning_effort
+                ),
+            },
         )
     except (DeadlineError, SupervisorError, OSError) as error:
         print(f"coordinator supervisor: {error}", file=sys.stderr)

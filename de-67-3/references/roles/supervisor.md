@@ -15,8 +15,8 @@ python <active-de-67-3-skill>/scripts/coordinator_supervisor.py --state .de67/st
 ```
 
 The runner accepts `--cwd <workspace>` and one prompt on standard input. The supervisor routes that
-prompt directly to `references/roles/coordinator.md`; it does not ask the child to preload the main
-router or sibling roles. The bundled runner discovers `codex` on `PATH`, uses the coordinator model
+prompt directly through `references/kernel.md` to `references/roles/coordinator.md`; it does not ask
+the child to preload the main router or sibling roles. The bundled runner discovers `codex` on `PATH`, uses the coordinator model
 and effort supplied by the supervisor, and records its prompt, JSONL event stream, status, timestamps,
 and exit code under ignored `.de67/state/runner-runs/`. `DE67_CODEX` may name an alternate Codex
 executable and `DE67_COORDINATOR_SANDBOX` may select the Codex sandbox when the host requires it.

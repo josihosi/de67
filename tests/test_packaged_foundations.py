@@ -19,18 +19,24 @@ class PackagedFoundationTests(unittest.TestCase):
 
         for relative_path, expected_hash in expected.items():
             with self.subTest(relative_path=relative_path):
-                actual = hashlib.sha256((ROOT / relative_path).read_bytes()).hexdigest()
+                text = (ROOT / relative_path).read_text(encoding="utf-8")
+                normalized = text.replace("\r\n", "\n").encode("utf-8")
+                actual = hashlib.sha256(normalized).hexdigest()
                 self.assertEqual(actual, expected_hash)
 
     def test_phases_route_to_the_shared_foundations(self) -> None:
         phase_one = (ROOT / "de-67-1/SKILL.md").read_text(encoding="utf-8")
         phase_two = (ROOT / "de-67-2/SKILL.md").read_text(encoding="utf-8")
         phase_three = (ROOT / "de-67-3/SKILL.md").read_text(encoding="utf-8")
+        phase_three_kernel = (
+            ROOT / "de-67-3/references/kernel.md"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("../references/imagination-round.md", phase_one)
         self.assertIn("../references/msw-kernel.md", phase_one)
         self.assertIn("../references/msw-kernel.md", phase_two)
-        self.assertIn("../references/msw-kernel.md", phase_three)
+        self.assertIn("references/kernel.md", phase_three)
+        self.assertIn("../../references/msw-kernel.md", phase_three_kernel)
 
 
 if __name__ == "__main__":

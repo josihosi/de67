@@ -15,8 +15,8 @@ python <active-de-67-3-skill>/scripts/coordinator_supervisor.py --state .de67/st
 ```
 
 The runner accepts `--cwd <workspace>` and one prompt on standard input. The supervisor routes that
-prompt directly to `references/roles/coordinator.md`; it does not ask the child to preload the main
-router or sibling roles.
+prompt directly through `references/kernel.md` to `references/roles/coordinator.md`; it does not ask
+the child to preload the main router or sibling roles.
 
 The supervisor is the direct parent and sole owner of restart-generation claims. A successor
 executes `DE67_COORDINATOR_ACK_ARGV_JSON` without a shell before dispatch. The retiring coordinator

@@ -1,4 +1,4 @@
-# DE-67
+# de67
 
 > When things become 67, you must de67.
 

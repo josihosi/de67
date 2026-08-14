@@ -1,9 +1,9 @@
 ---
 name: de-67-1
-description: Explicit first phase of DE-67. Use when the user invokes `$de-67-1` or says `DE-67-1` to shape an idea through current-chat multiple choice and produce a user-owned WEC intent and language brief. Do not start specification authoring, coordination, workers, implementation, or mutation.
+description: Explicit first phase of de67. Use when the user says `de67 1` to shape an idea through current-chat multiple choice and produce a user-owned WEC intent and language brief. Do not start specification authoring, coordination, workers, implementation, or mutation.
 ---
 
-# DE-67-1 — discussion
+# de67 1 — discussion
 
 Work only in the current user-facing chat. Do not create or delegate to an external discussion bot,
 coordinator, reviewer, or worker. Do not read `de-67-2/` or `de-67-3/`.

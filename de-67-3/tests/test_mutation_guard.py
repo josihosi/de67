@@ -1852,14 +1852,15 @@ class MutationGuardTests(unittest.TestCase):
         self.assertNotIn("terminal task retires", combined)
         self.assertNotIn("worker retirement", combined)
 
-    def test_sol_ultra_is_reserved_for_mutation_roles(self) -> None:
+    def test_sol_xhigh_and_ultra_are_reserved_for_mutation_roles(self) -> None:
         normalized_task_guidance = " ".join(TASK_GUIDANCE.split())
         self.assertIn(
-            "exact `gpt-5.6-sol` / `ultra` pair", normalized_task_guidance
+            "exact `gpt-5.6-sol` / `xhigh` and `gpt-5.6-sol` / `ultra` pairs",
+            normalized_task_guidance,
         )
         self.assertIn("reserved exclusively for mutation roles", TASK_GUIDANCE)
-        self.assertIn("Never use the exact `gpt-5.6-sol` /", COORDINATOR_TEXT)
-        self.assertIn("`ultra` pair is mutation-only", WORKER_TEXT)
+        self.assertIn("Never use either reserved pair", COORDINATOR_TEXT)
+        self.assertIn("`xhigh` and `ultra` pairs are mutation-only", WORKER_TEXT)
         self.assertIn("Ordinary workers may be Luna, Terra, or Sol", WORKER_TEXT)
 
 

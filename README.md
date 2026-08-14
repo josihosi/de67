@@ -33,7 +33,8 @@ survives coordinator or worker replacement.
 de67 is deliberately hostile to coordination theatre. It tries to minimize prompt churn, handovers,
 duplicated contracts, speculative documents, repeated tests, and agents reading material they do not
 need. Ordinary work mostly uses GPT-5.6 Sol at low reasoning plus Luna and Terra workers selected for
-the task. The exact GPT-5.6 Sol `ultra` pairing is reserved for independent mutation review rather
+the task. GPT-5.6 Sol at `xhigh` is reserved for ordinary independent mutation review, while the
+rare universal mutation uses `ultra`, rather
 than routine implementation.
 
 The clock is deterministic Python, not another language-model agent. It records deadlines, claims,
@@ -47,7 +48,7 @@ de67 is built specifically for **OpenAI Codex**. It is not an Anthropic or gener
 It requires:
 
 - the current Codex CLI with subagents and reasoning-effort selection;
-- access to GPT-5.6 Sol, GPT-5.6 Luna, and GPT-5.6 Terra, including Sol at `ultra`;
+- access to GPT-5.6 Sol, GPT-5.6 Luna, and GPT-5.6 Terra, including Sol at `xhigh` and `ultra`;
 - Python 3.10 or newer, using only the standard library;
 - Git and a repository with an upstream branch for guarded routine checkpoints.
 

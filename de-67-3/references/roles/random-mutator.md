@@ -15,7 +15,7 @@ pending, stop and route that component to the universal mutator. When it returns
 this ordinary stored-lane review for the same cycle. Do not resolve one component as the other or
 redraw either obligation.
 
-Use a fresh independent `gpt-5.6-sol` reviewer at `ultra`, the selected mutation profile. Read
+Use a fresh independent `gpt-5.6-sol` reviewer at `xhigh`, the selected mutation profile. Read
 the selected target, the current DFS information necessary to preserve the outcome, the latest ten
 short failure verdicts, and pending suggestions. Fetch long evidence only for an exact anomaly that
 can change the decision. The selected profile does not expand this ordinary lane's authority.

@@ -79,36 +79,27 @@ open successor gap, invalidates affected acceptance, and routes the DFS claim ba
 ## Mutate and hand over
 
 After each incident, require both the micro item recovery and macro method-learning candidate. The
-normal candidate surface includes role modules, guideline bodies, DFS mechanics, task/test/debug
-design, and orchestration. The normal method guard may cover the Phase-3 router, role modules,
-assets/guidance, tests and debug tools, and nonprotected orchestration scripts. It protects the
-kernel, deadline harness, mutation guard, and their hard tests as well as the item clock and attempt
-accounting. Every deadline miss returns a finite local recovery plus one causal, repeatable method
-candidate; change only the implicated surface. Apply only the portion covered by explicit authority and an
-applicable guard; keep the remainder isolated and never claim a narrow guard validated it. A failed
-guard or application clears nothing. After a guarded promotion, request a restart and retire. The
-external supervisor owns the successor; the old coordinator never launches or acknowledges it. DFS
-and deadline mutations remain independent when the same evidence activates both.
+normal candidate may change role modules, mutable guidance, DFS mechanics, task/test/debug design,
+and nonprotected orchestration, but preserves the protected kernel, clocks, guards, hard tests, and
+attempt accounting. Change only the evidence-implicated surface and apply only what explicit
+authority and the applicable guard cover. Failed validation clears nothing. Keep simultaneous DFS
+and incident mutations independent.
 
 When the harness reports a due random improvement review, block new dispatch. Give a fresh
-`gpt-5.6-sol` reviewer at `ultra`, the selected mutation profile, the stored target, current
-guidance/DFS, the latest ten short failure verdicts, and pending scratch. Use the same profile for
-deadline and integrity mutation reviews. Model choice changes no lane authority or guard. The
-stored ordinary attempt cadence remains the private `[10, 30]` draw; do not
-redraw it. Require one to three ranked evidence-backed inefficiencies, the legacy stored-lane target
-change or guarded DFS no-op, and optionally an accompanying broad normal-method candidate. The old
-coordinator applies only what the joint guard validates, consumes the ledger after a real mutation,
-resolves the cycle so the clock queues the restart, and retires. Never reselect a DFS draw, launch
-the successor from the old coordinator, or treat a log's `RUNNING` text as liveness.
+`gpt-5.6-sol` reviewer at `xhigh` the stored target, necessary current guidance or DFS, compact
+failure evidence, and pending scratch. Use the same profile for incident mutation. Model choice
+changes no authority. Route the exact stored cycle to its named mutator module; do not redraw or
+reselect it.
 
 When the persisted draw is exactly `k = 30` with lane `DFS.md` and the workspace roster proves
-`gpt-5.6-sol` at `ultra`, the same cycle additionally requires the rare universal role. It prepares
-an isolated whole-skill and optional DFS candidate that may challenge even kernel, clock, guard, and
-supervisor architecture. It cannot edit live state, promote itself, weaken outcome or proof,
-falsify evidence, change permissions or authority, or erase attempts. The clock snapshots capability
-when the exact draw becomes due. If Sol/ultra is unproved then, expose the trigger and unavailable
-reason without arming that component; let the ordinary review close the cycle. Never substitute a
-weaker review, rewrite the roster, or reinterpret the frozen snapshot.
+`gpt-5.6-sol` at `ultra`, route its additional component to the rare universal role. If that exact
+capability was unproved when due, expose the unavailable component and continue the ordinary review;
+never substitute a weaker reviewer or rewrite the frozen snapshot.
+
+Prefer deleting or condensing implicated text over parallel explanation. Add no artifact, gate, or
+handover unless direct evidence proves the existing method cannot express the required distinction;
+similarity alone never authorizes merging different lane authority. After guarded promotion, consume only the applicable scratch, request one
+restart, and retire. The external supervisor alone launches and acknowledges the successor.
 
 ## Continue and stop
 

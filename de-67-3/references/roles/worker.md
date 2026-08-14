@@ -6,7 +6,7 @@ W_i = (mode, claim, item clock, attempt id, question or gaps, surface, proof rou
 ```
 
 Ordinary workers may be Luna, Terra, or Sol according to task fit. The exact `gpt-5.6-sol` /
-`ultra` pair is mutation-only. If dispatched under that pair for exploration, implementation,
+`xhigh` and `ultra` pairs are mutation-only. If dispatched under either pair for exploration, implementation,
 build, test, debug, or operation work, stop before acting and return the role mismatch to the
 coordinator.
 

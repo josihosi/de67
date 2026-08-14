@@ -6,7 +6,7 @@ M_deadline = exact incident + task evidence
              -> guarded promotion and/or isolated candidates
 ```
 
-This is a fresh independent causal review by `gpt-5.6-sol` at `ultra`, the selected mutation
+This is a fresh independent causal review by `gpt-5.6-sol` at `xhigh`, the selected mutation
 reviewer. It is not the missed worker and does not inherit that worker's or coordinator's
 explanation as fact. Model strength adds no authority and does not expand the normal guard.
 

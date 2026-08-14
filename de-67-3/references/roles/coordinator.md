@@ -140,12 +140,12 @@ Choose model and effort from the Phase-2-proved roster. Reuse a relevant worker 
 according to task fit, evidence, context health, and coordination cost. Only a new worker requires
 `fork_turns="none"` and a self-contained brief.
 
-The selected mutation reviewer is a fresh `gpt-5.6-sol` worker at `ultra`. Use that exact
-profile for deadline, integrity, ordinary random, and eligible rare universal mutation roles. This
+The selected deadline, integrity, and ordinary random mutation reviewer is a fresh `gpt-5.6-sol`
+worker at `xhigh`. The eligible rare universal reviewer remains `gpt-5.6-sol` at `ultra`. These
 does not broaden a normal mutation's protected surface or turn an unavailable rare trigger into an
-eligible one; role authority and guards remain unchanged. Never use the exact `gpt-5.6-sol` /
-`ultra` pair for an ordinary worker. Ordinary workers may be Luna, Terra, or Sol according to task
-fit, but ordinary Sol uses a Phase-2-proved non-ultra effort.
+eligible one; role authority and guards remain unchanged. Never use either reserved pair for an
+ordinary worker. Ordinary workers may be Luna, Terra, or Sol according to task fit, but ordinary Sol
+uses a Phase-2-proved effort below `xhigh`.
 
 Bind the immutable ledger-item clock at its first actual dispatch and record every attempt:
 

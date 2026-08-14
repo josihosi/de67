@@ -1,11 +1,11 @@
 ---
 name: de-67-2
-description: "Create and freeze a code-grounded functional specification (DFS) from WEC.md. Use only when the user explicitly invokes `$de-67-2` or says `DE-67-2`; never trigger this phase implicitly."
+description: "Create and freeze a code-grounded functional specification (DFS) from WEC.md. Use only when the user explicitly says `de67 2`; never trigger this phase implicitly."
 ---
 
-# DE-67-2 — functional specification
+# de67 2 — functional specification
 
-Run only after an explicit `DE-67-2` or `$de-67-2` invocation.
+Run only after an explicit `de67 2` invocation.
 
 Read `../references/msw-kernel.md` completely and execute it exactly as written. It is a verbatim
 foundation; do not paraphrase, summarize, refactor, or replace its wording.
@@ -122,7 +122,7 @@ Those refinements may classify the same behavior or proof boundary. They may not
 behavior, change project language or permissions, weaken acceptance, rewrite or close an existing
 claim, or legitimize an implementation shortcut. A worker reports evidence but never edits or
 refreezes the DFS. An ambiguous refinement, multiple materially different designs, or any material
-change returns to DE-67-2 and the user.
+change returns to de67 2 and the user.
 
 Do not add task slots, worker profiles, deadlines, dispatch packets, proof-review payloads, or a
 coordination matrix to the DFS. Those are not functional specification.

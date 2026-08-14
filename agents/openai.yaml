@@ -1,7 +1,7 @@
 interface:
-  display_name: "DE-67"
-  short_description: "Route explicitly to one DE-67 workflow phase"
-  default_prompt: "Use $de67 to choose the active DE-67 workflow phase."
+  display_name: "de67"
+  short_description: "Route explicitly to one de67 workflow phase"
+  default_prompt: "Use de67 1, de67 2, or de67 3 to choose a workflow phase."
 
 policy:
   allow_implicit_invocation: true

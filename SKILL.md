@@ -1,17 +1,17 @@
 ---
 name: de67
-description: Route Codex work through DE-67 discussion, code-grounded specification, or delivery. Use when the user says `DE-67-1`, `DE-67-2`, or `DE-67-3`, invokes `$de67`, or asks Codex to install or integrate DE-67. Route to exactly one phase and never preload sibling phase instructions.
+description: Route Codex work through de67 discussion, code-grounded specification, or delivery. Use when the user says `de67 1`, `de67 2`, or `de67 3`, invokes `$de67`, or asks Codex to install or integrate de67. Route to exactly one phase and never preload sibling phase instructions.
 ---
 
-# DE-67 router
+# de67 router
 
 This file routes; it does not run a phase.
 
 Match the user's command and read exactly one entrypoint:
 
-- `DE-67-1` or `$de-67-1`: read `de-67-1/SKILL.md` for the current-chat discussion and WEC.
-- `DE-67-2` or `$de-67-2`: read `de-67-2/SKILL.md` for code inspection and DFS authoring.
-- `DE-67-3` or `$de-67-3`: read `de-67-3/SKILL.md` for implementation, deadlines, and mutation.
+- `de67 1`: read `de-67-1/SKILL.md` for the current-chat discussion and WEC.
+- `de67 2`: read `de-67-2/SKILL.md` for code inspection and DFS authoring.
+- `de67 3`: read `de-67-3/SKILL.md` for implementation, deadlines, and mutation.
 
 Open the exact selected entrypoint directly; do not inventory or read sibling phase folders for
 background or completeness. The handoff artifacts are the interface: phase 2 receives `WEC.md`;
@@ -23,11 +23,11 @@ consent from a discussion or specification request.
 
 ## Install or integrate
 
-When the user supplies the DE-67 repository and asks Codex to install or integrate it:
+When the user supplies the de67 repository and asks Codex to install or integrate it:
 
-1. Require the OpenAI Codex CLI, Git, and Python 3.10 or newer. DE-67 is Codex-specific.
+1. Require the OpenAI Codex CLI, Git, and Python 3.10 or newer. de67 is Codex-specific.
 2. Before enabling method mutation, create or select a user-owned writable Git fork or repository
-   for the DE-67 lab. Install the skill from that checkout so accepted mutations have reviewable
+   for the de67 lab. Install the skill from that checkout so accepted mutations have reviewable
    commits and can be rewound if harmful. Do not mutate a read-only release copy.
 3. Preserve the repository as one intact skill folder with all phase folders, scripts, references,
    assets, and agent metadata. The checkout may be named `de67-lab`; the skill identity remains

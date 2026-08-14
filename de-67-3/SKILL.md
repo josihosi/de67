@@ -1,9 +1,9 @@
 ---
 name: de-67-3
-description: Explicit third phase of DE-67. Use when the user invokes `$de-67-3` or says `DE-67-3` to deliver a frozen DFS through deadline-bound work, progressive role disclosure, honest proof, and evidence-driven method mutation. Do not run the discussion or DFS-authoring phases.
+description: Explicit third phase of de67. Use when the user says `de67 3` to deliver a frozen DFS through deadline-bound work, progressive role disclosure, honest proof, and evidence-driven method mutation. Do not run the discussion or DFS-authoring phases.
 ---
 
-# DE-67-3 — delivery router
+# de67 3 — delivery router
 
 This file routes Phase 3; it is not the coordinator procedure.
 
@@ -12,7 +12,7 @@ read `de-67-1/` or `de-67-2/`. Never inventory, search, or read `.de67/no-go-zon
 
 Read `references/kernel.md` completely, then inspect
 `.de67/state/workspace.json` and verify that `.de67/DFS.md` records `Frozen` or `Refrozen` against an inspected source baseline. A missing configuration,
-draft DFS, unresolved material owner choice, or changed user outcome returns to DE-67-2.
+draft DFS, unresolved material owner choice, or changed user outcome returns to de67 2.
 
 Copy each missing ledger from `assets/environment/` individually. Never overwrite an existing
 project file with a template. Machine state stays under `.de67/state/`; the DFS and ledgers are

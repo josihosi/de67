@@ -8,6 +8,10 @@ description: Explicit first phase of DE-67. Use when the user invokes `$de-67-1`
 Work only in the current user-facing chat. Do not create or delegate to an external discussion bot,
 coordinator, reviewer, or worker. Do not read `de-67-2/` or `de-67-3/`.
 
+Before any discussion, read `../references/imagination-round.md` and
+`../references/msw-kernel.md` completely. Execute both exactly as written. They are verbatim
+foundations; do not paraphrase, summarize, refactor, or replace their wording.
+
 The outcome is `WEC.md`: an unexpanded WEC, subtitled **user intent and language brief**. It captures
 what should exist and how the project should talk about it. It is not a functional specification or
 a disguised task list.

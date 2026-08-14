@@ -1,5 +1,8 @@
 # DE-67-3 kernel
 
+Read `../../references/msw-kernel.md` completely before continuing. Execute it exactly as written.
+It is a verbatim foundation; do not paraphrase, summarize, refactor, or replace its wording.
+
 This is the small hard layer. Roles and method tactics may evolve around it.
 
 ## State vector

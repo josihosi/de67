@@ -34,7 +34,7 @@ class SupervisorError(RuntimeError):
 
 
 def require_canonical_method_checkout() -> Path:
-    """Keep prompting, guarding, and promotion on one de67-lab checkout."""
+    """Keep prompting, guarding, and promotion on one DE-67 method checkout."""
 
     repository = METHOD_REPO_ROOT.resolve()
     try:
@@ -46,15 +46,15 @@ def require_canonical_method_checkout() -> Path:
         )
     except (OSError, subprocess.CalledProcessError) as error:
         raise SupervisorError(
-            "Coordinator supervisor must run from the canonical de67-lab Git checkout"
+            "Coordinator supervisor must run from the active DE-67 method Git checkout"
         ) from error
     try:
         top_level = Path(completed.stdout.strip()).resolve(strict=True)
     except (OSError, RuntimeError) as error:
-        raise SupervisorError("Canonical de67-lab Git root cannot be resolved") from error
+        raise SupervisorError("Active DE-67 method Git root cannot be resolved") from error
     if top_level != repository or (repository / "de-67-3").resolve() != PHASE3_ROOT.resolve():
         raise SupervisorError(
-            "Coordinator method files are not the canonical de67-lab Phase-3 tree"
+            "Coordinator method files are not the active DE-67 Phase-3 tree"
         )
     return repository
 

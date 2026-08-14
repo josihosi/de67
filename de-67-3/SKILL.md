@@ -10,7 +10,7 @@ This file routes Phase 3; it is not the coordinator procedure.
 The invocation authorizes implementation of the frozen DFS in the named working repository. Do not
 read `de-67-1/` or `de-67-2/`. Never inventory, search, or read `.de67/no-go-zone/`.
 
-Read `../references/msw-kernel.md` and `references/kernel.md` completely, then inspect
+Read `references/kernel.md` completely, then inspect
 `.de67/state/workspace.json` and verify that `.de67/DFS.md` records `Frozen` or `Refrozen` against an inspected source baseline. A missing configuration,
 draft DFS, unresolved material owner choice, or changed user outcome returns to DE-67-2.
 
@@ -43,27 +43,9 @@ The coordinator is the default attended role. For unattended work, enter through
 Fresh supervisors route their child directly to the coordinator module rather than back through
 this router.
 
-## Mutable method surface
-
-Evidence may challenge task strategy, tests, debug or observation routes, orchestration, guideline
-bodies, DFS mechanisms, and any role module. The exact rare universal trigger may also challenge the
-kernel, clock, guard, and supervisor architecture. Such work begins as a candidate. Apply only the
-part whose authority and proof route are explicit; leave broader or enforcement-changing candidates
-isolated for independent review or owner authorization.
-
-Installed skill resources, enforcement scripts, and live clock state are never edited
-opportunistically during a delivery run. A candidate is not authority, and neither a mutator nor a
-coordinator may self-promote, weaken outcome or proof, falsify evidence, or exceed authority.
-Guarded normal method promotion changes and checkpoints only the canonical `de67-lab` Phase-3 tree.
-It never synchronizes a workspace-local policy file into the skill.
-
 ## Terminal routing
 
 Ordinary worker results, findings, acceptance, ledger refill, and exploration-to-closure transition
 stay with the same coordinator. An applied guarded method or DFS mutation requests a fresh
 coordinator and retires the old one. The old coordinator never launches or acknowledges its
 successor.
-
-When the user outcome is honestly proved, every closure gap is resolved, the work ledger is empty,
-and no incident or restart gate remains, stop. A random review cannot manufacture work after that
-point.

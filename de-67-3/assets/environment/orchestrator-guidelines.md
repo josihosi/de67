@@ -91,7 +91,7 @@ external supervisor owns the successor; the old coordinator never launches or ac
 and deadline mutations remain independent when the same evidence activates both.
 
 When the harness reports a due random improvement review, block new dispatch. Give a fresh
-`gpt-5.6-sol` reviewer at `ultra`, Josef's selected mutation profile, the stored target, current
+`gpt-5.6-sol` reviewer at `ultra`, the selected mutation profile, the stored target, current
 guidance/DFS, the latest ten short failure verdicts, and pending scratch. Use the same profile for
 deadline and integrity mutation reviews. Model choice changes no lane authority or guard. The
 stored ordinary attempt cadence remains the private `[10, 30]` draw; do not

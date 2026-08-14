@@ -549,7 +549,10 @@ def _run_supervisor_locked(
                 _mark_protocol_failure(result, "Coordinator restart generation moved backwards")
                 return 1
 
-        if result.exit_code != 0:
+        # A durable baton outranks the runner's process exit convention. Codex may
+        # return a non-zero code after coherently requesting its successor; the
+        # clock-backed generation is the authoritative handover signal.
+        if result.exit_code != 0 and not after.required:
             return result.exit_code if result.exit_code > 0 else 1
         if work_is_complete(workdir, state, lineage_id):
             return 0

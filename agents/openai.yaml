@@ -1,7 +1,7 @@
 interface:
-  display_name: "DE-67 Lab Router"
+  display_name: "DE-67"
   short_description: "Route explicitly to one DE-67 workflow phase"
-  default_prompt: "Use $de67-lab to choose the active DE-67 workflow phase."
+  default_prompt: "Use $de67 to choose the active DE-67 workflow phase."
 
 policy:
   allow_implicit_invocation: true

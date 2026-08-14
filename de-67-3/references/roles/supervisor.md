@@ -11,12 +11,15 @@ work, chooses a worker, diagnoses a miss, edits the DFS, or authors a mutation.
 Start unattended delivery with:
 
 ```text
-python <active-de-67-3-skill>/scripts/coordinator_supervisor.py --state .de67/state/deadlines.sqlite3 --lineage PROJECT --workspace . --run-root .de67/state/coordinator-runs --runner <one-shot-runner>
+python <active-de-67-3-skill>/scripts/coordinator_supervisor.py --state .de67/state/deadlines.sqlite3 --lineage PROJECT --workspace . --run-root .de67/state/coordinator-runs --runner python <active-de-67-3-skill>/scripts/codex_runner.py
 ```
 
 The runner accepts `--cwd <workspace>` and one prompt on standard input. The supervisor routes that
 prompt directly to `references/roles/coordinator.md`; it does not ask the child to preload the main
-router or sibling roles.
+router or sibling roles. The bundled runner discovers `codex` on `PATH`, uses the coordinator model
+and effort supplied by the supervisor, and records its prompt, JSONL event stream, status, timestamps,
+and exit code under ignored `.de67/state/runner-runs/`. `DE67_CODEX` may name an alternate Codex
+executable and `DE67_COORDINATOR_SANDBOX` may select the Codex sandbox when the host requires it.
 
 The supervisor is the direct parent and sole owner of restart-generation claims. A successor
 executes `DE67_COORDINATOR_ACK_ARGV_JSON` without a shell before dispatch. The retiring coordinator

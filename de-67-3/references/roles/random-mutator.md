@@ -15,7 +15,7 @@ pending, stop and route that component to the universal mutator. When it returns
 this ordinary stored-lane review for the same cycle. Do not resolve one component as the other or
 redraw either obligation.
 
-Use a fresh independent `gpt-5.6-sol` reviewer at `ultra`, Josef's selected mutation profile. Read
+Use a fresh independent `gpt-5.6-sol` reviewer at `ultra`, the selected mutation profile. Read
 the selected target, the current DFS information necessary to preserve the outcome, the latest ten
 short failure verdicts, and pending suggestions. Fetch long evidence only for an exact anomaly that
 can change the decision. The selected profile does not expand this ordinary lane's authority.
@@ -28,7 +28,8 @@ kernel, deadline harness, mutation guard, their hard tests, item clocks, and att
 
 Prepare baseline and candidate directories containing the two canonical guideline assets plus the
 workspace DFS. Change only the stored target there. A guideline draw promotes only the matching
-`de67-lab/de-67-3/assets/environment/` file; a DFS draw promotes only `.de67/DFS.md`. Never create or
+active DE-67 method checkout's `de-67-3/assets/environment/` file; a DFS draw promotes only
+`.de67/DFS.md`. Never create or
 mutate workspace-local guideline copies. For a DFS draw, use a source-grounded same-outcome candidate
 or the exact guarded no-op when no honest change is available. If broad method learning is supported,
 copy the complete active Phase-3 tree as both the starting baseline and candidate, change only the
@@ -40,7 +41,8 @@ python <active-de-67-3-skill>/scripts/mutation_guard.py random-review --baseline
 
 The legacy selected-lane target must still change, except for its guarded DFS no-op; a method
 candidate accompanies rather than replaces that decision. After an applied verdict, promote and
-checkpoint method changes only in `de67-lab`; checkpoint a DFS change only in the product repository;
+checkpoint method changes only in the active DE-67 method checkout; checkpoint a DFS change only in
+the product repository;
 then consume the workspace scratch ledger. A guarded DFS no-op changes neither the DFS nor scratch
 ledger. Record the applied component and guard evidence:
 

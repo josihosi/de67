@@ -65,7 +65,8 @@ Useful mutable sections are selected by heading from the active skill's
   `orchestrator-guidelines.md`.
 
 Do not read or update workspace-local guideline copies. `.de67/` owns the DFS, work ledger,
-mutation-suggestion scratch, and clock state; `de67-lab/de-67-3` alone owns method guidance.
+mutation-suggestion scratch, and clock state; the active DE-67 method checkout's `de-67-3` tree alone
+owns method guidance.
 
 ## Choose exploration or closure
 
@@ -139,7 +140,7 @@ Choose model and effort from the Phase-2-proved roster. Reuse a relevant worker 
 according to task fit, evidence, context health, and coordination cost. Only a new worker requires
 `fork_turns="none"` and a self-contained brief.
 
-Josef's selected mutation reviewer is a fresh `gpt-5.6-sol` worker at `ultra`. Use that exact
+The selected mutation reviewer is a fresh `gpt-5.6-sol` worker at `ultra`. Use that exact
 profile for deadline, integrity, ordinary random, and eligible rare universal mutation roles. This
 does not broaden a normal mutation's protected surface or turn an unavailable rare trigger into an
 eligible one; role authority and guards remain unchanged. Never use the exact `gpt-5.6-sol` /

@@ -6,7 +6,7 @@ M_deadline = exact incident + task evidence
              -> guarded promotion and/or isolated candidates
 ```
 
-This is a fresh independent causal review by `gpt-5.6-sol` at `ultra`, Josef's selected mutation
+This is a fresh independent causal review by `gpt-5.6-sol` at `ultra`, the selected mutation
 reviewer. It is not the missed worker and does not inherit that worker's or coordinator's
 explanation as fact. Model strength adds no authority and does not expand the normal guard.
 
@@ -71,7 +71,7 @@ isolated with its proof plan.
 
 On success the guard atomically stores and prints a digest-bound receipt for this exact lineage,
 task, incident kind, candidate, active live tree, and protected baseline. Apply the complete guarded
-candidate only to the canonical `de67-lab/de-67-3` tree, checkpoint it in `de67-lab`, and use only
+candidate only to the active DE-67 method checkout's `de-67-3` tree, checkpoint it there, and use only
 that repository's routine push. Never edit or commit `.de67/test-and-task-guidelines.md` or
 `.de67/orchestrator-guidelines.md`. Free-form evidence cannot replace the receipt, and one receipt
 cannot cross incidents.

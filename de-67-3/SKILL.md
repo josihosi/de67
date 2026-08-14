@@ -54,7 +54,8 @@ isolated for independent review or owner authorization.
 Installed skill resources, enforcement scripts, and live clock state are never edited
 opportunistically during a delivery run. A candidate is not authority, and neither a mutator nor a
 coordinator may self-promote, weaken outcome or proof, falsify evidence, or exceed authority.
-Guarded normal method promotion changes and checkpoints only the canonical `de67-lab` Phase-3 tree.
+Guarded normal method promotion changes and checkpoints only the active DE-67 method checkout's
+Phase-3 tree.
 It never synchronizes a workspace-local policy file into the skill.
 
 ## Terminal routing

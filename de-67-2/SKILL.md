@@ -7,6 +7,9 @@ description: "Create and freeze a code-grounded functional specification (DFS) f
 
 Run only after an explicit `DE-67-2` or `$de-67-2` invocation.
 
+Read `../references/msw-kernel.md` completely and execute it exactly as written. It is a verbatim
+foundation; do not paraphrase, summarize, refactor, or replace its wording.
+
 ## Phase owner
 
 The invocation agent delegates this whole phase once to a fresh owner using

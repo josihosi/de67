@@ -10,6 +10,10 @@ Ordinary workers may be Luna, Terra, or Sol according to task fit. The exact `gp
 build, test, debug, or operation work, stop before acting and return the role mismatch to the
 coordinator.
 
+Read the shared `references/msw-kernel.md` from the active DE-67 method checkout completely before
+acting. Execute it exactly as written. It is a verbatim foundation; do not paraphrase, summarize,
+refactor, or replace its wording.
+
 Read this module, the self-contained task brief with its extracted claim-bound DFS slices, and only
 the code, state, tests, tools, and current guideline sections needed by that task. Do not read the
 whole DFS, coordinator transcript, or predecessor transcript. If direct evidence shows that the

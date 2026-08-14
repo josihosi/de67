@@ -172,9 +172,10 @@ python <active-de-67-3-skill>/scripts/deadline_harness.py revise-gap --state .de
 
 Only an abandoned attempt may retry the same revision.
 
-The brief names exploration or closure, one claim, its slice ids and extracted DFS text, the exact
-question or gaps, code and state boundaries, the honest proof route, and the current attempt
-identity. Do not make the worker rediscover the DFS index. A retry uses a new task id but does not
+The brief names the active DE-67 method checkout's shared `references/msw-kernel.md`, exploration or
+closure, one claim, its slice ids and extracted DFS text, the exact question or gaps, code and state
+boundaries, the honest proof route, and the current attempt identity. Do not make the worker
+rediscover the DFS index. A retry uses a new task id but does not
 restart the claim's ledger-item clock. Unknown overlap serializes.
 
 Remain live while workers are outstanding. Use the native non-polling wait or deadline wakeup and

@@ -43,7 +43,14 @@ work ledger. Give every active item one pointer line naming its guarded, claim-b
 Multiple slices carry non-contiguous outcome, owner, acceptance, and proof context without loading
 unrelated DFS text. Mark each current item as exploration or closure. Exploration keeps one learning
 goal and exits with a strategy plus proof route; closure keeps the frozen remaining gaps and next
-action. Re-read code and define tests at planning time. Remove accepted items and their live pointer
+action. Before dispatching a closure gap, compare its terminal evidence with the last accepted
+production frontier and identify the first unproved producer, owner transition, or environment
+prerequisite on that route. If the current setup cannot create the terminal precondition, route that
+missing bridge first instead of spending an end-to-end closure attempt on downstream proof. A helper
+or state-reducer fixture remains setup evidence until the natural producer reaches its next consumer;
+a capacity-dependent build is dispatchable only after current capacity is measured against the
+same-configuration artifact requirement. Re-read code and define tests at planning time. Remove
+accepted items and their live pointer
 line without a batch summary or archive; leave durable DFS markers in place for history and reopen.
 For a still-red claim, replace old task notes with only the current causal frontier and active route.
 Keep attempt history in the clock rather than duplicating it in the ledger.

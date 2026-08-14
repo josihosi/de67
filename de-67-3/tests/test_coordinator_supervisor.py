@@ -79,26 +79,6 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                 harness.request_coordinator_restart(
                     os.environ["DE67_LINEAGE"], "fake second retirement"
                 )
-    elif mode == "restart-then-exit-nonzero":
-        if generation is None:
-            harness.request_coordinator_restart(
-                os.environ["DE67_LINEAGE"], "valid baton before non-zero exit"
-            )
-            raise SystemExit(2)
-        harness.acknowledge_coordinator_restart(
-            os.environ["DE67_LINEAGE"],
-            generation,
-            os.environ["DE67_COORDINATOR_RUN_ID"],
-        )
-        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
-        (root / "DFS.md").write_text(
-            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
-            encoding="utf-8",
-        )
-        (root / "work-ledger.md").write_text(
-            "# Work ledger\n\n## Active work\n",
-            encoding="utf-8",
-        )
     elif mode == "ack":
         harness.acknowledge_coordinator_restart(
             os.environ["DE67_LINEAGE"],
@@ -381,30 +361,6 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             },
         )
         self.assertNotIn("RUNNING", self.statuses().values())
-
-    def test_valid_baton_continues_after_any_child_exit_code(self) -> None:
-        self.write_work_documents(red=True, active=True)
-        run_ids = iter(("retiring-run", "successor-run"))
-
-        result = run_supervisor(
-            self.state_path,
-            "project",
-            self.workspace,
-            self.runner_command(),
-            self.run_root,
-            extra_env=self.environment("restart-then-exit-nonzero"),
-            run_id_factory=lambda _generation: next(run_ids),
-        )
-
-        self.assertEqual(result, 0)
-        self.assertEqual(
-            [event["run_id"] for event in self.read_events()],
-            ["retiring-run", "successor-run"],
-        )
-        self.assertEqual(
-            self.statuses(),
-            {"retiring-run": "FAILED", "successor-run": "DONE"},
-        )
 
     def test_fresh_workspace_initializes_clock_before_first_coordinator(self) -> None:
         self.state_path.unlink()

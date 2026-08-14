@@ -22,9 +22,15 @@ The supervisor is the direct parent and sole owner of restart-generation claims.
 executes `DE67_COORDINATOR_ACK_ARGV_JSON` without a shell before dispatch. The retiring coordinator
 requests a baton and exits; it never launches or acknowledges its successor.
 
-Success without a new acknowledged restart stays stopped. A failed or unacknowledged successor is
-not silently retried and remains pending. After abnormal death, confirm the runner tree is gone
-before releasing that exact failed claim for an explicit recovery action.
+A successful coordinator exit without a baton does not end supervision while work remains. Wait
+without polling or model tokens until the earliest active claim deadline or an already-persisted
+incident/mutation gate. At that event, persist one restart generation and launch one acknowledged
+successor. The successor routes the deadline mutator; the supervisor does not diagnose the miss or
+choose a model. Never launch the same unchanged supervision event twice.
+
+A failed or unacknowledged successor is not silently retried and remains pending. After abnormal
+death, confirm the runner tree is gone before releasing that exact failed claim for an explicit
+recovery action.
 
 When the user outcome is honestly proved, closure gaps and active work are empty, and no incident or
 restart gate remains, launch nothing. A due ordinary random review cannot create post-contract work.

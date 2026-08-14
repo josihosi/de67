@@ -18,11 +18,13 @@ from coordinator_supervisor import (  # noqa: E402
     KERNEL_PATH,
     PHASE3_ROOT,
     ROLE_ROOT,
+    SupervisionEvent,
     SupervisorError,
     _supervisor_lock,
     coordinator_prompt,
     read_clock,
     run_supervisor,
+    wait_for_supervision_event,
     work_is_complete,
 )
 from deadline_harness import DeadlineHarness  # noqa: E402
@@ -143,9 +145,94 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             harness.start_task(
                 "project", "seed", "R-000", 3600, now=time.time()
             )
+        self.waiter = patch(
+            "coordinator_supervisor.wait_for_supervision_event",
+            return_value=None,
+        )
+        self.waiter.start()
 
     def tearDown(self) -> None:
+        self.waiter.stop()
         self.temporary.cleanup()
+
+    def test_clock_event_waits_once_and_requests_a_successor(self) -> None:
+        base = time.time()
+        with DeadlineHarness(self.state_path) as harness:
+            deadline = harness._claim("project", "R-000")["deadline_at"]
+        sleeps: list[float] = []
+
+        event = wait_for_supervision_event(
+            self.state_path,
+            "project",
+            now=lambda: base,
+            sleep=sleeps.append,
+        )
+
+        self.assertIsInstance(event, SupervisionEvent)
+        assert event is not None
+        self.assertAlmostEqual(sleeps[0], float(deadline) - base, places=3)
+        self.assertTrue(event.signature.startswith("gate:"))
+        self.assertTrue(event.restart.required)
+        self.assertEqual(event.restart.generation, 1)
+        with DeadlineHarness(self.state_path) as harness:
+            summary = harness.list_tasks(now=float(deadline))
+        self.assertEqual(
+            summary["pending_incident_reviews"][0]["kind"], "deadline_miss"
+        )
+
+    def test_pending_incident_requests_a_successor_without_sleeping(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            deadline = float(harness._claim("project", "R-000")["deadline_at"])
+            harness.expire_claim("project", "R-000", now=deadline)
+        sleeps: list[float] = []
+
+        event = wait_for_supervision_event(
+            self.state_path,
+            "project",
+            now=lambda: deadline,
+            sleep=sleeps.append,
+        )
+
+        self.assertIsNotNone(event)
+        self.assertEqual(sleeps, [])
+        assert event is not None
+        self.assertTrue(event.restart.required)
+        self.assertTrue(event.signature.startswith("gate:"))
+
+    def test_unchanged_incident_does_not_create_a_second_successor(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            deadline = float(harness._claim("project", "R-000")["deadline_at"])
+            harness.expire_claim("project", "R-000", now=deadline)
+        first = wait_for_supervision_event(
+            self.state_path,
+            "project",
+            now=lambda: deadline,
+            sleep=lambda _seconds: None,
+        )
+        assert first is not None and first.restart.generation is not None
+        with DeadlineHarness(self.state_path) as harness:
+            harness.claim_coordinator_restart(
+                "project", first.restart.generation, "successor-1", now=deadline
+            )
+            harness.acknowledge_coordinator_restart(
+                "project", first.restart.generation, "successor-1", now=deadline
+            )
+
+        with self.assertRaisesRegex(SupervisorError, "without resolving"):
+            wait_for_supervision_event(
+                self.state_path,
+                "project",
+                now=lambda: deadline,
+                sleep=lambda _seconds: None,
+                handled_signatures={first.signature},
+            )
+
+        with DeadlineHarness(self.state_path) as harness:
+            restart = harness.coordinator_restart_status("project")[
+                "coordinator_restart"
+            ]
+        self.assertEqual(restart["generation"], 1)
+        self.assertFalse(restart["pending"])
 
     def environment(self, mode: str) -> dict[str, str]:
         return {

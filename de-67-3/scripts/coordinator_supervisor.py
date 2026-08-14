@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -71,6 +72,12 @@ class ChildResult:
     run_id: str
     run_dir: Path
     exit_code: int
+
+
+@dataclass(frozen=True)
+class SupervisionEvent:
+    restart: RestartState
+    signature: str
 
 
 def _write(path: Path, value: str) -> None:
@@ -153,6 +160,106 @@ def read_clock(state_path: Path, lineage_id: str) -> RestartState:
         return _restart_state(
             harness.coordinator_restart_status(lineage_id), lineage_id
         )
+
+
+def _gate_signature(
+    pending_reviews: Sequence[object],
+    pending_mutations: Sequence[object],
+) -> str:
+    return "gate:" + json.dumps(
+        {
+            "reviews": pending_reviews,
+            "mutations": pending_mutations,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def wait_for_supervision_event(
+    state_path: Path,
+    lineage_id: str,
+    *,
+    now: Callable[[], float] = time.time,
+    sleep: Callable[[float], None] = time.sleep,
+    handled_signatures: set[str] | None = None,
+) -> SupervisionEvent | None:
+    """Wait without polling until durable clock state requires a successor."""
+    with DeadlineHarness(state_path) as harness:
+        summary = harness.list_tasks(now=now())
+        restart = _restart_state(summary, lineage_id)
+        if restart.required:
+            return SupervisionEvent(restart, f"restart:{restart.generation}")
+
+        pending_reviews = summary["pending_incident_reviews"]
+        pending_mutations = [
+            *summary.get("pending_deadline_mutations", []),
+            *summary.get("pending_integrity_mutations", []),
+        ]
+        if pending_reviews or pending_mutations:
+            signature = _gate_signature(pending_reviews, pending_mutations)
+            if handled_signatures is not None and signature in handled_signatures:
+                raise SupervisorError(
+                    "A coordinator returned without resolving supervision event "
+                    f"{signature}"
+                )
+            requested = harness.request_coordinator_restart(
+                lineage_id,
+                "supervisor observed a persisted incident or mutation gate",
+                now=now(),
+            )["coordinator_restart"]
+            return SupervisionEvent(
+                _restart_state(
+                    {"lineage_id": lineage_id, "coordinator_restart": requested},
+                    lineage_id,
+                ),
+                signature,
+            )
+
+        deadlines = [
+            (float(task["deadline_at"]), str(task["claim_id"]))
+            for task in summary["tasks"]
+            if task.get("deadline_at") is not None
+        ]
+        if not deadlines:
+            return None
+        deadline_at, claim_id = min(deadlines)
+
+    sleep(max(0.0, deadline_at - now()))
+
+    with DeadlineHarness(state_path) as harness:
+        expired = harness.expire_claim(
+            lineage_id,
+            claim_id,
+            now=max(deadline_at, now()),
+        )
+        if expired["incident"] is None:
+            return None
+        summary = harness.list_tasks(now=max(deadline_at, now()))
+        signature = _gate_signature(
+            summary["pending_incident_reviews"],
+            [
+                *summary.get("pending_deadline_mutations", []),
+                *summary.get("pending_integrity_mutations", []),
+            ],
+        )
+        if handled_signatures is not None and signature in handled_signatures:
+            raise SupervisorError(
+                "A coordinator returned without resolving supervision event "
+                f"{signature}"
+            )
+        requested = harness.request_coordinator_restart(
+            lineage_id,
+            f"claim {claim_id} reached its immutable deadline",
+            now=max(deadline_at, now()),
+        )["coordinator_restart"]
+    return SupervisionEvent(
+        _restart_state(
+            {"lineage_id": lineage_id, "coordinator_restart": requested},
+            lineage_id,
+        ),
+        signature,
+    )
 
 
 def work_is_complete(
@@ -362,6 +469,7 @@ def _run_supervisor_locked(
     *,
     extra_env: Mapping[str, str] | None = None,
     run_id_factory: Callable[[int | None], str] = _default_run_id,
+    event_waiter: Callable[[Path, str], SupervisionEvent | None] | None = None,
 ) -> int:
     state = Path(state_path).expanduser().resolve()
     workdir = Path(workspace).expanduser().resolve()
@@ -372,6 +480,7 @@ def _run_supervisor_locked(
         raise SupervisorError("Lineage id must not be empty")
     if not runner_command:
         raise SupervisorError("Runner command must not be empty")
+    wait_for_event = event_waiter or wait_for_supervision_event
 
     require_canonical_method_checkout()
 
@@ -383,6 +492,7 @@ def _run_supervisor_locked(
     restart = read_clock(state, lineage_id)
     generation = restart.generation if restart.required else None
     attempted_generations: set[int] = set()
+    handled_events: set[str] = set()
 
     while True:
         if generation is not None:
@@ -444,7 +554,23 @@ def _run_supervisor_locked(
         if work_is_complete(workdir, state, lineage_id):
             return 0
         if not after.required:
-            return 0
+            if event_waiter is None:
+                event = wait_for_supervision_event(
+                    state,
+                    lineage_id,
+                    handled_signatures=handled_events,
+                )
+            else:
+                event = wait_for_event(state, lineage_id)
+            if event is None:
+                return 0
+            if event.signature in handled_events:
+                raise SupervisorError(
+                    "A coordinator returned without resolving supervision event "
+                    f"{event.signature}"
+                )
+            handled_events.add(event.signature)
+            after = event.restart
         if after.generation is None:
             _mark_protocol_failure(result, "Required coordinator restart lacks a generation")
             return 1
@@ -467,6 +593,7 @@ def run_supervisor(
     *,
     extra_env: Mapping[str, str] | None = None,
     run_id_factory: Callable[[int | None], str] = _default_run_id,
+    event_waiter: Callable[[Path, str], SupervisionEvent | None] | None = None,
 ) -> int:
     state = Path(state_path).expanduser().resolve()
     with _supervisor_lock(state):
@@ -478,6 +605,7 @@ def run_supervisor(
             run_root,
             extra_env=extra_env,
             run_id_factory=run_id_factory,
+            event_waiter=event_waiter,
         )
 
 

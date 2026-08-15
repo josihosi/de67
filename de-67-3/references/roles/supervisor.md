@@ -28,9 +28,12 @@ requests a baton and exits; it never launches or acknowledges its successor.
 A successful coordinator exit without a baton does not end supervision while the active ledger is
 nonempty. Persist one restart generation immediately and launch one acknowledged successor; a
 closed item's deadline is irrelevant to ordinary handover. When no active ledger item remains, wait
-without polling or model tokens only for an active claim deadline or an already-persisted
-incident/mutation gate. The successor routes any deadline mutator; the supervisor does not diagnose
-the miss or choose a model. Never launch the same unchanged supervision event twice.
+and the DFS still contains red work, launch exactly one acknowledged replenishment coordinator to
+rebuild the compact ledger. If that run returns with the ledger still empty and the same red work,
+do not loop. Only when neither ordinary handover applies, wait without polling or model tokens for
+an active claim deadline or an already-persisted incident/mutation gate. The successor routes any
+deadline mutator; the supervisor does not diagnose the miss or choose a model. Never launch the
+same unchanged supervision event twice.
 
 A failed or unacknowledged successor is not silently retried and remains pending. After abnormal
 death, confirm the runner tree is gone before releasing that exact failed claim for an explicit

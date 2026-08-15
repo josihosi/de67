@@ -317,6 +317,14 @@ def ledger_has_active_work(workspace: Path) -> bool:
     ) is not None
 
 
+def dfs_has_open_work(workspace: Path) -> bool:
+    """Return whether the frozen DFS still has a red product claim."""
+    dfs = workspace / ".de67" / "DFS.md"
+    return dfs.is_file() and RED_DFS_CLAIM.search(
+        dfs.read_text(encoding="utf-8")
+    ) is not None
+
+
 def coordinator_prompt(
     workspace: Path,
     state_path: Path,
@@ -505,6 +513,9 @@ def _run_supervisor_locked(
     generation = restart.generation if restart.required else None
     attempted_generations: set[int] = set()
     handled_events: set[str] = set()
+    replenishment_attempted = (
+        dfs_has_open_work(workdir) and not ledger_has_active_work(workdir)
+    )
 
     while True:
         if generation is not None:
@@ -573,6 +584,21 @@ def _run_supervisor_locked(
                 requested = harness.request_coordinator_restart(
                     lineage_id,
                     "supervisor observed active ledger work after coordinator exit",
+                )["coordinator_restart"]
+            after = _restart_state(
+                {"lineage_id": lineage_id, "coordinator_restart": requested},
+                lineage_id,
+            )
+        elif (
+            not after.required
+            and dfs_has_open_work(workdir)
+            and not replenishment_attempted
+        ):
+            replenishment_attempted = True
+            with DeadlineHarness(state) as harness:
+                requested = harness.request_coordinator_restart(
+                    lineage_id,
+                    "supervisor observed an empty ledger with open DFS work",
                 )["coordinator_restart"]
             after = _restart_state(
                 {"lineage_id": lineage_id, "coordinator_restart": requested},

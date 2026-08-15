@@ -156,6 +156,22 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                 "# Work ledger\n\n## Active work\n",
                 encoding="utf-8",
             )
+    elif mode == "drain-then-no-refill":
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        if generation is None:
+            harness.complete_task(
+                os.environ["DE67_LINEAGE"], "seed", "ledger item retired"
+            )
+            (root / "work-ledger.md").write_text(
+                "# Work ledger\n\n## Active work\n",
+                encoding="utf-8",
+            )
+        else:
+            harness.acknowledge_coordinator_restart(
+                os.environ["DE67_LINEAGE"],
+                generation,
+                os.environ["DE67_COORDINATOR_RUN_ID"],
+            )
     elif mode == "fail-before-ack":
         raise SystemExit(7)
     else:
@@ -561,6 +577,33 @@ class CoordinatorSupervisorTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(len(self.read_events()), 1)
+
+    def test_drained_ledger_launches_one_replenishment_coordinator(self) -> None:
+        self.write_work_documents(red=True, active=True)
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("drain-then-no-refill"),
+            run_id_factory=lambda generation: (
+                "draining-run" if generation is None else "replenishment-run"
+            ),
+        )
+
+        self.assertEqual(result, 0)
+        events = self.read_events()
+        self.assertEqual(len(events), 2)
+        self.assertIsNone(events[0]["generation"])
+        self.assertEqual(events[1]["generation"], 1)
+        with DeadlineHarness(self.state_path) as harness:
+            restart = harness.coordinator_restart_status("project")[
+                "coordinator_restart"
+            ]
+        self.assertIsNotNone(restart)
+        self.assertFalse(restart_required(restart))
 
     def test_active_ledger_restarts_immediately_without_a_deadline_event(self) -> None:
         self.write_work_documents(active=True)

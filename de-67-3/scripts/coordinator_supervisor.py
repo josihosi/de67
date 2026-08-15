@@ -236,13 +236,17 @@ def wait_for_supervision_event(
         if expired["incident"] is None:
             return None
         summary = harness.list_tasks(now=max(deadline_at, now()))
-        signature = _gate_signature(
-            summary["pending_incident_reviews"],
-            [
-                *summary.get("pending_deadline_mutations", []),
-                *summary.get("pending_integrity_mutations", []),
-            ],
-        )
+        pending_reviews = summary["pending_incident_reviews"]
+        pending_mutations = [
+            *summary.get("pending_deadline_mutations", []),
+            *summary.get("pending_integrity_mutations", []),
+        ]
+        # expire_claim also returns the one durable incident after that incident
+        # has been reviewed and resolved. Only live gates justify a successor;
+        # the immutable historical deadline must not re-arm itself.
+        if not pending_reviews and not pending_mutations:
+            return None
+        signature = _gate_signature(pending_reviews, pending_mutations)
         if handled_signatures is not None and signature in handled_signatures:
             raise SupervisorError(
                 "A coordinator returned without resolving supervision event "

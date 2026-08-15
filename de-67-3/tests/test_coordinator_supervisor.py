@@ -137,6 +137,25 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             "# Work ledger\n\n## Active work\n",
             encoding="utf-8",
         )
+    elif mode == "handover-then-complete":
+        if generation is not None:
+            harness.acknowledge_coordinator_restart(
+                os.environ["DE67_LINEAGE"],
+                generation,
+                os.environ["DE67_COORDINATOR_RUN_ID"],
+            )
+            harness.complete_task(
+                os.environ["DE67_LINEAGE"], "seed", "final proof"
+            )
+            root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+            (root / "DFS.md").write_text(
+                "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+                encoding="utf-8",
+            )
+            (root / "work-ledger.md").write_text(
+                "# Work ledger\n\n## Active work\n",
+                encoding="utf-8",
+            )
     elif mode == "fail-before-ack":
         raise SystemExit(7)
     else:
@@ -543,7 +562,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(len(self.read_events()), 1)
 
-    def test_active_ledger_or_clock_gate_prevents_completion(self) -> None:
+    def test_active_ledger_restarts_immediately_without_a_deadline_event(self) -> None:
         self.write_work_documents(active=True)
         with DeadlineHarness(self.state_path) as harness:
             harness.complete_task("project", "seed", "green", now=time.time())
@@ -554,12 +573,23 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.workspace,
             self.runner_command(),
             self.run_root,
-            extra_env=self.environment("unacknowledged"),
-            run_id_factory=lambda _generation: "active-ledger-run",
+            extra_env=self.environment("handover-then-complete"),
+            run_id_factory=lambda generation: (
+                "active-ledger-initial" if generation is None else "active-ledger-successor"
+            ),
         )
 
         self.assertEqual(result, 0)
-        self.assertEqual(len(self.read_events()), 1)
+        events = self.read_events()
+        self.assertEqual(len(events), 2)
+        self.assertIsNone(events[0]["generation"])
+        self.assertEqual(events[1]["generation"], 1)
+        with DeadlineHarness(self.state_path) as harness:
+            restart = harness.coordinator_restart_status("project")[
+                "coordinator_restart"
+            ]
+        self.assertIsNotNone(restart)
+        self.assertFalse(restart_required(restart))
 
     def test_active_clock_prevents_completion(self) -> None:
         self.write_work_documents()

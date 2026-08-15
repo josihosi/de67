@@ -10,12 +10,15 @@ The ordinary attempt cadence remains one uniformly drawn terminal-window interva
 and one stored lane. Do not redraw the interval, reselect a friendlier lane, or infer a new cadence.
 Already-dispatched workers keep their original briefs and clocks.
 
+The read-only trajectory sidecar is optional when the selected review concerns repeated direction
+or semantic duplication. Proximity alone never requires a mutation or permits merging lane authority.
+
 If the persisted draw is exactly `k = 30` with lane `DFS.md` and its universal component is still
 pending, stop and route that component to the universal mutator. When it returns resolved, perform
 this ordinary stored-lane review for the same cycle. Do not resolve one component as the other or
 redraw either obligation.
 
-Use a fresh independent `gpt-5.6-sol` reviewer at `ultra`, the selected mutation profile. Read
+Use a fresh independent `gpt-5.6-sol` reviewer at `xhigh`, the selected mutation profile. Read
 the selected target, the current DFS information necessary to preserve the outcome, the latest ten
 short failure verdicts, and pending suggestions. Fetch long evidence only for an exact anomaly that
 can change the decision. The selected profile does not expand this ordinary lane's authority.

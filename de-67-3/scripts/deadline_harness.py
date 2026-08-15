@@ -234,6 +234,53 @@ class DeadlineHarness:
                 PRIMARY KEY (lineage_id, claim_id)
             );
 
+            CREATE TABLE IF NOT EXISTS claim_deadline_generations (
+                lineage_id TEXT NOT NULL,
+                claim_id TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK (generation > 0),
+                estimate_seconds REAL NOT NULL CHECK (estimate_seconds > 0),
+                started_at REAL NOT NULL,
+                deadline_at REAL NOT NULL,
+                armed_by_restart_generation INTEGER,
+                PRIMARY KEY (lineage_id, claim_id, generation),
+                FOREIGN KEY (lineage_id, claim_id)
+                    REFERENCES claim_clocks(lineage_id, claim_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS claim_deadline_generation_incidents (
+                lineage_id TEXT NOT NULL,
+                claim_id TEXT NOT NULL,
+                generation INTEGER NOT NULL,
+                source_task_id TEXT NOT NULL,
+                recorded_at REAL NOT NULL,
+                short_verdict TEXT NOT NULL,
+                long_detail TEXT NOT NULL,
+                reviewed_at REAL,
+                restart_generation INTEGER,
+                PRIMARY KEY (lineage_id, claim_id, generation),
+                FOREIGN KEY (lineage_id, claim_id, generation)
+                    REFERENCES claim_deadline_generations(
+                        lineage_id, claim_id, generation
+                    ),
+                FOREIGN KEY (lineage_id, source_task_id)
+                    REFERENCES tasks(lineage_id, task_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS deadline_generation_mutation_components (
+                lineage_id TEXT NOT NULL,
+                claim_id TEXT NOT NULL,
+                generation INTEGER NOT NULL,
+                component TEXT NOT NULL CHECK (component IN ('micro', 'macro')),
+                resolved_at REAL NOT NULL,
+                evidence TEXT NOT NULL,
+                receipt_id TEXT,
+                PRIMARY KEY (lineage_id, claim_id, generation, component),
+                FOREIGN KEY (lineage_id, claim_id, generation)
+                    REFERENCES claim_deadline_generation_incidents(
+                        lineage_id, claim_id, generation
+                    )
+            );
+
             CREATE TABLE IF NOT EXISTS claim_clock_migration_conflicts (
                 lineage_id TEXT NOT NULL,
                 claim_id TEXT NOT NULL,
@@ -547,6 +594,20 @@ class DeadlineHarness:
             self.connection.execute(
                 "ALTER TABLE tasks ADD COLUMN closure_gap_revision INTEGER"
             )
+        if "deadline_generation" not in task_columns:
+            self.connection.execute(
+                "ALTER TABLE tasks ADD COLUMN deadline_generation INTEGER NOT NULL DEFAULT 1"
+            )
+        self.connection.execute(
+            """
+            INSERT OR IGNORE INTO claim_deadline_generations (
+                lineage_id, claim_id, generation, estimate_seconds,
+                started_at, deadline_at
+            )
+            SELECT lineage_id, claim_id, 1, estimate_seconds, started_at, deadline_at
+            FROM claim_clocks
+            """
+        )
         gap_columns = {
             row["name"]
             for row in self.connection.execute(
@@ -615,6 +676,27 @@ class DeadlineHarness:
             self.connection.execute(
                 "ALTER TABLE deadline_mutation_components ADD COLUMN receipt_id TEXT"
             )
+        self.connection.execute(
+            """
+            INSERT OR IGNORE INTO claim_deadline_generation_incidents (
+                lineage_id, claim_id, generation, source_task_id, recorded_at,
+                short_verdict, long_detail, reviewed_at, restart_generation
+            )
+            SELECT lineage_id, claim_id, 1, source_task_id, recorded_at,
+                   short_verdict, long_detail, reviewed_at, restart_generation
+            FROM claim_deadline_incidents
+            """
+        )
+        self.connection.execute(
+            """
+            INSERT OR IGNORE INTO deadline_generation_mutation_components (
+                lineage_id, claim_id, generation, component, resolved_at,
+                evidence, receipt_id
+            )
+            SELECT lineage_id, claim_id, 1, component, resolved_at, evidence, receipt_id
+            FROM deadline_generation_mutation_components
+            """
+        )
         integrity_component_columns = {
             row["name"]
             for row in self.connection.execute(
@@ -1243,7 +1325,21 @@ class DeadlineHarness:
 
     def _claim(self, lineage_id: str, claim_id: str) -> sqlite3.Row:
         row = self.connection.execute(
-            "SELECT * FROM claim_clocks WHERE lineage_id = ? AND claim_id = ?",
+            """
+            SELECT clock.lineage_id, clock.claim_id,
+                   generation.estimate_seconds, generation.started_at,
+                   generation.deadline_at, clock.phase,
+                   clock.migrated_from_task_id, clock.migration_note,
+                   generation.generation AS deadline_generation,
+                   generation.armed_by_restart_generation
+            FROM claim_clocks AS clock
+            JOIN claim_deadline_generations AS generation
+              ON generation.lineage_id = clock.lineage_id
+             AND generation.claim_id = clock.claim_id
+            WHERE clock.lineage_id = ? AND clock.claim_id = ?
+            ORDER BY generation.generation DESC
+            LIMIT 1
+            """,
             (lineage_id, claim_id),
         ).fetchone()
         if row is None:
@@ -1410,6 +1506,15 @@ class DeadlineHarness:
                     reason,
                 ),
             )
+            self.connection.execute(
+                """
+                INSERT INTO claim_deadline_generations (
+                    lineage_id, claim_id, generation, estimate_seconds,
+                    started_at, deadline_at
+                ) VALUES (?, ?, 1, ?, ?, ?)
+                """,
+                (lineage_id, claim_id, estimate, started_at, deadline_at),
+            )
             basis_task_id = (
                 source_task_id
                 if source_task_id is not None
@@ -1494,7 +1599,46 @@ class DeadlineHarness:
 
     def _task_claim(self, lineage_id: str, task_id: str) -> sqlite3.Row:
         task = self._task(lineage_id, task_id)
-        return self._claim(lineage_id, str(task["claim_id"]))
+        row = self.connection.execute(
+            """
+            SELECT clock.lineage_id, clock.claim_id,
+                   generation.estimate_seconds, generation.started_at,
+                   generation.deadline_at, clock.phase,
+                   clock.migrated_from_task_id, clock.migration_note,
+                   generation.generation AS deadline_generation,
+                   generation.armed_by_restart_generation
+            FROM claim_clocks AS clock
+            JOIN claim_deadline_generations AS generation
+              ON generation.lineage_id = clock.lineage_id
+             AND generation.claim_id = clock.claim_id
+            WHERE clock.lineage_id = ? AND clock.claim_id = ?
+              AND generation.generation = ?
+            """,
+            (lineage_id, task["claim_id"], task["deadline_generation"]),
+        ).fetchone()
+        if row is None:
+            # Divergent v1 clocks intentionally have no claim clock until an
+            # authoritative legacy source is selected.
+            legacy_clock = self.connection.execute(
+                "SELECT * FROM claim_clocks WHERE lineage_id = ? AND claim_id = ?",
+                (lineage_id, task["claim_id"]),
+            ).fetchone()
+            if legacy_clock is None:
+                return task
+            self.connection.execute(
+                """
+                INSERT OR IGNORE INTO claim_deadline_generations (
+                    lineage_id, claim_id, generation, estimate_seconds,
+                    started_at, deadline_at
+                ) VALUES (?, ?, 1, ?, ?, ?)
+                """,
+                (
+                    lineage_id, task["claim_id"], legacy_clock["estimate_seconds"],
+                    legacy_clock["started_at"], legacy_clock["deadline_at"],
+                ),
+            )
+            return self._task_claim(lineage_id, task_id)
+        return row
 
     def _latest_valid_acceptance(
         self, lineage_id: str, claim_id: str
@@ -1837,32 +1981,85 @@ class DeadlineHarness:
         return [dict(row) for row in rows]
 
     def _claim_deadline_incident(
-        self, lineage_id: str, claim_id: str
+        self, lineage_id: str, claim_id: str, generation: int | None = None
     ) -> sqlite3.Row | None:
-        return self.connection.execute(
-            """
-            SELECT * FROM claim_deadline_incidents
+        generation_clause = "AND generation = ?" if generation is not None else ""
+        parameters: tuple[object, ...] = (
+            (lineage_id, claim_id, generation)
+            if generation is not None
+            else (lineage_id, claim_id)
+        )
+        row = self.connection.execute(
+            f"""
+            SELECT * FROM claim_deadline_generation_incidents
             WHERE lineage_id = ? AND claim_id = ?
+              {generation_clause}
+            ORDER BY generation DESC LIMIT 1
             """,
-            (lineage_id, claim_id),
+            parameters,
         ).fetchone()
+        if row is None and (generation is None or generation == 1):
+            legacy = self.connection.execute(
+                """
+                SELECT * FROM claim_deadline_incidents
+                WHERE lineage_id = ? AND claim_id = ?
+                """,
+                (lineage_id, claim_id),
+            ).fetchone()
+            if legacy is not None:
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO claim_deadline_generation_incidents (
+                        lineage_id, claim_id, generation, source_task_id,
+                        recorded_at, short_verdict, long_detail, reviewed_at,
+                        restart_generation
+                    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        lineage_id, claim_id, legacy["source_task_id"],
+                        legacy["recorded_at"], legacy["short_verdict"],
+                        legacy["long_detail"], legacy["reviewed_at"],
+                        legacy["restart_generation"],
+                    ),
+                )
+                return self._claim_deadline_incident(
+                    lineage_id, claim_id, 1 if generation is not None else None
+                )
+        return row
 
     def _deadline_mutation_components(
-        self, lineage_id: str, claim_id: str
+        self, lineage_id: str, claim_id: str, generation: int | None = None
     ) -> dict[str, sqlite3.Row]:
+        if generation is None:
+            incident = self._claim_deadline_incident(lineage_id, claim_id)
+            if incident is None:
+                return {}
+            generation = int(incident["generation"])
         rows = self.connection.execute(
             """
-            SELECT * FROM deadline_mutation_components
-            WHERE lineage_id = ? AND claim_id = ?
+            SELECT * FROM deadline_generation_mutation_components
+            WHERE lineage_id = ? AND claim_id = ? AND generation = ?
             """,
-            (lineage_id, claim_id),
+            (lineage_id, claim_id, generation),
         ).fetchall()
+        if generation == 1:
+            legacy = self.connection.execute(
+                """
+                SELECT * FROM deadline_mutation_components
+                WHERE lineage_id = ? AND claim_id = ?
+                """,
+                (lineage_id, claim_id),
+            ).fetchall()
+            rows = [*rows, *legacy]
         return {str(row["component"]): row for row in rows}
 
     def _deadline_mutation_pending(self, lineage_id: str, claim_id: str) -> bool:
-        if self._claim_deadline_incident(lineage_id, claim_id) is None:
+        incident = self._claim_deadline_incident(lineage_id, claim_id)
+        if incident is None:
             return False
-        return set(self._deadline_mutation_components(lineage_id, claim_id)) != {
+        return set(self._deadline_mutation_components(
+            lineage_id, claim_id, int(incident["generation"])
+        )) != {
             "micro",
             "macro",
         }
@@ -1870,9 +2067,9 @@ class DeadlineHarness:
     def _pending_deadline_mutations(self, lineage_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(
             """
-            SELECT claim_id, source_task_id, recorded_at, reviewed_at,
+            SELECT claim_id, generation, source_task_id, recorded_at, reviewed_at,
                    restart_generation
-            FROM claim_deadline_incidents
+            FROM claim_deadline_generation_incidents
             WHERE lineage_id = ?
             ORDER BY recorded_at, claim_id
             """,
@@ -1881,7 +2078,7 @@ class DeadlineHarness:
         result: list[dict[str, Any]] = []
         for row in rows:
             components = self._deadline_mutation_components(
-                lineage_id, str(row["claim_id"])
+                lineage_id, str(row["claim_id"]), int(row["generation"])
             )
             pending = [
                 component
@@ -1893,6 +2090,7 @@ class DeadlineHarness:
             result.append(
                 {
                     "claim_id": row["claim_id"],
+                    "deadline_generation": row["generation"],
                     "source_task_id": row["source_task_id"],
                     "recorded_at": row["recorded_at"],
                     "reviewed": row["reviewed_at"] is not None,
@@ -2481,25 +2679,53 @@ class DeadlineHarness:
         )
         if not missed:
             return None
+        if self.connection.execute(
+            "SELECT 1 FROM claim_clocks WHERE lineage_id = ? AND claim_id = ?",
+            (task["lineage_id"], task["claim_id"]),
+        ).fetchone() is None:
+            return self._record_incident(
+                task["lineage_id"], task["task_id"], "deadline_miss", 1, now
+            )
         existing = self._claim_deadline_incident(
-            str(task["lineage_id"]), str(task["claim_id"])
+            str(task["lineage_id"]), str(task["claim_id"]),
+            int(task["deadline_generation"]),
         )
         if existing is None:
             self.connection.execute(
                 """
-                INSERT INTO claim_deadline_incidents (
-                    lineage_id, claim_id, source_task_id, recorded_at,
+                INSERT INTO claim_deadline_generation_incidents (
+                    lineage_id, claim_id, generation, source_task_id, recorded_at,
                     short_verdict, long_detail
-                ) VALUES (?, ?, ?, ?, 'deadline miss', ?)
+                ) VALUES (?, ?, ?, ?, ?, 'deadline miss', ?)
                 """,
                 (
                     task["lineage_id"],
                     task["claim_id"],
+                    task["deadline_generation"],
                     task["task_id"],
                     now,
                     self._default_incident_detail("deadline_miss", None),
                 ),
             )
+            if self.connection.execute(
+                """
+                SELECT 1 FROM claim_deadline_incidents
+                WHERE lineage_id = ? AND claim_id = ?
+                """,
+                (task["lineage_id"], task["claim_id"]),
+            ).fetchone() is None:
+                self.connection.execute(
+                    """
+                    INSERT INTO claim_deadline_incidents (
+                        lineage_id, claim_id, source_task_id, recorded_at,
+                        short_verdict, long_detail
+                    ) VALUES (?, ?, ?, ?, 'deadline miss', ?)
+                    """,
+                    (
+                        task["lineage_id"], task["claim_id"], task["task_id"], now,
+                        self._default_incident_detail("deadline_miss", None),
+                    ),
+                )
             compatibility = self._record_incident(
                 task["lineage_id"], task["task_id"], "deadline_miss", 1, now
             )
@@ -2528,6 +2754,7 @@ class DeadlineHarness:
         result = dict(compatibility)
         result["recorded"] = recorded
         result["claim_id"] = task["claim_id"]
+        result["deadline_generation"] = task["deadline_generation"]
         result["mutation_pending"] = self._deadline_mutation_pending(
             str(task["lineage_id"]), str(task["claim_id"])
         )
@@ -2536,13 +2763,14 @@ class DeadlineHarness:
 
     def _status(self, lineage_id: str, task_id: str, now: float) -> dict[str, Any]:
         task = self._task(lineage_id, task_id)
-        claim = self.connection.execute(
-            """
-            SELECT * FROM claim_clocks
-            WHERE lineage_id = ? AND claim_id = ?
-            """,
-            (lineage_id, task["claim_id"]),
-        ).fetchone()
+        claim = (
+            self._task_claim(lineage_id, task_id)
+            if self.connection.execute(
+                "SELECT 1 FROM claim_clocks WHERE lineage_id = ? AND claim_id = ?",
+                (lineage_id, task["claim_id"]),
+            ).fetchone() is not None
+            else None
+        )
         migration_conflict = (
             self._migration_conflict(lineage_id, str(task["claim_id"]))
             if claim is None
@@ -2569,7 +2797,7 @@ class DeadlineHarness:
         )
         completion_accepted = claim_acceptance is not None
         claim_deadline_incident = self._claim_deadline_incident(
-            lineage_id, str(task["claim_id"])
+            lineage_id, str(task["claim_id"]), int(task["deadline_generation"])
         )
         if task["integrity_breached_at"] is not None:
             state = "integrity_breach"
@@ -2587,6 +2815,7 @@ class DeadlineHarness:
             "lineage_id": lineage_id,
             "task_id": task_id,
             "claim_id": task["claim_id"],
+            "deadline_generation": task["deadline_generation"],
             "state": state,
             "phase": claim["phase"] if claim is not None else "migration_conflict",
             "phase_at_dispatch": task["phase_at_dispatch"],
@@ -2808,13 +3037,11 @@ class DeadlineHarness:
             ).fetchone()
             random_mutation = self._random_mutation_status(lineage_id)
             coordinator_restart = self._coordinator_restart_status(lineage_id)
-            claim = self.connection.execute(
-                """
-                SELECT * FROM claim_clocks
-                WHERE lineage_id = ? AND claim_id = ?
-                """,
+            claim_exists = self.connection.execute(
+                "SELECT 1 FROM claim_clocks WHERE lineage_id = ? AND claim_id = ?",
                 (lineage_id, claim_id),
             ).fetchone()
+            claim = self._claim(lineage_id, claim_id) if claim_exists is not None else None
             conflict = self._migration_conflict(lineage_id, claim_id)
             if (
                 claim is None
@@ -2866,6 +3093,51 @@ class DeadlineHarness:
                 raise DeadlineError(
                     "Random improvement review is due; resolve it before dispatching a new task"
                 )
+            advanced_deadline_generation = False
+            if existing is None and claim is not None:
+                incident = self._claim_deadline_incident(
+                    lineage_id, claim_id, int(claim["deadline_generation"])
+                )
+                if incident is not None and not self._deadline_mutation_pending(
+                    lineage_id, claim_id
+                ):
+                    restart_generation = incident["restart_generation"]
+                    restart = (
+                        self.connection.execute(
+                            """
+                            SELECT * FROM coordinator_restart_requests
+                            WHERE lineage_id = ? AND generation = ?
+                            """,
+                            (lineage_id, restart_generation),
+                        ).fetchone()
+                        if restart_generation is not None
+                        else None
+                    )
+                    if restart is None or restart["acknowledged_at"] is None:
+                        raise DeadlineError(
+                            "Resolved deadline generation requires its acknowledged "
+                            "successor before a new work deadline can be armed"
+                        )
+                    next_generation = int(claim["deadline_generation"]) + 1
+                    self.connection.execute(
+                        """
+                        INSERT INTO claim_deadline_generations (
+                            lineage_id, claim_id, generation, estimate_seconds,
+                            started_at, deadline_at, armed_by_restart_generation
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            lineage_id,
+                            claim_id,
+                            next_generation,
+                            estimate,
+                            started_at,
+                            started_at + estimate,
+                            restart_generation,
+                        ),
+                    )
+                    claim = self._claim(lineage_id, claim_id)
+                    advanced_deadline_generation = True
             if claim is None:
                 dispatch_phase = "exploration" if phase is None else phase
                 if dispatch_phase != "exploration":
@@ -2889,6 +3161,15 @@ class DeadlineHarness:
                 )
                 self.connection.execute(
                     """
+                    INSERT INTO claim_deadline_generations (
+                        lineage_id, claim_id, generation, estimate_seconds,
+                        started_at, deadline_at
+                    ) VALUES (?, ?, 1, ?, ?, ?)
+                    """,
+                    (lineage_id, claim_id, estimate, started_at, started_at + estimate),
+                )
+                self.connection.execute(
+                    """
                     INSERT INTO claim_phase_events (
                         lineage_id, claim_id, sequence, phase,
                         recorded_at, basis_task_id
@@ -2900,7 +3181,7 @@ class DeadlineHarness:
                 claim_created = True
             else:
                 claim_created = False
-                if claim["estimate_seconds"] != estimate:
+                if not advanced_deadline_generation and claim["estimate_seconds"] != estimate:
                     raise DeadlineError(
                         "Repeated claim dispatch cannot change the claim estimate or deadline"
                     )
@@ -3007,9 +3288,10 @@ class DeadlineHarness:
                 INSERT OR IGNORE INTO tasks (
                     lineage_id, task_id, claim_id,
                     estimate_seconds, started_at, deadline_at,
+                    deadline_generation,
                     phase_at_dispatch, phase_sequence_at_dispatch,
                     closure_gap_id, closure_gap_revision
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     lineage_id,
@@ -3018,6 +3300,7 @@ class DeadlineHarness:
                     claim["estimate_seconds"],
                     started_at,
                     claim["deadline_at"],
+                    claim["deadline_generation"],
                     dispatch_phase,
                     phase_sequence,
                     selected_gap_id,
@@ -4350,9 +4633,9 @@ class DeadlineHarness:
             if incident["reviewed_at"] is None:
                 self.connection.execute(
                     """
-                    UPDATE claim_deadline_incidents
+                    UPDATE claim_deadline_generation_incidents
                     SET short_verdict = ?, long_detail = ?, reviewed_at = ?
-                    WHERE lineage_id = ? AND claim_id = ?
+                    WHERE lineage_id = ? AND claim_id = ? AND generation = ?
                     """,
                     (
                         short_verdict,
@@ -4360,6 +4643,7 @@ class DeadlineHarness:
                         reviewed_at,
                         lineage_id,
                         claim_id,
+                        incident["generation"],
                     ),
                 )
                 self.connection.execute(
@@ -4375,6 +4659,18 @@ class DeadlineHarness:
                         reviewed_at,
                         lineage_id,
                         incident["source_task_id"],
+                    ),
+                )
+                self.connection.execute(
+                    """
+                    UPDATE claim_deadline_incidents
+                    SET short_verdict = ?, long_detail = ?, reviewed_at = ?
+                    WHERE lineage_id = ? AND claim_id = ?
+                      AND source_task_id = ?
+                    """,
+                    (
+                        short_verdict, diagnosis, reviewed_at, lineage_id,
+                        claim_id, incident["source_task_id"],
                     ),
                 )
                 recorded = True
@@ -4396,7 +4692,9 @@ class DeadlineHarness:
                 component
                 for component in ("micro", "macro")
                 if component
-                not in self._deadline_mutation_components(lineage_id, claim_id)
+                not in self._deadline_mutation_components(
+                    lineage_id, claim_id, int(diagnosed["generation"])
+                )
             ]
             self.connection.commit()
             return result
@@ -4550,28 +4848,43 @@ class DeadlineHarness:
                 )
             existing = self.connection.execute(
                 """
-                SELECT * FROM deadline_mutation_components
-                WHERE lineage_id = ? AND claim_id = ? AND component = ?
+                SELECT * FROM deadline_generation_mutation_components
+                WHERE lineage_id = ? AND claim_id = ?
+                  AND generation = ? AND component = ?
                 """,
-                (lineage_id, claim_id, component),
+                (lineage_id, claim_id, incident["generation"], component),
             ).fetchone()
             if existing is None:
                 self.connection.execute(
                     """
-                    INSERT INTO deadline_mutation_components (
-                        lineage_id, claim_id, component, resolved_at, evidence,
-                        receipt_id
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO deadline_generation_mutation_components (
+                        lineage_id, claim_id, generation, component,
+                        resolved_at, evidence, receipt_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         lineage_id,
                         claim_id,
+                        incident["generation"],
                         component,
                         resolved_at,
                         evidence,
                         receipt_id,
                     ),
                 )
+                if int(incident["generation"]) == 1:
+                    self.connection.execute(
+                        """
+                        INSERT OR IGNORE INTO deadline_mutation_components (
+                            lineage_id, claim_id, component, resolved_at,
+                            evidence, receipt_id
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            lineage_id, claim_id, component, resolved_at,
+                            evidence, receipt_id,
+                        ),
+                    )
                 recorded = True
             elif (
                 existing["evidence"] == evidence
@@ -4582,7 +4895,9 @@ class DeadlineHarness:
                 raise DeadlineError(
                     "Deadline mutation resolution is immutable once recorded"
                 )
-            components = self._deadline_mutation_components(lineage_id, claim_id)
+            components = self._deadline_mutation_components(
+                lineage_id, claim_id, int(incident["generation"])
+            )
             pending = [
                 name for name in ("micro", "macro") if name not in components
             ]
@@ -4599,11 +4914,24 @@ class DeadlineHarness:
                     )
                     self.connection.execute(
                         """
-                        UPDATE claim_deadline_incidents SET restart_generation = ?
-                        WHERE lineage_id = ? AND claim_id = ?
+                        UPDATE claim_deadline_generation_incidents
+                        SET restart_generation = ?
+                        WHERE lineage_id = ? AND claim_id = ? AND generation = ?
                         """,
-                        (restart["generation"], lineage_id, claim_id),
+                        (
+                            restart["generation"], lineage_id, claim_id,
+                            incident["generation"],
+                        ),
                     )
+                    if int(incident["generation"]) == 1:
+                        self.connection.execute(
+                            """
+                            UPDATE claim_deadline_incidents
+                            SET restart_generation = ?
+                            WHERE lineage_id = ? AND claim_id = ?
+                            """,
+                            (restart["generation"], lineage_id, claim_id),
+                        )
                 else:
                     restart = self.connection.execute(
                         """
@@ -4616,6 +4944,7 @@ class DeadlineHarness:
                 "recorded": recorded,
                 "lineage_id": lineage_id,
                 "claim_id": claim_id,
+                "deadline_generation": incident["generation"],
                 "component": component,
                 "receipt_id": receipt_id,
                 "pending_components": pending,

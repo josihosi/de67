@@ -68,6 +68,11 @@ Do not read or update workspace-local guideline copies. `.de67/` owns the DFS, w
 mutation-suggestion scratch, and clock state; the active DE-67 method checkout's `de-67-3` tree alone
 owns method guidance.
 
+When semantic proximity would clarify the next direction, optionally run
+`trajectory_sidecar.py --workspace . --state .de67/state/deadlines.sqlite3 --claim CLAIM --lineage PROJECT`.
+Its diff neighbors and attempt path are advisory only: they never score completion, replace exact
+gap binding or evidence, block dispatch, close work, or create a task.
+
 ## Choose exploration or closure
 
 When ownership, mechanism, or the proof route is unknown, dispatch an exploration task with one
@@ -140,14 +145,14 @@ Choose model and effort from the Phase-2-proved roster. Reuse a relevant worker 
 according to task fit, evidence, context health, and coordination cost. Only a new worker requires
 `fork_turns="none"` and a self-contained brief.
 
-The selected mutation reviewer is a fresh `gpt-5.6-sol` worker at `ultra`. Use that exact
-profile for deadline, integrity, ordinary random, and eligible rare universal mutation roles. This
+The selected deadline, integrity, and ordinary random mutation reviewer is a fresh `gpt-5.6-sol`
+worker at `xhigh`. The eligible rare universal reviewer remains `gpt-5.6-sol` at `ultra`. These
 does not broaden a normal mutation's protected surface or turn an unavailable rare trigger into an
-eligible one; role authority and guards remain unchanged. Never use the exact `gpt-5.6-sol` /
-`ultra` pair for an ordinary worker. Ordinary workers may be Luna, Terra, or Sol according to task
-fit, but ordinary Sol uses a Phase-2-proved non-ultra effort.
+eligible one; role authority and guards remain unchanged. Never use either reserved pair for an
+ordinary worker. Ordinary workers may be Luna, Terra, or Sol according to task fit, but ordinary Sol
+uses a Phase-2-proved effort below `xhigh`.
 
-Bind the immutable ledger-item clock at its first actual dispatch and record every attempt:
+Bind the first immutable deadline generation at actual dispatch and record every attempt:
 
 ```text
 python <active-de-67-3-skill>/scripts/deadline_harness.py start --state .de67/state/deadlines.sqlite3 --lineage PROJECT --task W-001 --claim R-001 --estimate-seconds 900 --phase <exploration|closure>
@@ -176,8 +181,10 @@ Only an abandoned attempt may retry the same revision.
 The brief names the active DE-67 method checkout's shared `references/msw-kernel.md`, exploration or
 closure, one claim, its slice ids and extracted DFS text, the exact question or gaps, code and state
 boundaries, the honest proof route, and the current attempt identity. Do not make the worker
-rediscover the DFS index. A retry uses a new task id but does not
-restart the claim's ledger-item clock. Unknown overlap serializes.
+rediscover the DFS index. An ordinary retry uses a new task id in the same deadline generation. After
+a missed generation is diagnosed, both mutation components resolve, and the successor acknowledges
+the restart, its first new dispatch appends the next generation from that attempt's estimate.
+Unknown overlap serializes.
 
 Remain live while workers are outstanding. Use the native non-polling wait or deadline wakeup and
 act on the first worker or clock event. Do not ingest a full transcript to clarify an active task.

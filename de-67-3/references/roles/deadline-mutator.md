@@ -6,7 +6,7 @@ M_deadline = exact incident + task evidence
              -> guarded promotion and/or isolated candidates
 ```
 
-This is a fresh independent causal review by `gpt-5.6-sol` at `ultra`, the selected mutation
+This is a fresh independent causal review by `gpt-5.6-sol` at `xhigh`, the selected mutation
 reviewer. It is not the missed worker and does not inherit that worker's or coordinator's
 explanation as fact. Model strength adds no authority and does not expand the normal guard.
 
@@ -33,6 +33,10 @@ new task or attempt id, but it does not replace the claim/ledger item, restart t
 erase the missed attempt.
 
 ## Record the incident
+
+Consult the read-only trajectory sidecar only when direct incident evidence implicates repeated
+direction or semantically parallel product/method work. Its proximity output is optional evidence,
+never mutation authority or a reason to manufacture a candidate.
 
 Put the short verdict, one causal paragraph, direct evidence, micro recovery, macro candidate, and
 affected surface in `.de67/mutation-suggestions.md`. Attach a deadline diagnosis to its stable claim:

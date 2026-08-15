@@ -255,6 +255,48 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(restart["generation"], 1)
         self.assertFalse(restart["pending"])
 
+    def test_resolved_deadline_does_not_rearm_a_successor(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            deadline = float(harness._claim("project", "R-000")["deadline_at"])
+            harness.expire_claim("project", "R-000", now=deadline)
+            harness.connection.execute(
+                """
+                UPDATE incidents SET reviewed_at = ?
+                WHERE lineage_id = 'project' AND task_id = 'seed'
+                  AND kind = 'deadline_miss'
+                """,
+                (deadline,),
+            )
+            harness.connection.executemany(
+                """
+                INSERT INTO deadline_mutation_components (
+                    lineage_id, claim_id, component, resolved_at, evidence
+                ) VALUES ('project', 'R-000', ?, ?, ?)
+                """,
+                (
+                    ("micro", deadline, "micro guarded"),
+                    ("macro", deadline, "macro guarded"),
+                ),
+            )
+            harness.connection.commit()
+
+        sleeps: list[float] = []
+        event = wait_for_supervision_event(
+            self.state_path,
+            "project",
+            now=lambda: deadline,
+            sleep=sleeps.append,
+        )
+
+        self.assertIsNone(event)
+        self.assertEqual(sleeps, [])
+        with DeadlineHarness(self.state_path) as harness:
+            self.assertIsNone(
+                harness.coordinator_restart_status("project")[
+                    "coordinator_restart"
+                ]
+            )
+
     def environment(self, mode: str) -> dict[str, str]:
         return {
             "FAKE_DE67_SCRIPTS": str(SCRIPTS),

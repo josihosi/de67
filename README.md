@@ -73,4 +73,9 @@ Phase de67 1 is based on the question-driven approach of
 code-grounded specification, delivery, proof, deadlines, and controlled method mutation were
 designed for this skill.
 
+The read-only Phase de67 3 trajectory sidecar was inspired by
+[Slopo's](https://github.com/rafal-qa/slopo) semantic code-similarity approach. de67's implementation
+is independent and adapts vector proximity to DFS gaps, diffs, tests, and accepted evidence; it does
+not include Slopo code.
+
 de67 is licensed under [Apache License 2.0](LICENSE).

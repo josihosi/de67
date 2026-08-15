@@ -29,12 +29,15 @@ consumer before another ownership or ordering edit; an upstream helper result is
 proof.
 
 State the exploration unknown and terminal evidence, or give every closure gap a stable id,
-description, and proof route. Bind one attempt to one current gap revision. A completed or finding
-result consumes that revision: close it or materially revise its contract from the returned
-evidence; only abandonment permits repetition. Name relevant surfaces and permission boundaries
-without a fixed allowlist or receipt schema. Stop on a falsified premise. Exploration completes only
-with a changed strategy and honest proof route ready to freeze; other contradictions are findings.
-Attempt termination never stops the item clock.
+description, and proof route. When a closure gap compresses an enumerated DFS mechanism, carry every
+named required element into the worker brief with its owning implementation and direct proof, then
+reconcile each element before accepting `completed`; an umbrella phrase such as “full required tables”
+is not coverage. Bind one attempt to one current gap revision. A completed or finding result consumes
+that revision: close it or materially revise its contract from the returned evidence; only
+abandonment permits repetition. Name relevant surfaces and permission boundaries without a fixed
+allowlist or receipt schema. Stop on a falsified premise. Exploration completes only with a changed
+strategy and honest proof route ready to freeze; other contradictions are findings. Attempt
+termination never stops the item clock.
 
 ## Worker and model selection
 

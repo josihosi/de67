@@ -60,7 +60,10 @@ Keep attempt history in the clock rather than duplicating it in the ledger.
 Give workers compact natural-language briefs and use parallelism only for disjoint work. Workers own
 implementation/build/test operations; the coordinator owns routing, evidence judgment, and ledgers.
 Immediately before invoking task `start`, read the exact claim clock and bind the remaining seconds
-and evidence-derived estimate through terminal evidence to the dispatch decision. If the estimate
+and evidence-derived estimate through the task's required durable result disposition to the
+dispatch decision. For closure, the estimate ends only after a terminal result is consumed into its
+required gap close, material revision, or exploration reopen, including any named independent
+review; the worker terminal timestamp alone is not the item-deadline endpoint. If the estimate
 exceeds the remaining time, the full gap is inadmissible as an on-time attempt: dispatch only a
 smaller necessary, independently terminal slice whose evidence-derived estimate fits. When no such
 slice exists, preserve useful continuation as late work without presenting or routing it as an

@@ -309,6 +309,22 @@ def work_is_complete(
     return True
 
 
+def ledger_has_active_work(workspace: Path) -> bool:
+    """Treat every strict active-ledger item as immediately admissible work."""
+    ledger = workspace / ".de67" / "work-ledger.md"
+    return ledger.is_file() and ACTIVE_LEDGER_ITEM.search(
+        ledger.read_text(encoding="utf-8")
+    ) is not None
+
+
+def dfs_has_open_work(workspace: Path) -> bool:
+    """Return whether the frozen DFS still has a red product claim."""
+    dfs = workspace / ".de67" / "DFS.md"
+    return dfs.is_file() and RED_DFS_CLAIM.search(
+        dfs.read_text(encoding="utf-8")
+    ) is not None
+
+
 def coordinator_prompt(
     workspace: Path,
     state_path: Path,
@@ -497,6 +513,9 @@ def _run_supervisor_locked(
     generation = restart.generation if restart.required else None
     attempted_generations: set[int] = set()
     handled_events: set[str] = set()
+    replenishment_attempted = (
+        dfs_has_open_work(workdir) and not ledger_has_active_work(workdir)
+    )
 
     while True:
         if generation is not None:
@@ -560,6 +579,31 @@ def _run_supervisor_locked(
             return result.exit_code if result.exit_code > 0 else 1
         if work_is_complete(workdir, state, lineage_id):
             return 0
+        if not after.required and ledger_has_active_work(workdir):
+            with DeadlineHarness(state) as harness:
+                requested = harness.request_coordinator_restart(
+                    lineage_id,
+                    "supervisor observed active ledger work after coordinator exit",
+                )["coordinator_restart"]
+            after = _restart_state(
+                {"lineage_id": lineage_id, "coordinator_restart": requested},
+                lineage_id,
+            )
+        elif (
+            not after.required
+            and dfs_has_open_work(workdir)
+            and not replenishment_attempted
+        ):
+            replenishment_attempted = True
+            with DeadlineHarness(state) as harness:
+                requested = harness.request_coordinator_restart(
+                    lineage_id,
+                    "supervisor observed an empty ledger with open DFS work",
+                )["coordinator_restart"]
+            after = _restart_state(
+                {"lineage_id": lineage_id, "coordinator_restart": requested},
+                lineage_id,
+            )
         if not after.required:
             if event_waiter is None:
                 event = wait_for_supervision_event(

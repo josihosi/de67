@@ -4810,6 +4810,7 @@ class DeadlineHarness:
         evidence: str,
         *,
         receipt_id: str | None = None,
+        no_change_required: bool = False,
         now: float | None = None,
     ) -> dict[str, Any]:
         lineage_id = self._identity(lineage_id, "Lineage id")
@@ -4819,11 +4820,20 @@ class DeadlineHarness:
             raise DeadlineError("Deadline mutation component must be micro or macro")
         evidence = self._nonempty_text(evidence, "Mutation evidence")
         if component == "macro":
-            if receipt_id is None:
+            if no_change_required and receipt_id is not None:
+                raise DeadlineError(
+                    "No-change macro resolution cannot consume a method receipt"
+                )
+            if not no_change_required and receipt_id is None:
                 raise DeadlineError(
                     "Deadline macro mutation requires a guard-issued method receipt"
                 )
-            receipt_id = self._identity(receipt_id, "Method receipt id")
+            if receipt_id is not None:
+                receipt_id = self._identity(receipt_id, "Method receipt id")
+        elif no_change_required:
+            raise DeadlineError(
+                "No-change resolution is only valid for a reviewed macro proposal"
+            )
         elif receipt_id is not None:
             raise DeadlineError("Deadline micro mutation cannot consume a receipt")
         resolved_at = self._now(now)
@@ -4838,7 +4848,7 @@ class DeadlineHarness:
                 raise DeadlineError(
                     "Claim deadline needs an independent diagnosis before mutation"
                 )
-            if component == "macro":
+            if component == "macro" and not no_change_required:
                 self._validate_normal_method_receipt(
                     receipt_id,
                     lineage_id=lineage_id,
@@ -4946,6 +4956,9 @@ class DeadlineHarness:
                 "claim_id": claim_id,
                 "deadline_generation": incident["generation"],
                 "component": component,
+                "disposition": (
+                    "no_change_required" if no_change_required else "applied"
+                ),
                 "receipt_id": receipt_id,
                 "pending_components": pending,
                 "coordinator_restart": (
@@ -6039,6 +6052,14 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_deadline.add_argument(
         "--receipt", help="Guard-issued method receipt; required for macro"
     )
+    resolve_deadline.add_argument(
+        "--no-change-required",
+        action="store_true",
+        help=(
+            "Resolve a reviewed macro proposal that independent evidence shows "
+            "requires no method change"
+        ),
+    )
 
     resolve_integrity = commands.add_parser(
         "resolve-integrity-mutation",
@@ -6259,6 +6280,7 @@ def main(argv: list[str] | None = None) -> int:
                         arguments.component,
                         arguments.evidence,
                         receipt_id=arguments.receipt,
+                        no_change_required=arguments.no_change_required,
                     )
                 elif arguments.command == "resolve-integrity-mutation":
                     result = harness.resolve_integrity_mutation(

@@ -3269,6 +3269,59 @@ class DeadlineHarnessTests(unittest.TestCase):
                 now=5,
             )
 
+    def test_reviewed_deadline_macro_can_end_with_no_change_required(self) -> None:
+        self.harness.start_task("project", "late", "R-LATE", 1, now=0)
+        self.harness.expire_task("project", "late", now=2)
+        self.harness.diagnose_claim_deadline(
+            "project", "R-LATE", "late", "The item clock expired.", now=3
+        )
+        self.harness.resolve_deadline_mutation(
+            "project", "R-LATE", "micro", "finite recovery", now=4
+        )
+
+        resolved = self.harness.resolve_deadline_mutation(
+            "project",
+            "R-LATE",
+            "macro",
+            "Independent review found the proposed rule already present.",
+            no_change_required=True,
+            now=5,
+        )
+
+        self.assertEqual(resolved["disposition"], "no_change_required")
+        self.assertIsNone(resolved["receipt_id"])
+        self.assertEqual(resolved["pending_components"], [])
+        self.assertIsNotNone(resolved["coordinator_restart"])
+        self.assertEqual(
+            self.harness.coordinator_view(now=5)["pending_deadline_mutations"], []
+        )
+
+    def test_no_change_required_is_macro_only_and_cannot_consume_receipt(self) -> None:
+        self.harness.start_task("project", "late", "R-LATE", 1, now=0)
+        self.harness.expire_task("project", "late", now=2)
+        self.harness.diagnose_claim_deadline(
+            "project", "R-LATE", "late", "The item clock expired.", now=3
+        )
+        with self.assertRaisesRegex(DeadlineError, "only valid.*macro"):
+            self.harness.resolve_deadline_mutation(
+                "project",
+                "R-LATE",
+                "micro",
+                "not applicable",
+                no_change_required=True,
+                now=4,
+            )
+        with self.assertRaisesRegex(DeadlineError, "cannot consume"):
+            self.harness.resolve_deadline_mutation(
+                "project",
+                "R-LATE",
+                "macro",
+                "not applicable",
+                receipt_id="f" * 64,
+                no_change_required=True,
+                now=4,
+            )
+
     def test_on_time_integrity_gate_persists_and_requires_two_components(self) -> None:
         self.harness.start_task("project", "breached", "R-I", 100, now=0)
         self.harness.record_integrity_breach(

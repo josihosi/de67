@@ -580,20 +580,23 @@ def persist_normal_method_receipt(
             incident = connection.execute(
                 """
                 SELECT task.claim_id, incident.reviewed_at
-                FROM claim_deadline_incidents AS incident
+                FROM claim_deadline_generation_incidents AS incident
                 JOIN tasks AS task
                   ON task.lineage_id = incident.lineage_id
                  AND task.task_id = incident.source_task_id
+                 AND task.claim_id = incident.claim_id
+                 AND task.deadline_generation = incident.generation
                 WHERE incident.lineage_id = ? AND incident.source_task_id = ?
                 """,
                 (lineage_id, task_id),
             ).fetchone()
             already_resolved = connection.execute(
                 """
-                SELECT 1 FROM deadline_mutation_components AS component
-                JOIN claim_deadline_incidents AS incident
+                SELECT 1 FROM deadline_generation_mutation_components AS component
+                JOIN claim_deadline_generation_incidents AS incident
                   ON incident.lineage_id = component.lineage_id
                  AND incident.claim_id = component.claim_id
+                 AND incident.generation = component.generation
                 WHERE incident.lineage_id = ? AND incident.source_task_id = ?
                   AND component.component = 'macro'
                 """,
@@ -939,7 +942,7 @@ def broader_mutation_from_incident(
             row = connection.execute(
                 """
                 SELECT short_verdict, long_detail, reviewed_at
-                FROM claim_deadline_incidents
+                FROM claim_deadline_generation_incidents
                 WHERE lineage_id = ? AND source_task_id = ?
                 """,
                 (lineage_id, task_id),

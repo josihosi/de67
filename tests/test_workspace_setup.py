@@ -24,6 +24,8 @@ from workspace_setup import (  # noqa: E402
 )
 import workspace_setup  # noqa: E402
 
+MODULE_PATH = Path(workspace_setup.__file__).resolve()
+
 
 VERIFIED_WORKERS = (
     ("gpt-5.6-luna", "high"),
@@ -391,6 +393,38 @@ class WorkspaceSetupTests(unittest.TestCase):
         hook = Path(str(result["hook"]))
         modified = hook.read_text(encoding="utf-8") + "echo user-owned\n"
         hook.write_text(modified, encoding="utf-8")
+
+        with self.assertRaisesRegex(SetupError, "modified managed hook"):
+            self.configure_push()
+        self.assertEqual(hook.read_text(encoding="utf-8"), modified)
+
+    def test_byte_identical_helper_at_another_path_keeps_managed_hook(self) -> None:
+        result = self.configure_push()
+        hook = Path(str(result["hook"]))
+        alternate = self.root / "alternate" / "workspace_setup.py"
+        alternate.parent.mkdir()
+        alternate.write_bytes(MODULE_PATH.read_bytes())
+        original = hook.read_text(encoding="utf-8")
+        hook.write_text(
+            original.replace(MODULE_PATH.as_posix(), alternate.as_posix()), encoding="utf-8"
+        )
+        alternate_hook = hook.read_text(encoding="utf-8")
+
+        self.configure_push()
+
+        self.assertEqual(hook.read_text(encoding="utf-8"), alternate_hook)
+
+    def test_different_helper_at_another_path_is_refused(self) -> None:
+        result = self.configure_push()
+        hook = Path(str(result["hook"]))
+        alternate = self.root / "alternate" / "workspace_setup.py"
+        alternate.parent.mkdir()
+        alternate.write_text("print('not DE67')\n", encoding="utf-8")
+        original = hook.read_text(encoding="utf-8")
+        hook.write_text(
+            original.replace(MODULE_PATH.as_posix(), alternate.as_posix()), encoding="utf-8"
+        )
+        modified = hook.read_text(encoding="utf-8")
 
         with self.assertRaisesRegex(SetupError, "modified managed hook"):
             self.configure_push()

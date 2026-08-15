@@ -114,6 +114,19 @@ class TrajectorySidecarTests(unittest.TestCase):
         self.assertIn("semantic proximity, not completion or proof", rendered)
         self.assertNotIn("%", rendered)
         self.assertNotIn("recommend", rendered.lower())
+        self.assertIn("Churn vector (advisory observations, not a score)", rendered)
+        self.assertEqual(report.churn_vector.product_owner.direction, "product-surface-present")
+        self.assertEqual(report.churn_vector.code_surface.direction, "mixed-surface")
+        self.assertEqual(
+            report.churn_vector.accepted_frontier.direction,
+            "open-frontier-without-latest-closure",
+        )
+
+        encoded = sidecar.asdict(report)
+        self.assertEqual(
+            encoded["churn_vector"]["product_owner"]["direction"],
+            "product-surface-present",
+        )
 
     def test_missing_claim_fails_without_creating_state(self) -> None:
         with self.assertRaisesRegex(sidecar.TrajectoryError, "No closure gaps"):

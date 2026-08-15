@@ -21,6 +21,21 @@ a disguised task list.
 Maintain a small decision frontier: only choices whose answers could materially change the desired
 experience, boundary, terminology, implementation language, or later specification.
 
+### Question language
+
+Write owner questions and choices in Simplified Technical English style:
+
+- use common words and one consistent term for each thing;
+- use active voice and name the actor when it is not obvious;
+- put one meaning in each sentence;
+- keep conditions before the action they control;
+- avoid idioms, jokes, vague pronouns, and unnecessary abbreviations;
+- make every option describe one concrete consequence;
+- use project terms from the user, but explain an uncommon term the first time.
+
+This is a practical clarity rule, not a claim of formal ASD-STE100 conformance. Preserve the user's
+own language in the WEC even when the questions use controlled English.
+
 For each unresolved choice:
 
 1. Use already-visible project facts or a narrow read-only lookup when that directly answers the

@@ -68,14 +68,20 @@ of turning every live experiment into an upstream change.
 
 ## Attributions
 
-Phase de67 1 is based on the question-driven approach of
-[Jekudy's GrillMe skill](https://github.com/Jekudy/grillme-skill). Its WEC contract and de67's
-code-grounded specification, delivery, proof, deadlines, and controlled method mutation were
-designed for this skill.
+- The MSW kernel comes from [@aienginerd on X](https://x.com/aienginerd).
+- The imagination round comes from Josef Horvath.
+- Phase de67 1's question-driven flow is based on
+  [Jekudy's GrillMe skill](https://github.com/Jekudy/grillme-skill).
+- Phase de67 1 uses [Simplified Technical English](https://en.wikipedia.org/wiki/Simplified_Technical_English)
+  as a practical clarity influence for owner questions. de67 does not claim formal ASD-STE100
+  conformance.
+- The read-only Phase de67 3 trajectory sidecar was inspired by
+  [Slopo's](https://github.com/rafal-qa/slopo) semantic code-similarity approach. de67's independent
+  implementation adapts vector proximity to DFS gaps, diffs, tests, and accepted evidence; it does
+  not include Slopo code.
+- SolAdvisor also influenced de67's advisory approach to agent reasoning and review.
 
-The read-only Phase de67 3 trajectory sidecar was inspired by
-[Slopo's](https://github.com/rafal-qa/slopo) semantic code-similarity approach. de67's implementation
-is independent and adapts vector proximity to DFS gaps, diffs, tests, and accepted evidence; it does
-not include Slopo code.
+The WEC contract and de67's code-grounded specification, delivery, proof, deadlines, and controlled
+method mutation were designed for this skill.
 
 de67 is licensed under [Apache License 2.0](LICENSE).

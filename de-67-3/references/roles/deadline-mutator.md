@@ -34,6 +34,10 @@ erase the missed attempt.
 
 ## Record the incident
 
+Consult the read-only trajectory sidecar only when direct incident evidence implicates repeated
+direction or semantically parallel product/method work. Its proximity output is optional evidence,
+never mutation authority or a reason to manufacture a candidate.
+
 Put the short verdict, one causal paragraph, direct evidence, micro recovery, macro candidate, and
 affected surface in `.de67/mutation-suggestions.md`. Attach a deadline diagnosis to its stable claim:
 

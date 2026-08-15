@@ -53,8 +53,12 @@ mapping is not a ritual, and worker choice is not a task result.
 
 Define the smallest honest test through the authoritative owner. Add negative controls only to
 exclude a real competing explanation. Exploration may select a strategy but is not closure proof;
-freeze that route before implementation. Incidental metadata matters only when it changes identity,
-the verdict, or a false-green control.
+freeze that route before implementation. Before freezing a route that consumes generated evidence,
+exercise a current production witness through its full prerequisite chain and prove that each
+producer output is accepted by the next authoritative owner, including artifact provenance and
+typed or schema vocabulary. If the current corpus cannot produce that witness, keep the missing
+route in exploration and make it part of the strategy rather than an assumed dependency. Incidental
+metadata matters only when it changes identity, the verdict, or a false-green control.
 
 ## Test checking
 

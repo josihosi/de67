@@ -172,6 +172,35 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                 generation,
                 os.environ["DE67_COORDINATOR_RUN_ID"],
             )
+            if generation == 2:
+                (root / "DFS.md").write_text(
+                    "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+                    encoding="utf-8",
+                )
+                (root / "work-ledger.md").write_text(
+                    "# Work ledger\n\n## Active work\n",
+                    encoding="utf-8",
+                )
+    elif mode == "crash-then-complete":
+        if generation is None:
+            raise SystemExit(9)
+        harness.acknowledge_coordinator_restart(
+            os.environ["DE67_LINEAGE"],
+            generation,
+            os.environ["DE67_COORDINATOR_RUN_ID"],
+        )
+        harness.complete_task(
+            os.environ["DE67_LINEAGE"], "seed", "successor proof"
+        )
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        (root / "DFS.md").write_text(
+            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+            encoding="utf-8",
+        )
+        (root / "work-ledger.md").write_text(
+            "# Work ledger\n\n## Active work\n",
+            encoding="utf-8",
+        )
     elif mode == "fail-before-ack":
         raise SystemExit(7)
     else:
@@ -255,7 +284,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertTrue(event.restart.required)
         self.assertTrue(event.signature.startswith("gate:"))
 
-    def test_unchanged_incident_does_not_create_a_second_successor(self) -> None:
+    def test_unchanged_incident_hands_off_to_another_successor(self) -> None:
         with DeadlineHarness(self.state_path) as harness:
             deadline = float(harness._claim("project", "R-000")["deadline_at"])
             harness.expire_claim("project", "R-000", now=deadline)
@@ -274,21 +303,21 @@ class CoordinatorSupervisorTests(unittest.TestCase):
                 "project", first.restart.generation, "successor-1", now=deadline
             )
 
-        with self.assertRaisesRegex(SupervisorError, "without resolving"):
-            wait_for_supervision_event(
-                self.state_path,
-                "project",
-                now=lambda: deadline,
-                sleep=lambda _seconds: None,
-                handled_signatures={first.signature},
-            )
+        second = wait_for_supervision_event(
+            self.state_path,
+            "project",
+            now=lambda: deadline,
+            sleep=lambda _seconds: None,
+        )
 
+        assert second is not None
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.coordinator_restart_status("project")[
                 "coordinator_restart"
             ]
-        self.assertEqual(restart["generation"], 1)
-        self.assertFalse(restart["pending"])
+        self.assertEqual(restart["generation"], 2)
+        self.assertTrue(restart["pending"])
+        self.assertEqual(second.restart.generation, 2)
 
     def test_resolved_deadline_does_not_rearm_a_successor(self) -> None:
         with DeadlineHarness(self.state_path) as harness:
@@ -564,6 +593,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.write_work_documents(red=True)
         with DeadlineHarness(self.state_path) as harness:
             harness.complete_task("project", "seed", "green", now=time.time())
+        run_ids = iter(("red-work-run", "red-work-successor"))
 
         result = run_supervisor(
             self.state_path,
@@ -571,15 +601,16 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.workspace,
             self.runner_command(),
             self.run_root,
-            extra_env=self.environment("unacknowledged"),
-            run_id_factory=lambda _generation: "red-work-run",
+            extra_env=self.environment("handover-then-complete"),
+            run_id_factory=lambda _generation: next(run_ids),
         )
 
         self.assertEqual(result, 0)
-        self.assertEqual(len(self.read_events()), 1)
+        self.assertEqual(len(self.read_events()), 2)
 
-    def test_drained_ledger_launches_one_replenishment_coordinator(self) -> None:
+    def test_empty_replenishment_hands_red_dfs_to_another_successor(self) -> None:
         self.write_work_documents(red=True, active=True)
+        run_ids = iter(("draining-run", "empty-replenishment", "restoring-run"))
 
         result = run_supervisor(
             self.state_path,
@@ -588,22 +619,61 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.runner_command(),
             self.run_root,
             extra_env=self.environment("drain-then-no-refill"),
-            run_id_factory=lambda generation: (
-                "draining-run" if generation is None else "replenishment-run"
-            ),
+            run_id_factory=lambda _generation: next(run_ids),
         )
 
         self.assertEqual(result, 0)
         events = self.read_events()
-        self.assertEqual(len(events), 2)
+        self.assertEqual(len(events), 3)
         self.assertIsNone(events[0]["generation"])
         self.assertEqual(events[1]["generation"], 1)
+        self.assertEqual(events[2]["generation"], 2)
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.coordinator_restart_status("project")[
                 "coordinator_restart"
             ]
         self.assertIsNotNone(restart)
         self.assertFalse(restart_required(restart))
+
+    def test_crashed_coordinator_with_active_work_gets_a_successor(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        run_ids = iter(("crashed-run", "recovery-run"))
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("crash-then-complete"),
+            run_id_factory=lambda _generation: next(run_ids),
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            [event["run_id"] for event in self.read_events()],
+            ["crashed-run", "recovery-run"],
+        )
+        self.assertEqual(
+            self.statuses(),
+            {"crashed-run": "FAILED", "recovery-run": "DONE"},
+        )
+
+    def test_missing_runner_is_a_concrete_environment_blocker(self) -> None:
+        self.write_work_documents(red=True, active=True)
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            [str(self.root / "missing-runner")],
+            self.run_root,
+            run_id_factory=lambda _generation: "missing-runner",
+        )
+
+        self.assertEqual(result, 1)
+        self.assertFalse(self.events.exists())
+        self.assertEqual(self.statuses(), {"missing-runner": "FAILED"})
 
     def test_active_ledger_restarts_immediately_without_a_deadline_event(self) -> None:
         self.write_work_documents(active=True)

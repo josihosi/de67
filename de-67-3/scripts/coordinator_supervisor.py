@@ -72,6 +72,7 @@ class ChildResult:
     run_id: str
     run_dir: Path
     exit_code: int
+    launched: bool
 
 
 @dataclass(frozen=True)
@@ -182,7 +183,6 @@ def wait_for_supervision_event(
     *,
     now: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
-    handled_signatures: set[str] | None = None,
 ) -> SupervisionEvent | None:
     """Wait without polling until durable clock state requires a successor."""
     with DeadlineHarness(state_path) as harness:
@@ -198,11 +198,6 @@ def wait_for_supervision_event(
         ]
         if pending_reviews or pending_mutations:
             signature = _gate_signature(pending_reviews, pending_mutations)
-            if handled_signatures is not None and signature in handled_signatures:
-                raise SupervisorError(
-                    "A coordinator returned without resolving supervision event "
-                    f"{signature}"
-                )
             requested = harness.request_coordinator_restart(
                 lineage_id,
                 "supervisor observed a persisted incident or mutation gate",
@@ -247,11 +242,6 @@ def wait_for_supervision_event(
         if not pending_reviews and not pending_mutations:
             return None
         signature = _gate_signature(pending_reviews, pending_mutations)
-        if handled_signatures is not None and signature in handled_signatures:
-            raise SupervisorError(
-                "A coordinator returned without resolving supervision event "
-                f"{signature}"
-            )
         requested = harness.request_coordinator_restart(
             lineage_id,
             f"claim {claim_id} reached its immutable deadline",
@@ -454,7 +444,7 @@ def run_child(
         )
         _write(run_dir / "exit_code.txt", "1\n")
         _write(run_dir / "status.txt", "FAILED\n")
-        return ChildResult(run_id, run_dir, 1)
+        return ChildResult(run_id, run_dir, 1, False)
     exit_code = 1
     try:
         _write(run_dir / "pid.txt", f"{process.pid}\n")
@@ -477,7 +467,7 @@ def run_child(
 
     _write(run_dir / "exit_code.txt", f"{exit_code}\n")
     _write(run_dir / "status.txt", "DONE\n" if exit_code == 0 else "FAILED\n")
-    return ChildResult(run_id, run_dir, exit_code)
+    return ChildResult(run_id, run_dir, exit_code, True)
 
 
 def _run_supervisor_locked(
@@ -512,11 +502,6 @@ def _run_supervisor_locked(
     restart = read_clock(state, lineage_id)
     generation = restart.generation if restart.required else None
     attempted_generations: set[int] = set()
-    handled_events: set[str] = set()
-    replenishment_attempted = (
-        dfs_has_open_work(workdir) and not ledger_has_active_work(workdir)
-    )
-
     while True:
         if generation is not None:
             if generation in attempted_generations:
@@ -548,6 +533,11 @@ def _run_supervisor_locked(
             extra_env=extra_env,
         )
 
+        # A runner that could not be launched is a concrete environment blocker,
+        # not a coordinator result that another coordinator can repair.
+        if not result.launched:
+            return result.exit_code if result.exit_code > 0 else 1
+
         # This is the only clock read after this child exits. There is no polling loop.
         after = read_clock(state, lineage_id)
 
@@ -572,11 +562,6 @@ def _run_supervisor_locked(
                 _mark_protocol_failure(result, "Coordinator restart generation moved backwards")
                 return 1
 
-        # A durable baton outranks the runner's process exit convention. Codex may
-        # return a non-zero code after coherently requesting its successor; the
-        # clock-backed generation is the authoritative handover signal.
-        if result.exit_code != 0 and not after.required:
-            return result.exit_code if result.exit_code > 0 else 1
         if work_is_complete(workdir, state, lineage_id):
             return 0
         if not after.required and ledger_has_active_work(workdir):
@@ -592,9 +577,7 @@ def _run_supervisor_locked(
         elif (
             not after.required
             and dfs_has_open_work(workdir)
-            and not replenishment_attempted
         ):
-            replenishment_attempted = True
             with DeadlineHarness(state) as harness:
                 requested = harness.request_coordinator_restart(
                     lineage_id,
@@ -606,21 +589,11 @@ def _run_supervisor_locked(
             )
         if not after.required:
             if event_waiter is None:
-                event = wait_for_supervision_event(
-                    state,
-                    lineage_id,
-                    handled_signatures=handled_events,
-                )
+                event = wait_for_supervision_event(state, lineage_id)
             else:
                 event = wait_for_event(state, lineage_id)
             if event is None:
-                return 0
-            if event.signature in handled_events:
-                raise SupervisorError(
-                    "A coordinator returned without resolving supervision event "
-                    f"{event.signature}"
-                )
-            handled_events.add(event.signature)
+                return result.exit_code if result.exit_code > 0 else 0
             after = event.restart
         if after.generation is None:
             _mark_protocol_failure(result, "Required coordinator restart lacks a generation")

@@ -219,7 +219,7 @@ def wait_for_supervision_event(
         deadlines = [
             (float(task["deadline_at"]), str(task["claim_id"]))
             for task in summary["tasks"]
-            if task.get("deadline_at") is not None
+            if task.get("deadline_at") is not None and task.get("state") == "running"
         ]
         if not deadlines:
             return None

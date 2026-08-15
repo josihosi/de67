@@ -152,7 +152,7 @@ eligible one; role authority and guards remain unchanged. Never use either reser
 ordinary worker. Ordinary workers may be Luna, Terra, or Sol according to task fit, but ordinary Sol
 uses a Phase-2-proved effort below `xhigh`.
 
-Bind the immutable ledger-item clock at its first actual dispatch and record every attempt:
+Bind the first immutable deadline generation at actual dispatch and record every attempt:
 
 ```text
 python <active-de-67-3-skill>/scripts/deadline_harness.py start --state .de67/state/deadlines.sqlite3 --lineage PROJECT --task W-001 --claim R-001 --estimate-seconds 900 --phase <exploration|closure>
@@ -181,8 +181,10 @@ Only an abandoned attempt may retry the same revision.
 The brief names the active DE-67 method checkout's shared `references/msw-kernel.md`, exploration or
 closure, one claim, its slice ids and extracted DFS text, the exact question or gaps, code and state
 boundaries, the honest proof route, and the current attempt identity. Do not make the worker
-rediscover the DFS index. A retry uses a new task id but does not
-restart the claim's ledger-item clock. Unknown overlap serializes.
+rediscover the DFS index. An ordinary retry uses a new task id in the same deadline generation. After
+a missed generation is diagnosed, both mutation components resolve, and the successor acknowledges
+the restart, its first new dispatch appends the next generation from that attempt's estimate.
+Unknown overlap serializes.
 
 Remain live while workers are outstanding. Use the native non-polling wait or deadline wakeup and
 act on the first worker or clock event. Do not ingest a full transcript to clarify an active task.

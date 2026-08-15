@@ -289,7 +289,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         )
 
         self.assertIsNone(event)
-        self.assertEqual(sleeps, [0.0])
+        self.assertEqual(sleeps, [])
         with DeadlineHarness(self.state_path) as harness:
             self.assertIsNone(
                 harness.coordinator_restart_status("project")[

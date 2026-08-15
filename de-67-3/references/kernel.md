@@ -39,8 +39,9 @@ Deleting or weakening any component of `K` makes a candidate inadmissible:
 
 - do not change the requested outcome, project language, permissions, or material owner choices;
 - do not fabricate, hide, relabel, or weaken evidence to obtain a green verdict;
-- once a ledger item is first dispatched, its lineage, claim id, item start, estimate, and deadline
-  do not move or reset under normal mutation;
+- each deadline generation keeps its lineage, claim id, start, estimate, deadline, and miss forever.
+  After that miss is resolved and its successor acknowledges the restart, the successor's first
+  dispatch may append one new generation; it never rewrites the prior one;
 - retries use new task or attempt ids. Each attempt's recorded identity, dispatch, result, misses,
   integrity incidents, findings, and accepted evidence remain accounted for even when strategy,
   roles, tests, or DFS prose change.

@@ -659,7 +659,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             [task["task_id"] for task in summary["tasks"]], ["next"]
         )
 
-    def test_list_supersedes_prior_deadline_miss_for_the_same_claim(self) -> None:
+    def test_acknowledged_restart_arms_a_new_deadline_generation(self) -> None:
         self.harness.start_task("project", "miss-1", "R-001", 1, now=0)
         self.harness.expire_task("project", "miss-1", now=2)
         self.resolve_claim_miss("R-001")
@@ -671,12 +671,27 @@ class DeadlineHarnessTests(unittest.TestCase):
         repeated = self.harness.expire_task("project", "miss-2", now=4)
 
         summary = self.harness.list_tasks(now=4)
-        self.assertFalse(repeated["incident"]["recorded"])
-        self.assertEqual(summary["cumulative_miss_units"], 1)
+        self.assertTrue(repeated["incident"]["recorded"])
+        self.assertEqual(repeated["status"]["deadline_generation"], 2)
+        generations = self.harness.connection.execute(
+            """
+            SELECT generation, started_at, deadline_at
+            FROM claim_deadline_generations
+            WHERE lineage_id = 'project' AND claim_id = 'R-001'
+            ORDER BY generation
+            """
+        ).fetchall()
+        self.assertEqual(
+            [tuple(row) for row in generations],
+            [(1, 0.0, 1.0), (2, 3.0, 4.0)],
+        )
+        self.assertEqual(summary["cumulative_miss_units"], 2)
         self.assertEqual(
             [task["task_id"] for task in summary["tasks"]], ["miss-2"]
         )
-        self.assertEqual(summary["pending_incident_reviews"], [])
+        self.assertEqual(
+            summary["pending_incident_reviews"][0]["task_id"], "miss-2"
+        )
         self.assertEqual(
             [item["task_id"] for item in summary["recent_failure_verdicts"]],
             ["miss-1"],
@@ -2544,9 +2559,10 @@ class DeadlineHarnessTests(unittest.TestCase):
             self.assertEqual(
                 view["pending_deadline_mutations"],
                 [
-                    {
-                        "claim_id": "R-001",
-                        "source_task_id": "legacy",
+                {
+                    "claim_id": "R-001",
+                    "deadline_generation": 1,
+                    "source_task_id": "legacy",
                         "recorded_at": 11,
                         "reviewed": True,
                         "pending_components": ["micro", "macro"],

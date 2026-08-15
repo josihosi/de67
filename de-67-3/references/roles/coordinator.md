@@ -68,6 +68,11 @@ Do not read or update workspace-local guideline copies. `.de67/` owns the DFS, w
 mutation-suggestion scratch, and clock state; the active DE-67 method checkout's `de-67-3` tree alone
 owns method guidance.
 
+When semantic proximity would clarify the next direction, optionally run
+`trajectory_sidecar.py --workspace . --state .de67/state/deadlines.sqlite3 --claim CLAIM --lineage PROJECT`.
+Its diff neighbors and attempt path are advisory only: they never score completion, replace exact
+gap binding or evidence, block dispatch, close work, or create a task.
+
 ## Choose exploration or closure
 
 When ownership, mechanism, or the proof route is unknown, dispatch an exploration task with one

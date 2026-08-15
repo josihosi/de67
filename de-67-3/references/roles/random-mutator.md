@@ -10,6 +10,9 @@ The ordinary attempt cadence remains one uniformly drawn terminal-window interva
 and one stored lane. Do not redraw the interval, reselect a friendlier lane, or infer a new cadence.
 Already-dispatched workers keep their original briefs and clocks.
 
+The read-only trajectory sidecar is optional when the selected review concerns repeated direction
+or semantic duplication. Proximity alone never requires a mutation or permits merging lane authority.
+
 If the persisted draw is exactly `k = 30` with lane `DFS.md` and its universal component is still
 pending, stop and route that component to the universal mutator. When it returns resolved, perform
 this ordinary stored-lane review for the same cycle. Do not resolve one component as the other or

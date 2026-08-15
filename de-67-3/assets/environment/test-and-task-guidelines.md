@@ -69,6 +69,11 @@ changed source, tooling, observation, or causal evidence. Close gaps only from t
 attempts; final acceptance is atomic and blocked by any open gap. Invalidated proof keeps its closed
 record and creates an open successor.
 
+At a closure spanning multiple authoritative transitions, execute the smallest witness through the
+first unproved consumer before broader implementation or proof. A rejection at that gate
+terminalizes the bound attempt as a finding; causal diagnosis and any revised bridge follow after
+that terminal result, not inside the still-running closure attempt.
+
 For compiled proof, bind the invoked path and artifact identity to the unchanged production/test
 snapshot and successful build; a version or “changed executable” claim is insufficient. For
 save/load proof, inspect serialized pre-state and owning normalization, execute exact equality in

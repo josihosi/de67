@@ -45,5 +45,10 @@ A failed or unacknowledged successor is not silently retried and remains pending
 death, confirm the runner tree is gone before releasing that exact failed claim for an explicit
 recovery action.
 
+A blocked-only ledger receives one fresh-coordinator audit for its exact content. If the blocker is
+obsolete, restore executable work. If it is genuine, terminalize every live attempt with honest
+blocker evidence; only then may the supervisor stop. The acknowledged audit identity prevents the
+same unchanged blocker set from creating another audit on a later supervisor start.
+
 When the user outcome is honestly proved, closure gaps and active work are empty, and no incident or
 restart gate remains, launch nothing. A due ordinary random review cannot create post-contract work.

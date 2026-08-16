@@ -23,6 +23,7 @@ from coordinator_supervisor import (  # noqa: E402
     _supervisor_lock,
     build_parser,
     coordinator_prompt,
+    blocked_ledger_audit_reason,
     ledger_has_only_blocked_work,
     read_clock,
     run_supervisor,
@@ -192,6 +193,43 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
         )
         harness.complete_task(
             os.environ["DE67_LINEAGE"], "seed", "successor proof"
+        )
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        (root / "DFS.md").write_text(
+            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+            encoding="utf-8",
+        )
+        (root / "work-ledger.md").write_text(
+            "# Work ledger\n\n## Active work\n",
+            encoding="utf-8",
+        )
+    elif mode == "confirm-blocked":
+        if generation is None:
+            raise AssertionError("blocked audit must be a restart generation")
+        harness.acknowledge_coordinator_restart(
+            os.environ["DE67_LINEAGE"],
+            generation,
+            os.environ["DE67_COORDINATOR_RUN_ID"],
+        )
+        harness.report_worker_finding(
+            os.environ["DE67_LINEAGE"],
+            "seed",
+            "blocker",
+            "Fresh coordinator confirmed the exact owner choice remains unavailable.",
+            short_verdict="owner choice is still required",
+        )
+    elif mode == "matrix-recover":
+        if generation is not None:
+            harness.acknowledge_coordinator_restart(
+                os.environ["DE67_LINEAGE"],
+                generation,
+                os.environ["DE67_COORDINATOR_RUN_ID"],
+            )
+        event_count = len(Path(os.environ["FAKE_EVENTS"]).read_text(encoding="utf-8").splitlines())
+        if event_count == 1:
+            raise SystemExit(int(os.environ["FAKE_FIRST_EXIT"]))
+        harness.complete_task(
+            os.environ["DE67_LINEAGE"], "seed", "matrix recovery proof"
         )
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
         (root / "DFS.md").write_text(
@@ -423,6 +461,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("do not preload the whole DFS", prompt)
         self.assertIn("Canonical mutable method guidance is only under", prompt)
         self.assertIn("Never read, create, or mutate workspace-local copies", prompt)
+        self.assertIn("If the ledger is blocked-only, audit", prompt)
+        self.assertIn("terminalize every live attempt", prompt)
         for role_path in ROLE_ROOT.glob("*.md"):
             if role_path != COORDINATOR_ROLE_PATH:
                 self.assertNotIn(str(role_path), prompt)
@@ -553,7 +593,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertFalse(self.events.exists())
         self.assertFalse(self.run_root.exists())
 
-    def test_blocked_only_ledger_stops_with_red_dfs(self) -> None:
+    def test_blocked_only_ledger_is_audited_once_then_stops(self) -> None:
         self.write_work_documents(red=True)
         ledger = self.workspace / ".de67" / "work-ledger.md"
         ledger.write_text(
@@ -564,17 +604,110 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         )
 
         self.assertTrue(ledger_has_only_blocked_work(self.workspace))
+        audit_reason = blocked_ledger_audit_reason(self.workspace)
+        self.assertIsNotNone(audit_reason)
         result = run_supervisor(
             self.state_path,
             "project",
             self.workspace,
             self.runner_command(),
             self.run_root,
-            extra_env=self.environment("unacknowledged"),
+            extra_env=self.environment("confirm-blocked"),
+            run_id_factory=lambda _generation: "blocked-audit",
         )
 
         self.assertEqual(result, 0)
-        self.assertFalse(self.events.exists())
+        self.assertEqual(
+            [event["generation"] for event in self.read_events()],
+            [1],
+        )
+        with DeadlineHarness(self.state_path) as harness:
+            restart = harness.coordinator_restart_status("project")[
+                "coordinator_restart"
+            ]
+        self.assertEqual(restart["reason"], audit_reason)
+        self.assertFalse(restart_required(restart))
+        with DeadlineHarness(self.state_path) as harness:
+            tasks = harness.list_tasks()["tasks"]
+        self.assertFalse(any(task["state"] == "running" for task in tasks))
+
+        second_run_root = self.root / "second-runs"
+        second_result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            second_run_root,
+            extra_env=self.environment("unacknowledged"),
+        )
+
+        self.assertEqual(second_result, 0)
+        self.assertFalse(second_run_root.exists())
+        self.assertEqual(len(self.read_events()), 1)
+
+    def test_recoverable_lifecycle_matrix_converges_after_child_exit(self) -> None:
+        ledger_cases = {
+            "active": "# Work ledger\n\n## Active work\n\n- [ ] R-001 \N{EM DASH} Work\n",
+            "empty": "# Work ledger\n\n## Active work\n",
+            "malformed": "# Work ledger\n\n## Active work\n\n- maybe R-001\n",
+        }
+        for ledger_name, ledger_text in ledger_cases.items():
+            for first_exit in (0, 9):
+                with self.subTest(ledger=ledger_name, first_exit=first_exit):
+                    with tempfile.TemporaryDirectory() as case_directory:
+                        case_root = Path(case_directory)
+                        workspace = case_root / "workspace"
+                        state_root = workspace / ".de67"
+                        state_root.mkdir(parents=True)
+                        state = case_root / "deadlines.sqlite3"
+                        runs = case_root / "runs"
+                        events = case_root / "events.jsonl"
+                        (state_root / "DFS.md").write_text(
+                            "# DFS\n\nStatus: Frozen\n\n- [ ] \N{LARGE RED CIRCLE} R-001 \N{EM DASH} Open\n",
+                            encoding="utf-8",
+                        )
+                        (state_root / "work-ledger.md").write_text(
+                            ledger_text,
+                            encoding="utf-8",
+                        )
+                        with DeadlineHarness(state) as harness:
+                            harness.start_task(
+                                "project", "seed", "R-000", 3600, now=time.time()
+                            )
+                        run_ids = iter(("first", "recovery"))
+
+                        result = run_supervisor(
+                            state,
+                            "project",
+                            workspace,
+                            self.runner_command(),
+                            runs,
+                            extra_env={
+                                **self.environment("matrix-recover"),
+                                "FAKE_EVENTS": str(events),
+                                "FAKE_FIRST_EXIT": str(first_exit),
+                            },
+                            run_id_factory=lambda _generation: next(run_ids),
+                        )
+
+                        self.assertEqual(result, 0)
+                        recorded = [
+                            json.loads(line)
+                            for line in events.read_text(encoding="utf-8").splitlines()
+                        ]
+                        self.assertEqual(len(recorded), 2)
+                        self.assertIsNone(recorded[0]["generation"])
+                        self.assertEqual(recorded[1]["generation"], 1)
+                        self.assertEqual(
+                            {
+                                path.parent.name: path.read_text(encoding="utf-8").strip()
+                                for path in runs.glob("*/status.txt")
+                            },
+                            {
+                                "first": "DONE" if first_exit == 0 else "FAILED",
+                                "recovery": "DONE",
+                            },
+                        )
 
     def test_active_item_outranks_blocked_items(self) -> None:
         self.write_work_documents(red=True, active=True)

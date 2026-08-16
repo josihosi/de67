@@ -57,6 +57,18 @@ mutation guards, workspace setup, supervisor, and cross-platform Codex runner ar
 an agent can install the `de67` folder into the active Codex skills directory without relying on a
 personal machine wrapper.
 
+## Optional integrations
+
+Optional integrations live under `integrations/` and are not core DE67 dependencies. Each package
+owns its transport-specific requirements, agent installation guidance, tests, and failure boundary.
+Core discussion, specification, supervision, clocks, and delivery must keep working when every
+integration is absent or broken.
+
+The OpenClaw Discord blocker adapter is in `integrations/openclaw_discord/`. It can relay one genuine
+blocked-only owner question and return one authenticated answer through a generic subprocess
+contract. OpenClaw is not imported by core DE67 and is not required unless the owner explicitly
+configures that adapter.
+
 ## Release and lab
 
 This repository is the publishable de67 release. Before enabling method mutation, users should
@@ -65,6 +77,10 @@ checkout. Accepted mutations are checkpointed there, giving the owner a reviewab
 safe place to rewind a harmful change. The folder name is not authoritative; the active checkout and
 its Git history are. Stable changes can then be promoted deliberately into a public release instead
 of turning every live experiment into an upstream change.
+
+Release maintainers must follow `RELEASE_PROMOTION.md`. In particular, promote lab work by merging a
+reviewed candidate into the release repository while preserving release history and tags; never
+force-push or copy the lab worktree over the release repository.
 
 ## Attributions
 

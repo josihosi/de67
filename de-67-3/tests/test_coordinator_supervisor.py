@@ -25,13 +25,14 @@ from coordinator_supervisor import (  # noqa: E402
     coordinator_prompt,
     blocked_ledger_audit_reason,
     ledger_has_only_blocked_work,
+    main,
     read_clock,
     run_supervisor,
     wait_for_supervision_event,
     work_is_complete,
 )
+from blocker_adapter import BlockerReply  # noqa: E402
 from deadline_harness import DeadlineHarness  # noqa: E402
-from discord_blocker_bridge import BlockerReply  # noqa: E402
 
 
 FAKE_RUNNER = r'''from __future__ import annotations
@@ -482,7 +483,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("Never read, create, or mutate workspace-local copies", prompt)
         self.assertIn("If the ledger is blocked-only, audit", prompt)
         self.assertIn("terminalize every live attempt", prompt)
-        self.assertIn("Never ask the owner or Discord to choose them", prompt)
+        self.assertIn("Never ask the owner or an external contact adapter", prompt)
         for role_path in ROLE_ROOT.glob("*.md"):
             if role_path != COORDINATOR_ROLE_PATH:
                 self.assertNotIn(str(role_path), prompt)
@@ -501,6 +502,36 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(arguments.coordinator_model, "gpt-5.6-sol")
         self.assertEqual(arguments.coordinator_reasoning_effort, "low")
         self.assertEqual(arguments.runner, ["runner", "--runner-owned-option"])
+
+    def test_optional_adapter_argument_stays_outside_runner_arguments(self) -> None:
+        arguments = build_parser().parse_args(
+            [
+                "--state", "state.sqlite3",
+                "--lineage", "project",
+                "--workspace", "workspace",
+                "--run-root", "runs",
+                "--blocker-adapter-command-json", "not-json",
+                "--runner", "runner",
+            ]
+        )
+
+        self.assertEqual(arguments.blocker_adapter_command_json, "not-json")
+        self.assertEqual(arguments.runner, ["runner"])
+
+    def test_invalid_optional_adapter_is_disabled_without_failing_core_main(self) -> None:
+        arguments = [
+            "--state", "state.sqlite3",
+            "--lineage", "project",
+            "--workspace", "workspace",
+            "--run-root", "runs",
+            "--blocker-adapter-command-json", "not-json",
+            "--runner", "runner",
+        ]
+        with patch("coordinator_supervisor.run_supervisor", return_value=0) as run:
+            result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertIsNone(run.call_args.kwargs["blocker_waiter"])
 
     def test_external_parent_continues_two_restart_generations_once_each(self) -> None:
         run_ids = iter(("initial-run", "generation-1-run", "generation-2-run"))
@@ -714,7 +745,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
                 "coordinator_restart"
             ]
         self.assertEqual(
-            restart["reason"], "owner replied to Discord blocker reply-1"
+            restart["reason"], "owner replied through blocker adapter reply-1"
         )
         self.assertFalse(restart_required(restart))
 

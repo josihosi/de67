@@ -54,10 +54,10 @@ The audit must reject implementation and test choices as blockers. Test tooling,
 scenarios, disposable identities or coordinates, profiles, registry database rows, and exact test
 bindings are ordinary executable work when they stay inside the frozen DFS.
 
-When Discord blocker messaging is configured, the quiescent supervisor sends that exact blocker
-once in short plain English and waits without model tokens or a task clock. It accepts only the
-configured owner's first answer after that message, stores the reply under `.de67/state/`, requests
-one restart, and gives the fresh coordinator the durable reply. The transport never interprets the
+When an optional blocker adapter is configured, the quiescent supervisor gives it that exact blocker
+and waits without model tokens or a task clock. A transport adapter authenticates and durably stores
+one owner answer under `.de67/state/blocker-adapter-state.json`; the supervisor requests one restart
+and gives the fresh coordinator that durable reply. The transport never interprets the
 answer or edits product state.
 
 When the user outcome is honestly proved, closure gaps and active work are empty, and no incident or

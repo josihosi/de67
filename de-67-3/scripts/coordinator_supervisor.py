@@ -17,12 +17,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Callable, Iterator, Mapping, Sequence
 
-from deadline_harness import DeadlineError, DeadlineHarness
-from discord_blocker_bridge import (
+from blocker_adapter import (
+    BlockerAdapterError,
     BlockerReply,
-    DiscordBlockerBridge,
-    DiscordBlockerError,
+    SubprocessBlockerAdapter,
+    parse_adapter_command,
+    safe_wait_for_reply,
 )
+from deadline_harness import DeadlineError, DeadlineHarness
 
 
 RED_DFS_CLAIM = re.compile(r"^- \[ \] \N{LARGE RED CIRCLE} ", re.MULTILINE)
@@ -401,7 +403,7 @@ def coordinator_prompt(
         "Read current code and Git state plus only relevant durable .de67 state; do not read predecessor logs or narrative handoffs.",
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every deadline-harness command; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
-        "If .de67/state/discord-blockers.json contains an authenticated owner reply for the "
+        "If .de67/state/blocker-adapter-state.json contains an authenticated owner reply for the "
         "current blocked ledger, treat its exact reply text as durable owner authority. Consume "
         "it by restoring executable work or by writing a materially changed blocker.",
         "If the ledger is blocked-only, audit whether each blocker is still genuine. Restore "
@@ -409,7 +411,7 @@ def coordinator_prompt(
         "before leaving the exact blocked ledger unchanged.",
         "Test tooling, fixtures, scenarios, disposable identities or coordinates, profiles, "
         "registry database rows, and exact test bindings inside the frozen DFS are ordinary "
-        "executable work. Never ask the owner or Discord to choose them.",
+        "executable work. Never ask the owner or an external contact adapter to choose them.",
     ]
     if generation is not None:
         lines.append(
@@ -475,8 +477,8 @@ def run_child(
             "DE67_WORKSPACE": str(workspace),
             "DE67_METHOD_REPO": str(METHOD_REPO_ROOT.resolve()),
             "DE67_SUPERVISOR_PID": str(os.getpid()),
-            "DE67_DISCORD_BLOCKER_STATE": str(
-                workspace / ".de67" / "state" / "discord-blockers.json"
+            "DE67_BLOCKER_ADAPTER_STATE": str(
+                workspace / ".de67" / "state" / "blocker-adapter-state.json"
             ),
         }
     )
@@ -588,7 +590,7 @@ def _run_supervisor_locked(
             with DeadlineHarness(state) as harness:
                 requested = harness.request_coordinator_restart(
                     lineage_id,
-                    f"owner replied to Discord blocker {reply.reply_message_id}",
+                    f"owner replied through blocker adapter {reply.reply_message_id}",
                 )["coordinator_restart"]
             restart = _restart_state(
                 {"lineage_id": lineage_id, "coordinator_restart": requested},
@@ -683,7 +685,7 @@ def _run_supervisor_locked(
             with DeadlineHarness(state) as harness:
                 requested = harness.request_coordinator_restart(
                     lineage_id,
-                    f"owner replied to Discord blocker {reply.reply_message_id}",
+                    f"owner replied through blocker adapter {reply.reply_message_id}",
                 )["coordinator_restart"]
             after = _restart_state(
                 {"lineage_id": lineage_id, "coordinator_restart": requested},
@@ -779,33 +781,31 @@ def build_parser() -> argparse.ArgumentParser:
         nargs=argparse.REMAINDER,
         help="Runner command; place this option last",
     )
-    parser.add_argument("--discord-channel-id")
-    parser.add_argument("--discord-owner-id")
-    parser.add_argument("--discord-poll-seconds", type=float)
-    parser.add_argument("--openclaw", default="/opt/homebrew/bin/openclaw")
+    parser.add_argument(
+        "--blocker-adapter-command-json",
+        help=(
+            "Optional shell-independent JSON argument array for an external owner-contact "
+            "adapter; the supervisor appends the wait/workspace/lineage arguments"
+        ),
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     try:
-        blocker_bridge = None
-        configured = (
-            arguments.discord_channel_id,
-            arguments.discord_owner_id,
-            arguments.discord_poll_seconds,
-        )
-        if any(value is not None for value in configured):
-            if any(value is None for value in configured):
-                raise SupervisorError(
-                    "Discord blocker messaging requires channel, owner, and poll seconds"
+        blocker_adapter = None
+        if arguments.blocker_adapter_command_json is not None:
+            try:
+                blocker_adapter = SubprocessBlockerAdapter(
+                    parse_adapter_command(arguments.blocker_adapter_command_json)
                 )
-            blocker_bridge = DiscordBlockerBridge(
-                openclaw=arguments.openclaw,
-                channel_id=arguments.discord_channel_id,
-                owner_id=arguments.discord_owner_id,
-                poll_seconds=arguments.discord_poll_seconds,
-            )
+            except BlockerAdapterError as error:
+                print(
+                    "coordinator supervisor: optional blocker adapter disabled: "
+                    f"{error}",
+                    file=sys.stderr,
+                )
         return run_supervisor(
             arguments.state,
             arguments.lineage,
@@ -819,10 +819,18 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             },
             blocker_waiter=(
-                blocker_bridge.wait_for_reply if blocker_bridge is not None else None
+                (
+                    lambda *, workspace, lineage_id: safe_wait_for_reply(
+                        blocker_adapter,
+                        workspace=workspace,
+                        lineage_id=lineage_id,
+                    )
+                )
+                if blocker_adapter is not None
+                else None
             ),
         )
-    except (DeadlineError, DiscordBlockerError, SupervisorError, OSError) as error:
+    except (DeadlineError, SupervisorError, OSError) as error:
         print(f"coordinator supervisor: {error}", file=sys.stderr)
         return 1
 

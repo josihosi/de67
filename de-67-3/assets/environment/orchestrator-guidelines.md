@@ -31,6 +31,11 @@ Inspect the authoritative owner, its helpers and callers, every competing reader
 state, owning tests, relevant history, and the natural execution path. Require changed causal evidence
 before repeating a route. Expand the DFS only when this review leaves exactly one necessary
 same-contract refinement; task, test, tooling, evidence, and external-authority gaps stay out of it.
+When compact verdicts already show semantically parallel findings or repeated strategy revision and
+the next dispatch risks an adjacent rerun, optionally consult the read-only trajectory sidecar and
+place its proximity result beside the current causal evidence. Absence, staleness, or failure is
+nonblocking; its output is direction evidence only, never completion, proof, mutation authority,
+lane-merging authority, a required ledger or clock field, or a language-model call.
 Treat diagnosis as an exploration learning goal. Once a changed strategy and proof route exist,
 freeze stable ids, descriptions, and proof routes for every finite closure gap. Dispatch exactly one
 active gap revision per closure attempt. A completed or finding result must close or materially

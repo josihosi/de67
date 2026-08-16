@@ -1,0 +1,154 @@
+import importlib.util
+from pathlib import Path
+import sqlite3
+import tempfile
+import unittest
+from unittest.mock import patch
+
+
+MODULE_PATH = Path(__file__).with_name("de67_dashboard.py")
+SPEC = importlib.util.spec_from_file_location("de67_dashboard", MODULE_PATH)
+dashboard_module = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader
+SPEC.loader.exec_module(dashboard_module)
+
+
+class DashboardTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.temporary.name)
+        state = self.workspace / ".de67/state"
+        state.mkdir(parents=True)
+        (self.workspace / ".de67/DFS.md").write_text("# DFS\n\n<script>alert(1)</script>\n", encoding="utf-8")
+        (self.workspace / ".de67/work-ledger.md").write_text(
+            "# Ledger\n\n## Active work\n\n- [ ] R-009 — useful work\n\n"
+            "## Waiting work\n\n- [ ] R-010 — waiting work\n\n## Blocked work\n",
+            encoding="utf-8",
+        )
+        connection = sqlite3.connect(state / "deadlines.sqlite3")
+        connection.executescript("""
+            CREATE TABLE tasks (task_id TEXT, claim_id TEXT, started_at REAL, deadline_at REAL,
+              closure_gap_id TEXT, closure_gap_revision INTEGER);
+            INSERT INTO tasks VALUES ('R009-M1','R-009',1,9999999999,'G-002',41);
+            CREATE TABLE claim_deadline_generations (generation INTEGER, deadline_at REAL);
+            INSERT INTO claim_deadline_generations VALUES (11,9999999999);
+            CREATE TABLE coordinator_restart_requests (generation INTEGER);
+            INSERT INTO coordinator_restart_requests VALUES (12);
+            CREATE TABLE incidents (kind TEXT);
+            INSERT INTO incidents VALUES ('deadline_miss');
+            CREATE TABLE worker_findings (
+              task_id TEXT, reported_at REAL, short_verdict TEXT, evidence TEXT
+            );
+            INSERT INTO worker_findings VALUES ('R009-M0',1,'escaped <finding>','details');
+            CREATE TABLE deadline_mutation_components (component TEXT);
+            INSERT INTO deadline_mutation_components VALUES ('micro'), ('macro');
+            CREATE TABLE integrity_mutation_components (component TEXT);
+            INSERT INTO integrity_mutation_components VALUES ('micro'), ('macro');
+            CREATE TABLE random_mutation_cycles (
+              cycle_number INTEGER, interval_windows INTEGER, due_after_terminal_windows INTEGER,
+              resolution_evidence TEXT,
+              ordinary_resolution_evidence TEXT, universal_resolution_evidence TEXT
+            );
+            INSERT INTO random_mutation_cycles VALUES
+              (1,1,1,'done',NULL,NULL), (2,2,2,NULL,NULL,NULL);
+        """)
+        connection.commit()
+        connection.close()
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def test_projection_is_read_only_and_escapes_workspace_html(self) -> None:
+        paths = [self.workspace / ".de67/DFS.md", self.workspace / ".de67/work-ledger.md",
+                 self.workspace / ".de67/state/deadlines.sqlite3"]
+        before = [path.read_bytes() for path in paths]
+        page = dashboard_module.Dashboard(self.workspace).render("dfs").decode()
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
+        self.assertNotIn("<script>", page)
+        self.assertEqual(before, [path.read_bytes() for path in paths])
+
+    def test_overview_uses_real_ledger_and_clock_state(self) -> None:
+        page = dashboard_module.Dashboard(self.workspace).render("overview").decode()
+        self.assertIn("R009-M1", page)
+        self.assertIn("gap G-002 r41", page)
+        self.assertIn("deadline generation 11", page)
+        self.assertIn("restart 12", page)
+        self.assertIn("useful work", page)
+        self.assertIn("<h2>Waiting work</h2>", page)
+        self.assertIn("waiting work", page)
+        self.assertIn("<small>Mutations</small><strong>2</strong>", page)
+        self.assertIn("<small>Random mutations</small><strong>1</strong>", page)
+        self.assertIn("Next in 2 windows · draw 2", page)
+        self.assertIn("Latest finding", page)
+        self.assertIn("R009-M0", page)
+        self.assertIn("escaped &lt;finding&gt;", page)
+        self.assertNotIn("escaped <finding>", page)
+
+    def test_terminal_attempt_is_not_shown_as_running_work(self) -> None:
+        database = self.workspace / ".de67/state/deadlines.sqlite3"
+        connection = sqlite3.connect(database)
+        connection.execute("ALTER TABLE tasks ADD COLUMN attempt_terminal_at REAL")
+        connection.execute("UPDATE tasks SET attempt_terminal_at=2")
+        connection.commit()
+        connection.close()
+        page = dashboard_module.Dashboard(self.workspace).render("overview").decode()
+        self.assertNotIn("R009-M1", page)
+        self.assertIn('dot yellow', page)
+
+    def test_invalid_utf8_is_visible_without_raw_failure(self) -> None:
+        (self.workspace / ".de67/DFS.md").write_bytes(b"# DFS\n\xff")
+        state = dashboard_module.Dashboard(self.workspace).snapshot()
+        self.assertTrue(state["dfs"]["identity"]["invalid_utf8"])
+        self.assertIn("�", state["dfs"]["html"])
+
+    def test_missing_sources_return_healthy_unavailable_page(self) -> None:
+        empty = Path(self.temporary.name) / "gone"
+        page = dashboard_module.Dashboard(empty).render("overview").decode()
+        self.assertIn("Active work ledger", page)
+        self.assertIn("SQLite", page)
+        self.assertIn("unable to open database file", page)
+
+    def test_last_good_panel_survives_source_disappearance(self) -> None:
+        dashboard = dashboard_module.Dashboard(self.workspace)
+        first = dashboard.snapshot()
+        (self.workspace / ".de67/DFS.md").unlink()
+        second = dashboard.snapshot()
+        self.assertFalse(first["dfs"]["stale"])
+        self.assertTrue(second["dfs"]["stale"])
+        self.assertIn("<h1>DFS</h1>", second["dfs"]["html"])
+
+    def test_exclusive_sqlite_lock_does_not_wait_or_write(self) -> None:
+        database = self.workspace / ".de67/state/deadlines.sqlite3"
+        before = database.read_bytes()
+        writer = sqlite3.connect(database)
+        writer.execute("BEGIN EXCLUSIVE")
+        try:
+            state = dashboard_module.Dashboard(self.workspace).snapshot()
+            self.assertIsNotNone(state["clock"]["error"])
+        finally:
+            writer.rollback()
+            writer.close()
+        self.assertEqual(before, database.read_bytes())
+
+    def test_incomplete_fence_and_unknown_markdown_are_escaped(self) -> None:
+        rendered = dashboard_module.render_markdown("# One\n\n```\n<img src=x onerror=bad>")
+        self.assertIn("&lt;img src=x onerror=bad&gt;", rendered)
+        self.assertNotIn("<img", rendered)
+
+    def test_stale_pid_file_falls_back_to_workspace_process(self) -> None:
+        (self.workspace / ".de67/state/coordinator-supervisor.pid").write_text(
+            "999999999", encoding="ascii"
+        )
+        process_output = type("Result", (), {"stdout": (
+            f" 42 1 python coordinator_supervisor.py --workspace {self.workspace}\n"
+            " 43 42 codex-remote-run --cwd project\n"
+        )})()
+        with patch.object(dashboard_module.subprocess, "run", return_value=process_output):
+            state = dashboard_module.process_state(self.workspace)
+        self.assertEqual(state["pid"], 42)
+        self.assertEqual(state["supervisor"], "running")
+        self.assertEqual(state["coordinator"], "running")
+
+
+if __name__ == "__main__":
+    unittest.main()

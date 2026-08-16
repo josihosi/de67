@@ -57,6 +57,12 @@ mutation guards, workspace setup, supervisor, and cross-platform Codex runner ar
 an agent can install the `de67` folder into the active Codex skills directory without relying on a
 personal machine wrapper.
 
+## Optional integrations
+
+Optional packages live under `integrations/` and are not required by DE67 core. The read-only
+dashboard in `integrations/dashboard/` serves live DFS, ledger, clock, and process state without
+coordinator or model calls. Installing, stopping, or breaking it must not affect ordinary DE67 work.
+
 ## Release and lab
 
 This repository is the publishable de67 release. Before enabling method mutation, users should

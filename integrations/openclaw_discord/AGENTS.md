@@ -5,7 +5,9 @@ Do not make OpenClaw a DE67 prerequisite and do not copy this package into phase
 
 Before enabling it:
 
-1. Verify Python 3.10 or newer and the exact `openclaw` executable on the target machine.
+1. Verify Python 3.10 or newer and run an actual OpenClaw message command under the exact service
+   user, login mode, and `PATH`. Finding the `openclaw` executable alone is insufficient when its
+   launcher needs `node` or another runtime from that environment.
 2. Verify OpenClaw's Discord account and the dedicated channel without printing credentials.
 3. Obtain the exact channel ID and owner user ID from the owner or authenticated configuration.
 4. Prefer reply-reference enforcement. Use `--allow-unthreaded-owner-answer` only after inspecting

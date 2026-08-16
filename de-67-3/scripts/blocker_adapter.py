@@ -102,6 +102,15 @@ def safe_wait_for_reply(
 
     try:
         return adapter.wait_for_reply(workspace=workspace, lineage_id=lineage_id)
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or "").strip().splitlines()
+        suffix = f": {detail[-1]}" if detail else ""
+        print(
+            "coordinator supervisor: optional blocker adapter unavailable: "
+            f"exit {error.returncode}{suffix}",
+            file=sys.stderr,
+        )
+        return None
     except (BlockerAdapterError, OSError, subprocess.SubprocessError) as error:
         print(
             f"coordinator supervisor: optional blocker adapter unavailable: {error}",

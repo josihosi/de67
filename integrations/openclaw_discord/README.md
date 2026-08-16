@@ -19,6 +19,9 @@ decides how that owner authority changes the ledger.
 
 No OpenClaw Python package is imported and no machine-specific install path is assumed. Pass the
 actual OpenClaw executable with `--openclaw` when it is not available as `openclaw` on `PATH`.
+The service environment must also resolve OpenClaw's own runtime dependencies. Test a real message
+command under that exact service user and `PATH`; an absolute OpenClaw path does not make a missing
+`node` or other launcher dependency available.
 
 ## Configure the supervisor
 

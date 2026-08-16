@@ -72,7 +72,9 @@ class BlockerAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             for error in (
                 FileNotFoundError("missing"),
-                subprocess.CalledProcessError(2, ["adapter"]),
+                subprocess.CalledProcessError(
+                    2, ["adapter"], stderr="adapter transport unavailable\n"
+                ),
             ):
                 with self.subTest(error=type(error).__name__):
                     with patch("blocker_adapter.subprocess.run", side_effect=error):
@@ -85,6 +87,8 @@ class BlockerAdapterTests(unittest.TestCase):
                                 )
                             )
                     self.assertIn("optional blocker adapter unavailable", stderr.getvalue())
+                    if isinstance(error, subprocess.CalledProcessError):
+                        self.assertIn("adapter transport unavailable", stderr.getvalue())
 
         completed = subprocess.CompletedProcess([], 0, "not-json", "")
         with tempfile.TemporaryDirectory() as directory:

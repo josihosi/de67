@@ -88,6 +88,14 @@ transitions, compare inherited remaining item time with an evidence-derived esti
 gap. Never rebase. Insufficient time exposes the estimate or external wait and continues useful work
 as late, not on-time.
 
+For exploration, the estimate basis must cover the dispatched learning route through the production
+owner, helpers and callers, competing readers and writers, owning tests, natural observation,
+strategy, finite-gap freeze, and required durable disposition. Historical timing is analogous only
+when it covers that same causal and observation surface; a symbol lookup or bounded execution/report
+duration is not evidence for omitted causal source reasoning. If that route is not yet evidenced,
+expose the unknown estimate or dispatch a smaller necessary independently terminal learning slice;
+do not present the full exploration as on-time.
+
 The claim clock starts at first worker dispatch and survives every result, task id, mutation, and
 restart; attempt durations guide coordination only. Every miss yields a finite micro recovery and
 one repeatable macro candidate limited to the implicated mutable surface. Normal mutation preserves

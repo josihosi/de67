@@ -63,6 +63,19 @@ the condition changes, remove the blocked entry and restore the ordinary uncheck
 
 Give workers compact natural-language briefs and use parallelism only for disjoint work. Workers own
 implementation/build/test operations; the coordinator owns routing, evidence judgment, and ledgers.
+Immediately before invoking task `start`, read the exact claim clock and bind the remaining seconds
+and evidence-derived estimate through the task's required durable result disposition to the
+dispatch decision. Treat closure pre-start as one conjunction: bind the current gap revision, prove
+the first external route executable under the exact authority its next command consumes, and pass
+that arithmetic. A manifest or named scenario is inventory, not execution authority; a tokenized
+selector requires a current explicit typed token. Never invoke closure task `start` to discover
+route readiness or fit. For closure, the estimate ends only after a terminal result is consumed into its
+required gap close, material revision, or exploration reopen, including any named independent
+review; the worker terminal timestamp alone is not the item-deadline endpoint. If the estimate
+exceeds the remaining time, the full gap is inadmissible as an on-time attempt: dispatch only a
+smaller necessary, independently terminal slice whose evidence-derived estimate fits. When no such
+slice exists, preserve useful continuation as late work without presenting or routing it as an
+on-time closure attempt. A cached comparison from an earlier dispatch is not current evidence.
 Choose model and effort from the Phase-2-proved roster without a rigid task matrix. Luna uses the
 trusted project default with an explicit proved effort; Terra is selected explicitly. Receive
 progress and final results through the native parent/child channel; clarification is allowed while

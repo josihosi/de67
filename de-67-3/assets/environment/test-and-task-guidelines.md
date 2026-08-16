@@ -13,6 +13,12 @@ edit is not an integrity breach by itself; preserve the useful tree, record any 
 and let the next worker continue. Reserve integrity quarantine for false evidence or deliberate
 destruction of work that cannot be recovered.
 
+For a closure precondition that must be established before an authoritative product-time
+transition, record the current product time, the next transition, and the evidence-derived duration
+of ordinary setup before dispatch. If setup cannot complete first, route an earlier valid footing
+or setup owner, or obtain material owner authority to change or defer the transition; never infer
+that choice or manufacture a buffer.
+
 ## Tooling check
 
 Confirm the tool, execution identity, environment, command, and smallest runnable route before
@@ -32,12 +38,15 @@ consumer before another ownership or ordering edit; an upstream helper result is
 proof.
 
 State the exploration unknown and terminal evidence, or give every closure gap a stable id,
-description, and proof route. Bind one attempt to one current gap revision. A completed or finding
-result consumes that revision: close it or materially revise its contract from the returned
-evidence; only abandonment permits repetition. Name relevant surfaces and permission boundaries
-without a fixed allowlist or receipt schema. Stop on a falsified premise. Exploration completes only
-with a changed strategy and honest proof route ready to freeze; other contradictions are findings.
-Attempt termination never stops the item clock.
+description, and proof route. When a closure gap compresses an enumerated DFS mechanism, carry every
+named required element into the worker brief with its owning implementation and direct proof, then
+reconcile each element before accepting `completed`; an umbrella phrase such as “full required tables”
+is not coverage. Bind one attempt to one current gap revision. A completed or finding result consumes
+that revision: close it or materially revise its contract from the returned evidence; only
+abandonment permits repetition. Name relevant surfaces and permission boundaries without a fixed
+allowlist or receipt schema. Stop on a falsified premise. Exploration completes only with a changed
+strategy and honest proof route ready to freeze; other contradictions are findings. Attempt
+termination never stops the item clock.
 
 ## Worker and model selection
 
@@ -53,8 +62,12 @@ mapping is not a ritual, and worker choice is not a task result.
 
 Define the smallest honest test through the authoritative owner. Add negative controls only to
 exclude a real competing explanation. Exploration may select a strategy but is not closure proof;
-freeze that route before implementation. Incidental metadata matters only when it changes identity,
-the verdict, or a false-green control.
+freeze that route before implementation. Before freezing a route that consumes generated evidence,
+exercise a current production witness through its full prerequisite chain and prove that each
+producer output is accepted by the next authoritative owner, including artifact provenance and
+typed or schema vocabulary. If the current corpus cannot produce that witness, keep the missing
+route in exploration and make it part of the strategy rather than an assumed dependency. Incidental
+metadata matters only when it changes identity, the verdict, or a false-green control.
 
 ## Test checking
 
@@ -64,6 +77,11 @@ exploration only when evidence falsifies a frozen premise, and do not repeat a f
 changed source, tooling, observation, or causal evidence. Close gaps only from their bound completed
 attempts; final acceptance is atomic and blocked by any open gap. Invalidated proof keeps its closed
 record and creates an open successor.
+
+At a closure spanning multiple authoritative transitions, execute the smallest witness through the
+first unproved consumer before broader implementation or proof. A rejection at that gate
+terminalizes the bound attempt as a finding; causal diagnosis and any revised bridge follow after
+that terminal result, not inside the still-running closure attempt.
 
 For compiled proof, bind the invoked path and artifact identity to the unchanged production/test
 snapshot and successful build; a version or “changed executable” claim is insufficient. For
@@ -78,6 +96,14 @@ setup cost before starting. Before every later dispatch, including same-coordina
 transitions, compare inherited remaining item time with an evidence-derived estimate for the next
 gap. Never rebase. Insufficient time exposes the estimate or external wait and continues useful work
 as late, not on-time.
+
+For exploration, the estimate basis must cover the dispatched learning route through the production
+owner, helpers and callers, competing readers and writers, owning tests, natural observation,
+strategy, finite-gap freeze, and required durable disposition. Historical timing is analogous only
+when it covers that same causal and observation surface; a symbol lookup or bounded execution/report
+duration is not evidence for omitted causal source reasoning. If that route is not yet evidenced,
+expose the unknown estimate or dispatch a smaller necessary independently terminal learning slice;
+do not present the full exploration as on-time.
 
 The claim clock starts at first worker dispatch and survives every result, task id, mutation, and
 restart; attempt durations guide coordination only. Every miss yields a finite micro recovery and

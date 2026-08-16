@@ -35,6 +35,17 @@ Treat diagnosis as an exploration learning goal. Once a changed strategy and pro
 freeze stable ids, descriptions, and proof routes for every finite closure gap. Dispatch exactly one
 active gap revision per closure attempt. A completed or finding result must close or materially
 revise that gap before another attempt; abandonment alone permits the same revision.
+Apply the MSW `rounds = 3` fuse across a same-gap causal-diagnosis chain, including different task
+and revision ids. Three consecutive terminal findings that have not crossed a new product or proof
+transition exhaust that observational course. Before any fourth attempt, halt narrower probes and
+replace them with one finite map of the already-visible producer, serializer or normalizer, state
+writer, consumer guard, and owning test; the next admissible attempt implements or proves the first
+authoritative transition. A material revision does not reset this fuse.
+When a command resolves but its downstream effect does not, treat action delivery as established
+and trace the immediate production consumer before another end-to-end attempt. Record its selected
+operand, next-state shape, and terminal result; dispatch only an operand proved to produce the next
+required non-empty or accepted state. Alternate encodings of the already-resolved action are not
+changed causal evidence.
 
 ## Plan the work ledger
 
@@ -54,11 +65,32 @@ accepted items and their live pointer
 line without a batch summary or archive; leave durable DFS markers in place for history and reopen.
 For a still-red claim, replace old task notes with only the current causal frontier and active route.
 Keep attempt history in the clock rather than duplicating it in the ledger.
+If a material owner choice or external condition leaves no executable route, remove the item's
+unchecked active block and record `- Blocked: R-001 — <exact choice or condition>` under
+`## Blocked work`. Keep blocked entries concise and do not dispatch them. When the owner answers or
+the condition changes, remove the blocked entry and restore the ordinary unchecked active item.
+Choosing or generating test tooling, fixtures, scenarios, disposable identities or coordinates,
+profiles, registry database rows, and exact test bindings is coordinator/worker authority when it
+does not change the frozen product contract. A broken or absent setup remains ordinary executable
+work. Do not turn it into an owner choice or send it to Discord.
 
 ## Coordinate workers
 
 Give workers compact natural-language briefs and use parallelism only for disjoint work. Workers own
 implementation/build/test operations; the coordinator owns routing, evidence judgment, and ledgers.
+Immediately before invoking task `start`, read the exact claim clock and bind the remaining seconds
+and evidence-derived estimate through the task's required durable result disposition to the
+dispatch decision. Treat closure pre-start as one conjunction: bind the current gap revision, prove
+the first external route executable under the exact authority its next command consumes, and pass
+that arithmetic. A manifest or named scenario is inventory, not execution authority; a tokenized
+selector requires a current explicit typed token. Never invoke closure task `start` to discover
+route readiness or fit. For closure, the estimate ends only after a terminal result is consumed into its
+required gap close, material revision, or exploration reopen, including any named independent
+review; the worker terminal timestamp alone is not the item-deadline endpoint. If the estimate
+exceeds the remaining time, the full gap is inadmissible as an on-time attempt: dispatch only a
+smaller necessary, independently terminal slice whose evidence-derived estimate fits. When no such
+slice exists, preserve useful continuation as late work without presenting or routing it as an
+on-time closure attempt. A cached comparison from an earlier dispatch is not current evidence.
 Choose model and effort from the Phase-2-proved roster without a rigid task matrix. Luna uses the
 trusted project default with an explicit proved effort; Terra is selected explicitly. Receive
 progress and final results through the native parent/child channel; clarification is allowed while

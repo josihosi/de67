@@ -28,16 +28,37 @@ requests a baton and exits; it never launches or acknowledges its successor.
 A successful coordinator exit without a baton does not end supervision while the active ledger is
 nonempty. Persist one restart generation immediately and launch one acknowledged successor; a
 closed item's deadline is irrelevant to ordinary handover. When no active ledger item remains, wait
-and the DFS still contains red work, launch exactly one acknowledged replenishment coordinator to
-rebuild the compact ledger. If that run returns with the ledger still empty and the same red work,
-do not loop. Only when neither ordinary handover applies, wait without polling or model tokens for
-an active claim deadline or an already-persisted incident/mutation gate. The successor routes any
-deadline mutator; the supervisor does not diagnose the miss or choose a model. Never launch the
-same unchanged supervision event twice.
+and the DFS still contains red work, launch an acknowledged replenishment coordinator to rebuild
+the compact ledger. If that run returns with the ledger still empty and the same red work, its exit
+is a new handover event: launch another successor until a coordinator restores executable work,
+records a durable blocking gate, or proves the DFS complete. Only when neither ordinary handover
+applies, wait without polling or model tokens for an active claim deadline or an already-persisted
+incident/mutation gate. The successor routes any deadline mutator; the supervisor does not diagnose
+the miss or choose a model. A coordinator process exit is not completion evidence.
+
+The exact ledger form `- Blocked: R-001 — <owner choice or external condition>` records non-executable
+work. When one or more blocked entries exist and no unchecked active item exists, stop without
+replenishing the red DFS. An owner answer or observed external change moves the item back to the
+ordinary unchecked active form before supervision resumes. A blocked entry never proves completion.
 
 A failed or unacknowledged successor is not silently retried and remains pending. After abnormal
 death, confirm the runner tree is gone before releasing that exact failed claim for an explicit
 recovery action.
+
+A blocked-only ledger receives one fresh-coordinator audit for its exact content. If the blocker is
+obsolete, restore executable work. If it is genuine, terminalize every live attempt with honest
+blocker evidence; only then may the supervisor stop. The acknowledged audit identity prevents the
+same unchanged blocker set from creating another audit on a later supervisor start.
+
+The audit must reject implementation and test choices as blockers. Test tooling, fixtures,
+scenarios, disposable identities or coordinates, profiles, registry database rows, and exact test
+bindings are ordinary executable work when they stay inside the frozen DFS.
+
+When an optional blocker adapter is configured, the quiescent supervisor gives it that exact blocker
+and waits without model tokens or a task clock. A transport adapter authenticates and durably stores
+one owner answer under `.de67/state/blocker-adapter-state.json`; the supervisor requests one restart
+and gives the fresh coordinator that durable reply. The transport never interprets the
+answer or edits product state.
 
 When the user outcome is honestly proved, closure gaps and active work are empty, and no incident or
 restart gate remains, launch nothing. A due ordinary random review cannot create post-contract work.

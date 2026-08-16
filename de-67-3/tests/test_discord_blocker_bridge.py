@@ -25,7 +25,7 @@ class DiscordBlockerBridgeTests(unittest.TestCase):
         self.assertIn("Problem:", message)
         self.assertIn("Reply to this message", message)
 
-    def test_authenticated_direct_reply_is_durable_and_once_only(self) -> None:
+    def test_authenticated_owner_answer_is_durable_and_once_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             root = workspace / ".de67"
@@ -51,13 +51,11 @@ class DiscordBlockerBridgeTests(unittest.TestCase):
                                     "id": "ignored",
                                     "content": "wrong person",
                                     "author": {"id": "intruder"},
-                                    "message_reference": {"message_id": "notice-1"},
                                 },
                                 {
                                     "id": "reply-1",
                                     "content": "Build a clean scenario.",
                                     "author": {"id": "owner"},
-                                    "message_reference": {"message_id": "notice-1"},
                                 },
                             ]
                         }

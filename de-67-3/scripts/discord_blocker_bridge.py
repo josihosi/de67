@@ -182,12 +182,9 @@ class DiscordBlockerBridge:
                 if not isinstance(message, dict):
                     continue
                 author = message.get("author")
-                reference = message.get("message_reference")
-                if not isinstance(author, dict) or not isinstance(reference, dict):
+                if not isinstance(author, dict):
                     continue
                 if str(author.get("id")) != self.owner_id:
-                    continue
-                if str(reference.get("message_id")) != notification_id:
                     continue
                 reply_id = message.get("id")
                 reply_text = message.get("content")

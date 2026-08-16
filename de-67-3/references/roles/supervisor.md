@@ -51,8 +51,8 @@ blocker evidence; only then may the supervisor stop. The acknowledged audit iden
 same unchanged blocker set from creating another audit on a later supervisor start.
 
 When Discord blocker messaging is configured, the quiescent supervisor sends that exact blocker
-once in short plain English and waits without model tokens or a task clock. It accepts only a direct
-reply to that message from the configured owner id, stores the reply under `.de67/state/`, requests
+once in short plain English and waits without model tokens or a task clock. It accepts only the
+configured owner's first answer after that message, stores the reply under `.de67/state/`, requests
 one restart, and gives the fresh coordinator the durable reply. The transport never interprets the
 answer or edits product state.
 

@@ -90,9 +90,13 @@ review; the worker terminal timestamp alone is not the item-deadline endpoint. T
 comparison also binds the evidence-derived critical path through every other open gap required for
 atomic claim acceptance and every method gate already known to become due on those terminal
 windows. A next-gap estimate may route useful work, but it cannot prove the claim remains on time.
-At the first dispatch of each new deadline generation, make this comparison inspectable: record one
-compact component vector naming every open gap and known due method gate, its evidence basis and
-duration, durable-disposition overhead, the summed critical path, and current remaining item seconds.
+At the first dispatch of each new deadline generation, and again after every terminal result that
+changes an open gap's description, proof route, or estimate, make this comparison inspectable:
+record one current compact component vector naming every open gap and known due method gate, its
+evidence basis and duration, durable-disposition overhead, the summed critical path, and current
+remaining item seconds. Each refreshed vector includes any prerequisite or repair slice plus the
+downstream terminal proof; an individually fitting prerequisite cannot establish on-time fit when
+that sum cannot fit.
 Any absent component leaves on-time fit unproved. A fresh generation or individually fitting
 next-gap attempts do not prove whole-claim fit; only an independently terminal estimate-discovery
 slice or honest late continuation may proceed until the vector is complete and fits.

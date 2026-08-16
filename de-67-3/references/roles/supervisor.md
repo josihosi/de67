@@ -50,5 +50,11 @@ obsolete, restore executable work. If it is genuine, terminalize every live atte
 blocker evidence; only then may the supervisor stop. The acknowledged audit identity prevents the
 same unchanged blocker set from creating another audit on a later supervisor start.
 
+When Discord blocker messaging is configured, the quiescent supervisor sends that exact blocker
+once in short plain English and waits without model tokens or a task clock. It accepts only a direct
+reply to that message from the configured owner id, stores the reply under `.de67/state/`, requests
+one restart, and gives the fresh coordinator the durable reply. The transport never interprets the
+answer or edits product state.
+
 When the user outcome is honestly proved, closure gaps and active work are empty, and no incident or
 restart gate remains, launch nothing. A due ordinary random review cannot create post-contract work.

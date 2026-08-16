@@ -31,6 +31,7 @@ from coordinator_supervisor import (  # noqa: E402
     work_is_complete,
 )
 from deadline_harness import DeadlineHarness  # noqa: E402
+from discord_blocker_bridge import BlockerReply  # noqa: E402
 
 
 FAKE_RUNNER = r'''from __future__ import annotations
@@ -218,6 +219,24 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             "Fresh coordinator confirmed the exact owner choice remains unavailable.",
             short_verdict="owner choice is still required",
         )
+    elif mode == "blocked-reply-complete":
+        if generation is None:
+            raise AssertionError("blocked reply route must use a restart generation")
+        harness.acknowledge_coordinator_restart(
+            os.environ["DE67_LINEAGE"],
+            generation,
+            os.environ["DE67_COORDINATOR_RUN_ID"],
+        )
+        if generation == 2:
+            root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+            (root / "DFS.md").write_text(
+                "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+                encoding="utf-8",
+            )
+            (root / "work-ledger.md").write_text(
+                "# Work ledger\n\n## Active work\n",
+                encoding="utf-8",
+            )
     elif mode == "matrix-recover":
         if generation is not None:
             harness.acknowledge_coordinator_restart(
@@ -644,6 +663,59 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(second_result, 0)
         self.assertFalse(second_run_root.exists())
         self.assertEqual(len(self.read_events()), 1)
+
+    def test_authenticated_blocker_reply_starts_one_fresh_coordinator(self) -> None:
+        self.write_work_documents(red=True)
+        ledger = self.workspace / ".de67" / "work-ledger.md"
+        ledger.write_text(
+            "# Work ledger\n\n## Active work\n\n"
+            "## Blocked work\n\n"
+            "- Blocked: R-001 \N{EM DASH} Owner choice required\n",
+            encoding="utf-8",
+        )
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "prior proof")
+
+        replies = [
+            BlockerReply(
+                "digest",
+                "notice-1",
+                "reply-1",
+                "Use the clean recovery route.",
+                "owner",
+            )
+        ]
+
+        def wait_for_owner_reply(*, workspace: Path, lineage_id: str) -> BlockerReply | None:
+            self.assertEqual(workspace, self.workspace.resolve())
+            self.assertEqual(lineage_id, "project")
+            return replies.pop(0) if replies else None
+
+        run_ids = iter(["blocked-audit", "owner-reply"])
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("blocked-reply-complete"),
+            run_id_factory=lambda _generation: next(run_ids),
+            blocker_waiter=wait_for_owner_reply,
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            [event["generation"] for event in self.read_events()],
+            [1, 2],
+        )
+        with DeadlineHarness(self.state_path) as harness:
+            restart = harness.coordinator_restart_status("project")[
+                "coordinator_restart"
+            ]
+        self.assertEqual(
+            restart["reason"], "owner replied to Discord blocker reply-1"
+        )
+        self.assertFalse(restart_required(restart))
 
     def test_recoverable_lifecycle_matrix_converges_after_child_exit(self) -> None:
         ledger_cases = {

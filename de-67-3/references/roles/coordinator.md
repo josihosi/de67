@@ -21,7 +21,10 @@ python <active-de-67-3-skill>/scripts/deadline_harness.py startup-view --state .
 If `DE67_COORDINATOR_ACK_ARGV_JSON` exists, execute that exact argument array without a shell before
 new dispatch. For a blocked-only ledger, audit each exact blocker once: restore an ordinary active
 item when a route is now executable; otherwise record honest terminal blocker evidence for every
-live attempt and leave the confirmed blocked entry unchanged. Read the active ledger, pending suggestions, workspace binding, actual Git state, and
+live attempt and leave the confirmed blocked entry unchanged. When
+`DE67_DISCORD_BLOCKER_STATE` names an authenticated reply for the current blocker, treat the exact
+reply as durable owner authority. Restore executable work or replace the blocker with the next
+material question; never reuse the same reply. Read the active ledger, pending suggestions, workspace binding, actual Git state, and
 only current code or guideline sections needed for the next decision. Inspect slice status first:
 
 ```text

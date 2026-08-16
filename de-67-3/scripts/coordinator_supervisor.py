@@ -18,6 +18,11 @@ from pathlib import Path
 from typing import BinaryIO, Callable, Iterator, Mapping, Sequence
 
 from deadline_harness import DeadlineError, DeadlineHarness
+from discord_blocker_bridge import (
+    BlockerReply,
+    DiscordBlockerBridge,
+    DiscordBlockerError,
+)
 
 
 RED_DFS_CLAIM = re.compile(r"^- \[ \] \N{LARGE RED CIRCLE} ", re.MULTILINE)
@@ -396,6 +401,9 @@ def coordinator_prompt(
         "Read current code and Git state plus only relevant durable .de67 state; do not read predecessor logs or narrative handoffs.",
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every deadline-harness command; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
+        "If .de67/state/discord-blockers.json contains an authenticated owner reply for the "
+        "current blocked ledger, treat its exact reply text as durable owner authority. Consume "
+        "it by restoring executable work or by writing a materially changed blocker.",
         "If the ledger is blocked-only, audit whether each blocker is still genuine. Restore "
         "recoverable work; otherwise terminalize every live attempt with honest blocker evidence "
         "before leaving the exact blocked ledger unchanged.",
@@ -464,6 +472,9 @@ def run_child(
             "DE67_WORKSPACE": str(workspace),
             "DE67_METHOD_REPO": str(METHOD_REPO_ROOT.resolve()),
             "DE67_SUPERVISOR_PID": str(os.getpid()),
+            "DE67_DISCORD_BLOCKER_STATE": str(
+                workspace / ".de67" / "state" / "discord-blockers.json"
+            ),
         }
     )
     if generation is None:
@@ -544,6 +555,7 @@ def _run_supervisor_locked(
     extra_env: Mapping[str, str] | None = None,
     run_id_factory: Callable[[int | None], str] = _default_run_id,
     event_waiter: Callable[[Path, str], SupervisionEvent | None] | None = None,
+    blocker_waiter: Callable[[Path, str], BlockerReply | None] | None = None,
 ) -> int:
     state = Path(state_path).expanduser().resolve()
     workdir = Path(workspace).expanduser().resolve()
@@ -565,7 +577,20 @@ def _run_supervisor_locked(
             blocked_ledger_was_audited(blocked_audit, restart)
             and blocked_work_is_quiescent(state, lineage_id)
         ):
-            return 0
+            if blocker_waiter is None:
+                return 0
+            reply = blocker_waiter(workspace=workdir, lineage_id=lineage_id)
+            if reply is None:
+                return 0
+            with DeadlineHarness(state) as harness:
+                requested = harness.request_coordinator_restart(
+                    lineage_id,
+                    f"owner replied to Discord blocker {reply.reply_message_id}",
+                )["coordinator_restart"]
+            restart = _restart_state(
+                {"lineage_id": lineage_id, "coordinator_restart": requested},
+                lineage_id,
+            )
         if not restart.required:
             with DeadlineHarness(state) as harness:
                 requested = harness.request_coordinator_restart(
@@ -647,7 +672,20 @@ def _run_supervisor_locked(
         if blocked_audit is not None and blocked_work_is_quiescent(
             state, lineage_id
         ):
-            return 0
+            if blocker_waiter is None:
+                return 0
+            reply = blocker_waiter(workspace=workdir, lineage_id=lineage_id)
+            if reply is None:
+                return 0
+            with DeadlineHarness(state) as harness:
+                requested = harness.request_coordinator_restart(
+                    lineage_id,
+                    f"owner replied to Discord blocker {reply.reply_message_id}",
+                )["coordinator_restart"]
+            after = _restart_state(
+                {"lineage_id": lineage_id, "coordinator_restart": requested},
+                lineage_id,
+            )
         if work_is_complete(workdir, state, lineage_id):
             return 0
         if not after.required and ledger_has_active_work(workdir):
@@ -704,6 +742,7 @@ def run_supervisor(
     extra_env: Mapping[str, str] | None = None,
     run_id_factory: Callable[[int | None], str] = _default_run_id,
     event_waiter: Callable[[Path, str], SupervisionEvent | None] | None = None,
+    blocker_waiter: Callable[[Path, str], BlockerReply | None] | None = None,
 ) -> int:
     state = Path(state_path).expanduser().resolve()
     with _supervisor_lock(state):
@@ -716,6 +755,7 @@ def run_supervisor(
             extra_env=extra_env,
             run_id_factory=run_id_factory,
             event_waiter=event_waiter,
+            blocker_waiter=blocker_waiter,
         )
 
 
@@ -736,12 +776,33 @@ def build_parser() -> argparse.ArgumentParser:
         nargs=argparse.REMAINDER,
         help="Runner command; place this option last",
     )
+    parser.add_argument("--discord-channel-id")
+    parser.add_argument("--discord-owner-id")
+    parser.add_argument("--discord-poll-seconds", type=float)
+    parser.add_argument("--openclaw", default="/opt/homebrew/bin/openclaw")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     try:
+        blocker_bridge = None
+        configured = (
+            arguments.discord_channel_id,
+            arguments.discord_owner_id,
+            arguments.discord_poll_seconds,
+        )
+        if any(value is not None for value in configured):
+            if any(value is None for value in configured):
+                raise SupervisorError(
+                    "Discord blocker messaging requires channel, owner, and poll seconds"
+                )
+            blocker_bridge = DiscordBlockerBridge(
+                openclaw=arguments.openclaw,
+                channel_id=arguments.discord_channel_id,
+                owner_id=arguments.discord_owner_id,
+                poll_seconds=arguments.discord_poll_seconds,
+            )
         return run_supervisor(
             arguments.state,
             arguments.lineage,
@@ -754,8 +815,11 @@ def main(argv: list[str] | None = None) -> int:
                     arguments.coordinator_reasoning_effort
                 ),
             },
+            blocker_waiter=(
+                blocker_bridge.wait_for_reply if blocker_bridge is not None else None
+            ),
         )
-    except (DeadlineError, SupervisorError, OSError) as error:
+    except (DeadlineError, DiscordBlockerError, SupervisorError, OSError) as error:
         print(f"coordinator supervisor: {error}", file=sys.stderr)
         return 1
 

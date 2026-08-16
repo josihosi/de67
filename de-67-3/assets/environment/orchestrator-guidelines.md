@@ -81,10 +81,14 @@ and proved before the full run. A manifest or named scenario is inventory, not e
 selector requires a current explicit typed token. Never invoke closure task `start` to discover
 route readiness or fit. For closure, the estimate ends only after a terminal result is consumed into its
 required gap close, material revision, or exploration reopen, including any named independent
-review; the worker terminal timestamp alone is not the item-deadline endpoint. If the estimate
-exceeds the remaining time, the full gap is inadmissible as an on-time attempt: dispatch only a
-smaller necessary, independently terminal slice whose evidence-derived estimate fits. When no such
-slice exists, preserve useful continuation as late work without presenting or routing it as an
+review; the worker terminal timestamp alone is not the item-deadline endpoint. The on-time
+comparison also binds the evidence-derived critical path through every other open gap required for
+atomic claim acceptance and every method gate already known to become due on those terminal
+windows. A next-gap estimate may route useful work, but it cannot prove the claim remains on time.
+If the critical-path estimate exceeds the remaining time, the full gap is inadmissible as an on-time
+attempt: dispatch only a smaller necessary, independently terminal slice whose evidence-derived
+estimate fits. When no such slice exists, preserve useful continuation as late work without
+presenting or routing it as an
 on-time closure attempt. A cached comparison from an earlier dispatch is not current evidence.
 Choose model and effort from the Phase-2-proved roster without a rigid task matrix. Luna uses the
 trusted project default with an explicit proved effort; Terra is selected explicitly. Receive

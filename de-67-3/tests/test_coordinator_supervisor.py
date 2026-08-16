@@ -482,6 +482,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("Never read, create, or mutate workspace-local copies", prompt)
         self.assertIn("If the ledger is blocked-only, audit", prompt)
         self.assertIn("terminalize every live attempt", prompt)
+        self.assertIn("Never ask the owner or Discord to choose them", prompt)
         for role_path in ROLE_ROOT.glob("*.md"):
             if role_path != COORDINATOR_ROLE_PATH:
                 self.assertNotIn(str(role_path), prompt)

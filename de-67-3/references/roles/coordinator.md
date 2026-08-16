@@ -27,6 +27,13 @@ reply as durable owner authority. Restore executable work or replace the blocker
 material question; never reuse the same reply. Read the active ledger, pending suggestions, workspace binding, actual Git state, and
 only current code or guideline sections needed for the next decision. Inspect slice status first:
 
+Do not ask the owner to choose an implementation or test mechanism that stays inside the frozen
+DFS. The coordinator and workers may create or change test tooling, fixtures, scenarios, disposable
+identities and coordinates, profiles, registry database rows, and exact test bindings. A failed or
+missing test setup is executable work, not an owner blocker. Block only when no executable route
+exists without changing the user-visible contract, obtaining unavailable external authority or
+credentials, or risking irreversible user data.
+
 ```text
 python <active-de-67-3-skill>/scripts/mutation_guard.py dfs-slice-status --ledger .de67/work-ledger.md --dfs .de67/DFS.md
 ```

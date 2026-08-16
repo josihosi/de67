@@ -407,6 +407,9 @@ def coordinator_prompt(
         "If the ledger is blocked-only, audit whether each blocker is still genuine. Restore "
         "recoverable work; otherwise terminalize every live attempt with honest blocker evidence "
         "before leaving the exact blocked ledger unchanged.",
+        "Test tooling, fixtures, scenarios, disposable identities or coordinates, profiles, "
+        "registry database rows, and exact test bindings inside the frozen DFS are ordinary "
+        "executable work. Never ask the owner or Discord to choose them.",
     ]
     if generation is not None:
         lines.append(

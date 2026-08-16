@@ -50,6 +50,10 @@ obsolete, restore executable work. If it is genuine, terminalize every live atte
 blocker evidence; only then may the supervisor stop. The acknowledged audit identity prevents the
 same unchanged blocker set from creating another audit on a later supervisor start.
 
+The audit must reject implementation and test choices as blockers. Test tooling, fixtures,
+scenarios, disposable identities or coordinates, profiles, registry database rows, and exact test
+bindings are ordinary executable work when they stay inside the frozen DFS.
+
 When Discord blocker messaging is configured, the quiescent supervisor sends that exact blocker
 once in short plain English and waits without model tokens or a task clock. It accepts only the
 configured owner's first answer after that message, stores the reply under `.de67/state/`, requests

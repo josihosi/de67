@@ -58,6 +58,10 @@ If a material owner choice or external condition leaves no executable route, rem
 unchecked active block and record `- Blocked: R-001 — <exact choice or condition>` under
 `## Blocked work`. Keep blocked entries concise and do not dispatch them. When the owner answers or
 the condition changes, remove the blocked entry and restore the ordinary unchecked active item.
+Choosing or generating test tooling, fixtures, scenarios, disposable identities or coordinates,
+profiles, registry database rows, and exact test bindings is coordinator/worker authority when it
+does not change the frozen product contract. A broken or absent setup remains ordinary executable
+work. Do not turn it into an owner choice or send it to Discord.
 
 ## Coordinate workers
 

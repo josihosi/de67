@@ -74,7 +74,10 @@ Immediately before invoking task `start`, read the exact claim clock and bind th
 and evidence-derived estimate through the task's required durable result disposition to the
 dispatch decision. Treat closure pre-start as one conjunction: bind the current gap revision, prove
 the first external route executable under the exact authority its next command consumes, and pass
-that arithmetic. A manifest or named scenario is inventory, not execution authority; a tokenized
+that arithmetic. When required closure evidence is a finalized scenario or registry report,
+pre-start also resolves each statically named required step and evidence binding through the
+current finalizer; a legacy or absent binding is a producer-consumer mismatch that must be repaired
+and proved before the full run. A manifest or named scenario is inventory, not execution authority; a tokenized
 selector requires a current explicit typed token. Never invoke closure task `start` to discover
 route readiness or fit. For closure, the estimate ends only after a terminal result is consumed into its
 required gap close, material revision, or exploration reopen, including any named independent

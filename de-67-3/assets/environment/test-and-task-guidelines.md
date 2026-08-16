@@ -10,6 +10,12 @@ state. Choose the smallest necessary task. Exploration gets one learning goal; c
 proof route, and finite frozen gaps. Name real dependencies and collision surfaces before parallel
 dispatch.
 
+For a closure precondition that must be established before an authoritative product-time
+transition, record the current product time, the next transition, and the evidence-derived duration
+of ordinary setup before dispatch. If setup cannot complete first, route an earlier valid footing
+or setup owner, or obtain material owner authority to change or defer the transition; never infer
+that choice or manufacture a buffer.
+
 ## Tooling check
 
 Confirm the tool, execution identity, environment, command, and smallest runnable route before

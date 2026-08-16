@@ -75,6 +75,8 @@ without Tailscale; [Tailscale Serve](https://tailscale.com/kb/1242/tailscale-ser
 optional route for authenticated home-network HTTPS. Installing, stopping, or breaking the
 dashboard must not affect ordinary DE67 work.
 
+![DE67 dashboard overview](integrations/dashboard/dashboard.png)
+
 ## Release and lab
 
 This repository is the publishable de67 release. Before enabling method mutation, users should

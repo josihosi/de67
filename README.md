@@ -66,8 +66,14 @@ integration is absent or broken.
 
 The OpenClaw Discord blocker adapter is in `integrations/openclaw_discord/`. It can relay one genuine
 blocked-only owner question and return one authenticated answer through a generic subprocess
-contract. OpenClaw is not imported by core DE67 and is not required unless the owner explicitly
-configures that adapter.
+contract. It requires an explicitly configured [OpenClaw](https://docs.openclaw.ai/) installation
+and Discord channel; OpenClaw is never imported or required by core DE67.
+
+The read-only dashboard in `integrations/dashboard/` serves live DFS, ledger, clock, mutation, and
+process state without coordinator or model calls. It requires only Python. Loopback hosting works
+without Tailscale; [Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve) is the recommended
+optional route for authenticated home-network HTTPS. Installing, stopping, or breaking the
+dashboard must not affect ordinary DE67 work.
 
 ## Release and lab
 
@@ -82,7 +88,17 @@ Release maintainers must follow `RELEASE_PROMOTION.md`. In particular, promote l
 reviewed candidate into the release repository while preserving release history and tags; never
 force-push or copy the lab worktree over the release repository.
 
-## Attributions
+## Contributions and acknowledgements
+
+- Josef Horvath directed the product, supplied the DE67 method and live CAOL proving ground, and
+  made the calls about what was useful versus bureaucracy.
+- OpenAI Codex, mostly GPT-5.6 Sol at light reasoning, implemented and integrated the current method,
+  optional OpenClaw adapter, dashboard, failure controls, and release packaging—with a suspicious
+  willingness to keep going forever.
+- [OpenClaw](https://docs.openclaw.ai/) provides the optional owner-messaging route used by the
+  Discord blocker adapter.
+- [Tailscale](https://tailscale.com/) provides the optional private-network and HTTPS route used by
+  the tested Mac-mini dashboard deployment.
 
 - The MSW kernel comes from [@aienginerd on X](https://x.com/aienginerd).
 - The imagination round comes from Josef Horvath.

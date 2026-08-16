@@ -35,6 +35,11 @@ Treat diagnosis as an exploration learning goal. Once a changed strategy and pro
 freeze stable ids, descriptions, and proof routes for every finite closure gap. Dispatch exactly one
 active gap revision per closure attempt. A completed or finding result must close or materially
 revise that gap before another attempt; abandonment alone permits the same revision.
+When a command resolves but its downstream effect does not, treat action delivery as established
+and trace the immediate production consumer before another end-to-end attempt. Record its selected
+operand, next-state shape, and terminal result; dispatch only an operand proved to produce the next
+required non-empty or accepted state. Alternate encodings of the already-resolved action are not
+changed causal evidence.
 
 ## Plan the work ledger
 

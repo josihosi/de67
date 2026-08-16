@@ -23,6 +23,7 @@ from coordinator_supervisor import (  # noqa: E402
     _supervisor_lock,
     build_parser,
     coordinator_prompt,
+    ledger_has_only_blocked_work,
     read_clock,
     run_supervisor,
     wait_for_supervision_event,
@@ -551,6 +552,40 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertFalse(self.events.exists())
         self.assertFalse(self.run_root.exists())
+
+    def test_blocked_only_ledger_stops_with_red_dfs(self) -> None:
+        self.write_work_documents(red=True)
+        ledger = self.workspace / ".de67" / "work-ledger.md"
+        ledger.write_text(
+            "# Work ledger\n\n## Active work\n\n"
+            "## Blocked work\n\n"
+            "- Blocked: R-001 \N{EM DASH} Owner choice required\n",
+            encoding="utf-8",
+        )
+
+        self.assertTrue(ledger_has_only_blocked_work(self.workspace))
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("unacknowledged"),
+        )
+
+        self.assertEqual(result, 0)
+        self.assertFalse(self.events.exists())
+
+    def test_active_item_outranks_blocked_items(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        ledger = self.workspace / ".de67" / "work-ledger.md"
+        with ledger.open("a", encoding="utf-8") as output:
+            output.write(
+                "\n## Blocked work\n\n"
+                "- Blocked: R-002 \N{EM DASH} Different owner choice\n"
+            )
+
+        self.assertFalse(ledger_has_only_blocked_work(self.workspace))
 
     def test_green_documents_cannot_hide_an_open_named_closure_gap(self) -> None:
         self.write_work_documents()

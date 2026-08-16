@@ -36,6 +36,11 @@ applies, wait without polling or model tokens for an active claim deadline or an
 incident/mutation gate. The successor routes any deadline mutator; the supervisor does not diagnose
 the miss or choose a model. A coordinator process exit is not completion evidence.
 
+The exact ledger form `- Blocked: R-001 — <owner choice or external condition>` records non-executable
+work. When one or more blocked entries exist and no unchecked active item exists, stop without
+replenishing the red DFS. An owner answer or observed external change moves the item back to the
+ordinary unchecked active form before supervision resumes. A blocked entry never proves completion.
+
 A failed or unacknowledged successor is not silently retried and remains pending. After abnormal
 death, confirm the runner tree is gone before releasing that exact failed claim for an explicit
 recovery action.

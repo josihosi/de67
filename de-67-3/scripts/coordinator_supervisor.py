@@ -21,6 +21,7 @@ from deadline_harness import DeadlineError, DeadlineHarness
 
 RED_DFS_CLAIM = re.compile(r"^- \[ \] \N{LARGE RED CIRCLE} ", re.MULTILINE)
 ACTIVE_LEDGER_ITEM = re.compile(r"^- \[ \] ", re.MULTILINE)
+BLOCKED_LEDGER_ITEM = re.compile(r"^- Blocked: ", re.MULTILINE)
 PHASE3_ROOT = Path(__file__).resolve().parents[1]
 METHOD_REPO_ROOT = PHASE3_ROOT.parent
 KERNEL_PATH = PHASE3_ROOT / "references" / "kernel.md"
@@ -307,6 +308,19 @@ def ledger_has_active_work(workspace: Path) -> bool:
     ) is not None
 
 
+def ledger_has_only_blocked_work(workspace: Path) -> bool:
+    """Stop when the ledger contains blockers but no executable item."""
+
+    ledger = workspace / ".de67" / "work-ledger.md"
+    if not ledger.is_file():
+        return False
+    text = ledger.read_text(encoding="utf-8")
+    return (
+        ACTIVE_LEDGER_ITEM.search(text) is None
+        and BLOCKED_LEDGER_ITEM.search(text) is not None
+    )
+
+
 def dfs_has_open_work(workspace: Path) -> bool:
     """Return whether the frozen DFS still has a red product claim."""
     dfs = workspace / ".de67" / "DFS.md"
@@ -494,6 +508,8 @@ def _run_supervisor_locked(
 
     require_canonical_method_checkout()
 
+    if ledger_has_only_blocked_work(workdir):
+        return 0
     if work_is_complete(workdir, state, lineage_id):
         return 0
 
@@ -562,6 +578,8 @@ def _run_supervisor_locked(
                 _mark_protocol_failure(result, "Coordinator restart generation moved backwards")
                 return 1
 
+        if ledger_has_only_blocked_work(workdir):
+            return 0
         if work_is_complete(workdir, state, lineage_id):
             return 0
         if not after.required and ledger_has_active_work(workdir):

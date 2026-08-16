@@ -54,6 +54,10 @@ accepted items and their live pointer
 line without a batch summary or archive; leave durable DFS markers in place for history and reopen.
 For a still-red claim, replace old task notes with only the current causal frontier and active route.
 Keep attempt history in the clock rather than duplicating it in the ledger.
+If a material owner choice or external condition leaves no executable route, remove the item's
+unchecked active block and record `- Blocked: R-001 — <exact choice or condition>` under
+`## Blocked work`. Keep blocked entries concise and do not dispatch them. When the owner answers or
+the condition changes, remove the blocked entry and restore the ordinary unchecked active item.
 
 ## Coordinate workers
 

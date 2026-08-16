@@ -11,9 +11,11 @@ proof route, and finite frozen gaps. Name real dependencies and collision surfac
 dispatch.
 
 For a closure precondition that must be established before an authoritative product-time
-transition, record the current product time, the next transition, and the evidence-derived duration
-of ordinary setup before dispatch. If setup cannot complete first, route an earlier valid footing
-or setup owner, or obtain material owner authority to change or defer the transition; never infer
+transition, record the current product time, the required endpoint, each known scheduled
+interruption before that endpoint, and the evidence-derived duration of ordinary setup before
+dispatch. Bind whether each interruption supplies the endpoint, invalidates the witness, or permits
+a proved resume to it; an interruption alone is not endpoint proof. If setup cannot complete first,
+route an earlier valid footing or setup owner, or obtain material owner authority to change or defer
 that choice or manufacture a buffer.
 
 ## Tooling check

@@ -90,7 +90,11 @@ the first external route executable under the exact authority its next command c
 that arithmetic. When required closure evidence is a finalized scenario or registry report,
 pre-start also resolves each statically named required step and evidence binding through the
 current finalizer; a legacy or absent binding is a producer-consumer mismatch that must be repaired
-and proved before the full run. A manifest or named scenario is inventory, not execution authority; a tokenized
+and proved before the full run. For a GUI-driven scenario, enumerate every statically declared
+input token, sequence mode, and focus mode through the current physical input owner and exercise a
+focused route check for each distinct transition before the full run. After one runtime input-owner
+mismatch, map and repair every remaining statically visible GUI input transition before another
+full run; do not rediscover the declared sequence one key at a time. A manifest or named scenario is inventory, not execution authority; a tokenized
 selector requires a current explicit typed token. Never invoke closure task `start` to discover
 route readiness or fit. For closure, the estimate ends only after a terminal result is consumed into its
 required gap close, material revision, or exploration reopen, including any named independent

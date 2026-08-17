@@ -8,9 +8,10 @@ description: Explicit first phase of de67. Use when the user says `de67 1` to sh
 Work only in the current user-facing chat. Do not create or delegate to an external discussion bot,
 coordinator, reviewer, or worker. Do not read `de-67-2/` or `de-67-3/`.
 
-Before any discussion, read `../references/imagination-round.md` and
-`../references/msw-kernel.md` completely. Execute both exactly as written. They are verbatim
-foundations; do not paraphrase, summarize, refactor, or replace their wording.
+Before any discussion, read `../references/imagination-round.md`,
+`../references/msw-kernel.md`, and `../references/controlled-english.md` completely. Execute the
+first two exactly as written. They are verbatim foundations; do not paraphrase, summarize, refactor,
+or replace their wording. Apply the controlled-English guideline to owner questions and the WEC.
 
 The outcome is `WEC.md`: an unexpanded WEC, subtitled **user intent and language brief**. It captures
 what should exist and how the project should talk about it. It is not a functional specification or
@@ -20,21 +21,6 @@ a disguised task list.
 
 Maintain a small decision frontier: only choices whose answers could materially change the desired
 experience, boundary, terminology, implementation language, or later specification.
-
-### Question language
-
-Write owner questions and choices in Simplified Technical English style:
-
-- use common words and one consistent term for each thing;
-- use active voice and name the actor when it is not obvious;
-- put one meaning in each sentence;
-- keep conditions before the action they control;
-- avoid idioms, jokes, vague pronouns, and unnecessary abbreviations;
-- make every option describe one concrete consequence;
-- use project terms from the user, but explain an uncommon term the first time.
-
-This is a practical clarity rule, not a claim of formal ASD-STE100 conformance. Preserve the user's
-own language in the WEC even when the questions use controlled English.
 
 For each unresolved choice:
 

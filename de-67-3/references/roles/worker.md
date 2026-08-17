@@ -1,5 +1,9 @@
 # Worker role
 
+Before writing a test finding or owner-facing result, read
+`../../../references/controlled-english.md` completely. Apply its test-finding and evidence
+profiles. Keep technical identifiers exact.
+
 ```text
 W_i = (mode, claim, item clock, attempt id, question or gaps, surface, proof route, boundaries)
       -> product evidence or immutable finding

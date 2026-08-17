@@ -31,6 +31,11 @@ Inspect the authoritative owner, its helpers and callers, every competing reader
 state, owning tests, relevant history, and the natural execution path. Require changed causal evidence
 before repeating a route. Expand the DFS only when this review leaves exactly one necessary
 same-contract refinement; task, test, tooling, evidence, and external-authority gaps stay out of it.
+When compact verdicts already show semantically parallel findings or repeated strategy revision and
+the next dispatch risks an adjacent rerun, optionally consult the read-only trajectory sidecar and
+place its proximity result beside the current causal evidence. Absence, staleness, or failure is
+nonblocking; its output is direction evidence only, never completion, proof, mutation authority,
+lane-merging authority, a required ledger or clock field, or a language-model call.
 Treat diagnosis as an exploration learning goal. Once a changed strategy and proof route exist,
 freeze stable ids, descriptions, and proof routes for every finite closure gap. Dispatch exactly one
 active gap revision per closure attempt. A completed or finding result must close or materially
@@ -82,15 +87,37 @@ Immediately before invoking task `start`, read the exact claim clock and bind th
 and evidence-derived estimate through the task's required durable result disposition to the
 dispatch decision. Treat closure pre-start as one conjunction: bind the current gap revision, prove
 the first external route executable under the exact authority its next command consumes, and pass
-that arithmetic. A manifest or named scenario is inventory, not execution authority; a tokenized
+that arithmetic. When required closure evidence is a finalized scenario or registry report,
+pre-start also resolves each statically named required step and evidence binding through the
+current finalizer; a legacy or absent binding is a producer-consumer mismatch that must be repaired
+and proved before the full run. For a GUI-driven scenario, enumerate every statically declared
+input token, sequence mode, and focus mode through the current physical input owner and exercise a
+focused route check for each distinct transition before the full run. After one runtime input-owner
+mismatch, map and repair every remaining statically visible GUI input transition before another
+full run; do not rediscover the declared sequence one key at a time. A manifest or named scenario is inventory, not execution authority; a tokenized
 selector requires a current explicit typed token. Never invoke closure task `start` to discover
 route readiness or fit. For closure, the estimate ends only after a terminal result is consumed into its
 required gap close, material revision, or exploration reopen, including any named independent
-review; the worker terminal timestamp alone is not the item-deadline endpoint. If the estimate
-exceeds the remaining time, the full gap is inadmissible as an on-time attempt: dispatch only a
-smaller necessary, independently terminal slice whose evidence-derived estimate fits. When no such
-slice exists, preserve useful continuation as late work without presenting or routing it as an
-on-time closure attempt. A cached comparison from an earlier dispatch is not current evidence.
+review; the worker terminal timestamp alone is not the item-deadline endpoint. The on-time
+comparison also binds the evidence-derived critical path through every other open gap required for
+atomic claim acceptance and every method gate already known to become due on those terminal
+windows. A next-gap estimate may route useful work, but it cannot prove the claim remains on time.
+At the first dispatch of each new deadline generation, and again after every terminal result that
+changes an open gap's description, proof route, or estimate, make this comparison inspectable:
+record one current compact component vector naming every open gap and known due method gate, its
+evidence basis and duration, durable-disposition overhead, the summed critical path, and current
+remaining item seconds. Each refreshed vector includes any prerequisite or repair slice plus the
+downstream terminal proof; an individually fitting prerequisite cannot establish on-time fit when
+that sum cannot fit.
+Any absent component leaves on-time fit unproved. A fresh generation or individually fitting
+next-gap attempts do not prove whole-claim fit. While the vector is incomplete, only an
+independently terminal estimate-discovery slice whose result is necessary to complete that vector
+may proceed as on-time work; all other continuation is honest late. Once the vector is complete, it
+must fit before any on-time closure dispatch.
+If the complete critical-path estimate exceeds the remaining time, no prerequisite, repair,
+product, or proof slice is on-time merely because it separately fits and is independently terminal.
+Preserve necessary continuation as late work without presenting or routing it as an on-time closure
+attempt. A cached comparison from an earlier dispatch is not current evidence.
 Choose model and effort from the Phase-2-proved roster without a rigid task matrix. Luna uses the
 trusted project default with an explicit proved effort; Terra is selected explicitly. Receive
 progress and final results through the native parent/child channel; clarification is allowed while

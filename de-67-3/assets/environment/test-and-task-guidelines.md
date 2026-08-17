@@ -14,9 +14,11 @@ and let the next worker continue. Reserve integrity quarantine for false evidenc
 destruction of work that cannot be recovered.
 
 For a closure precondition that must be established before an authoritative product-time
-transition, record the current product time, the next transition, and the evidence-derived duration
-of ordinary setup before dispatch. If setup cannot complete first, route an earlier valid footing
-or setup owner, or obtain material owner authority to change or defer the transition; never infer
+transition, record the current product time, the required endpoint, each known scheduled
+interruption before that endpoint, and the evidence-derived duration of ordinary setup before
+dispatch. Bind whether each interruption supplies the endpoint, invalidates the witness, or permits
+a proved resume to it; an interruption alone is not endpoint proof. If setup cannot complete first,
+route an earlier valid footing or setup owner, or obtain material owner authority to change or defer
 that choice or manufacture a buffer.
 
 ## Tooling check
@@ -93,9 +95,11 @@ that artifact, and name the first divergent field. Reject unbound or changed-inp
 Estimate first dispatch through honest acceptance, including exploration, setup, implementation,
 build, proof, dependencies, and measured review/restart routes. Record the basis. Resolve unknown
 setup cost before starting. Before every later dispatch, including same-coordinator and successor
-transitions, compare inherited remaining item time with an evidence-derived estimate for the next
-gap. Never rebase. Insufficient time exposes the estimate or external wait and continues useful work
-as late, not on-time.
+transitions, compare inherited remaining item time with the evidence-derived critical path through
+every open gap required for honest acceptance and every method gate already known to become due on
+those terminal windows. A next-gap estimate may route useful work, but it does not prove the item
+remains on time. Never rebase. Insufficient time exposes the estimate or external wait and continues
+useful work as late, not on-time.
 
 For exploration, the estimate basis must cover the dispatched learning route through the production
 owner, helpers and callers, competing readers and writers, owning tests, natural observation,

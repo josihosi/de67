@@ -8,6 +8,9 @@ S_sup = (DFS completion, ledger, clock gates, child exit, restart generation)
 The supervisor is an external process owner. It records process facts and never judges product
 work, chooses a worker, diagnoses a miss, edits the DFS, or authors a mutation.
 
+Before writing an owner blocker message, read `../../../references/controlled-english-message.md`
+completely. Keep technical identifiers exact.
+
 Start unattended delivery with:
 
 ```text

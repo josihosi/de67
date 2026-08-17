@@ -68,6 +68,11 @@ typed or schema vocabulary. If the current corpus cannot produce that witness, k
 route in exploration and make it part of the strategy rather than an assumed dependency. Incidental
 metadata matters only when it changes identity, the verdict, or a false-green control.
 
+When a focused closure fixture enters a global actor loop after mutating world state, make the
+fixture own every incidental actor the loop can touch: remove actors outside the claim after the
+final mutation or prove retained actors occupy valid terrain. When logged errors make the runner
+fail, bind terminal evidence to process exit zero rather than a green assertion summary.
+
 ## Test checking
 
 Check the diff, command, and relevant artifact or observation. A test proves only its exercised

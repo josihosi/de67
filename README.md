@@ -1,10 +1,9 @@
 # de67
 
-> When things become 67, you must de67.
-
-Software work rarely fails because nobody can write another plan. It fails when the plan grows
-sideways, tests become substitutes for the product, agents hand unfinished work around, and the
-finish line quietly moves.
+When software work turns 67—plans multiplying, agents looping, and proof wandering off—de67 acts
+like a small coordination enzyme. It recognizes one cut site: work that can be deleted without
+leaving the requested outcome unmet or unproved. It preserves the useful strand and permits
+mutation only where evidence shows that the method needs editing.
 
 de67 is an OpenAI Codex skill for turning that drift back into a short path from an idea to working,
 honestly proven code. It separates discussion, specification, and delivery so each phase receives a
@@ -27,6 +26,38 @@ WEC.md  ->  frozen DFS.md  ->  working, proven code
 
 Phases never silently start one another. The user chooses the boundary, and accepted progress
 survives coordinator or worker replacement.
+
+## Phase 3 at a glance
+
+Phase 3 keeps implementation work separate from coordination and judges progress through durable
+evidence rather than agent confidence.
+
+```mermaid
+flowchart LR
+    DFS["Frozen DFS"] --> Ledger["Active work ledger"]
+    Ledger --> Coordinator["Coordinator"]
+    Clock["Deterministic clock"] --> Coordinator
+    Coordinator --> Worker["Worker"]
+    Worker --> Result{"Evidence or finding?"}
+    Result -->|Evidence| Acceptance["Accept the gap or claim"]
+    Result -->|Finding| Coordinator
+    Acceptance --> Ledger
+    Acceptance --> DFS
+```
+
+When evidence contradicts the current route, Phase 3 changes the smallest justified part of the
+method without rewriting the user's outcome or erasing failed attempts.
+
+```mermaid
+flowchart LR
+    Event["Deadline, integrity incident, or due review"] --> Review["Independent mutation review"]
+    Review --> Candidate["Smallest evidence-backed candidate"]
+    Candidate --> Guard{"Applicable guard passes?"}
+    Guard -->|No| Preserve["Preserve current method and open gate"]
+    Guard -->|Yes| Apply["Apply receipt-bound mutation"]
+    Apply --> Restart["Fresh coordinator generation"]
+    Restart --> Ledger["Continue the durable ledger"]
+```
 
 ## Lean coordination
 

@@ -31,10 +31,10 @@ into project `.de67/` state.
 
 ## Current repository relationship
 
-At the preparation of the `0.2.0` candidate, both repositories descend from a common history but
-have unique commits. The release side contains its previous checkpoint/release merges and `v0.1.0`;
-the lab side contains later method mutations and integration work. Preserve both sides by merging
-the reviewed lab commit into a release branch based on current `de67/main`.
+The repositories descend from common history but can contain unique commits. The release side owns
+its previous checkpoint and release merges; the lab side owns later accepted method evolution.
+Preserve both sides by merging the reviewed lab commit into a release branch based on current
+`de67/main`.
 
 Never infer that this paragraph is still current. Re-run the checks below for every promotion.
 
@@ -80,8 +80,8 @@ Never infer that this paragraph is still current. Re-run the checks below for ev
 
    - Add concise release notes describing user-visible method and packaging changes, compatibility,
      optional integrations, and any migration action.
-   - Confirm the intended semantic version with the owner. For the current proposed takeover that
-     version is `0.2.0`, but this file does not authorize publication.
+   - Confirm the intended semantic version with the owner. This file does not select a version or
+     authorize publication.
    - Commit the release-specific metadata on the release-candidate branch.
    - Present the exact candidate commit, validation evidence, preserved release-only changes, and
      tag target for owner approval.
@@ -94,7 +94,7 @@ Never infer that this paragraph is still current. Re-run the checks below for ev
      branch and tag.
    - Do not change lab routine-push configuration to point at `de67`.
 
-## Required `0.2.0` takeover report
+## Required takeover report
 
 Before publishing, report:
 

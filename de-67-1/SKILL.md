@@ -8,9 +8,10 @@ description: Explicit first phase of de67. Use when the user says `de67 1` to sh
 Work only in the current user-facing chat. Do not create or delegate to an external discussion bot,
 coordinator, reviewer, or worker. Do not read `de-67-2/` or `de-67-3/`.
 
-Before any discussion, read `../references/imagination-round.md` and
-`../references/msw-kernel.md` completely. Execute both exactly as written. They are verbatim
-foundations; do not paraphrase, summarize, refactor, or replace their wording.
+Before any discussion, read `../references/imagination-round.md`,
+`../references/msw-kernel.md`, and `../references/controlled-english.md` completely. Execute the
+first two exactly as written. They are verbatim foundations; do not paraphrase, summarize, refactor,
+or replace their wording. Apply the controlled-English guideline to owner questions and the WEC.
 
 The outcome is `WEC.md`: an unexpanded WEC, subtitled **user intent and language brief**. It captures
 what should exist and how the project should talk about it. It is not a functional specification or

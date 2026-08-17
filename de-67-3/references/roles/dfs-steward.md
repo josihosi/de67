@@ -1,5 +1,8 @@
 # DFS steward role
 
+Before writing or refreezing the DFS, read `../../../references/controlled-english.md` completely.
+Apply its specification and evidence profiles. Keep technical identifiers exact.
+
 ```text
 D_DFS = current DFS + accepted proof or source-grounded finding
         -> exact closure, same-outcome candidate, or Phase-2 return

@@ -42,6 +42,15 @@ attempts, evidence, misses, and restart generations without consuming model toke
 Mutation is gated and receipt-backed so a failed approach can change without rewriting the user's
 goal or erasing accepted work.
 
+## Shared writing foundations
+
+All three phases use the verbatim [MSW kernel](references/msw-kernel.md) to delete work that the
+requested outcome does not need. DE67 also uses one central
+[controlled-English guideline](references/controlled-english.md) for owner questions, the WEC, the
+DFS, work ledgers, test findings, and blocker messages. The guideline preserves exact technical
+identifiers and does not claim formal ASD-STE100 compliance. Compact profiles keep ledger and
+OpenClaw writers from loading the full DFS-oriented guideline.
+
 ## Requirements
 
 de67 is built specifically for **OpenAI Codex**. It is not an Anthropic or generic multi-agent skill.

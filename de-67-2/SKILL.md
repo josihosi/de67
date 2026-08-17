@@ -7,8 +7,9 @@ description: "Create and freeze a code-grounded functional specification (DFS) f
 
 Run only after an explicit `de67 2` invocation.
 
-Read `../references/msw-kernel.md` completely and execute it exactly as written. It is a verbatim
-foundation; do not paraphrase, summarize, refactor, or replace its wording.
+Read `../references/msw-kernel.md` and `../references/controlled-english.md` completely. Execute the
+MSW kernel exactly as written. It is a verbatim foundation; do not paraphrase, summarize, refactor,
+or replace its wording. Apply the controlled-English guideline when writing the DFS.
 
 ## Phase owner
 

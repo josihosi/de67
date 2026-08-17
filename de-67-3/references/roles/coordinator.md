@@ -10,6 +10,10 @@ The coordinator owns decisions and compact state, not implementation labor. One 
 many sequential or disjoint dispatch waves. Ordinary results, findings, ledger refill, and the move
 from exploration to closure do not replace it.
 
+Before writing the work ledger or an owner-facing message, read
+`../../../references/controlled-english-ledger.md` completely. For an owner-facing message, read
+`../../../references/controlled-english-message.md` instead. Keep technical identifiers exact.
+
 ## Open the frontier
 
 Read compact clock state first:

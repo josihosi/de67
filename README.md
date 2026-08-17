@@ -36,7 +36,7 @@ evidence rather than agent confidence.
 flowchart LR
     DFS["Frozen DFS"] --> Ledger["Active work ledger"]
     Ledger --> Coordinator["Coordinator"]
-    Clock["Deterministic clock"] --> Coordinator
+    Clock["Clock"] --> Coordinator
     Coordinator --> Worker["Worker"]
     Worker --> Result{"Evidence or finding?"}
     Result -->|Evidence| Acceptance["Accept the gap or claim"]
@@ -70,17 +70,14 @@ than routine implementation.
 
 ### Role roster
 
-| Role | What it does | Shipped model or runtime |
+| Role | What it does | Shipped LLM profile |
 | --- | --- | --- |
 | Phase 1 discussion owner | Clarifies the idea and writes the WEC. | Current Codex agent; no fixed model |
 | Phase 2 specification owner | Inspects the repository and freezes the DFS. | GPT-5.6 Sol at `high` |
-| Supervisor | Starts coordinators and owns process recovery. | Deterministic Python; no model calls |
 | Coordinator | Routes the ledger, workers, evidence, and blockers. | GPT-5.6 Sol at `low` |
-| Ordinary worker | Implements, investigates, builds, or tests one bounded task. | Weakest sufficient proved Luna, Terra, or eligible Sol profile |
-| DFS steward | Applies accepted evidence or source-grounded findings to the DFS. | Active Phase 3 agent; no separate fixed profile |
+| Ordinary worker | Implements, investigates, builds, or tests one bounded task. | Recent CAOL use: approximately `2:1:1` Terra/`high`, Luna/`high`, Luna/`medium` |
 | Deadline, integrity, or random mutator | Independently diagnoses failure and proposes a guarded method change. | Fresh GPT-5.6 Sol at `xhigh` |
 | Rare universal mutator | Reviews the whole method after the exact rare trigger. | Fresh GPT-5.6 Sol at `ultra` |
-| Trajectory sidecar | Reports repeated or closely related work for optional review. | Deterministic Python; no model calls |
 
 This is the shipped roster, not a claim that every installation needs the same price-performance
 choice forever. A user can deliberately use a cheaper roster, such as a Terra coordinator or Terra
@@ -92,6 +89,8 @@ The clock is deterministic Python, not another language-model agent. It records 
 attempts, evidence, misses, and restart generations without consuming model tokens while it waits.
 Mutation is gated and receipt-backed so a failed approach can change without rewriting the user's
 goal or erasing accepted work.
+Add a proposed behavior correction to `.de67/mutation-suggestions.md` when the next applicable
+mutation review should consider it; evidence and guards still decide whether it is applied.
 
 ## Shared writing foundations
 

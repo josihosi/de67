@@ -70,6 +70,14 @@ accepted items and their live pointer
 line without a batch summary or archive; leave durable DFS markers in place for history and reopen.
 For a still-red claim, replace old task notes with only the current causal frontier and active route.
 Keep attempt history in the clock rather than duplicating it in the ledger.
+If a material owner choice or external condition leaves no executable route, remove the item's
+unchecked active block and record `- Blocked: R-001 — <exact choice or condition>` under
+`## Blocked work`. Keep blocked entries concise and do not dispatch them. When the owner answers or
+the condition changes, remove the blocked entry and restore the ordinary unchecked active item.
+Choosing or generating test tooling, fixtures, scenarios, disposable identities or coordinates,
+profiles, registry database rows, and exact test bindings is coordinator/worker authority when it
+does not change the frozen product contract. A broken or absent setup remains ordinary executable
+work. Do not turn it into an owner choice or send it to Discord.
 
 ## Coordinate workers
 
@@ -98,13 +106,14 @@ remaining item seconds. Each refreshed vector includes any prerequisite or repai
 downstream terminal proof; an individually fitting prerequisite cannot establish on-time fit when
 that sum cannot fit.
 Any absent component leaves on-time fit unproved. A fresh generation or individually fitting
-next-gap attempts do not prove whole-claim fit; only an independently terminal estimate-discovery
-slice or honest late continuation may proceed until the vector is complete and fits.
-If the critical-path estimate exceeds the remaining time, the full gap is inadmissible as an on-time
-attempt: dispatch only a smaller necessary, independently terminal slice whose evidence-derived
-estimate fits. When no such slice exists, preserve useful continuation as late work without
-presenting or routing it as an
-on-time closure attempt. A cached comparison from an earlier dispatch is not current evidence.
+next-gap attempts do not prove whole-claim fit. While the vector is incomplete, only an
+independently terminal estimate-discovery slice whose result is necessary to complete that vector
+may proceed as on-time work; all other continuation is honest late. Once the vector is complete, it
+must fit before any on-time closure dispatch.
+If the complete critical-path estimate exceeds the remaining time, no prerequisite, repair,
+product, or proof slice is on-time merely because it separately fits and is independently terminal.
+Preserve necessary continuation as late work without presenting or routing it as an on-time closure
+attempt. A cached comparison from an earlier dispatch is not current evidence.
 Choose model and effort from the Phase-2-proved roster without a rigid task matrix. Luna uses the
 trusted project default with an explicit proved effort; Terra is selected explicitly. Receive
 progress and final results through the native parent/child channel; clarification is allowed while

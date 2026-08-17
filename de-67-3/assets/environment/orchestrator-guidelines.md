@@ -114,6 +114,9 @@ next-gap attempts do not prove whole-claim fit. While the vector is incomplete, 
 independently terminal estimate-discovery slice whose result is necessary to complete that vector
 may proceed as on-time work; all other continuation is honest late. Once the vector is complete, it
 must fit before any on-time closure dispatch.
+The sum of known positive components is already an evidence-derived lower bound while the vector is
+incomplete. If that lower bound exceeds current remaining item seconds, fit is disproved:
+estimate-discovery and every other continuation proceed only as honest late work.
 If the complete critical-path estimate exceeds the remaining time, no prerequisite, repair,
 product, or proof slice is on-time merely because it separately fits and is independently terminal.
 Preserve necessary continuation as late work without presenting or routing it as an on-time closure

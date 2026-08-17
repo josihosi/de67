@@ -30,6 +30,24 @@ PRODUCT_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cs", ".go", ".h", ".hpp", ".java", ".js", ".jsx",
     ".kt", ".kts", ".m", ".mm", ".py", ".rs", ".swift", ".ts", ".tsx",
 }
+TEST_PATH_PARTS = {"test", "tests", "testing"}
+SUPPORT_PATH_PARTS = {".de67", "harness", "scripts", "tools"}
+
+
+@dataclass(frozen=True)
+class ChurnObservation:
+    direction: str
+    evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ChurnVector:
+    product_owner: ChurnObservation
+    proof_depth: ChurnObservation
+    artifact_identity: ChurnObservation
+    attempt_novelty: ChurnObservation
+    code_surface: ChurnObservation
+    accepted_frontier: ChurnObservation
 
 
 @dataclass(frozen=True)
@@ -59,6 +77,135 @@ class TrajectoryReport:
     latest_task: str | None
     latest_task_gap: str | None
     latest_task_result: str
+    churn_vector: ChurnVector
+
+
+def git_changed_paths(workspace: Path) -> tuple[str, ...]:
+    result = subprocess.run(
+        ["git", "-C", str(workspace), "diff", "--name-only", "--no-ext-diff"],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        raise TrajectoryError(result.stderr.strip() or "git diff --name-only failed")
+    return tuple(line.strip() for line in result.stdout.splitlines() if line.strip())
+
+
+def classify_path(path: str) -> str:
+    parsed = Path(path)
+    parts = {part.lower() for part in parsed.parts}
+    if any(part in TEST_PATH_PARTS or "test" in part for part in parts):
+        return "test"
+    if parts & SUPPORT_PATH_PARTS:
+        return "support"
+    if parsed.suffix.lower() in PRODUCT_SUFFIXES:
+        return "product"
+    return "other"
+
+
+def observation(direction: str, *evidence: str) -> ChurnObservation:
+    return ChurnObservation(direction, tuple(item for item in evidence if item))
+
+
+def derive_churn_vector(
+    gaps: list[GapReport], changed_paths: tuple[str, ...], latest_result: str
+) -> ChurnVector:
+    surfaces = Counter(classify_path(path) for path in changed_paths)
+    product_count = surfaces["product"]
+    test_count = surfaces["test"]
+    support_count = surfaces["support"]
+    other_count = surfaces["other"]
+
+    if product_count:
+        product_owner = observation(
+            "product-surface-present", f"{product_count} changed product path(s)"
+        )
+    elif changed_paths:
+        product_owner = observation(
+            "support-only-movement", "changed paths do not include a product source path"
+        )
+    else:
+        product_owner = observation("no-uncommitted-movement", "git diff is empty")
+
+    frontier_gaps = [gap for gap in gaps if gap.status == "open"] or gaps
+    obligation_text = " ".join(gap.summary.lower() for gap in frontier_gaps)
+    if re.search(r"\b(terminal|receipt|aftermath|save/reload|survivor)\b", obligation_text):
+        proof_depth = observation("terminal-route-targeted", "current obligation names terminal proof")
+    elif re.search(r"\b(interaction|input|combat|gameplay|click)\b", obligation_text):
+        proof_depth = observation("interaction-targeted", "current obligation names interaction proof")
+    elif re.search(r"\b(startup|preflight|launch|focus|hud)\b", obligation_text):
+        proof_depth = observation("startup-or-preflight-targeted", "current obligation remains at setup depth")
+    else:
+        proof_depth = observation("proof-depth-unclassified", "no proof-depth marker in current obligations")
+
+    if re.search(r"\b(source|head|commit)\b", obligation_text) and re.search(
+        r"\b(binary|executable|hash)\b", obligation_text
+    ) and re.search(r"\b(pid|process|window)\b", obligation_text):
+        artifact_identity = observation(
+            "source-binary-runtime-bound", "current obligation binds source, binary, and runtime identity"
+        )
+    elif re.search(r"\b(binary|executable|hash|pid|process|build)\b", obligation_text):
+        artifact_identity = observation(
+            "partial-artifact-binding", "artifact identity terms are present but the full binding is not"
+        )
+    else:
+        artifact_identity = observation("artifact-binding-unobserved", "no artifact identity terms observed")
+
+    attempts = sum(gap.attempts for gap in gaps)
+    findings = sum(gap.findings for gap in gaps)
+    active = sum(
+        1 for gap in gaps
+        if gap.attempt_path and gap.attempt_path[-1].startswith("active")
+    )
+    if findings > 1 and any(gap.revision > 1 for gap in gaps):
+        attempt_novelty = observation(
+            "finding-led-revision-chain",
+            f"{findings} finding return(s) across revised closure gaps",
+        )
+    elif active and findings:
+        attempt_novelty = observation("active-after-finding", "an active attempt follows a finding return")
+    elif attempts == 1:
+        attempt_novelty = observation("single-attempt", "one attempt is recorded")
+    elif attempts:
+        attempt_novelty = observation("multi-attempt", f"{attempts} attempts are recorded")
+    else:
+        attempt_novelty = observation("untouched", "no attempts are recorded")
+
+    surface_evidence = (
+        f"product={product_count}, test={test_count}, support={support_count}, other={other_count}"
+    )
+    nonzero = [name for name, count in surfaces.items() if count]
+    if not changed_paths:
+        code_surface = observation("clean", surface_evidence)
+    elif len(nonzero) > 1:
+        code_surface = observation("mixed-surface", surface_evidence)
+    else:
+        code_surface = observation(f"{nonzero[0]}-surface", surface_evidence)
+
+    open_count = sum(gap.status == "open" for gap in gaps)
+    proved_count = len(gaps) - open_count
+    if not open_count:
+        accepted_frontier = observation("all-current-gaps-proved", f"{proved_count} accepted gap(s)")
+    elif latest_result == "active":
+        accepted_frontier = observation(
+            "active-open-frontier", f"{open_count} open gap(s); latest attempt is active"
+        )
+    else:
+        accepted_frontier = observation(
+            "open-frontier-without-latest-closure",
+            f"{open_count} open gap(s); latest result is {latest_result}",
+        )
+    return ChurnVector(
+        product_owner,
+        proof_depth,
+        artifact_identity,
+        attempt_novelty,
+        code_surface,
+        accepted_frontier,
+    )
 
 
 def tokenize(text: str) -> list[str]:
@@ -199,6 +346,7 @@ def build_report(
     claim: str,
     lineage: str | None = None,
 ) -> TrajectoryReport:
+    changed_paths = git_changed_paths(workspace)
     production_units, test_units = git_diff_units(workspace)
     with closing(readonly_connection(state)) as connection:
         lineage_id = infer_lineage(connection, lineage)
@@ -294,6 +442,8 @@ def build_report(
             """,
             (lineage_id, claim),
         ).fetchone()
+    latest_result = str(latest["attempt_terminal_kind"] or "active") if latest is not None else "none"
+    churn_vector = derive_churn_vector(reports, changed_paths, latest_result)
     return TrajectoryReport(
         lineage_id,
         claim,
@@ -301,7 +451,8 @@ def build_report(
         tuple(reports),
         str(latest["task_id"]) if latest is not None else None,
         str(latest["closure_gap_id"]) if latest is not None and latest["closure_gap_id"] else None,
-        str(latest["attempt_terminal_kind"] or "active") if latest is not None else "none",
+        latest_result,
+        churn_vector,
     )
 
 
@@ -334,6 +485,10 @@ def render_text(report: TrajectoryReport) -> str:
         lines.extend(["", "Shared nearest test units (not distinct coverage):"])
         for unit, gaps in repeated:
             lines.append(f"  {', '.join(gaps)} -> {unit}")
+    lines.extend(["", "Churn vector (advisory observations, not a score):"])
+    for name, value in asdict(report.churn_vector).items():
+        evidence = "; ".join(value["evidence"]) or "none"
+        lines.append(f"  {name.replace('_', ' ')}: {value['direction']} [{evidence}]")
     lines.extend(
         [
             "",

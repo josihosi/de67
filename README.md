@@ -66,6 +66,26 @@ mutation guards, workspace setup, supervisor, and cross-platform Codex runner ar
 an agent can install the `de67` folder into the active Codex skills directory without relying on a
 personal machine wrapper.
 
+## Optional integrations
+
+Optional integrations live under `integrations/` and are not core DE67 dependencies. Each package
+owns its transport-specific requirements, agent installation guidance, tests, and failure boundary.
+Core discussion, specification, supervision, clocks, and delivery must keep working when every
+integration is absent or broken.
+
+The OpenClaw Discord blocker adapter is in `integrations/openclaw_discord/`. It can relay one genuine
+blocked-only owner question and return one authenticated answer through a generic subprocess
+contract. It requires an explicitly configured [OpenClaw](https://docs.openclaw.ai/) installation
+and Discord channel; OpenClaw is never imported or required by core DE67.
+
+The read-only dashboard in `integrations/dashboard/` serves live DFS, ledger, clock, mutation, and
+process state without coordinator or model calls. It requires only Python. Loopback hosting works
+without Tailscale; [Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve) is the recommended
+optional route for authenticated home-network HTTPS. Installing, stopping, or breaking the
+dashboard must not affect ordinary DE67 work.
+
+![DE67 dashboard overview](integrations/dashboard/dashboard.png)
+
 ## Release and lab
 
 This repository is the publishable de67 release. Before enabling method mutation, users should
@@ -75,16 +95,36 @@ safe place to rewind a harmful change. The folder name is not authoritative; the
 its Git history are. Stable changes can then be promoted deliberately into a public release instead
 of turning every live experiment into an upstream change.
 
-## Attributions
+Release maintainers must follow `RELEASE_PROMOTION.md`. In particular, promote lab work by merging a
+reviewed candidate into the release repository while preserving release history and tags; never
+force-push or copy the lab worktree over the release repository.
 
-Phase de67 1 is based on the question-driven approach of
-[Jekudy's GrillMe skill](https://github.com/Jekudy/grillme-skill). Its WEC contract and de67's
-code-grounded specification, delivery, proof, deadlines, and controlled method mutation were
-designed for this skill.
+## Contributions and acknowledgements
 
-The read-only Phase de67 3 trajectory sidecar was inspired by
-[Slopo's](https://github.com/rafal-qa/slopo) semantic code-similarity approach. de67's implementation
-is independent and adapts vector proximity to DFS gaps, diffs, tests, and accepted evidence; it does
-not include Slopo code.
+- Josef Horvath directed the product, supplied the DE67 method and live CAOL proving ground, and
+  made the calls about what was useful versus bureaucracy.
+- OpenAI Codex, mostly GPT-5.6 Sol at light reasoning, implemented and integrated the current method,
+  optional OpenClaw adapter, dashboard, failure controls, and release packaging—with a suspicious
+  willingness to keep going forever.
+- [OpenClaw](https://docs.openclaw.ai/) provides the optional owner-messaging route used by the
+  Discord blocker adapter.
+- [Tailscale](https://tailscale.com/) provides the optional private-network and HTTPS route used by
+  the tested Mac-mini dashboard deployment.
+
+- The MSW kernel comes from [@aienginerd on X](https://x.com/aienginerd).
+- The imagination round comes from Josef Horvath.
+- Phase de67 1's question-driven flow is based on
+  [Jekudy's GrillMe skill](https://github.com/Jekudy/grillme-skill).
+- Phase de67 1 uses [Simplified Technical English](https://en.wikipedia.org/wiki/Simplified_Technical_English)
+  as a practical clarity influence for owner questions. de67 does not claim formal ASD-STE100
+  conformance.
+- The read-only Phase de67 3 trajectory sidecar was inspired by
+  [Slopo's](https://github.com/rafal-qa/slopo) semantic code-similarity approach. de67's independent
+  implementation adapts vector proximity to DFS gaps, diffs, tests, and accepted evidence; it does
+  not include Slopo code.
+- SolAdvisor also influenced de67's advisory approach to agent reasoning and review.
+
+The WEC contract and de67's code-grounded specification, delivery, proof, deadlines, and controlled
+method mutation were designed for this skill.
 
 de67 is licensed under [Apache License 2.0](LICENSE).

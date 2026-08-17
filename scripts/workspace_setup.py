@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -202,6 +203,35 @@ def _shell_path(path: Path) -> str:
     return shlex.quote(path.as_posix())
 
 
+def _same_file_content(left: Path, right: Path) -> bool:
+    if not left.is_file() or not right.is_file():
+        return False
+    left_digest = hashlib.sha256(left.read_bytes()).digest()
+    right_digest = hashlib.sha256(right.read_bytes()).digest()
+    return left_digest == right_digest
+
+
+def _equivalent_managed_hook(existing: str, interpreter: Path, script: Path) -> bool:
+    lines = existing.splitlines()
+    if len(lines) != 3 or lines[:2] != ["#!/bin/sh", MANAGED_HOOK_MARKER]:
+        return False
+    try:
+        command = shlex.split(lines[2], posix=True)
+    except ValueError:
+        return False
+    if len(command) != 8 or command[2:] != [
+        "push", "--workspace", "$PWD", "--hook", "||", ":"
+    ]:
+        return False
+    existing_interpreter = Path(command[0])
+    existing_script = Path(command[1])
+    try:
+        same_interpreter = existing_interpreter.samefile(interpreter)
+    except OSError:
+        same_interpreter = False
+    return same_interpreter and _same_file_content(existing_script, script)
+
+
 def _install_hook(workspace: Path) -> Path:
     hook = _hook_path(workspace)
     script = Path(__file__).resolve()
@@ -214,6 +244,8 @@ def _install_hook(workspace: Path) -> Path:
     if hook.exists():
         existing = hook.read_text(encoding="utf-8", errors="replace")
         if existing != hook_text:
+            if _equivalent_managed_hook(existing, Path(sys.executable), script):
+                return hook
             kind = (
                 "modified managed hook"
                 if MANAGED_HOOK_MARKER in existing

@@ -8,7 +8,10 @@ review.
 Read the exact working tree, affected DFS claim, current owner path, relevant tests, and current tool
 state. Choose the smallest necessary task. Exploration gets one learning goal; closure gets a known strategy,
 proof route, and finite frozen gaps. Name real dependencies and collision surfaces before parallel
-dispatch.
+dispatch. Treat uncommitted files as inheritable work. A missed commit or an ordinary overlapping
+edit is not an integrity breach by itself; preserve the useful tree, record any uncertain section,
+and let the next worker continue. Reserve integrity quarantine for false evidence or deliberate
+destruction of work that cannot be recovered.
 
 For a closure precondition that must be established before an authoritative product-time
 transition, record the current product time, the required endpoint, each known scheduled

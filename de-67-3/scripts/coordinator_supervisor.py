@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -16,11 +17,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Callable, Iterator, Mapping, Sequence
 
+from blocker_adapter import (
+    BlockerAdapterError,
+    BlockerReply,
+    SubprocessBlockerAdapter,
+    parse_adapter_command,
+    safe_wait_for_reply,
+)
 from deadline_harness import DeadlineError, DeadlineHarness
 
 
 RED_DFS_CLAIM = re.compile(r"^- \[ \] \N{LARGE RED CIRCLE} ", re.MULTILINE)
 ACTIVE_LEDGER_ITEM = re.compile(r"^- \[ \] ", re.MULTILINE)
+BLOCKED_LEDGER_ITEM = re.compile(r"^- Blocked: ", re.MULTILINE)
+BLOCKED_AUDIT_PREFIX = "supervisor audit blocked-only ledger sha256:"
 PHASE3_ROOT = Path(__file__).resolve().parents[1]
 METHOD_REPO_ROOT = PHASE3_ROOT.parent
 KERNEL_PATH = PHASE3_ROOT / "references" / "kernel.md"
@@ -65,6 +75,7 @@ class RestartState:
     generation: int | None
     expected_run_id: str | None
     run_id: str | None
+    reason: str | None
 
 
 @dataclass(frozen=True)
@@ -72,6 +83,7 @@ class ChildResult:
     run_id: str
     run_dir: Path
     exit_code: int
+    launched: bool
 
 
 @dataclass(frozen=True)
@@ -130,7 +142,7 @@ def _restart_state(summary: Mapping[str, object], lineage_id: str) -> RestartSta
         raise SupervisorError("Deadline state is bound to a different lineage")
     raw = summary.get("coordinator_restart")
     if raw is None:
-        return RestartState(False, None, None, None)
+        return RestartState(False, None, None, None, None)
     if not isinstance(raw, Mapping):
         raise SupervisorError("Coordinator restart state must be an object")
 
@@ -151,7 +163,10 @@ def _restart_state(summary: Mapping[str, object], lineage_id: str) -> RestartSta
         not isinstance(expected_run_id, str) or not expected_run_id.strip()
     ):
         raise SupervisorError("Claimed coordinator run id must be non-empty")
-    return RestartState(required, generation, expected_run_id, run_id)
+    reason = raw.get("reason")
+    if reason is not None and (not isinstance(reason, str) or not reason.strip()):
+        raise SupervisorError("Coordinator restart reason must be non-empty")
+    return RestartState(required, generation, expected_run_id, run_id, reason)
 
 
 def read_clock(state_path: Path, lineage_id: str) -> RestartState:
@@ -182,7 +197,6 @@ def wait_for_supervision_event(
     *,
     now: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
-    handled_signatures: set[str] | None = None,
 ) -> SupervisionEvent | None:
     """Wait without polling until durable clock state requires a successor."""
     with DeadlineHarness(state_path) as harness:
@@ -198,11 +212,6 @@ def wait_for_supervision_event(
         ]
         if pending_reviews or pending_mutations:
             signature = _gate_signature(pending_reviews, pending_mutations)
-            if handled_signatures is not None and signature in handled_signatures:
-                raise SupervisorError(
-                    "A coordinator returned without resolving supervision event "
-                    f"{signature}"
-                )
             requested = harness.request_coordinator_restart(
                 lineage_id,
                 "supervisor observed a persisted incident or mutation gate",
@@ -247,11 +256,6 @@ def wait_for_supervision_event(
         if not pending_reviews and not pending_mutations:
             return None
         signature = _gate_signature(pending_reviews, pending_mutations)
-        if handled_signatures is not None and signature in handled_signatures:
-            raise SupervisorError(
-                "A coordinator returned without resolving supervision event "
-                f"{signature}"
-            )
         requested = harness.request_coordinator_restart(
             lineage_id,
             f"claim {claim_id} reached its immutable deadline",
@@ -309,6 +313,76 @@ def work_is_complete(
     return True
 
 
+def ledger_has_active_work(workspace: Path) -> bool:
+    """Treat every strict active-ledger item as immediately admissible work."""
+    ledger = workspace / ".de67" / "work-ledger.md"
+    return ledger.is_file() and ACTIVE_LEDGER_ITEM.search(
+        ledger.read_text(encoding="utf-8")
+    ) is not None
+
+
+def ledger_has_only_blocked_work(workspace: Path) -> bool:
+    """Stop when the ledger contains blockers but no executable item."""
+
+    ledger = workspace / ".de67" / "work-ledger.md"
+    if not ledger.is_file():
+        return False
+    text = ledger.read_text(encoding="utf-8")
+    return (
+        ACTIVE_LEDGER_ITEM.search(text) is None
+        and BLOCKED_LEDGER_ITEM.search(text) is not None
+    )
+
+
+def blocked_ledger_audit_reason(workspace: Path) -> str | None:
+    """Name one durable fresh-coordinator audit for the exact blocked ledger."""
+
+    ledger = workspace / ".de67" / "work-ledger.md"
+    if not ledger_has_only_blocked_work(workspace):
+        return None
+    digest = hashlib.sha256(ledger.read_bytes()).hexdigest()
+    return f"{BLOCKED_AUDIT_PREFIX}{digest}"
+
+
+def blocked_ledger_was_audited(
+    audit_reason: str,
+    restart: RestartState,
+) -> bool:
+    """Stop only after one acknowledged coordinator saw this exact blocker set."""
+
+    return (
+        not restart.required
+        and restart.run_id is not None
+        and restart.reason == audit_reason
+    )
+
+
+def blocked_work_is_quiescent(state_path: Path, lineage_id: str) -> bool:
+    """Require a confirmed blocker to leave no ticking task or live gate."""
+
+    with DeadlineHarness(state_path) as harness:
+        summary = harness.list_tasks()
+    return not any(
+        task.get("state") == "running" for task in summary["tasks"]
+    ) and not any(
+        summary.get(key)
+        for key in (
+            "pending_incident_reviews",
+            "pending_deadline_mutations",
+            "pending_integrity_mutations",
+            "claim_clock_migration_conflicts",
+        )
+    )
+
+
+def dfs_has_open_work(workspace: Path) -> bool:
+    """Return whether the frozen DFS still has a red product claim."""
+    dfs = workspace / ".de67" / "DFS.md"
+    return dfs.is_file() and RED_DFS_CLAIM.search(
+        dfs.read_text(encoding="utf-8")
+    ) is not None
+
+
 def coordinator_prompt(
     workspace: Path,
     state_path: Path,
@@ -329,6 +403,15 @@ def coordinator_prompt(
         "Read current code and Git state plus only relevant durable .de67 state; do not read predecessor logs or narrative handoffs.",
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every deadline-harness command; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
+        "If .de67/state/blocker-adapter-state.json contains an authenticated owner reply for the "
+        "current blocked ledger, treat its exact reply text as durable owner authority. Consume "
+        "it by restoring executable work or by writing a materially changed blocker.",
+        "If the ledger is blocked-only, audit whether each blocker is still genuine. Restore "
+        "recoverable work; otherwise terminalize every live attempt with honest blocker evidence "
+        "before leaving the exact blocked ledger unchanged.",
+        "Test tooling, fixtures, scenarios, disposable identities or coordinates, profiles, "
+        "registry database rows, and exact test bindings inside the frozen DFS are ordinary "
+        "executable work. Never ask the owner or an external contact adapter to choose them.",
     ]
     if generation is not None:
         lines.append(
@@ -394,6 +477,9 @@ def run_child(
             "DE67_WORKSPACE": str(workspace),
             "DE67_METHOD_REPO": str(METHOD_REPO_ROOT.resolve()),
             "DE67_SUPERVISOR_PID": str(os.getpid()),
+            "DE67_BLOCKER_ADAPTER_STATE": str(
+                workspace / ".de67" / "state" / "blocker-adapter-state.json"
+            ),
         }
     )
     if generation is None:
@@ -438,7 +524,7 @@ def run_child(
         )
         _write(run_dir / "exit_code.txt", "1\n")
         _write(run_dir / "status.txt", "FAILED\n")
-        return ChildResult(run_id, run_dir, 1)
+        return ChildResult(run_id, run_dir, 1, False)
     exit_code = 1
     try:
         _write(run_dir / "pid.txt", f"{process.pid}\n")
@@ -461,7 +547,7 @@ def run_child(
 
     _write(run_dir / "exit_code.txt", f"{exit_code}\n")
     _write(run_dir / "status.txt", "DONE\n" if exit_code == 0 else "FAILED\n")
-    return ChildResult(run_id, run_dir, exit_code)
+    return ChildResult(run_id, run_dir, exit_code, True)
 
 
 def _run_supervisor_locked(
@@ -474,6 +560,7 @@ def _run_supervisor_locked(
     extra_env: Mapping[str, str] | None = None,
     run_id_factory: Callable[[int | None], str] = _default_run_id,
     event_waiter: Callable[[Path, str], SupervisionEvent | None] | None = None,
+    blocker_waiter: Callable[[Path, str], BlockerReply | None] | None = None,
 ) -> int:
     state = Path(state_path).expanduser().resolve()
     workdir = Path(workspace).expanduser().resolve()
@@ -488,16 +575,44 @@ def _run_supervisor_locked(
 
     require_canonical_method_checkout()
 
-    if work_is_complete(workdir, state, lineage_id):
+    restart = read_clock(state, lineage_id)
+    blocked_audit = blocked_ledger_audit_reason(workdir)
+    if blocked_audit is not None:
+        if (
+            blocked_ledger_was_audited(blocked_audit, restart)
+            and blocked_work_is_quiescent(state, lineage_id)
+        ):
+            if blocker_waiter is None:
+                return 0
+            reply = blocker_waiter(workspace=workdir, lineage_id=lineage_id)
+            if reply is None:
+                return 0
+            with DeadlineHarness(state) as harness:
+                requested = harness.request_coordinator_restart(
+                    lineage_id,
+                    f"owner replied through blocker adapter {reply.reply_message_id}",
+                )["coordinator_restart"]
+            restart = _restart_state(
+                {"lineage_id": lineage_id, "coordinator_restart": requested},
+                lineage_id,
+            )
+        if not restart.required:
+            with DeadlineHarness(state) as harness:
+                requested = harness.request_coordinator_restart(
+                    lineage_id,
+                    blocked_audit,
+                )["coordinator_restart"]
+            restart = _restart_state(
+                {"lineage_id": lineage_id, "coordinator_restart": requested},
+                lineage_id,
+            )
+    elif work_is_complete(workdir, state, lineage_id):
         return 0
 
     records.mkdir(parents=True, exist_ok=True)
 
-    restart = read_clock(state, lineage_id)
     generation = restart.generation if restart.required else None
     attempted_generations: set[int] = set()
-    handled_events: set[str] = set()
-
     while True:
         if generation is not None:
             if generation in attempted_generations:
@@ -529,6 +644,11 @@ def _run_supervisor_locked(
             extra_env=extra_env,
         )
 
+        # A runner that could not be launched is a concrete environment blocker,
+        # not a coordinator result that another coordinator can repair.
+        if not result.launched:
+            return result.exit_code if result.exit_code > 0 else 1
+
         # This is the only clock read after this child exits. There is no polling loop.
         after = read_clock(state, lineage_id)
 
@@ -553,30 +673,56 @@ def _run_supervisor_locked(
                 _mark_protocol_failure(result, "Coordinator restart generation moved backwards")
                 return 1
 
-        # A durable baton outranks the runner's process exit convention. Codex may
-        # return a non-zero code after coherently requesting its successor; the
-        # clock-backed generation is the authoritative handover signal.
-        if result.exit_code != 0 and not after.required:
-            return result.exit_code if result.exit_code > 0 else 1
+        blocked_audit = blocked_ledger_audit_reason(workdir)
+        if blocked_audit is not None and blocked_work_is_quiescent(
+            state, lineage_id
+        ):
+            if blocker_waiter is None:
+                return 0
+            reply = blocker_waiter(workspace=workdir, lineage_id=lineage_id)
+            if reply is None:
+                return 0
+            with DeadlineHarness(state) as harness:
+                requested = harness.request_coordinator_restart(
+                    lineage_id,
+                    f"owner replied through blocker adapter {reply.reply_message_id}",
+                )["coordinator_restart"]
+            after = _restart_state(
+                {"lineage_id": lineage_id, "coordinator_restart": requested},
+                lineage_id,
+            )
         if work_is_complete(workdir, state, lineage_id):
             return 0
+        if not after.required and ledger_has_active_work(workdir):
+            with DeadlineHarness(state) as harness:
+                requested = harness.request_coordinator_restart(
+                    lineage_id,
+                    "supervisor observed active ledger work after coordinator exit",
+                )["coordinator_restart"]
+            after = _restart_state(
+                {"lineage_id": lineage_id, "coordinator_restart": requested},
+                lineage_id,
+            )
+        elif (
+            not after.required
+            and dfs_has_open_work(workdir)
+        ):
+            with DeadlineHarness(state) as harness:
+                requested = harness.request_coordinator_restart(
+                    lineage_id,
+                    "supervisor observed an empty ledger with open DFS work",
+                )["coordinator_restart"]
+            after = _restart_state(
+                {"lineage_id": lineage_id, "coordinator_restart": requested},
+                lineage_id,
+            )
         if not after.required:
             if event_waiter is None:
-                event = wait_for_supervision_event(
-                    state,
-                    lineage_id,
-                    handled_signatures=handled_events,
-                )
+                event = wait_for_supervision_event(state, lineage_id)
             else:
                 event = wait_for_event(state, lineage_id)
             if event is None:
-                return 0
-            if event.signature in handled_events:
-                raise SupervisorError(
-                    "A coordinator returned without resolving supervision event "
-                    f"{event.signature}"
-                )
-            handled_events.add(event.signature)
+                return result.exit_code if result.exit_code > 0 else 0
             after = event.restart
         if after.generation is None:
             _mark_protocol_failure(result, "Required coordinator restart lacks a generation")
@@ -601,6 +747,7 @@ def run_supervisor(
     extra_env: Mapping[str, str] | None = None,
     run_id_factory: Callable[[int | None], str] = _default_run_id,
     event_waiter: Callable[[Path, str], SupervisionEvent | None] | None = None,
+    blocker_waiter: Callable[[Path, str], BlockerReply | None] | None = None,
 ) -> int:
     state = Path(state_path).expanduser().resolve()
     with _supervisor_lock(state):
@@ -613,6 +760,7 @@ def run_supervisor(
             extra_env=extra_env,
             run_id_factory=run_id_factory,
             event_waiter=event_waiter,
+            blocker_waiter=blocker_waiter,
         )
 
 
@@ -633,12 +781,31 @@ def build_parser() -> argparse.ArgumentParser:
         nargs=argparse.REMAINDER,
         help="Runner command; place this option last",
     )
+    parser.add_argument(
+        "--blocker-adapter-command-json",
+        help=(
+            "Optional shell-independent JSON argument array for an external owner-contact "
+            "adapter; the supervisor appends the wait/workspace/lineage arguments"
+        ),
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     try:
+        blocker_adapter = None
+        if arguments.blocker_adapter_command_json is not None:
+            try:
+                blocker_adapter = SubprocessBlockerAdapter(
+                    parse_adapter_command(arguments.blocker_adapter_command_json)
+                )
+            except BlockerAdapterError as error:
+                print(
+                    "coordinator supervisor: optional blocker adapter disabled: "
+                    f"{error}",
+                    file=sys.stderr,
+                )
         return run_supervisor(
             arguments.state,
             arguments.lineage,
@@ -651,6 +818,17 @@ def main(argv: list[str] | None = None) -> int:
                     arguments.coordinator_reasoning_effort
                 ),
             },
+            blocker_waiter=(
+                (
+                    lambda *, workspace, lineage_id: safe_wait_for_reply(
+                        blocker_adapter,
+                        workspace=workspace,
+                        lineage_id=lineage_id,
+                    )
+                )
+                if blocker_adapter is not None
+                else None
+            ),
         )
     except (DeadlineError, SupervisorError, OSError) as error:
         print(f"coordinator supervisor: {error}", file=sys.stderr)

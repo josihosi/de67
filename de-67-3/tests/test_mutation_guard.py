@@ -287,6 +287,66 @@ class MutationGuardTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_guidelines_cli_uses_current_generation_incident(self) -> None:
+        state = self.incident_state()
+        connection = sqlite3.connect(state)
+        try:
+            connection.execute(
+                """
+                INSERT INTO claim_deadline_generations (
+                    lineage_id, claim_id, generation, estimate_seconds,
+                    started_at, deadline_at
+                ) VALUES ('project', 'R-001', 2, 1, 10, 11)
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO tasks (
+                    lineage_id, task_id, claim_id, estimate_seconds,
+                    started_at, deadline_at, deadline_generation,
+                    terminal_at, attempt_terminal_at, attempt_terminal_kind
+                ) VALUES (
+                    'project', 'miss-current', 'R-001', 1,
+                    10, 11, 2, 12, 12, 'finding'
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO claim_deadline_generation_incidents (
+                    lineage_id, claim_id, generation, source_task_id,
+                    recorded_at, short_verdict, long_detail, reviewed_at
+                ) VALUES (
+                    'project', 'R-001', 2, 'miss-current',
+                    12, 'current miss',
+                    'Independent diagnosis for the current generation.', 13
+                )
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        self.mutate_task()
+
+        result, output = self.run_guidelines_cli(
+            state, "miss-current", "deadline_miss"
+        )
+
+        self.assertEqual(result, 0, output)
+        connection = sqlite3.connect(state)
+        connection.row_factory = sqlite3.Row
+        try:
+            receipt = connection.execute(
+                """
+                SELECT task_id, claim_id FROM normal_method_receipts
+                WHERE task_id = 'miss-current'
+                """
+            ).fetchone()
+            self.assertIsNotNone(receipt)
+            self.assertEqual(receipt["claim_id"], "R-001")
+        finally:
+            connection.close()
+
     def test_guidelines_cli_derives_integrity_scope(self) -> None:
         state = self.incident_state()
         self.mutate_task()

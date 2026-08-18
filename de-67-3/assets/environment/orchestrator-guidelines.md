@@ -121,6 +121,15 @@ same vector, not from a next-gap or downstream comparator. Give the dispatched e
 slice and its durable disposition their own evidence-derived components and add them to every known
 positive downstream component; leave unknown components explicit, and never call that lower bound
 whole-claim fit.
+Before that first `start`, consume every already-terminal predecessor result into its required gap
+close, material revision, or exploration reopen, then build the vector from the resulting current
+gaps. Do not dispatch a task merely to restate or terminalize evidence that is already durable;
+coordinator-owned result consumption is not estimate discovery and supplies no route-duration
+estimate. A measured predecessor duration belongs only to the exact causal route it timed. It may
+populate that named unchanged component, but it cannot estimate a newly exposed repair, its proof or
+disposition, later open gaps, or whole-claim fit. If that duration exhausts the proposed generation
+estimate while any necessary positive component remains outside it, the known lower bound already
+disproves that estimate even when the omitted component is still unmeasured.
 Any absent component leaves on-time fit unproved. A fresh generation or individually fitting
 next-gap attempts do not prove whole-claim fit. While the vector is incomplete, only an
 independently terminal estimate-discovery slice whose result is necessary to complete that vector

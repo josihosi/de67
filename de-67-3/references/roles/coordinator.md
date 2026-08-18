@@ -159,17 +159,17 @@ every exact incident and preserve the same item and attempt accounting.
 
 Choose Luna by default for ordinary implementation, builds, focused tests, harness execution, and
 bounded debugging with a known route. Choose Terra when the task requires ambiguous ownership,
-difficult causal diagnosis, risky cross-cutting work, or a demanding exploration goal. Do not count
-dispatches or enforce a model ratio. Reuse a relevant worker or spawn another according to task fit,
-evidence, context health, and coordination cost. Only a new worker requires `fork_turns="none"` and
-a self-contained brief.
+difficult causal diagnosis, risky cross-cutting work, or a demanding exploration goal. Choose
+effort from uncertainty, not duration: `low` for a known mechanical route, `medium` for ordinary
+work, `high` for substantial research or causal diagnosis, and `max` only for genuinely open-ended
+research. Never use Terra at `max`. Do not count dispatches or enforce a model or effort ratio. Reuse
+a relevant worker or spawn another according to task fit, evidence, context health, and coordination
+cost. Only a new worker requires `fork_turns="none"` and a self-contained brief.
 
 The selected deadline, integrity, and ordinary random mutation reviewer is a fresh `gpt-5.6-sol`
 worker at `xhigh`. The eligible rare universal reviewer remains `gpt-5.6-sol` at `ultra`. These
 does not broaden a normal mutation's protected surface or turn an unavailable rare trigger into an
-eligible one; role authority and guards remain unchanged. Never use either reserved pair for an
-ordinary worker. Eligible ordinary Sol is an exceptional task-fit choice and uses a Phase-2-proved
-effort below `xhigh`.
+eligible one; role authority and guards remain unchanged. Never use Sol for ordinary work.
 
 Bind the first immutable deadline generation at actual dispatch and record every attempt:
 

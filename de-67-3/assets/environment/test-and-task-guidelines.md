@@ -62,9 +62,11 @@ state without weakening downstream authority.
 Use a Phase-2-proved Luna profile by default for ordinary implementation, builds, focused tests,
 harness execution, and bounded debugging with a known route. Use Terra when current evidence makes
 ambiguous ownership, difficult causal diagnosis, risky cross-cutting work, or a demanding
-exploration goal the task. Eligible non-ultra Sol remains an exceptional task-fit choice. The exact
-`gpt-5.6-sol` / `xhigh` and `gpt-5.6-sol` / `ultra` pairs are reserved exclusively for mutation
-roles, never ordinary work. Give one self-contained brief with validated DFS slices; workers do not
+exploration goal the task. Choose effort from uncertainty, not duration: `low` for a known
+mechanical route, `medium` for ordinary work, `high` for substantial research or causal diagnosis,
+and `max` only for genuinely open-ended research. Never use Terra at `max`; use Luna or revise the
+task boundary. Sol is not an ordinary worker: use `gpt-5.6-sol` at `xhigh` for mutation review and
+at `ultra` only for the eligible rare universal mutation. Give one self-contained brief with validated DFS slices; workers do not
 rediscover the index or preload the DFS. Do not count model selections, enforce a ratio, or create a
 separate justification artifact. Choose, reuse, or replace workers from task fit, evidence, context,
 and coordination cost. Optional code mapping is not a ritual, and worker choice is not a task result.

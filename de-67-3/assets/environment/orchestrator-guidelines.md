@@ -126,8 +126,8 @@ If the complete critical-path estimate exceeds the remaining time, no prerequisi
 product, or proof slice is on-time merely because it separately fits and is independently terminal.
 Use the same `deadline-miss` command. The next generation may continue the necessary work with a
 new start and deadline. A cached comparison from an earlier dispatch is not current evidence.
-Choose model and effort from the Phase-2-proved roster without a rigid task matrix. Luna uses the
-trusted project default with an explicit proved effort; Terra is selected explicitly. Receive
+Choose Luna or Terra and its effort from the Phase-2-proved roster and the worker-selection rules.
+Never dispatch Terra at `max` or Sol as an ordinary worker. Receive
 progress and final results through the native parent/child channel; clarification is allowed while
 the task is active without loading its full transcript.
 Avoid permits, transcript ingestion, hash maps, or field-complete handoff schemas unless a concrete

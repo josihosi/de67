@@ -1911,18 +1911,14 @@ class MutationGuardTests(unittest.TestCase):
         self.assertNotIn("terminal task retires", combined)
         self.assertNotIn("worker retirement", combined)
 
-    def test_sol_xhigh_and_ultra_are_reserved_for_mutation_roles(self) -> None:
-        normalized_task_guidance = " ".join(TASK_GUIDANCE.split())
-        self.assertIn(
-            "exact `gpt-5.6-sol` / `xhigh` and `gpt-5.6-sol` / `ultra` pairs",
-            normalized_task_guidance,
-        )
-        self.assertIn("reserved exclusively for mutation", TASK_GUIDANCE)
-        self.assertIn("roles, never ordinary work", TASK_GUIDANCE)
-        self.assertIn("Never use either reserved pair", COORDINATOR_TEXT)
-        self.assertIn("`xhigh` and `ultra` pairs are mutation-only", WORKER_TEXT)
+    def test_worker_model_guidance_reserves_sol_without_a_worker_gate(self) -> None:
+        self.assertIn("Sol is not an ordinary worker", TASK_GUIDANCE)
+        self.assertIn("Never use Sol for ordinary work", COORDINATOR_TEXT)
+        self.assertIn("Sol is mutation-only", WORKER_TEXT)
         self.assertIn("Luna is the default ordinary worker", WORKER_TEXT)
-        self.assertIn("Do not count model selections or enforce a ratio", WORKER_TEXT)
+        self.assertIn("dispatch guidelines, not worker-side gates", WORKER_TEXT)
+        self.assertIn("does not stop ordinary DE67 work", WORKER_TEXT)
+        self.assertNotIn("stop before acting", WORKER_TEXT)
         self.assertIn("Choose Luna by default", COORDINATOR_TEXT)
         self.assertIn("Use Terra when current evidence makes", TASK_GUIDANCE)
 

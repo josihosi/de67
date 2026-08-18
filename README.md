@@ -75,13 +75,13 @@ than routine implementation.
 | Phase 1 discussion owner | Clarifies the idea and writes the WEC. | Current Codex agent; no fixed model |
 | Phase 2 specification owner | Inspects the repository and freezes the DFS. | GPT-5.6 Sol at `high` |
 | Coordinator | Routes the ledger, workers, evidence, and blockers. | GPT-5.6 Sol at `low` |
-| Ordinary worker | Implements, investigates, builds, or tests one bounded task. | Luna by default; Terra for difficult diagnosis or risky cross-cutting work; eligible non-ultra Sol exceptionally |
+| Ordinary worker | Implements, investigates, builds, or tests one bounded task. | Luna by default; Terra for difficult diagnosis or risky cross-cutting work; never Terra/`max`; no Sol |
 | Deadline, integrity, or random mutator | Independently diagnoses failure and proposes a guarded method change. | Fresh GPT-5.6 Sol at `xhigh` |
 | Rare universal mutator | Reviews the whole method after the exact rare trigger. | Fresh GPT-5.6 Sol at `ultra` |
 
 This is the shipped roster, not a claim that every installation needs the same price-performance
-choice forever. A user can deliberately use a cheaper roster, such as a Terra coordinator or Terra
-mutator. Make that change in the writable de67 lab, prove the selected model and effort, and update
+choice forever. A user can deliberately use a cheaper roster, such as a Terra coordinator. Make
+that change in the writable de67 lab, prove the selected model and effort, and update
 the matching guidance, guards, and tests together. A different model changes cost and capability;
 it does not expand a role's authority or weaken the evidence required for acceptance.
 

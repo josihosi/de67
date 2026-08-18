@@ -11,11 +11,11 @@ W_i = (mode, claim, item clock, attempt id, question or gaps, surface, proof rou
 
 Luna is the default ordinary worker for implementation, builds, focused tests, harness execution,
 and bounded debugging with a known route. Terra is for ambiguous ownership, difficult causal
-diagnosis, risky cross-cutting work, or a demanding exploration goal. Eligible non-ultra Sol is an
-exceptional task-fit choice. Do not count model selections or enforce a ratio. The exact
-`gpt-5.6-sol` / `xhigh` and `ultra` pairs are mutation-only. If dispatched under either pair for
-exploration, implementation, build, test, debug, or operation work, stop before acting and return
-the role mismatch to the coordinator.
+diagnosis, risky cross-cutting work, or a demanding exploration goal. Choose effort from uncertainty,
+not duration: `low` for a known mechanical route, `medium` for ordinary work, `high` for substantial
+research or causal diagnosis, and `max` only for genuinely open-ended research. Never use Terra at
+`max`. Sol is mutation-only. These are dispatch guidelines, not worker-side gates. A mismatched
+dispatch does not stop ordinary DE67 work. Do not count model or effort selections or enforce a ratio.
 
 Read the shared `references/msw-kernel.md` from the active DE-67 method checkout completely before
 acting. Execute it exactly as written. It is a verbatim foundation; do not paraphrase, summarize,

@@ -22,6 +22,7 @@ from deadline_harness import (  # noqa: E402
     main,
     method_tree_digest,
     protected_method_digest,
+    workspace_method_digest,
 )
 
 
@@ -112,6 +113,77 @@ class DeadlineHarnessTests(unittest.TestCase):
         )
         target.connection.commit()
         return receipt_id
+
+    def test_workspace_local_guideline_candidate_can_retire_macro_mutation(self) -> None:
+        self.harness.close()
+        workspace = Path(self.temporary.name) / "workspace"
+        state_path = workspace / ".de67" / "state" / "deadlines.sqlite3"
+        environment = workspace / ".de67"
+        environment.mkdir(parents=True)
+        packaged = Path(__file__).resolve().parents[1] / "assets" / "environment"
+        for name in ("orchestrator-guidelines.md", "test-and-task-guidelines.md"):
+            content = (packaged / name).read_text(encoding="utf-8")
+            if name == "orchestrator-guidelines.md":
+                content += "\nWorkspace-local guarded rule.\n"
+            (environment / name).write_text(content, encoding="utf-8")
+
+        with DeadlineHarness(state_path) as harness:
+            harness.start_task("project", "late", "R-LATE", 1, now=0)
+            harness.expire_task("project", "late", now=2)
+            harness.diagnose_claim_deadline(
+                "project", "R-LATE", "late", "The item clock expired.", now=3
+            )
+            harness.resolve_deadline_mutation(
+                "project", "R-LATE", "micro", "finite recovery", now=4
+            )
+            candidate_digest = workspace_method_digest(state_path.resolve())
+            self.assertIsNotNone(candidate_digest)
+            changed_paths = ["assets/environment/orchestrator-guidelines.md"]
+            contract = {
+                "lineage_id": "project",
+                "task_id": "late",
+                "claim_id": "R-LATE",
+                "incident_kind": "deadline_miss",
+                "candidate_digest": candidate_digest,
+                "changed_paths": changed_paths,
+                "protected_baseline_digest": protected_method_digest(),
+                "live_tree_digest": method_tree_digest(),
+            }
+            receipt_id = hashlib.sha256(
+                json.dumps(contract, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest()
+            harness.connection.execute(
+                """
+                INSERT INTO normal_method_receipts (
+                    receipt_id, lineage_id, task_id, claim_id, incident_kind,
+                    validated_at, candidate_digest, changed_paths,
+                    protected_baseline_digest, live_tree_digest
+                ) VALUES (?, 'project', 'late', 'R-LATE', 'deadline_miss',
+                          4, ?, ?, ?, ?)
+                """,
+                (
+                    receipt_id,
+                    candidate_digest,
+                    json.dumps(changed_paths, separators=(",", ":")),
+                    protected_method_digest(),
+                    method_tree_digest(),
+                ),
+            )
+            harness.connection.commit()
+
+            resolved = harness.resolve_deadline_mutation(
+                "project",
+                "R-LATE",
+                "macro",
+                "workspace-local method changed",
+                receipt_id=receipt_id,
+                now=5,
+            )
+
+            self.assertEqual(resolved["pending_components"], [])
+            self.assertEqual(resolved["receipt_id"], receipt_id)
 
     def resolve_deadline_macro(
         self, claim_id: str, evidence: str, *, now: float

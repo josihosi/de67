@@ -35,6 +35,10 @@ NORMAL_METHOD_PROTECTED_FILES = (
     "tests/test_deadline_harness.py",
     "tests/test_mutation_guard.py",
 )
+WORKSPACE_METHOD_GUIDELINE_FILES = (
+    "orchestrator-guidelines.md",
+    "test-and-task-guidelines.md",
+)
 ACTIVE_SKILL_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -83,6 +87,29 @@ def protected_method_digest(root: Path = ACTIVE_SKILL_ROOT) -> str:
             "Active method tree is missing protected files: " + ", ".join(missing)
         )
     return _files_digest(protected)
+
+
+def workspace_method_digest(
+    state_path: Path | None, root: Path = ACTIVE_SKILL_ROOT
+) -> str | None:
+    """Project the active workspace guidelines onto the installed method tree."""
+
+    if (
+        state_path is None
+        or state_path.parent.name != "state"
+        or state_path.parent.parent.name != ".de67"
+    ):
+        return None
+    environment = state_path.parent.parent
+    guideline_paths = {
+        name: environment / name for name in WORKSPACE_METHOD_GUIDELINE_FILES
+    }
+    if any(not path.is_file() for path in guideline_paths.values()):
+        return None
+    files = _method_files(root)
+    for name, path in guideline_paths.items():
+        files[f"assets/environment/{name}"] = path.read_bytes()
+    return _files_digest(files)
 
 
 class DeadlineError(RuntimeError):
@@ -4919,10 +4946,13 @@ class DeadlineHarness:
         if receipt_id != expected_id:
             raise DeadlineError("Method receipt digest does not match its contract")
 
-        current_tree_digest = method_tree_digest()
-        if current_tree_digest != receipt["candidate_digest"]:
+        candidate_digests = {
+            method_tree_digest(),
+            workspace_method_digest(self.state_path),
+        }
+        if receipt["candidate_digest"] not in candidate_digests:
             raise DeadlineError(
-                "Method receipt candidate is not the active live Phase-3 tree"
+                "Method receipt candidate is not the active published or workspace-local Phase-3 tree"
             )
         if protected_method_digest() != receipt["protected_baseline_digest"]:
             raise DeadlineError(

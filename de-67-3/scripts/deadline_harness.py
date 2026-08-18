@@ -2745,13 +2745,18 @@ class DeadlineHarness:
         return self._incident_result(row, recorded=True)
 
     def _record_miss_if_due(
-        self, task: sqlite3.Row, now: float, *, completion_invalid: bool = False
+        self,
+        task: sqlite3.Row,
+        now: float,
+        *,
+        completion_invalid: bool = False,
+        forced: bool = False,
     ) -> dict[str, Any] | None:
         claim = self._task_claim(task["lineage_id"], task["task_id"])
         accepted = self._latest_valid_acceptance(
             str(task["lineage_id"]), str(task["claim_id"])
         )
-        missed = now >= claim["deadline_at"] and (
+        missed = (forced or now >= claim["deadline_at"]) and (
             completion_invalid
             or task["integrity_breached_at"] is not None
             or accepted is None
@@ -3769,6 +3774,51 @@ class DeadlineHarness:
                 "claim_id": claim_id,
                 "checked_at": checked_at,
                 "deadline_at": self._claim(lineage_id, claim_id)["deadline_at"],
+                "mutation_pending": self._deadline_mutation_pending(
+                    lineage_id, claim_id
+                ),
+                "random_mutation": self._random_mutation_status(lineage_id),
+            }
+            self.connection.commit()
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def miss_claim_deadline(
+        self, lineage_id: str, claim_id: str, *, now: float | None = None
+    ) -> dict[str, Any]:
+        """End the current generation through its ordinary deadline-miss route."""
+
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        claim_id = self._identity(claim_id, "Claim id")
+        recorded_at = self._now(now)
+        self._begin()
+        try:
+            claim = self._claim(lineage_id, claim_id)
+            task = self.connection.execute(
+                """
+                SELECT * FROM tasks
+                WHERE lineage_id = ? AND claim_id = ?
+                  AND deadline_generation = ?
+                ORDER BY started_at DESC, task_id DESC
+                LIMIT 1
+                """,
+                (lineage_id, claim_id, claim["deadline_generation"]),
+            ).fetchone()
+            if task is None:
+                raise DeadlineError(
+                    "Claim has no current-generation worker attempt to anchor its miss"
+                )
+            accepted = self._latest_valid_acceptance(lineage_id, claim_id)
+            if accepted is not None and accepted["accepted_at"] < claim["deadline_at"]:
+                raise DeadlineError("An accepted claim cannot miss its deadline")
+            incident = self._record_miss_if_due(task, recorded_at, forced=True)
+            result = {
+                "incident": incident,
+                "claim_id": claim_id,
+                "recorded_at": recorded_at,
+                "deadline_at": claim["deadline_at"],
                 "mutation_pending": self._deadline_mutation_pending(
                     lineage_id, claim_id
                 ),
@@ -6041,6 +6091,14 @@ def build_parser() -> argparse.ArgumentParser:
     expire = commands.add_parser("expire", help="Record a due miss once")
     add_task_identity_flags(expire)
 
+    deadline_miss = commands.add_parser(
+        "deadline-miss",
+        help="End the current claim generation through its ordinary deadline-miss route",
+    )
+    deadline_miss.add_argument("--state", dest="command_state")
+    deadline_miss.add_argument("--lineage", required=True)
+    deadline_miss.add_argument("--claim", required=True)
+
     complete = commands.add_parser(
         "complete", help="Terminalize one attempt with completion evidence"
     )
@@ -6315,6 +6373,10 @@ def main(argv: list[str] | None = None) -> int:
                     result = harness.status_task(arguments.lineage, arguments.task)
                 elif arguments.command == "expire":
                     result = harness.expire_task(arguments.lineage, arguments.task)
+                elif arguments.command == "deadline-miss":
+                    result = harness.miss_claim_deadline(
+                        arguments.lineage, arguments.claim
+                    )
                 elif arguments.command == "list":
                     result = harness.coordinator_view()
                 elif arguments.command == "startup-view":

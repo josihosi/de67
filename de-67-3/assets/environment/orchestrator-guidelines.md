@@ -120,11 +120,12 @@ may proceed as on-time work; all other continuation is honest late. Once the vec
 must fit before any on-time closure dispatch.
 The sum of known positive components is already an evidence-derived lower bound while the vector is
 incomplete. If that lower bound exceeds current remaining item seconds, fit is disproved:
-end the cycle through the existing deadline-miss route. Do not add another deadline status.
+run `deadline_harness.py deadline-miss --lineage PROJECT --claim CLAIM` to end the generation
+through the existing deadline-miss route. Do not wait for wall time or add another deadline status.
 If the complete critical-path estimate exceeds the remaining time, no prerequisite, repair,
 product, or proof slice is on-time merely because it separately fits and is independently terminal.
-End the cycle through the same deadline-miss route. The next generation may continue the necessary
-work with a new start and deadline. A cached comparison from an earlier dispatch is not current evidence.
+Use the same `deadline-miss` command. The next generation may continue the necessary work with a
+new start and deadline. A cached comparison from an earlier dispatch is not current evidence.
 Choose model and effort from the Phase-2-proved roster without a rigid task matrix. Luna uses the
 trusted project default with an explicit proved effort; Terra is selected explicitly. Receive
 progress and final results through the native parent/child channel; clarification is allowed while

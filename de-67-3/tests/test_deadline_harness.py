@@ -318,6 +318,22 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertFalse(repeated["incident"]["recorded"])
         self.assertEqual(repeated["status"]["cumulative_miss_units"], 1)
 
+    def test_coordinator_can_end_generation_as_ordinary_deadline_miss(self) -> None:
+        self.harness.start_task("project", "task", "R-1", 100, now=100)
+
+        first = self.harness.miss_claim_deadline("project", "R-1", now=110)
+        repeated = self.harness.miss_claim_deadline("project", "R-1", now=120)
+
+        self.assertTrue(first["incident"]["recorded"])
+        self.assertEqual(first["deadline_at"], 200)
+        self.assertTrue(first["mutation_pending"])
+        self.assertFalse(repeated["incident"]["recorded"])
+        self.assertEqual(repeated["deadline_at"], 200)
+        self.assertEqual(
+            self.harness.coordinator_view(now=120)["pending_incident_reviews"],
+            [{"claim_id": "R-1", "task_id": "task", "kind": "deadline_miss"}],
+        )
+
     def test_late_completion_is_accepted_without_erasing_miss(self) -> None:
         self.harness.start_task("project", "task", "R-1", 10, now=100)
 
@@ -3485,6 +3501,9 @@ class DeadlineHarnessTests(unittest.TestCase):
             "diagnose-claim-deadline": [
                 "--lineage", "project", "--claim", "R-001",
                 "--short-verdict", "late", "--diagnosis", "diagnosis",
+            ],
+            "deadline-miss": [
+                "--lineage", "project", "--claim", "R-001",
             ],
             "resolve-deadline-mutation": [
                 "--lineage", "project", "--claim", "R-001",

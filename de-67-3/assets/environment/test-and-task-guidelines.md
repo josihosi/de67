@@ -82,6 +82,13 @@ typed or schema vocabulary. If the current corpus cannot produce that witness, k
 route in exploration and make it part of the strategy rather than an assumed dependency. Incidental
 metadata matters only when it changes identity, the verdict, or a false-green control.
 
+Before freezing an interactive scenario, derive each later expected transition from the
+authoritative product state actually produced by all preceding steps. Declare a reusable setup
+prerequisite as a typed scenario capability and preflight it at its first consumer; an input token,
+cursor change, or other UI state is not evidence of a product-state transition. If a required
+transition is absent, classify the result as a scenario or task-definition fault and repair or split
+the observation route before changing product behavior or repeating the run.
+
 When a focused closure fixture enters a global actor loop after mutating world state, make the
 fixture own every incidental actor the loop can touch: remove actors outside the claim after the
 final mutation or prove retained actors occupy valid terrain. When logged errors make the runner

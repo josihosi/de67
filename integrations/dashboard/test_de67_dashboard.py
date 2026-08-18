@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -17,6 +18,8 @@ class DashboardTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.workspace = Path(self.temporary.name)
+        self.sessions = self.workspace / "sessions"
+        self.sessions.mkdir()
         state = self.workspace / ".de67/state"
         state.mkdir(parents=True)
         (self.workspace / ".de67/DFS.md").write_text("# DFS\n\n<script>alert(1)</script>\n", encoding="utf-8")
@@ -62,13 +65,13 @@ class DashboardTests(unittest.TestCase):
         paths = [self.workspace / ".de67/DFS.md", self.workspace / ".de67/work-ledger.md",
                  self.workspace / ".de67/state/deadlines.sqlite3"]
         before = [path.read_bytes() for path in paths]
-        page = dashboard_module.Dashboard(self.workspace).render("dfs").decode()
+        page = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).render("dfs").decode()
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
         self.assertNotIn("<script>", page)
         self.assertEqual(before, [path.read_bytes() for path in paths])
 
     def test_overview_uses_real_ledger_and_clock_state(self) -> None:
-        page = dashboard_module.Dashboard(self.workspace).render("overview").decode()
+        page = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).render("overview").decode()
         self.assertIn("R009-M1", page)
         self.assertIn("gap G-002 r41", page)
         self.assertIn("deadline generation 11", page)
@@ -76,9 +79,11 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("useful work", page)
         self.assertIn("<h2>Waiting work</h2>", page)
         self.assertIn("waiting work", page)
-        self.assertIn("<small>Mutations</small><strong>2</strong>", page)
-        self.assertIn("<small>Random mutations</small><strong>1</strong>", page)
-        self.assertIn("Next in 2 windows · draw 2", page)
+        self.assertIn("<small>Mutations</small><strong>3</strong>", page)
+        self.assertNotIn("<small>Random mutations</small>", page)
+        self.assertIn("Next random in 2 worker results", page)
+        self.assertIn("<h2>Active workers</h2>", page)
+        self.assertIn("Unavailable", page)
         self.assertIn("Latest finding", page)
         self.assertIn("R009-M0", page)
         self.assertIn("escaped &lt;finding&gt;", page)
@@ -91,25 +96,25 @@ class DashboardTests(unittest.TestCase):
         connection.execute("UPDATE tasks SET attempt_terminal_at=2")
         connection.commit()
         connection.close()
-        page = dashboard_module.Dashboard(self.workspace).render("overview").decode()
+        page = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).render("overview").decode()
         self.assertNotIn("R009-M1", page)
         self.assertIn('dot yellow', page)
 
     def test_invalid_utf8_is_visible_without_raw_failure(self) -> None:
         (self.workspace / ".de67/DFS.md").write_bytes(b"# DFS\n\xff")
-        state = dashboard_module.Dashboard(self.workspace).snapshot()
+        state = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).snapshot()
         self.assertTrue(state["dfs"]["identity"]["invalid_utf8"])
         self.assertIn("�", state["dfs"]["html"])
 
     def test_missing_sources_return_healthy_unavailable_page(self) -> None:
         empty = Path(self.temporary.name) / "gone"
-        page = dashboard_module.Dashboard(empty).render("overview").decode()
+        page = dashboard_module.Dashboard(empty, sessions_root=self.sessions).render("overview").decode()
         self.assertIn("Active work ledger", page)
         self.assertIn("SQLite", page)
         self.assertIn("unable to open database file", page)
 
     def test_last_good_panel_survives_source_disappearance(self) -> None:
-        dashboard = dashboard_module.Dashboard(self.workspace)
+        dashboard = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions)
         first = dashboard.snapshot()
         (self.workspace / ".de67/DFS.md").unlink()
         second = dashboard.snapshot()
@@ -123,7 +128,7 @@ class DashboardTests(unittest.TestCase):
         writer = sqlite3.connect(database)
         writer.execute("BEGIN EXCLUSIVE")
         try:
-            state = dashboard_module.Dashboard(self.workspace).snapshot()
+            state = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).snapshot()
             self.assertIsNotNone(state["clock"]["error"])
         finally:
             writer.rollback()
@@ -134,6 +139,39 @@ class DashboardTests(unittest.TestCase):
         rendered = dashboard_module.render_markdown("# One\n\n```\n<img src=x onerror=bad>")
         self.assertIn("&lt;img src=x onerror=bad&gt;", rendered)
         self.assertNotIn("<img", rendered)
+
+    def test_active_workers_are_counted_by_model_and_effort(self) -> None:
+        day = self.sessions / "2026/08/18"
+        day.mkdir(parents=True)
+
+        def write_session(name, session_id, parent, model, effort, complete=False):
+            path = day / name
+            items = [
+                {"type": "session_meta", "payload": {
+                    "id": session_id, "parent_thread_id": parent,
+                    "cwd": str(self.workspace), "timestamp": "2026-08-18T08:00:00Z",
+                }},
+                {"type": "turn_context", "payload": {"model": model, "effort": effort}},
+                {"type": "event_msg", "payload": {"type": "task_started"}},
+            ]
+            if complete:
+                items.append({"type": "event_msg", "payload": {"type": "task_complete"}})
+            path.write_text("".join(json.dumps(item) + "\n" for item in items), encoding="utf-8")
+
+        write_session("rollout-2026-08-18T08-00-00-root.jsonl", "root", None,
+                      "gpt-5.6-sol", "low")
+        write_session("rollout-2026-08-18T08-01-00-luna.jsonl", "luna", "root",
+                      "gpt-5.6-luna", "medium")
+        write_session("rollout-2026-08-18T08-02-00-terra.jsonl", "terra", "root",
+                      "gpt-5.6-terra", "high", complete=True)
+
+        page = dashboard_module.Dashboard(
+            self.workspace, sessions_root=self.sessions
+        ).render("overview").decode()
+        self.assertIn("<h2>Active workers</h2>", page)
+        self.assertIn("<tr><th>Luna</th><td class=\"\">0</td><td class=\"active-count\">1</td>", page)
+        self.assertIn("<tr><th>Terra</th><td class=\"\">0</td><td class=\"\">0</td><td class=\"\">0</td>", page)
+        self.assertNotIn("Unavailable", page)
 
     def test_stale_pid_file_falls_back_to_workspace_process(self) -> None:
         (self.workspace / ".de67/state/coordinator-supervisor.pid").write_text(

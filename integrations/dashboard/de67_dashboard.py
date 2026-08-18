@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
 from pathlib import Path
 import re
@@ -275,10 +276,80 @@ def process_state(workspace: Path) -> dict[str, Any]:
     return {"supervisor": "running", "coordinator": coordinator, "pid": pid}
 
 
+def _session_header(path: Path) -> dict[str, Any]:
+    record: dict[str, Any] = {}
+    with path.open("r", encoding="utf-8", errors="replace") as source:
+        for _ in range(12):
+            line = source.readline()
+            if not line:
+                break
+            try:
+                item = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            payload = item.get("payload", {})
+            if item.get("type") == "session_meta":
+                record.update({
+                    "id": payload.get("id"),
+                    "parent": payload.get("parent_thread_id"),
+                    "cwd": payload.get("cwd"),
+                    "timestamp": payload.get("timestamp") or item.get("timestamp"),
+                })
+            elif item.get("type") == "turn_context":
+                record["model"] = payload.get("model")
+                record["effort"] = payload.get("effort")
+            if record.get("id") and record.get("model"):
+                break
+    return record
+
+
+def _session_complete(path: Path) -> bool:
+    size = path.stat().st_size
+    with path.open("rb") as source:
+        source.seek(max(0, size - 131072))
+        tail = source.read().decode("utf-8", errors="replace")
+    return '"type":"task_complete"' in tail or '"type": "task_complete"' in tail
+
+
+def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
+    """Project active Luna/Terra subagents from Codex's existing read-only session records."""
+    counts = {model: {effort: 0 for effort in ("low", "medium", "high", "max")}
+              for model in ("luna", "terra")}
+    paths = sorted(sessions_root.glob("**/rollout-*.jsonl"), reverse=True)
+    root_path: Path | None = None
+    root: dict[str, Any] = {}
+    target = workspace.resolve()
+    for path in paths:
+        candidate = _session_header(path)
+        try:
+            candidate_cwd = Path(candidate.get("cwd", "")).resolve()
+        except (OSError, RuntimeError):
+            continue
+        if not candidate.get("parent") and candidate_cwd == target:
+            root_path, root = path, candidate
+            break
+    if root_path is None or not root.get("id"):
+        return {"counts": counts, "available": False, "error": "active Codex session unavailable"}
+    root_mtime = root_path.stat().st_mtime
+    for path in paths:
+        if path == root_path or path.stat().st_mtime < root_mtime:
+            continue
+        candidate = _session_header(path)
+        if candidate.get("parent") != root["id"] or _session_complete(path):
+            continue
+        model = str(candidate.get("model", "")).lower().rsplit("-", 1)[-1]
+        effort = str(candidate.get("effort", "")).lower()
+        if model in counts and effort in counts[model]:
+            counts[model][effort] += 1
+    return {"counts": counts, "available": True, "error": None}
+
+
 class Dashboard:
-    def __init__(self, workspace: Path, refresh_seconds: int = 0) -> None:
+    def __init__(self, workspace: Path, refresh_seconds: int = 0,
+                 sessions_root: Path | None = None) -> None:
         self.workspace = workspace
         self.refresh_seconds = refresh_seconds
+        self.sessions_root = sessions_root or Path.home() / ".codex/sessions"
         self._lock = threading.Lock()
         self._good: dict[str, dict[str, Any]] = {}
 
@@ -315,8 +386,12 @@ class Dashboard:
                 process_error = None
             except Exception as error:
                 process, process_error = {}, str(error)
+            try:
+                workers = worker_state(self.workspace, self.sessions_root)
+            except Exception as error:
+                workers = {"counts": {}, "available": False, "error": str(error)}
             return {"dfs": dfs, "ledger": ledger, "clock": clock, "process": process,
-                    "process_error": process_error, "observed": time.time()}
+                    "workers": workers, "process_error": process_error, "observed": time.time()}
 
     def render(self, tab: str) -> bytes:
         state = self.snapshot()
@@ -329,6 +404,7 @@ class Dashboard:
         finding = clock_data.get("finding") or {}
         next_random = clock_data.get("next_random_mutation") or {}
         process = state["process"]
+        workers = state["workers"]
         now = time.time()
         deadline_at = deadline.get("deadline_at") or task.get("deadline_at")
         remaining = "—"
@@ -341,11 +417,10 @@ class Dashboard:
         if random_remaining is None:
             random_note = ""
         elif random_remaining == 0:
-            random_note = "Due now"
+            random_note = "Random mutation due now"
         else:
-            random_note = f"Next in {random_remaining} windows"
-        if next_random.get("interval_windows") is not None:
-            random_note += f" · draw {next_random['interval_windows']}"
+            suffix = "result" if random_remaining == 1 else "results"
+            random_note = f"Next random in {random_remaining} worker {suffix}"
         finding_age = ""
         if isinstance(finding.get("reported_at"), (int, float)):
             age_seconds = max(0, int(now - finding["reported_at"]))
@@ -383,9 +458,20 @@ class Dashboard:
                 lamp("Coordinator", coordinator.title(), "green" if coordinator == "running" else "yellow" if coordinator == "waiting" else "grey"),
                 lamp("Work", work_value, work_tone),
                 f'<div class="metric"><small>Deadline</small><strong>{remaining}</strong></div>',
-                f'<div class="metric"><small>Mutations</small><strong>{_escape(clock_data.get("mutations", "—"))}</strong></div>',
-                f'<div class="metric"><small>Random mutations</small><strong>{_escape(clock_data.get("random_mutations", "—"))}</strong><span class="metric-note">{_escape(random_note)}</span></div>',
+                f'<div class="metric"><small>Mutations</small><strong>{_escape((clock_data.get("mutations", 0) + clock_data.get("random_mutations", 0)) if clock_data else "—")}</strong><span class="metric-note">{_escape(random_note)}</span></div>',
             ])
+            worker_counts = workers.get("counts", {})
+            if workers.get("available"):
+                rows = "".join(
+                    f'<tr><th>{model.title()}</th>' + "".join(
+                        f'<td class="{"active-count" if worker_counts.get(model, {}).get(effort, 0) else ""}">{_escape(worker_counts.get(model, {}).get(effort, 0))}</td>'
+                        for effort in ("low", "medium", "high", "max")
+                    ) + "</tr>" for model in ("luna", "terra")
+                )
+                worker_body = f'<table><thead><tr><th>Model</th><th>Low</th><th>Medium</th><th>High</th><th>Max</th></tr></thead><tbody>{rows}</tbody></table>'
+            else:
+                worker_body = f'<p class="subtle">Unavailable · {_escape(workers.get("error", "unknown source"))}</p>'
+            workers_html = f'<section class="workers"><h2>Active workers</h2>{worker_body}</section>'
             active_html = render_markdown(ledger_data["active"]) if ledger_data["active"] else "<p>None.</p>"
             waiting_html = render_markdown(ledger_data["waiting"]) if ledger_data["waiting"] else "<p>None.</p>"
             blocked_html = render_markdown(ledger_data["blocked"]) if ledger_data["blocked"] else "<p>None.</p>"
@@ -403,18 +489,19 @@ class Dashboard:
                     f'<span>{_escape(finding.get("short_verdict", ""))}</span>'
                     f'<em>{_escape(finding_age)}</em></div>'
                 )
-            body = f'<div class="status">{cards}</div>{finding_html}<section><h2>Active work ledger</h2><div class="subtle">{details}</div>{active_html}</section><section><h2>Waiting work</h2>{waiting_html}</section><section><h2>Blocked work</h2>{blocked_html}</section>'
+            body = f'<div class="status">{cards}</div>{workers_html}{finding_html}<section><h2>Active work ledger</h2><div class="subtle">{details}</div>{active_html}</section><section><h2>Waiting work</h2>{waiting_html}</section><section><h2>Blocked work</h2>{blocked_html}</section>'
         page = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>DE67</title>
 <style>
 :root{{--bg:#101318;--panel:#1a1e24;--line:#343a43;--text:#eee9df;--muted:#9ca3ad;--green:#75c84c;--yellow:#f0bc28;--red:#e05248;--blue:#75a7d8}}
-*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}}main{{max-width:1180px;margin:auto;padding:24px}}header{{display:flex;align-items:baseline;gap:22px}}h1{{font-size:25px;margin:0}}header span,.subtle{{color:var(--muted)}}nav{{display:flex;margin:18px 0;border-bottom:1px solid var(--line)}}nav a{{color:var(--muted);text-decoration:none;padding:10px 16px}}nav a.selected{{color:var(--text);border:1px solid var(--line);border-bottom-color:var(--bg);border-radius:6px 6px 0 0;margin-bottom:-1px}}nav a:last-child{{margin-left:auto}}.status{{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}}.lamp,.metric,section,.activity{{background:var(--panel);border:1px solid var(--line);border-radius:7px}}.lamp,.metric{{padding:13px 14px;min-height:82px}}small{{display:block;color:var(--muted);margin-bottom:10px}}strong{{font-size:18px}}.metric-note{{display:block;color:var(--muted);font-size:11px;margin-top:5px;white-space:nowrap}}.activity{{display:grid;grid-template-columns:100px max-content 1fr max-content;align-items:center;gap:12px;margin-top:10px;padding:10px 14px}}.activity small{{margin:0}}.activity strong{{font-size:13px}}.activity span{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.activity em{{color:var(--muted);font-style:normal;font-size:12px}}.dot{{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:8px}}.green{{background:var(--green)}}.yellow{{background:var(--yellow)}}.red{{background:var(--red)}}.grey{{background:#737983}}section{{margin-top:12px;padding:16px}}h2{{font-size:16px;margin:0 0 12px}}h3{{font-size:15px}}p,li{{line-height:1.55}}code{{background:#11151a;padding:2px 4px;border-radius:3px}}pre{{overflow:auto;background:#11151a;padding:12px;border-radius:5px}}footer{{display:flex;gap:25px;flex-wrap:wrap;color:var(--muted);padding:14px 4px}}footer em{{font-style:normal;color:#747c87;margin-left:5px}}.document{{padding:22px}}@media(max-width:900px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}@media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}header span{{display:none}}.activity{{grid-template-columns:1fr}}.activity span{{white-space:normal}}}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}}main{{max-width:1180px;margin:auto;padding:24px}}header{{display:flex;align-items:baseline;gap:22px}}h1{{font-size:25px;margin:0}}header span,.subtle{{color:var(--muted)}}nav{{display:flex;margin:18px 0;border-bottom:1px solid var(--line)}}nav a{{color:var(--muted);text-decoration:none;padding:10px 16px}}nav a.selected{{color:var(--text);border:1px solid var(--line);border-bottom-color:var(--bg);border-radius:6px 6px 0 0;margin-bottom:-1px}}nav a:last-child{{margin-left:auto}}.status{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}}.lamp,.metric,section,.activity{{background:var(--panel);border:1px solid var(--line);border-radius:7px}}.lamp,.metric{{padding:13px 14px;min-height:82px}}small{{display:block;color:var(--muted);margin-bottom:10px}}strong{{font-size:18px}}.metric-note{{display:block;color:var(--muted);font-size:11px;margin-top:5px;white-space:nowrap}}.workers{{padding:12px 16px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:7px 12px;text-align:center;border-top:1px solid var(--line)}}thead th{{border-top:0;color:var(--muted);font-size:12px;font-weight:500}}tbody th{{text-align:left}}td{{font-variant-numeric:tabular-nums;color:var(--muted)}}td.active-count{{color:var(--green);font-weight:700}}.activity{{display:grid;grid-template-columns:100px max-content 1fr max-content;align-items:center;gap:12px;margin-top:10px;padding:10px 14px}}.activity small{{margin:0}}.activity strong{{font-size:13px}}.activity span{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.activity em{{color:var(--muted);font-style:normal;font-size:12px}}.dot{{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:8px}}.green{{background:var(--green)}}.yellow{{background:var(--yellow)}}.red{{background:var(--red)}}.grey{{background:#737983}}section{{margin-top:12px;padding:16px}}h2{{font-size:16px;margin:0 0 12px}}h3{{font-size:15px}}p,li{{line-height:1.55}}code{{background:#11151a;padding:2px 4px;border-radius:3px}}pre{{overflow:auto;background:#11151a;padding:12px;border-radius:5px}}footer{{display:flex;gap:25px;flex-wrap:wrap;color:var(--muted);padding:14px 4px}}footer em{{font-style:normal;color:#747c87;margin-left:5px}}.document{{padding:22px}}@media(max-width:900px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}@media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}header span{{display:none}}.activity{{grid-template-columns:1fr}}.activity span{{white-space:normal}}}}
 </style></head><body><main><header><h1>DE67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")
 
 
-def serve(workspace: Path, bind: str, port: int, refresh_seconds: int) -> None:
-    dashboard = Dashboard(workspace.resolve(), refresh_seconds)
+def serve(workspace: Path, bind: str, port: int, refresh_seconds: int,
+          sessions_root: Path | None = None) -> None:
+    dashboard = Dashboard(workspace.resolve(), refresh_seconds, sessions_root)
 
     class Server(ThreadingHTTPServer):
         def server_bind(self) -> None:
@@ -462,10 +549,12 @@ def main() -> None:
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8767)
     parser.add_argument("--refresh-seconds", type=int, default=0)
+    parser.add_argument("--codex-sessions", type=Path, default=None,
+                        help="Codex session root used for optional active-worker counts")
     args = parser.parse_args()
     if args.refresh_seconds < 0:
         parser.error("--refresh-seconds cannot be negative")
-    serve(args.workspace, args.bind, args.port, args.refresh_seconds)
+    serve(args.workspace, args.bind, args.port, args.refresh_seconds, args.codex_sessions)
 
 
 if __name__ == "__main__":

@@ -116,6 +116,11 @@ evidence basis and duration, durable-disposition overhead, the summed critical p
 remaining item seconds. Each refreshed vector includes any prerequisite or repair slice plus the
 downstream terminal proof; an individually fitting prerequisite cannot establish on-time fit when
 that sum cannot fit.
+For the first dispatch that arms a fresh generation, derive `start --estimate-seconds` from this
+same vector, not from a next-gap or downstream comparator. Give the dispatched estimate-discovery
+slice and its durable disposition their own evidence-derived components and add them to every known
+positive downstream component; leave unknown components explicit, and never call that lower bound
+whole-claim fit.
 Any absent component leaves on-time fit unproved. A fresh generation or individually fitting
 next-gap attempts do not prove whole-claim fit. While the vector is incomplete, only an
 independently terminal estimate-discovery slice whose result is necessary to complete that vector

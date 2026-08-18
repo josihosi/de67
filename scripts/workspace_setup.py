@@ -22,6 +22,15 @@ CONFIG_RELATIVE_PATH = Path(".de67/state/workspace.json")
 PUSH_STATUS_RELATIVE_PATH = Path(".de67/state/checkpoint-push.json")
 DEADLINE_STATE_RELATIVE_PATH = Path(".de67/state/deadlines.sqlite3")
 STATE_IGNORE_SENTINEL = Path(".de67/state/.workspace-setup-ignore-probe.tmp")
+PHASE3_ENVIRONMENT_ROOT = (
+    Path(__file__).resolve().parents[1] / "de-67-3" / "assets" / "environment"
+)
+PHASE3_WORKSPACE_FILES = (
+    "orchestrator-guidelines.md",
+    "test-and-task-guidelines.md",
+    "work-ledger.md",
+    "mutation-suggestions.md",
+)
 
 
 class SetupError(RuntimeError):
@@ -441,6 +450,35 @@ def _require_frozen_dfs(workspace: Path) -> None:
         raise SetupError(".de67/DFS.md must record Frozen or Refrozen status")
 
 
+def _prepare_phase3_environment(workspace: Path) -> dict[str, list[str]]:
+    """Copy missing mutable Phase-3 files without replacing workspace policy."""
+
+    environment = workspace / ".de67"
+    environment.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    preserved: list[str] = []
+    for name in PHASE3_WORKSPACE_FILES:
+        source = PHASE3_ENVIRONMENT_ROOT / name
+        if not source.is_file():
+            raise SetupError(f"Missing packaged Phase-3 environment file: {source}")
+        destination = environment / name
+        if destination.exists():
+            if not destination.is_file():
+                raise SetupError(f"Phase-3 environment path is not a file: {destination}")
+            preserved.append(name)
+            continue
+        try:
+            with destination.open("xb") as handle:
+                handle.write(source.read_bytes())
+        except FileExistsError:
+            preserved.append(name)
+            continue
+        except OSError as error:
+            raise SetupError(f"Cannot prepare Phase-3 environment file {name}: {error}") from error
+        copied.append(name)
+    return {"copied": copied, "preserved": preserved}
+
+
 def configure(
     workspace_path: str | Path,
     requested_targets: Sequence[Sequence[str]],
@@ -478,6 +516,7 @@ def configure(
     selected_lineage: str | None = None
     if bind_clock:
         _require_frozen_dfs(workspace)
+        phase3_environment = _prepare_phase3_environment(workspace)
         requested_lineage = None if lineage is None else lineage.strip()
         if lineage is not None and not requested_lineage:
             raise SetupError("Lineage must not be empty")
@@ -500,6 +539,7 @@ def configure(
             raise SetupError(f"Cannot bind deadline clock: {error}") from error
     else:
         selected_lineage = configured_lineage
+        phase3_environment = {"copied": [], "preserved": []}
     hook = _install_hook(workspace)
     config = {
         "version": 1,
@@ -520,6 +560,7 @@ def configure(
         "workspace": str(workspace),
         "hook": str(hook),
         "clock": config["clock"],
+        "phase3_environment": phase3_environment,
         "push": pushed,
     }
 

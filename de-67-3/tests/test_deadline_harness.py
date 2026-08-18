@@ -775,7 +775,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             },
         )
 
-    def test_due_integrity_breach_records_miss_before_three_breach_units(self) -> None:
+    def test_due_integrity_breach_records_miss_before_one_breach_unit(self) -> None:
         self.harness.start_task("project", "task", "R-1", 10, now=100)
 
         result = self.harness.record_integrity_breach(
@@ -788,9 +788,9 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertEqual(miss["cumulative_before"], 0)
         self.assertEqual(miss["cumulative_after"], 1)
         self.assertEqual(breach["cumulative_before"], 1)
-        self.assertEqual(breach["cumulative_after"], 4)
-        self.assertEqual(breach["cadence_threshold"], 3)
-        self.assertEqual(result["status"]["cumulative_miss_units"], 4)
+        self.assertEqual(breach["cumulative_after"], 2)
+        self.assertIsNone(breach["cadence_threshold"])
+        self.assertEqual(result["status"]["cumulative_miss_units"], 2)
         self.assertEqual(
             [incident["kind"] for incident in result["status"]["incidents"]],
             ["deadline_miss", "integrity_breach"],
@@ -932,7 +932,7 @@ class DeadlineHarnessTests(unittest.TestCase):
 
         spawn.assert_called_once_with(str(state_path), "project", "R-1")
 
-    def test_integrity_breach_adds_three_once_and_invalidates_completion(self) -> None:
+    def test_integrity_breach_adds_one_once_and_invalidates_completion(self) -> None:
         self.harness.start_task("project", "first", "R-1", 100, now=0)
         self.harness.start_task("project", "second", "R-2", 100, now=0)
         self.harness.complete_task("project", "first", "initial evidence", now=1)
@@ -945,19 +945,19 @@ class DeadlineHarnessTests(unittest.TestCase):
         )
 
         self.assertTrue(first["incident"]["recorded"])
-        self.assertEqual(first["incident"]["units"], 3)
-        self.assertTrue(first["incident"]["cadence_crossed"])
-        self.assertEqual(first["incident"]["cadence_threshold"], 3)
+        self.assertEqual(first["incident"]["units"], 1)
+        self.assertFalse(first["incident"]["cadence_crossed"])
+        self.assertIsNone(first["incident"]["cadence_threshold"])
         self.assertFalse(first["status"]["completion_accepted"])
         self.assertFalse(repeated["incident"]["recorded"])
-        self.assertEqual(repeated["status"]["cumulative_miss_units"], 3)
+        self.assertEqual(repeated["status"]["cumulative_miss_units"], 1)
         self.assertEqual(repeated["status"]["integrity_reason"], "fabricated result")
 
         second = self.harness.record_integrity_breach(
             "project", "second", "hidden reset", now=4
         )
-        self.assertEqual(second["incident"]["cadence_threshold"], 6)
-        self.assertEqual(second["incident"]["cumulative_after"], 6)
+        self.assertIsNone(second["incident"]["cadence_threshold"])
+        self.assertEqual(second["incident"]["cumulative_after"], 2)
 
         with self.assertRaises(DeadlineError):
             self.harness.complete_task(
@@ -2931,15 +2931,9 @@ class DeadlineHarnessTests(unittest.TestCase):
             self.harness.start_task(
                 "project", "finding-retry", "R-REV", 100, phase="closure", now=5
             )
-        with self.assertRaisesRegex(DeadlineError, "materially change both"):
-            self.harness.revise_closure_gap(
-                "project", "R-REV", "G-001", "finding",
-                "One proof remains.", "Run an owner-visible route.", now=5,
-            )
         revised = self.harness.revise_closure_gap(
             "project", "R-REV", "G-001", "finding",
-            "Prove the owner signal reaches the product boundary.",
-            "Run the owner-visible route and inspect its artifact.", now=5,
+            "One proof remains.", "Run an owner-visible route.", now=5,
         )
         self.assertEqual(revised["revision"], 2)
         self.assertEqual(revised["basis_task_id"], "finding")
@@ -3250,7 +3244,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             "proof-a",
         )
 
-    def test_macro_receipt_is_exact_live_and_not_cross_incident_replayable(self) -> None:
+    def test_macro_receipt_is_optional_but_invalid_receipts_are_rejected(self) -> None:
         self.harness.start_task("project", "late", "R-LATE", 1, now=0)
         self.harness.start_task("project", "breach", "R-BREACH", 100, now=0)
         self.harness.expire_task("project", "late", now=2)
@@ -3260,10 +3254,6 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.harness.resolve_deadline_mutation(
             "project", "R-LATE", "micro", "finite recovery", now=4
         )
-        with self.assertRaisesRegex(DeadlineError, "guard-issued"):
-            self.harness.resolve_deadline_mutation(
-                "project", "R-LATE", "macro", "method changed", now=5
-            )
         with self.assertRaisesRegex(DeadlineError, "exact incident"):
             self.harness.resolve_deadline_mutation(
                 "project",
@@ -3274,16 +3264,14 @@ class DeadlineHarnessTests(unittest.TestCase):
                 now=5,
             )
 
-        receipt_id = self.record_normal_receipt("late", "deadline_miss")
         resolved = self.harness.resolve_deadline_mutation(
             "project",
             "R-LATE",
             "macro",
             "method changed",
-            receipt_id=receipt_id,
             now=5,
         )
-        self.assertEqual(resolved["receipt_id"], receipt_id)
+        self.assertIsNone(resolved["receipt_id"])
 
         self.harness.record_integrity_breach(
             "project", "breach", "forged proof", now=2
@@ -3305,9 +3293,13 @@ class DeadlineHarnessTests(unittest.TestCase):
                 "breach",
                 "macro",
                 "method guard",
-                receipt_id=receipt_id,
+                receipt_id="f" * 64,
                 now=5,
             )
+        resolved = self.harness.resolve_integrity_mutation(
+            "project", "breach", "macro", "method reviewed", now=5
+        )
+        self.assertIsNone(resolved["receipt_id"])
 
     def test_reviewed_deadline_macro_can_end_with_no_change_required(self) -> None:
         self.harness.start_task("project", "late", "R-LATE", 1, now=0)

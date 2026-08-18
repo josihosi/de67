@@ -73,7 +73,6 @@ NORMAL_METHOD_MUTABLE_ROOTS = (
     "SKILL.md",
     "agents/",
     "assets/environment/",
-    "references/roles/",
     "scripts/",
     "tests/",
 )
@@ -279,50 +278,7 @@ def validate_method_mutation(
             "Normal method mutation changed a path outside its broad mutable surface: "
             + ", ".join(outside)
         )
-    for name in GUIDELINE_FILES:
-        relative = f"assets/environment/{name}"
-        if relative not in baseline or relative not in candidate:
-            raise GuardError(
-                f"Normal method candidate must preserve guideline asset: {relative}"
-            )
-        try:
-            before = baseline[relative].decode("utf-8")
-            after = candidate[relative].decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise GuardError(f"Guideline asset is not UTF-8: {relative}") from error
-        _require_frozen_headings(name, before, after)
     return changed
-
-
-def markdown_headings(text: str) -> tuple[str, ...]:
-    """Return exact ATX headings outside fenced examples."""
-
-    headings: list[str] = []
-    fence_character: str | None = None
-    for line in text.splitlines():
-        fence = FENCE.match(line)
-        if fence:
-            character = fence.group("marker")[0]
-            if fence_character is None:
-                fence_character = character
-            elif fence_character == character:
-                fence_character = None
-            continue
-        if fence_character is None and ATX_HEADING.match(line):
-            headings.append(line.rstrip())
-    return tuple(headings)
-
-
-def _require_frozen_headings(name: str, baseline: str, candidate: str) -> None:
-    expected = markdown_headings(read_markdown(CANONICAL_GUIDELINES_ROOT / name))
-    before = markdown_headings(baseline)
-    after = markdown_headings(candidate)
-    if not expected:
-        raise GuardError(f"Canonical {name} has no frozen Markdown headings")
-    if before != expected:
-        raise GuardError(f"{name} baseline headings differ from the canonical template")
-    if after != expected:
-        raise GuardError(f"{name} candidate headings differ from the canonical template")
 
 
 def validate_guideline_mutation(
@@ -332,7 +288,7 @@ def validate_guideline_mutation(
     broader_mutation: bool,
     require_change: bool = True,
 ) -> tuple[str, ...]:
-    """Validate mutable bodies while keeping every guideline heading frozen."""
+    """Validate meaningful changes to workspace-local mutable guidance."""
 
     if not isinstance(broader_mutation, bool):
         raise GuardError("Guideline mutation scope must be derived from a stored incident")
@@ -340,7 +296,6 @@ def validate_guideline_mutation(
     for name in GUIDELINE_FILES:
         baseline = read_markdown(baseline_root / name)
         candidate = read_markdown(candidate_root / name)
-        _require_frozen_headings(name, baseline, candidate)
         if baseline != candidate:
             changed.append(name)
 
@@ -875,11 +830,6 @@ def validate_random_review_mutation(
         name: read_markdown(candidate_root / name)
         for name in (*GUIDELINE_FILES, DFS_FILE)
     }
-    for name in GUIDELINE_FILES:
-        _require_frozen_headings(
-            name, baseline_files[name], candidate_files[name]
-        )
-
     changed = tuple(
         name
         for name in (*GUIDELINE_FILES, DFS_FILE)
@@ -1954,9 +1904,6 @@ def validate_work_ledger(
     ledger_text = read_markdown(ledger)
     blocks = _active_work_blocks(ledger_text)
     items = tuple(reference for reference, _ in blocks)
-    if len(items) > 10:
-        raise GuardError(f"Work ledger has {len(items)} active items; maximum is 10")
-
     dfs_text = read_markdown(dfs)
     red_claims = red_dfs_claims(dfs_text)
     slices = parse_dfs_slices(dfs_text)

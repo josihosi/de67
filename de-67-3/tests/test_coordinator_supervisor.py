@@ -14,10 +14,6 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from coordinator_supervisor import (  # noqa: E402
-    COORDINATOR_ROLE_PATH,
-    KERNEL_PATH,
-    PHASE3_ROOT,
-    ROLE_ROOT,
     SupervisionEvent,
     SupervisorError,
     _supervisor_lock,
@@ -462,7 +458,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             for line in self.events.read_text(encoding="utf-8").splitlines()
         ]
 
-    def test_supervisor_prompt_routes_only_the_coordinator_role(self) -> None:
+    def test_supervisor_prompt_routes_only_workspace_local_guidance(self) -> None:
         prompt = coordinator_prompt(
             self.workspace.resolve(),
             self.state_path.resolve(),
@@ -471,22 +467,15 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             None,
         )
 
-        self.assertIn(str(KERNEL_PATH), prompt)
-        self.assertIn(str(COORDINATOR_ROLE_PATH), prompt)
-        self.assertNotIn(str(PHASE3_ROOT / "SKILL.md"), prompt)
-        self.assertNotIn("Read the installed DE-67-3 skill", prompt)
-        self.assertNotIn("Run DE-67-3", prompt)
-        self.assertIn("Do not read the phase router", prompt)
-        self.assertIn("extract its guarded claim-bound DFS slices", prompt)
-        self.assertIn("do not preload the whole DFS", prompt)
-        self.assertIn("Canonical mutable method guidance is only under", prompt)
-        self.assertIn("Never read, create, or mutate workspace-local copies", prompt)
+        self.assertIn("Do not read packaged DE-67", prompt)
+        self.assertIn(".de67/orchestrator-guidelines.md", prompt)
+        self.assertIn(".de67/test-and-task-guidelines.md", prompt)
+        self.assertIn("active mutable policy", prompt)
+        self.assertIn("DFS slices as the compact default", prompt)
+        self.assertIn("Read more of the DFS", prompt)
         self.assertIn("If the ledger is blocked-only, audit", prompt)
         self.assertIn("terminalize every live attempt", prompt)
         self.assertIn("Never ask the owner or an external contact adapter", prompt)
-        for role_path in ROLE_ROOT.glob("*.md"):
-            if role_path != COORDINATOR_ROLE_PATH:
-                self.assertNotIn(str(role_path), prompt)
 
     def test_cli_defaults_coordinator_to_sol_low_without_changing_runner_args(self) -> None:
         arguments = build_parser().parse_args(

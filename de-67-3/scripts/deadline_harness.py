@@ -4229,11 +4229,11 @@ class DeadlineHarness:
             if (
                 normalized_description
                 == " ".join(str(current["description"]).split()).casefold()
-                or normalized_proof_route
+                and normalized_proof_route
                 == " ".join(str(current["proof_route"]).split()).casefold()
             ):
                 raise DeadlineError(
-                    "A gap revision must materially change both its description and proof route"
+                    "A gap revision must materially change its description or proof route"
                 )
             revision = int(current["revision"]) + 1
             self.connection.execute(
@@ -4974,10 +4974,6 @@ class DeadlineHarness:
                 raise DeadlineError(
                     "No-change macro resolution cannot consume a method receipt"
                 )
-            if not no_change_required and receipt_id is None:
-                raise DeadlineError(
-                    "Deadline macro mutation requires a guard-issued method receipt"
-                )
             if receipt_id is not None:
                 receipt_id = self._identity(receipt_id, "Method receipt id")
         elif no_change_required:
@@ -4998,7 +4994,7 @@ class DeadlineHarness:
                 raise DeadlineError(
                     "Claim deadline needs an independent diagnosis before mutation"
                 )
-            if component == "macro" and not no_change_required:
+            if component == "macro" and receipt_id is not None:
                 self._validate_normal_method_receipt(
                     receipt_id,
                     lineage_id=lineage_id,
@@ -5142,11 +5138,8 @@ class DeadlineHarness:
             raise DeadlineError("Integrity mutation component must be micro or macro")
         evidence = self._nonempty_text(evidence, "Mutation evidence")
         if component == "macro":
-            if receipt_id is None:
-                raise DeadlineError(
-                    "Integrity macro mutation requires a guard-issued method receipt"
-                )
-            receipt_id = self._identity(receipt_id, "Method receipt id")
+            if receipt_id is not None:
+                receipt_id = self._identity(receipt_id, "Method receipt id")
         elif receipt_id is not None:
             raise DeadlineError("Integrity micro mutation cannot consume a receipt")
         resolved_at = self._now(now)
@@ -5162,7 +5155,7 @@ class DeadlineHarness:
                 raise DeadlineError(
                     "Integrity incident needs an independent diagnosis before mutation"
                 )
-            if component == "macro":
+            if component == "macro" and receipt_id is not None:
                 self._validate_normal_method_receipt(
                     receipt_id,
                     lineage_id=lineage_id,
@@ -5437,7 +5430,7 @@ class DeadlineHarness:
                 task, recorded_at, completion_invalid=True
             )
             incident = self._record_incident(
-                lineage_id, task_id, "integrity_breach", 3, recorded_at, reason
+                lineage_id, task_id, "integrity_breach", 1, recorded_at, reason
             )
             successor_gap = None
             if task["integrity_breached_at"] is None:

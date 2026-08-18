@@ -31,42 +31,8 @@ RED_DFS_CLAIM = re.compile(r"^- \[ \] \N{LARGE RED CIRCLE} ", re.MULTILINE)
 ACTIVE_LEDGER_ITEM = re.compile(r"^- \[ \] ", re.MULTILINE)
 BLOCKED_LEDGER_ITEM = re.compile(r"^- Blocked: ", re.MULTILINE)
 BLOCKED_AUDIT_PREFIX = "supervisor audit blocked-only ledger sha256:"
-PHASE3_ROOT = Path(__file__).resolve().parents[1]
-METHOD_REPO_ROOT = PHASE3_ROOT.parent
-KERNEL_PATH = PHASE3_ROOT / "references" / "kernel.md"
-ROLE_ROOT = PHASE3_ROOT / "references" / "roles"
-COORDINATOR_ROLE_PATH = ROLE_ROOT / "coordinator.md"
-METHOD_GUIDANCE_ROOT = PHASE3_ROOT / "assets" / "environment"
-
-
 class SupervisorError(RuntimeError):
     """Raised when coordinator ownership or restart state is inconsistent."""
-
-
-def require_canonical_method_checkout() -> Path:
-    """Keep prompting, guarding, and promotion on one DE-67 method checkout."""
-
-    repository = METHOD_REPO_ROOT.resolve()
-    try:
-        completed = subprocess.run(
-            ["git", "-C", str(repository), "rev-parse", "--show-toplevel"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as error:
-        raise SupervisorError(
-            "Coordinator supervisor must run from the active DE-67 method Git checkout"
-        ) from error
-    try:
-        top_level = Path(completed.stdout.strip()).resolve(strict=True)
-    except (OSError, RuntimeError) as error:
-        raise SupervisorError("Active DE-67 method Git root cannot be resolved") from error
-    if top_level != repository or (repository / "de-67-3").resolve() != PHASE3_ROOT.resolve():
-        raise SupervisorError(
-            "Coordinator method files are not the active DE-67 Phase-3 tree"
-        )
-    return repository
 
 
 @dataclass(frozen=True)
@@ -392,14 +358,12 @@ def coordinator_prompt(
 ) -> str:
     lines = [
         f"Act as a fresh Phase-3 delivery coordinator in {workspace}.",
-        "Read only these DE-67 method files at entry:",
-        f"- {KERNEL_PATH}",
-        f"- {COORDINATOR_ROLE_PATH}",
-        f"Canonical method repository: {METHOD_REPO_ROOT}.",
-        f"Canonical mutable method guidance is only under {METHOD_GUIDANCE_ROOT}.",
-        "Never read, create, or mutate workspace-local copies of test-and-task-guidelines.md or orchestrator-guidelines.md.",
-        "Do not read the phase router or sibling role modules unless the coordinator module routes a concrete event to one of them.",
-        "Read the active ledger and extract its guarded claim-bound DFS slices; do not preload the whole DFS unless the coordinator module's indexing or recovery condition applies.",
+        "Do not read packaged DE-67 SKILL.md, kernel, role, reference, or guideline prose during delivery.",
+        "Packaged DE-67 scripts may be executed as tools; their prose is bootstrap material only.",
+        "Read .de67/orchestrator-guidelines.md before routing work and read only its relevant sections thereafter.",
+        "Require workers and reviewers to read the relevant sections of .de67/test-and-task-guidelines.md and .de67/orchestrator-guidelines.md for their route.",
+        "The workspace-local guideline files are active mutable policy. Never replace them with packaged assets after bootstrap.",
+        "Read the active ledger and use its claim-bound DFS slices as the compact default. Read more of the DFS when the current decision genuinely needs it.",
         "Read current code and Git state plus only relevant durable .de67 state; do not read predecessor logs or narrative handoffs.",
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every deadline-harness command; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
@@ -475,7 +439,6 @@ def run_child(
             "DE67_DEADLINE_STATE": str(state_path),
             "DE67_LINEAGE": lineage_id,
             "DE67_WORKSPACE": str(workspace),
-            "DE67_METHOD_REPO": str(METHOD_REPO_ROOT.resolve()),
             "DE67_SUPERVISOR_PID": str(os.getpid()),
             "DE67_BLOCKER_ADAPTER_STATE": str(
                 workspace / ".de67" / "state" / "blocker-adapter-state.json"
@@ -572,8 +535,6 @@ def _run_supervisor_locked(
     if not runner_command:
         raise SupervisorError("Runner command must not be empty")
     wait_for_event = event_waiter or wait_for_supervision_event
-
-    require_canonical_method_checkout()
 
     restart = read_clock(state, lineage_id)
     blocked_audit = blocked_ledger_audit_reason(workdir)

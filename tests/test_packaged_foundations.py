@@ -37,7 +37,8 @@ class PackagedFoundationTests(unittest.TestCase):
         self.assertIn("../references/controlled-english.md", phase_one)
         self.assertIn("../references/msw-kernel.md", phase_two)
         self.assertIn("../references/controlled-english.md", phase_two)
-        self.assertIn("references/kernel.md", phase_three)
+        self.assertIn("must not read packaged Phase-3 prose", phase_three)
+        self.assertIn(".de67/orchestrator-guidelines.md", phase_three)
         self.assertIn("../../references/msw-kernel.md", phase_three_kernel)
 
     def test_authoring_roles_route_to_controlled_english(self) -> None:
@@ -55,23 +56,10 @@ class PackagedFoundationTests(unittest.TestCase):
         self.assertIn("current frontier, not the full event history", ledger_profile)
         self.assertIn("Ask for one decision or action", message_profile)
 
-        for relative_path in (
-            "de-67-3/references/roles/dfs-steward.md",
-            "de-67-3/references/roles/worker.md",
-        ):
-            with self.subTest(relative_path=relative_path):
-                text = (ROOT / relative_path).read_text(encoding="utf-8")
-                self.assertIn("../../../references/controlled-english.md", text)
-
-        coordinator = (
-            ROOT / "de-67-3/references/roles/coordinator.md"
+        task_guidance = (
+            ROOT / "de-67-3/assets/environment/test-and-task-guidelines.md"
         ).read_text(encoding="utf-8")
-        supervisor = (
-            ROOT / "de-67-3/references/roles/supervisor.md"
-        ).read_text(encoding="utf-8")
-        self.assertIn("../../../references/controlled-english-ledger.md", coordinator)
-        self.assertIn("../../../references/controlled-english-message.md", coordinator)
-        self.assertIn("../../../references/controlled-english-message.md", supervisor)
+        self.assertIn("controlled-English evidence profile", task_guidance)
 
         phase_one = (ROOT / "de-67-1/SKILL.md").read_text(encoding="utf-8")
         self.assertNotIn("Write owner questions and choices in Simplified Technical English", phase_one)

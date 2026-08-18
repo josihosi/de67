@@ -10,42 +10,34 @@ This file routes Phase 3; it is not the coordinator procedure.
 The invocation authorizes implementation of the frozen DFS in the named working repository. Do not
 read `de-67-1/` or `de-67-2/`. Never inventory, search, or read `.de67/no-go-zone/`.
 
-Read `references/kernel.md` completely, then inspect
-`.de67/state/workspace.json` and verify that `.de67/DFS.md` records `Frozen` or `Refrozen` against an inspected source baseline. A missing configuration,
-draft DFS, unresolved material owner choice, or changed user outcome returns to de67 2.
+This router is bootstrap material. A launcher may read it to initialize Phase 3. Runtime
+coordinators, workers, stewards, and mutators must not read packaged Phase-3 prose under this skill
+after launch. They may execute the packaged scripts as tools.
 
-Copy each missing ledger from `assets/environment/` individually. Never overwrite an existing
-project file with a template. Machine state stays under `.de67/state/`; the DFS and ledgers are
-ordinary project artifacts. Method guidance lives only in this Phase-3 skill under
-`assets/environment/`. Never read, create, or mutate workspace-local guideline copies; legacy
-`.de67/test-and-task-guidelines.md` and `.de67/orchestrator-guidelines.md` are not active policy.
+Inspect `.de67/state/workspace.json` and verify that `.de67/DFS.md` records `Frozen` or `Refrozen`
+against an inspected source baseline. A missing configuration, draft DFS, unresolved material owner
+choice, or changed user outcome returns to de67 2.
 
-## Disclose one role
+Copy each missing ledger or guideline from `assets/environment/` individually. Never overwrite an
+existing project file with a template. Machine state stays under `.de67/state/`; the DFS, ledgers,
+and mutable guidance are ordinary project artifacts. During delivery, the active policy is only:
 
-After the kernel, open exactly one role module for the current event:
+- `.de67/orchestrator-guidelines.md` for coordination and routed mutation work;
+- `.de67/test-and-task-guidelines.md` for task, worker, and test work.
 
-- normal start, resume, returned work, or continued delivery -> `references/roles/coordinator.md`
-- a task-local implementation, exploration, test, build, debug, or operation ->
-  `references/roles/worker.md`
-- every exact deadline or integrity incident -> `references/roles/deadline-mutator.md`
-- a stored ordinary random-improvement gate -> `references/roles/random-mutator.md`
-- a persisted random draw with `k = 30`, lane `DFS.md`, and proved `gpt-5.6-sol` at `ultra` ->
-  `references/roles/universal-mutator.md`
-- accepted evidence or a finding that may change DFS state -> `references/roles/dfs-steward.md`
-- unattended launch, restart ownership, or abnormal process recovery ->
-  `references/roles/supervisor.md`
+Every runtime brief must point to the relevant local file and section. Read only the sections on the
+current route, but never substitute the packaged template or role prose for the local mutable copy.
 
-Do not preload sibling role modules. The active role may open another module only when a concrete
-state transition names that next role. Pass it compact durable state and direct evidence, not a
-predecessor transcript.
+## Route locally
 
-The coordinator is the default attended role. For unattended work, enter through the supervisor.
-Fresh supervisors route their child directly to the coordinator module rather than back through
-this router.
+The supervisor launches a coordinator against the workspace-local orchestration guidance. The
+coordinator routes workers to relevant workspace-local task guidance. Deadline, integrity, random,
+DFS, and universal reviews use the corresponding local sections and durable clock state. Loading
+unrelated sections is discouraged for token cost, not forbidden when the current decision needs
+them.
 
 ## Terminal routing
 
 Ordinary worker results, findings, acceptance, ledger refill, and exploration-to-closure transition
-stay with the same coordinator. An applied guarded method or DFS mutation requests a fresh
-coordinator and retires the old one. The old coordinator never launches or acknowledges its
-successor.
+stay with the same coordinator. An applied method or DFS mutation requests a fresh coordinator and
+retires the old one. The external supervisor launches and acknowledges the successor.

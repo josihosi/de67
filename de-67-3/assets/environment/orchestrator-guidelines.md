@@ -86,11 +86,10 @@ work. Do not turn it into an owner choice or send it to Discord.
 
 Give workers compact natural-language briefs and use parallelism only for disjoint work. Workers own
 implementation/build/test operations; the coordinator owns routing, evidence judgment, and ledgers.
-Immediately before invoking task `start`, read the exact claim clock and bind the remaining seconds
-and evidence-derived estimate through the task's required durable result disposition to the
-dispatch decision. Treat closure pre-start as one conjunction: bind the current gap revision, prove
-the first external route executable under the exact authority its next command consumes, and pass
-that arithmetic. When required closure evidence is a finalized scenario or registry report,
+Immediately before invoking task `start`, read the exact claim clock. Treat closure admission as one
+conjunction: bind the current gap revision, prove the first external route executable under the
+exact authority its next command consumes, and pass the current component-vector arithmetic through
+the task's required durable disposition. When required closure evidence is a finalized scenario or registry report,
 pre-start also resolves each statically named required step and evidence binding through the
 current finalizer; a legacy or absent binding is a producer-consumer mismatch that must be repaired
 and proved before the full run. For a GUI-driven scenario, enumerate every statically declared
@@ -99,50 +98,32 @@ focused route check for each distinct transition before the full run. After one 
 mismatch, map and repair every remaining statically visible GUI input transition before another
 full run; do not rediscover the declared sequence one key at a time. A manifest or named scenario is inventory, not execution authority; a tokenized
 selector requires a current explicit typed token. Never invoke closure task `start` to discover
-route readiness or fit. For closure, the estimate ends only after a terminal result is consumed into its
-required gap close, material revision, or exploration reopen, including any named independent
-review; the worker terminal timestamp alone is not the item-deadline endpoint. The on-time
-comparison also binds the evidence-derived critical path through every other open gap required for
-atomic claim acceptance and every method gate already known to become due on those terminal
-windows. A next-gap estimate may route useful work, but it cannot prove the claim remains on time.
+route readiness or fit.
 Treat one stale or configuration-mismatched canonical link input as a build-graph coherence failure:
 map and rebuild the complete inconsistent input set through the canonical current-configuration
 owner, then bind the resulting executable to current source before another product run. Do not
 replace that owner with a custom linker or rediscover its inconsistent inputs one failure at a time.
-At the first dispatch of each new deadline generation, and again after every terminal result that
-changes an open gap's description, proof route, or estimate, make this comparison inspectable:
-record one current compact component vector naming every open gap and known due method gate, its
-evidence basis and duration, durable-disposition overhead, the summed critical path, and current
-remaining item seconds. Each refreshed vector includes any prerequisite or repair slice plus the
-downstream terminal proof; an individually fitting prerequisite cannot establish on-time fit when
-that sum cannot fit.
-For the first dispatch that arms a fresh generation, derive `start --estimate-seconds` from this
-same vector, not from a next-gap or downstream comparator. Give the dispatched estimate-discovery
-slice and its durable disposition their own evidence-derived components and add them to every known
-positive downstream component; leave unknown components explicit, and never call that lower bound
-whole-claim fit.
-Before that first `start`, consume every already-terminal predecessor result into its required gap
-close, material revision, or exploration reopen, then build the vector from the resulting current
-gaps. Do not dispatch a task merely to restate or terminalize evidence that is already durable;
-coordinator-owned result consumption is not estimate discovery and supplies no route-duration
-estimate. A measured predecessor duration belongs only to the exact causal route it timed. It may
-populate that named unchanged component, but it cannot estimate a newly exposed repair, its proof or
-disposition, later open gaps, or whole-claim fit. If that duration exhausts the proposed generation
-estimate while any necessary positive component remains outside it, the known lower bound already
-disproves that estimate even when the omitted component is still unmeasured.
-Any absent component leaves on-time fit unproved. A fresh generation or individually fitting
-next-gap attempts do not prove whole-claim fit. While the vector is incomplete, only an
-independently terminal estimate-discovery slice whose result is necessary to complete that vector
-may proceed as on-time work; all other continuation is honest late. Once the vector is complete, it
-must fit before any on-time closure dispatch.
-The sum of known positive components is already an evidence-derived lower bound while the vector is
-incomplete. If that lower bound exceeds current remaining item seconds, fit is disproved:
-run `deadline_harness.py deadline-miss --lineage PROJECT --claim CLAIM` to end the generation
-through the existing deadline-miss route. Do not wait for wall time or add another deadline status.
-If the complete critical-path estimate exceeds the remaining time, no prerequisite, repair,
-product, or proof slice is on-time merely because it separately fits and is independently terminal.
-Use the same `deadline-miss` command. The next generation may continue the necessary work with a
-new start and deadline. A cached comparison from an earlier dispatch is not current evidence.
+Before a generation's first `start`, consume every terminal predecessor into its required gap
+disposition and make one compact admission vector inspectable. Rebuild it after any terminal result
+changes a gap, proof route, or estimate. The vector names every open acceptance gap and known due
+method gate, the candidate route through durable disposition, each evidence-derived duration or
+explicit unknown, the sum of known positive components, and the proposed generation estimate or
+current remaining item seconds. Repair, proof, disposition, and downstream work remain separate
+components unless one measurement timed that exact combined route. A predecessor duration credits
+only its unchanged component. Never dispatch merely to restate durable evidence; coordinator result
+consumption supplies no route-duration evidence, and a worker terminal timestamp is not the
+item-deadline endpoint.
+
+Derive a fresh generation's `start --estimate-seconds` from that vector, never from a next-gap
+comparator, and do not call an incomplete lower bound whole-claim fit. An incomplete vector admits
+only a necessary, independently terminal estimate-discovery slice whose own route and disposition
+have an evidence-derived duration. Admission fails when the complete critical path exceeds the
+available time, or when the known lower bound is at least the proposed estimate or remaining time
+while any necessary positive component is still omitted. Run `deadline_harness.py deadline-miss --lineage
+PROJECT --claim CLAIM` immediately in either case; do not wait for wall time or dispatch a separately
+fitting prerequisite, repair, product, or proof slice as on-time work. A fresh generation, cached
+comparison, or task-local estimate never rebases the claim or proves whole-claim fit; the next
+generation may continue necessary work honestly after the incident route.
 Choose Luna or Terra and its effort from the Phase-2-proved roster and the worker-selection rules.
 Never dispatch Terra at `max` or Sol as an ordinary worker. Receive
 progress and final results through the native parent/child channel; clarification is allowed while

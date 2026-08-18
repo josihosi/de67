@@ -46,6 +46,9 @@ transition exhaust that observational course. Before any fourth attempt, halt na
 replace them with one finite map of the already-visible producer, serializer or normalizer, state
 writer, consumer guard, and owning test; the next admissible attempt implements or proves the first
 authoritative transition. A material revision does not reset this fuse.
+That post-fuse attempt terminates at the durable disposition of that first transition; it does not
+also consume the transition through downstream integration. Only a later gap revision may bind the
+next consumer after the first transition is accepted.
 When a command resolves but its downstream effect does not, treat action delivery as established
 and trace the immediate production consumer before another end-to-end attempt. Record its selected
 operand, next-state shape, and terminal result; dispatch only an operand proved to produce the next

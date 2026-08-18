@@ -6,7 +6,7 @@ M_random = stored cycle + fixed lane + compact evidence
            -> resolution + restart
 ```
 
-The ordinary attempt cadence remains one uniformly drawn terminal-window interval in `[10, 30]`
+The ordinary attempt cadence remains one uniformly drawn terminal-window interval in `[20, 50]`
 and one stored lane. Do not redraw the interval, reselect a friendlier lane, or infer a new cadence.
 Already-dispatched workers keep their original briefs and clocks.
 
@@ -45,9 +45,10 @@ python <active-de-67-3-skill>/scripts/mutation_guard.py random-review --baseline
 The legacy selected-lane target must still change, except for its guarded DFS no-op; a method
 candidate accompanies rather than replaces that decision. After an applied verdict, promote and
 checkpoint method changes only in the active DE-67 method checkout; checkpoint a DFS change only in
-the product repository;
-then consume the workspace scratch ledger. A guarded DFS no-op changes neither the DFS nor scratch
-ledger. Record the applied component and guard evidence:
+the product repository; then empty the workspace scratch ledger. Move each suggestion that was not
+applied to one short entry in optional `.de67/human-todo.md` first. Do not make this cleanup, the
+to-do file, or an empty ledger a validation gate. A malformed or failed suggestion does not block
+another valid mutation or ordinary delivery. Record the applied component and guard evidence:
 
 ```text
 python <active-de-67-3-skill>/scripts/deadline_harness.py resolve-random-mutation --state .de67/state/deadlines.sqlite3 --lineage PROJECT --cycle N --component ordinary --evidence "<guard result and actual target/section>"

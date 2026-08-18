@@ -151,7 +151,6 @@ def protected_method_digest(root: Path = SKILL_ROOT) -> str:
 
 def normal_method_candidate_snapshot(
     guideline_candidate_root: Path,
-    ledger_candidate: Path,
     method_candidate_root: Path | None,
 ) -> tuple[str, str, str, tuple[str, ...]]:
     """Bind a normal candidate to the active tree and its hard protected files."""
@@ -166,7 +165,6 @@ def normal_method_candidate_snapshot(
         f"assets/environment/{name}": (guideline_candidate_root / name).read_bytes()
         for name in GUIDELINE_FILES
     }
-    overlays[f"assets/environment/{MUTATION_LEDGER}"] = ledger_candidate.read_bytes()
     if method_candidate_root is None:
         candidate.update(overlays)
     else:
@@ -177,7 +175,7 @@ def normal_method_candidate_snapshot(
         ]
         if mismatched:
             raise GuardError(
-                "Method candidate must contain the exact guarded guideline and ledger candidates: "
+                "Method candidate must contain the exact guarded guideline candidates: "
                 + ", ".join(sorted(mismatched))
             )
 
@@ -294,17 +292,6 @@ def validate_method_mutation(
             raise GuardError(f"Guideline asset is not UTF-8: {relative}") from error
         _require_frozen_headings(name, before, after)
     return changed
-
-
-def validate_consumed_mutation_ledger(candidate: Path) -> None:
-    """Require a successful mutation candidate to consume all scratch suggestions."""
-
-    expected = read_markdown(CANONICAL_GUIDELINES_ROOT / MUTATION_LEDGER)
-    actual = read_markdown(candidate)
-    if actual != expected:
-        raise GuardError(
-            "A successful mutation must reset mutation-suggestions.md to its empty template"
-        )
 
 
 def markdown_headings(text: str) -> tuple[str, ...]:
@@ -580,20 +567,23 @@ def persist_normal_method_receipt(
             incident = connection.execute(
                 """
                 SELECT task.claim_id, incident.reviewed_at
-                FROM claim_deadline_incidents AS incident
+                FROM claim_deadline_generation_incidents AS incident
                 JOIN tasks AS task
                   ON task.lineage_id = incident.lineage_id
                  AND task.task_id = incident.source_task_id
+                 AND task.claim_id = incident.claim_id
+                 AND task.deadline_generation = incident.generation
                 WHERE incident.lineage_id = ? AND incident.source_task_id = ?
                 """,
                 (lineage_id, task_id),
             ).fetchone()
             already_resolved = connection.execute(
                 """
-                SELECT 1 FROM deadline_mutation_components AS component
-                JOIN claim_deadline_incidents AS incident
+                SELECT 1 FROM deadline_generation_mutation_components AS component
+                JOIN claim_deadline_generation_incidents AS incident
                   ON incident.lineage_id = component.lineage_id
                  AND incident.claim_id = component.claim_id
+                 AND incident.generation = component.generation
                 WHERE incident.lineage_id = ? AND incident.source_task_id = ?
                   AND component.component = 'macro'
                 """,
@@ -939,7 +929,7 @@ def broader_mutation_from_incident(
             row = connection.execute(
                 """
                 SELECT short_verdict, long_detail, reviewed_at
-                FROM claim_deadline_incidents
+                FROM claim_deadline_generation_incidents
                 WHERE lineage_id = ? AND source_task_id = ?
                 """,
                 (lineage_id, task_id),
@@ -2159,7 +2149,7 @@ def build_parser() -> argparse.ArgumentParser:
     guidelines.add_argument("--lineage", required=True)
     guidelines.add_argument("--task", required=True)
     guidelines.add_argument("--incident-kind", choices=INCIDENT_KINDS, required=True)
-    guidelines.add_argument("--ledger-candidate", type=Path, required=True)
+    guidelines.add_argument("--ledger-candidate", type=Path)
     guidelines.add_argument("--method-baseline", type=Path)
     guidelines.add_argument("--method-candidate", type=Path)
 
@@ -2224,7 +2214,7 @@ def build_parser() -> argparse.ArgumentParser:
     expansion.add_argument("--state", type=Path, required=True)
     expansion.add_argument("--lineage", required=True)
     expansion.add_argument("--task", required=True)
-    expansion.add_argument("--ledger-candidate", type=Path, required=True)
+    expansion.add_argument("--ledger-candidate", type=Path)
 
     random_review = commands.add_parser(
         "random-review",
@@ -2235,7 +2225,7 @@ def build_parser() -> argparse.ArgumentParser:
     random_review.add_argument("--state", type=Path, required=True)
     random_review.add_argument("--lineage", required=True)
     random_review.add_argument("--cycle", type=int, required=True)
-    random_review.add_argument("--ledger-candidate", type=Path, required=True)
+    random_review.add_argument("--ledger-candidate", type=Path)
     random_review.add_argument("--method-baseline", type=Path)
     random_review.add_argument("--method-candidate", type=Path)
 
@@ -2288,7 +2278,6 @@ def main(argv: list[str] | None = None) -> int:
                 raise GuardError(
                     "Deadline macro mutation needs an evidence-backed guideline or method change"
                 )
-            validate_consumed_mutation_ledger(arguments.ledger_candidate)
             (
                 candidate_digest,
                 protected_baseline_digest,
@@ -2296,7 +2285,6 @@ def main(argv: list[str] | None = None) -> int:
                 changed_paths,
             ) = normal_method_candidate_snapshot(
                 arguments.candidate,
-                arguments.ledger_candidate,
                 arguments.method_candidate,
             )
             receipt_id = persist_normal_method_receipt(
@@ -2382,7 +2370,6 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.candidate,
                 task_claim,
             )
-            validate_consumed_mutation_ledger(arguments.ledger_candidate)
             print(
                 f"ok: {finding_kind} finding expanded {task_claim}; added "
                 + ", ".join(added)
@@ -2413,8 +2400,6 @@ def main(argv: list[str] | None = None) -> int:
                     require_change=False,
                 )
             all_changed = (*changed, *method_changed)
-            if all_changed:
-                validate_consumed_mutation_ledger(arguments.ledger_candidate)
             if all_changed:
                 print(
                     f"ok: random review cycle {arguments.cycle}; changed "

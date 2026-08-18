@@ -8,7 +8,10 @@ review.
 Read the exact working tree, affected DFS claim, current owner path, relevant tests, and current tool
 state. Choose the smallest necessary task. Exploration gets one learning goal; closure gets a known strategy,
 proof route, and finite frozen gaps. Name real dependencies and collision surfaces before parallel
-dispatch.
+dispatch. Treat uncommitted files as inheritable work. A missed commit or an ordinary overlapping
+edit is not an integrity breach by itself; preserve the useful tree, record any uncertain section,
+and let the next worker continue. Reserve integrity quarantine for false evidence or deliberate
+destruction of work that cannot be recovered.
 
 For a closure precondition that must be established before an authoritative product-time
 transition, record the current product time, the required endpoint, each known scheduled
@@ -16,7 +19,7 @@ interruption before that endpoint, and the evidence-derived duration of ordinary
 dispatch. Bind whether each interruption supplies the endpoint, invalidates the witness, or permits
 a proved resume to it; an interruption alone is not endpoint proof. If setup cannot complete first,
 route an earlier valid footing or setup owner, or obtain material owner authority to change or defer
-that choice or manufacture a buffer.
+the transition; never infer that choice or manufacture a buffer.
 
 ## Tooling check
 
@@ -46,6 +49,13 @@ abandonment permits repetition. Name relevant surfaces and permission boundaries
 allowlist or receipt schema. Stop on a falsified premise. Exploration completes only with a changed
 strategy and honest proof route ready to freeze; other contradictions are findings. Attempt
 termination never stops the item clock.
+
+Size a task by the smallest independently valid authority boundary, not by changed line count, file
+count, or the number of transitions it crosses. When issuing, claiming, executing, and consuming one
+authority are inseparable and no partial state can be independently valid and proved, bind and
+implement the complete chain in one gap; do not return it unimplemented solely because the required
+repair is mechanically broad. Split only at a boundary that leaves a useful independently testable
+state without weakening downstream authority.
 
 ## Worker and model selection
 
@@ -81,6 +91,14 @@ exploration only when evidence falsifies a frozen premise, and do not repeat a f
 changed source, tooling, observation, or causal evidence. Close gaps only from their bound completed
 attempts; final acceptance is atomic and blocked by any open gap. Invalidated proof keeps its closed
 record and creates an open successor.
+
+For playtest proof, apply the MSW deletion test to each proposed artifact. Require direct reasonable
+evidence for causally necessary preconditions, authoritative transitions, observations, persistence,
+and terminal effects. An incidental setup action may rely on a later authoritative guard only when
+that guard necessarily proves the action's relevant effect; do not require duplicate screenshots,
+metadata, reruns, registry steps, or review whose deletion leaves the requested behavior honestly
+proved. Yellow or contradictory evidence remains non-green, and an uncertain, stale, missing, or
+contradicted causal route remains inconclusive.
 
 At a closure spanning multiple authoritative transitions, execute the smallest witness through the
 first unproved consumer before broader implementation or proof. A rejection at that gate

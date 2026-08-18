@@ -287,6 +287,66 @@ class MutationGuardTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_guidelines_cli_uses_current_generation_incident(self) -> None:
+        state = self.incident_state()
+        connection = sqlite3.connect(state)
+        try:
+            connection.execute(
+                """
+                INSERT INTO claim_deadline_generations (
+                    lineage_id, claim_id, generation, estimate_seconds,
+                    started_at, deadline_at
+                ) VALUES ('project', 'R-001', 2, 1, 10, 11)
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO tasks (
+                    lineage_id, task_id, claim_id, estimate_seconds,
+                    started_at, deadline_at, deadline_generation,
+                    terminal_at, attempt_terminal_at, attempt_terminal_kind
+                ) VALUES (
+                    'project', 'miss-current', 'R-001', 1,
+                    10, 11, 2, 12, 12, 'finding'
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO claim_deadline_generation_incidents (
+                    lineage_id, claim_id, generation, source_task_id,
+                    recorded_at, short_verdict, long_detail, reviewed_at
+                ) VALUES (
+                    'project', 'R-001', 2, 'miss-current',
+                    12, 'current miss',
+                    'Independent diagnosis for the current generation.', 13
+                )
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        self.mutate_task()
+
+        result, output = self.run_guidelines_cli(
+            state, "miss-current", "deadline_miss"
+        )
+
+        self.assertEqual(result, 0, output)
+        connection = sqlite3.connect(state)
+        connection.row_factory = sqlite3.Row
+        try:
+            receipt = connection.execute(
+                """
+                SELECT task_id, claim_id FROM normal_method_receipts
+                WHERE task_id = 'miss-current'
+                """
+            ).fetchone()
+            self.assertIsNotNone(receipt)
+            self.assertEqual(receipt["claim_id"], "R-001")
+        finally:
+            connection.close()
+
     def test_guidelines_cli_derives_integrity_scope(self) -> None:
         state = self.incident_state()
         self.mutate_task()
@@ -1296,7 +1356,7 @@ class MutationGuardTests(unittest.TestCase):
         with patch.object(
             deadline.secrets, "randbelow", side_effect=[0, lane_index]
         ), deadline.DeadlineHarness(state) as harness:
-            for number in range(1, 11):
+            for number in range(1, 21):
                 task = f"terminal-{number}"
                 harness.start_task("project", task, f"R-{number:03d}", 10, now=0)
                 harness.complete_task("project", task, "green", now=1)
@@ -1312,24 +1372,23 @@ class MutationGuardTests(unittest.TestCase):
     ) -> tuple[int, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
+        arguments = [
+            "random-review",
+            "--baseline",
+            str(self.baseline),
+            "--candidate",
+            str(self.candidate),
+            "--state",
+            str(state),
+            "--lineage",
+            "project",
+            "--cycle",
+            str(cycle),
+        ]
+        if ledger is not None:
+            arguments.extend(["--ledger-candidate", str(ledger)])
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            result = guard.main(
-                [
-                    "random-review",
-                    "--baseline",
-                    str(self.baseline),
-                    "--candidate",
-                    str(self.candidate),
-                    "--state",
-                    str(state),
-                    "--lineage",
-                    "project",
-                    "--cycle",
-                    str(cycle),
-                    "--ledger-candidate",
-                    str(self.empty_ledger if ledger is None else ledger),
-                ]
-            )
+            result = guard.main(arguments)
         return result, stdout.getvalue() + stderr.getvalue()
 
     def test_random_review_applies_exactly_the_selected_guideline_lane(self) -> None:
@@ -1396,7 +1455,7 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("Functional contract", output)
 
-    def test_successful_random_mutation_requires_empty_scratch_ledger(self) -> None:
+    def test_successful_random_mutation_does_not_require_empty_scratch_ledger(self) -> None:
         state, cycle = self.random_review_state(0)
         self.mutate_task()
         uncleared = self.root / "uncleared.md"
@@ -1404,8 +1463,8 @@ class MutationGuardTests(unittest.TestCase):
         result, output = self.run_random_review_cli(
             state, cycle, ledger=uncleared
         )
-        self.assertEqual(result, 1)
-        self.assertIn("reset mutation-suggestions.md", output)
+        self.assertEqual(result, 0, output)
+        self.assertIn("random review cycle", output)
 
     def test_random_review_requires_due_unresolved_stored_cycle(self) -> None:
         state = self.root / "not-due.sqlite"
@@ -1529,7 +1588,7 @@ class MutationGuardTests(unittest.TestCase):
         )
         state = self.root / f"universal-{lane_index}-{capability_effort}.sqlite"
         with patch.object(
-            deadline.secrets, "randbelow", side_effect=[20, lane_index]
+            deadline.secrets, "randbelow", side_effect=[10, lane_index]
         ), deadline.DeadlineHarness(state) as harness:
             for number in range(1, 31):
                 task = f"terminal-{number}"

@@ -1,9 +1,10 @@
 # DE-67 mutation suggestion ledger
 
 This is consumable scratch, not history or promotion authority. Independent reviews and manual
-suggestions use ordinary Markdown. A successful guarded mutation consumes the entries it actually
-applies and resets the live ledger to this empty template; a failed guard or application clears
-nothing.
+suggestions use ordinary Markdown. At the end of a mutation review, reset the live ledger to this
+empty template. Applied suggestions need no other record. Move each rejected or failed suggestion
+to one short entry in optional `.de67/human-todo.md` before removing it. Mutation validation does
+not require an empty ledger, and ledger cleanup never blocks ordinary work.
 
 Every deadline miss records both:
 

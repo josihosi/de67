@@ -75,7 +75,7 @@ than routine implementation.
 | Phase 1 discussion owner | Clarifies the idea and writes the WEC. | Current Codex agent; no fixed model |
 | Phase 2 specification owner | Inspects the repository and freezes the DFS. | GPT-5.6 Sol at `high` |
 | Coordinator | Routes the ledger, workers, evidence, and blockers. | GPT-5.6 Sol at `low` |
-| Ordinary worker | Implements, investigates, builds, or tests one bounded task. | Recent CAOL use: approximately `2:1:1` Terra/`high`, Luna/`high`, Luna/`medium` |
+| Ordinary worker | Implements, investigates, builds, or tests one bounded task. | Luna by default; Terra for difficult diagnosis or risky cross-cutting work; eligible non-ultra Sol exceptionally |
 | Deadline, integrity, or random mutator | Independently diagnoses failure and proposes a guarded method change. | Fresh GPT-5.6 Sol at `xhigh` |
 | Rare universal mutator | Reviews the whole method after the exact rare trigger. | Fresh GPT-5.6 Sol at `ultra` |
 

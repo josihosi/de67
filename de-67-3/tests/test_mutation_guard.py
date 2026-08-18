@@ -1917,10 +1917,14 @@ class MutationGuardTests(unittest.TestCase):
             "exact `gpt-5.6-sol` / `xhigh` and `gpt-5.6-sol` / `ultra` pairs",
             normalized_task_guidance,
         )
-        self.assertIn("reserved exclusively for mutation roles", TASK_GUIDANCE)
+        self.assertIn("reserved exclusively for mutation", TASK_GUIDANCE)
+        self.assertIn("roles, never ordinary work", TASK_GUIDANCE)
         self.assertIn("Never use either reserved pair", COORDINATOR_TEXT)
         self.assertIn("`xhigh` and `ultra` pairs are mutation-only", WORKER_TEXT)
-        self.assertIn("Ordinary workers may be Luna, Terra, or Sol", WORKER_TEXT)
+        self.assertIn("Luna is the default ordinary worker", WORKER_TEXT)
+        self.assertIn("Do not count model selections or enforce a ratio", WORKER_TEXT)
+        self.assertIn("Choose Luna by default", COORDINATOR_TEXT)
+        self.assertIn("Use Terra when current evidence makes", TASK_GUIDANCE)
 
 
 if __name__ == "__main__":

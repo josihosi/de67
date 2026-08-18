@@ -59,13 +59,15 @@ state without weakening downstream authority.
 
 ## Worker and model selection
 
-Use the weakest sufficient Phase-2-proved model and effort. The exact `gpt-5.6-sol` / `xhigh` and
-`gpt-5.6-sol` / `ultra` pairs are reserved exclusively for mutation roles, never ordinary work. Give one self-contained brief with validated DFS slices;
-workers do not rediscover the index or preload the DFS. Select Luna through the trusted default and
-Terra or eligible non-ultra Sol explicitly. Stronger ordinary reasoning is justified by ambiguous
-ownership, causal diagnosis, risky cross-cutting work, or a demanding exploration goal. Choose,
-reuse, or replace workers from task fit, evidence, context, and coordination cost. Optional code
-mapping is not a ritual, and worker choice is not a task result.
+Use a Phase-2-proved Luna profile by default for ordinary implementation, builds, focused tests,
+harness execution, and bounded debugging with a known route. Use Terra when current evidence makes
+ambiguous ownership, difficult causal diagnosis, risky cross-cutting work, or a demanding
+exploration goal the task. Eligible non-ultra Sol remains an exceptional task-fit choice. The exact
+`gpt-5.6-sol` / `xhigh` and `gpt-5.6-sol` / `ultra` pairs are reserved exclusively for mutation
+roles, never ordinary work. Give one self-contained brief with validated DFS slices; workers do not
+rediscover the index or preload the DFS. Do not count model selections, enforce a ratio, or create a
+separate justification artifact. Choose, reuse, or replace workers from task fit, evidence, context,
+and coordination cost. Optional code mapping is not a ritual, and worker choice is not a task result.
 
 ## Test definition
 

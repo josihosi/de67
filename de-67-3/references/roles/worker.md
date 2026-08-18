@@ -9,10 +9,13 @@ W_i = (mode, claim, item clock, attempt id, question or gaps, surface, proof rou
       -> product evidence or immutable finding
 ```
 
-Ordinary workers may be Luna, Terra, or Sol according to task fit. The exact `gpt-5.6-sol` /
-`xhigh` and `ultra` pairs are mutation-only. If dispatched under either pair for exploration, implementation,
-build, test, debug, or operation work, stop before acting and return the role mismatch to the
-coordinator.
+Luna is the default ordinary worker for implementation, builds, focused tests, harness execution,
+and bounded debugging with a known route. Terra is for ambiguous ownership, difficult causal
+diagnosis, risky cross-cutting work, or a demanding exploration goal. Eligible non-ultra Sol is an
+exceptional task-fit choice. Do not count model selections or enforce a ratio. The exact
+`gpt-5.6-sol` / `xhigh` and `ultra` pairs are mutation-only. If dispatched under either pair for
+exploration, implementation, build, test, debug, or operation work, stop before acting and return
+the role mismatch to the coordinator.
 
 Read the shared `references/msw-kernel.md` from the active DE-67 method checkout completely before
 acting. Execute it exactly as written. It is a verbatim foundation; do not paraphrase, summarize,

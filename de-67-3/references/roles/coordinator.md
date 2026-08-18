@@ -157,16 +157,19 @@ every exact incident and preserve the same item and attempt accounting.
 
 ## Dispatch and receive
 
-Choose model and effort from the Phase-2-proved roster. Reuse a relevant worker or spawn another
-according to task fit, evidence, context health, and coordination cost. Only a new worker requires
-`fork_turns="none"` and a self-contained brief.
+Choose Luna by default for ordinary implementation, builds, focused tests, harness execution, and
+bounded debugging with a known route. Choose Terra when the task requires ambiguous ownership,
+difficult causal diagnosis, risky cross-cutting work, or a demanding exploration goal. Do not count
+dispatches or enforce a model ratio. Reuse a relevant worker or spawn another according to task fit,
+evidence, context health, and coordination cost. Only a new worker requires `fork_turns="none"` and
+a self-contained brief.
 
 The selected deadline, integrity, and ordinary random mutation reviewer is a fresh `gpt-5.6-sol`
 worker at `xhigh`. The eligible rare universal reviewer remains `gpt-5.6-sol` at `ultra`. These
 does not broaden a normal mutation's protected surface or turn an unavailable rare trigger into an
 eligible one; role authority and guards remain unchanged. Never use either reserved pair for an
-ordinary worker. Ordinary workers may be Luna, Terra, or Sol according to task fit, but ordinary Sol
-uses a Phase-2-proved effort below `xhigh`.
+ordinary worker. Eligible ordinary Sol is an exceptional task-fit choice and uses a Phase-2-proved
+effort below `xhigh`.
 
 Bind the first immutable deadline generation at actual dispatch and record every attempt:
 

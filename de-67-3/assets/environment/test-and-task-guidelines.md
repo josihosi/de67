@@ -19,7 +19,7 @@ interruption before that endpoint, and the evidence-derived duration of ordinary
 dispatch. Bind whether each interruption supplies the endpoint, invalidates the witness, or permits
 a proved resume to it; an interruption alone is not endpoint proof. If setup cannot complete first,
 route an earlier valid footing or setup owner, or obtain material owner authority to change or defer
-that choice or manufacture a buffer.
+the transition; never infer that choice or manufacture a buffer.
 
 ## Tooling check
 
@@ -50,6 +50,13 @@ allowlist or receipt schema. Stop on a falsified premise. Exploration completes 
 strategy and honest proof route ready to freeze; other contradictions are findings. Attempt
 termination never stops the item clock.
 
+Size a task by the smallest independently valid authority boundary, not by changed line count, file
+count, or the number of transitions it crosses. When issuing, claiming, executing, and consuming one
+authority are inseparable and no partial state can be independently valid and proved, bind and
+implement the complete chain in one gap; do not return it unimplemented solely because the required
+repair is mechanically broad. Split only at a boundary that leaves a useful independently testable
+state without weakening downstream authority.
+
 ## Worker and model selection
 
 Use the weakest sufficient Phase-2-proved model and effort. The exact `gpt-5.6-sol` / `xhigh` and
@@ -71,6 +78,11 @@ typed or schema vocabulary. If the current corpus cannot produce that witness, k
 route in exploration and make it part of the strategy rather than an assumed dependency. Incidental
 metadata matters only when it changes identity, the verdict, or a false-green control.
 
+When a focused closure fixture enters a global actor loop after mutating world state, make the
+fixture own every incidental actor the loop can touch: remove actors outside the claim after the
+final mutation or prove retained actors occupy valid terrain. When logged errors make the runner
+fail, bind terminal evidence to process exit zero rather than a green assertion summary.
+
 ## Test checking
 
 Check the diff, command, and relevant artifact or observation. A test proves only its exercised
@@ -79,6 +91,14 @@ exploration only when evidence falsifies a frozen premise, and do not repeat a f
 changed source, tooling, observation, or causal evidence. Close gaps only from their bound completed
 attempts; final acceptance is atomic and blocked by any open gap. Invalidated proof keeps its closed
 record and creates an open successor.
+
+For playtest proof, apply the MSW deletion test to each proposed artifact. Require direct reasonable
+evidence for causally necessary preconditions, authoritative transitions, observations, persistence,
+and terminal effects. An incidental setup action may rely on a later authoritative guard only when
+that guard necessarily proves the action's relevant effect; do not require duplicate screenshots,
+metadata, reruns, registry steps, or review whose deletion leaves the requested behavior honestly
+proved. Yellow or contradictory evidence remains non-green, and an uncertain, stale, missing, or
+contradicted causal route remains inconclusive.
 
 At a closure spanning multiple authoritative transitions, execute the smallest witness through the
 first unproved consumer before broader implementation or proof. A rejection at that gate

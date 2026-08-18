@@ -58,8 +58,8 @@ outcome, proof, permissions, item clock, or attempt accounting. Normal mutation 
 tests.
 
 Apply only the portion covered by a current authority and guard. Snapshot the two canonical
-guideline assets from the active Phase-3 skill, prepare candidate copies plus an empty
-scratch-ledger candidate, and snapshot the complete active Phase-3 method into baseline and
+guideline assets from the active Phase-3 skill, prepare candidate copies, and snapshot the complete
+active Phase-3 method into baseline and
 repeatable candidate directories. The method baseline must be byte-identical to the complete active
 tree. Build the candidate by changing that snapshot only; never seed it from workspace-local
 guidelines or another checkout. Run the guideline and broad normal-method review as one transaction:
@@ -97,4 +97,7 @@ python <active-de-67-3-skill>/scripts/deadline_harness.py resolve-integrity-muta
 
 The second component queues one fresh-coordinator generation. Deadline and integrity gates remain
 independent when both exist, but may share that one pending restart baton after both are resolved. A
-failed guard or application clears nothing and authorizes no retry of an unchanged tactic.
+failed guard or application authorizes no retry of an unchanged tactic. Before finishing the review,
+move each rejected or failed suggestion to one short entry in optional `.de67/human-todo.md`, then
+empty `.de67/mutation-suggestions.md`. Do not make the to-do file, cleanup, or an empty ledger a
+validation gate. Continue ordinary delivery after the incident mutation route is resolved.

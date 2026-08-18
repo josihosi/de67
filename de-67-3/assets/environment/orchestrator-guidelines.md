@@ -102,6 +102,10 @@ review; the worker terminal timestamp alone is not the item-deadline endpoint. T
 comparison also binds the evidence-derived critical path through every other open gap required for
 atomic claim acceptance and every method gate already known to become due on those terminal
 windows. A next-gap estimate may route useful work, but it cannot prove the claim remains on time.
+Treat one stale or configuration-mismatched canonical link input as a build-graph coherence failure:
+map and rebuild the complete inconsistent input set through the canonical current-configuration
+owner, then bind the resulting executable to current source before another product run. Do not
+replace that owner with a custom linker or rediscover its inconsistent inputs one failure at a time.
 At the first dispatch of each new deadline generation, and again after every terminal result that
 changes an open gap's description, proof route, or estimate, make this comparison inspectable:
 record one current compact component vector naming every open gap and known due method gate, its
@@ -114,10 +118,13 @@ next-gap attempts do not prove whole-claim fit. While the vector is incomplete, 
 independently terminal estimate-discovery slice whose result is necessary to complete that vector
 may proceed as on-time work; all other continuation is honest late. Once the vector is complete, it
 must fit before any on-time closure dispatch.
+The sum of known positive components is already an evidence-derived lower bound while the vector is
+incomplete. If that lower bound exceeds current remaining item seconds, fit is disproved:
+end the cycle through the existing deadline-miss route. Do not add another deadline status.
 If the complete critical-path estimate exceeds the remaining time, no prerequisite, repair,
 product, or proof slice is on-time merely because it separately fits and is independently terminal.
-Preserve necessary continuation as late work without presenting or routing it as an on-time closure
-attempt. A cached comparison from an earlier dispatch is not current evidence.
+End the cycle through the same deadline-miss route. The next generation may continue the necessary
+work with a new start and deadline. A cached comparison from an earlier dispatch is not current evidence.
 Choose model and effort from the Phase-2-proved roster without a rigid task matrix. Luna uses the
 trusted project default with an explicit proved effort; Terra is selected explicitly. Receive
 progress and final results through the native parent/child channel; clarification is allowed while

@@ -175,6 +175,52 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("&lt;img src=x onerror=bad&gt;", rendered)
         self.assertNotIn("<img", rendered)
 
+    def test_ledger_continuations_stay_inside_one_decorative_rail(self) -> None:
+        rendered = dashboard_module.render_ledger_section(
+            "- [ ] R-009 — useful work\n"
+            "  - Phase: Closure.\n"
+            "  - Current route: first line\n"
+            "    continues here.\n"
+        )
+        self.assertEqual(rendered.count('class="ledger-item"'), 1)
+        self.assertIn('class="ledger-title">R-009 — useful work', rendered)
+        self.assertIn("continues here", rendered)
+        self.assertNotIn("☐", rendered)
+
+    def test_sidecar_is_cached_by_clock_state_and_rendered_without_artifacts(self) -> None:
+        script = self.workspace / "trajectory_sidecar.py"
+        script.write_text("# test sidecar\n", encoding="utf-8")
+        report = {
+            "claim": "R-009",
+            "closure_sequence": 2,
+            "latest_task": "R009-M1",
+            "latest_task_gap": "G-002",
+            "latest_task_result": "active",
+            "gaps": [
+                {"gap_id": "G-001", "revision": 1, "summary": "proved route",
+                 "status": "proved", "attempts": 1},
+                {"gap_id": "G-002", "revision": 41, "summary": "<active route>",
+                 "status": "open", "attempts": 3},
+            ],
+            "churn_vector": {
+                "product_owner": {"direction": "product-surface-present"},
+            },
+        }
+        before = set(self.workspace.rglob("*"))
+        with patch.object(dashboard_module, "read_sidecar", return_value=report) as run:
+            dashboard = dashboard_module.Dashboard(
+                self.workspace, sessions_root=self.sessions, sidecar_script=script
+            )
+            first = dashboard.render("overview").decode()
+            second = dashboard.render("overview").decode()
+        self.assertEqual(run.call_count, 1)
+        self.assertIn("Trajectory sidecar", first)
+        self.assertIn("G-002 r41", first)
+        self.assertIn("active · 3 attempts", first)
+        self.assertIn("&lt;active route&gt;", first)
+        self.assertEqual(first, second)
+        self.assertEqual(before, set(self.workspace.rglob("*")))
+
     def test_active_workers_are_counted_by_model_and_effort(self) -> None:
         day = self.sessions / "2026/08/18"
         day.mkdir(parents=True)

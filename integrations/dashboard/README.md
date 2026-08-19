@@ -43,6 +43,8 @@ python3 integrations/dashboard/de67_dashboard.py \
 
 The report stays in memory until the clock changes. The dashboard does not create sidecar
 snapshots, history files, or refresh artifacts. A missing or failed sidecar cannot stop DE67.
+The plot keeps current closure gaps around the claim, draws product and test cosine similarity
+along each spoke, and shows the sidecar's categorical trajectory observations without scoring them.
 
 Run focused tests:
 

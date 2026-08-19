@@ -162,6 +162,7 @@ def render_trajectory(report: dict[str, Any]) -> str:
     size = radius * 2 + 220
     center = size / 2
     lines: list[str] = []
+    vectors: list[str] = []
     nodes: list[str] = []
     latest_gap = str(report.get("latest_task_gap") or "")
     for index, gap in enumerate(gaps):
@@ -175,12 +176,38 @@ def render_trajectory(report: dict[str, Any]) -> str:
         lines.append(
             f'<line x1="{center:.1f}" y1="{center:.1f}" x2="{x:.1f}" y2="{y:.1f}" />'
         )
+        try:
+            product_relation = max(0.0, min(1.0, float(gap.get("implementation_relation", 0))))
+        except (TypeError, ValueError):
+            product_relation = 0.0
+        try:
+            test_relation = max(0.0, min(1.0, float(gap.get("test_relation", 0))))
+        except (TypeError, ValueError):
+            test_relation = 0.0
+        perpendicular_x = -math.sin(angle) * 3
+        perpendicular_y = math.cos(angle) * 3
+        for relation, css_class, offset in (
+            (product_relation, "product-vector", -1),
+            (test_relation, "test-vector", 1),
+        ):
+            inner_radius = 82
+            visible_radius = inner_radius + (radius - inner_radius) * relation
+            end_x = center + visible_radius * math.cos(angle) + perpendicular_x * offset
+            end_y = center + visible_radius * math.sin(angle) + perpendicular_y * offset
+            start_x = center + inner_radius * math.cos(angle) + perpendicular_x * offset
+            start_y = center + inner_radius * math.sin(angle) + perpendicular_y * offset
+            vectors.append(
+                f'<g class="{css_class}"><line x1="{start_x:.1f}" y1="{start_y:.1f}" '
+                f'x2="{end_x:.1f}" y2="{end_y:.1f}" /><circle cx="{end_x:.1f}" '
+                f'cy="{end_y:.1f}" r="3" /></g>'
+            )
         summary = " ".join(str(gap.get("summary", "")).split())
         nodes.append(
-            f'<g class="trajectory-node {tone}" transform="translate({x - 58:.1f} {y - 30:.1f})">'
-            f'<title>{_escape(summary)}</title><rect width="116" height="60" rx="8" />'
-            f'<text x="58" y="23">{_escape(gap_id)} r{_escape(gap.get("revision", "?"))}</text>'
-            f'<text class="node-state" x="58" y="43">{_escape("active" if active else status)} · {_escape(gap.get("attempts", 0))} attempts</text>'
+            f'<g class="trajectory-node {tone}" transform="translate({x - 58:.1f} {y - 36:.1f})">'
+            f'<title>{_escape(summary)}</title><rect width="116" height="72" rx="8" />'
+            f'<text x="58" y="21">{_escape(gap_id)} r{_escape(gap.get("revision", "?"))}</text>'
+            f'<text class="node-state" x="58" y="40">{_escape("active" if active else status)} · {_escape(gap.get("attempts", 0))} attempts</text>'
+            f'<text class="node-vector" x="58" y="58">code {product_relation:.2f} · test {test_relation:.2f}</text>'
             '</g>'
         )
     claim = report.get("claim", "Claim")
@@ -192,16 +219,24 @@ def render_trajectory(report: dict[str, Any]) -> str:
         f'<text class="node-state" x="78" y="53">{_escape(latest_task)}</text></g>'
     )
     churn = report.get("churn_vector") or {}
-    observations = " · ".join(
-        str(value.get("direction")) for value in churn.values()
-        if isinstance(value, dict) and value.get("direction")
-    )
+    observation_chips: list[str] = []
+    for name, value in churn.items():
+        if not isinstance(value, dict) or not value.get("direction"):
+            continue
+        evidence = "; ".join(str(item) for item in value.get("evidence", []) if item)
+        observation_chips.append(
+            f'<span title="{_escape(evidence)}"><b>{_escape(str(name).replace("_", " "))}</b>'
+            f'{_escape(str(value["direction"]).replace("-", " "))}</span>'
+        )
     return (
-        '<section class="trajectory"><h2>Trajectory sidecar</h2>'
+        '<section class="trajectory"><div class="trajectory-heading"><h2>Trajectory sidecar</h2>'
+        '<span><i class="vector-key product"></i>Code similarity '
+        '<i class="vector-key test"></i>Test similarity</span></div>'
         '<div class="trajectory-scroll">'
         f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="Trajectory for {_escape(claim)}">'
-        f'<g class="trajectory-lines">{"".join(lines)}</g>{"".join(nodes)}{center_node}</svg></div>'
-        f'<div class="trajectory-note">{_escape(observations)}</div></section>'
+        f'<g class="trajectory-lines">{"".join(lines)}</g><g class="trajectory-vectors">'
+        f'{"".join(vectors)}</g>{"".join(nodes)}{center_node}</svg></div>'
+        f'<div class="trajectory-observations">{"".join(observation_chips)}</div></section>'
     )
 
 
@@ -655,6 +690,14 @@ class Dashboard:
             self._good["sidecar"] = value
             return value
         except Exception as error:
+            if claim and "No closure gaps found" in str(error):
+                value = {
+                    "data": {"claim": claim, "gaps": [], "churn_vector": {}},
+                    "observed": time.time(), "stale": False, "error": None,
+                }
+                self._sidecar_signature = signature if "signature" in locals() else None
+                self._good["sidecar"] = value
+                return value
             previous = dict(self._good.get("sidecar", {}))
             previous.update({"stale": bool(previous), "error": str(error),
                              "observed": time.time()})
@@ -792,16 +835,16 @@ class Dashboard:
                     f'<span>{_escape(finding.get("short_verdict", ""))}</span>'
                     f'<em>{_escape(finding_age)}</em></div>'
                 )
-            body = f'<div class="status">{cards}</div>{workers_html}{finding_html}<div class="work-grid"><section><h2>Active work ledger</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section>{sidecar_html}</div><section><h2>Waiting work</h2><div class="ledger-list">{waiting_html}</div></section><section><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
+            body = f'<div class="status">{cards}</div>{workers_html}{sidecar_html}{finding_html}<section><h2>Active work ledger</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section><h2>Waiting work</h2><div class="ledger-list">{waiting_html}</div></section><section><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
         page = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>DE67</title>
 <style>
 :root{{--bg:#101318;--panel:#1a1e24;--line:#343a43;--text:#eee9df;--muted:#9ca3ad;--green:#75c84c;--yellow:#f0bc28;--red:#e05248;--blue:#75a7d8}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}}main{{max-width:1180px;margin:auto;padding:24px}}header{{display:flex;align-items:baseline;gap:22px}}h1{{font-size:25px;margin:0}}header span,.subtle{{color:var(--muted)}}nav{{display:flex;margin:18px 0;border-bottom:1px solid var(--line)}}nav a{{color:var(--muted);text-decoration:none;padding:10px 16px}}nav a.selected{{color:var(--text);border:1px solid var(--line);border-bottom-color:var(--bg);border-radius:6px 6px 0 0;margin-bottom:-1px}}nav a:last-child{{margin-left:auto}}.status{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}}.lamp,.metric,section,.activity{{background:var(--panel);border:1px solid var(--line);border-radius:7px}}.lamp,.metric{{padding:13px 14px;min-height:82px}}small{{display:block;color:var(--muted);margin-bottom:10px}}strong{{font-size:18px}}.metric-note{{display:block;color:var(--muted);font-size:11px;margin-top:5px;white-space:nowrap}}.workers{{padding:12px 16px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:7px 12px;text-align:center;border-top:1px solid var(--line)}}thead th{{border-top:0;color:var(--muted);font-size:12px;font-weight:500}}tbody th{{text-align:left}}td{{font-variant-numeric:tabular-nums;color:var(--muted)}}td.active-count{{color:var(--green);font-weight:700}}.activity{{display:grid;grid-template-columns:100px max-content 1fr max-content;align-items:center;gap:12px;margin-top:10px;padding:10px 14px}}.activity small{{margin:0}}.activity strong{{font-size:13px}}.activity span{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.activity em{{color:var(--muted);font-style:normal;font-size:12px}}.dot{{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:8px}}.green{{background:var(--green)}}.yellow{{background:var(--yellow)}}.red{{background:var(--red)}}.grey{{background:#737983}}section{{margin-top:12px;padding:16px}}h2{{font-size:16px;margin:0 0 12px}}h3{{font-size:15px}}p,li{{line-height:1.55}}code{{background:#11151a;padding:2px 4px;border-radius:3px}}pre{{overflow:auto;background:#11151a;padding:12px;border-radius:5px}}.ledger-list{{margin-top:12px}}.ledger-item{{position:relative;margin:10px 0 0;padding:12px 16px 12px 22px;border:0;border-radius:0;background:linear-gradient(90deg,rgba(117,167,216,.08),transparent 68%)}}.ledger-item::before{{content:"";position:absolute;left:0;top:6px;bottom:6px;width:4px;border-radius:4px;background:linear-gradient(180deg,var(--blue),#536c86)}}.ledger-title{{font-weight:650;line-height:1.45}}.ledger-item ul{{list-style:none;margin:8px 0 0;padding-left:0;color:var(--muted)}}.ledger-item li{{padding:4px 0}}.ledger-item p{{margin:8px 0 0;color:var(--muted)}}.trajectory{{padding-bottom:12px}}.trajectory-scroll{{overflow:auto;display:flex;justify-content:center}}.trajectory svg{{display:block;width:min(100%,560px);height:auto;min-width:500px}}.trajectory-lines line{{stroke:var(--line);stroke-width:2}}.trajectory-node rect{{fill:#20252c;stroke:var(--line);stroke-width:2}}.trajectory-node.open rect{{stroke:var(--yellow)}}.trajectory-node.proved rect{{stroke:var(--green)}}.trajectory-node.active rect{{fill:#202b35;stroke:var(--blue);stroke-width:3}}.trajectory-node text,.trajectory-center text{{fill:var(--text);font:600 13px system-ui,sans-serif;text-anchor:middle}}.trajectory-node .node-state,.trajectory-center .node-state{{fill:var(--muted);font-size:10px;font-weight:500}}.trajectory-center rect{{fill:#111820;stroke:var(--blue);stroke-width:3}}.trajectory-note{{color:var(--muted);font-size:11px;text-align:center;line-height:1.5;padding:0 8px 4px}}footer{{display:flex;gap:25px;flex-wrap:wrap;color:var(--muted);padding:14px 4px}}footer em{{font-style:normal;color:#747c87;margin-left:5px}}.document{{padding:22px}}@media(max-width:900px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}@media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}header span{{display:none}}.activity{{grid-template-columns:1fr}}.activity span{{white-space:normal}}.trajectory svg{{min-width:460px}}}}
 .status{{grid-template-columns:repeat(6,1fr)}}
-.work-grid{{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(440px,.75fr);gap:12px;align-items:start}}.work-grid>section{{height:100%}}
+.trajectory-heading{{display:flex;align-items:center;justify-content:space-between;gap:16px}}.trajectory-heading h2{{margin:0}}.trajectory-heading>span{{color:var(--muted);font-size:11px;white-space:nowrap}}.vector-key{{display:inline-block;width:16px;height:3px;border-radius:3px;margin:0 5px 3px 10px}}.vector-key.product{{background:var(--blue)}}.vector-key.test{{background:var(--yellow)}}.trajectory-vectors line{{stroke-width:5;stroke-linecap:round}}.trajectory-vectors circle{{stroke:none}}.product-vector line{{stroke:var(--blue)}}.product-vector circle{{fill:var(--blue)}}.test-vector line{{stroke:var(--yellow)}}.test-vector circle{{fill:var(--yellow)}}.trajectory-node .node-vector{{fill:#b8c0ca;font-size:9px;font-weight:500}}.trajectory-observations{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:4px}}.trajectory-observations span{{display:flex;flex-direction:column;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:5px;color:var(--muted);font-size:10px;line-height:1.35}}.trajectory-observations b{{color:var(--text);font-size:10px;font-weight:600;text-transform:capitalize;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 @media(max-width:1000px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}
-@media(max-width:1050px){{.work-grid{{grid-template-columns:1fr}}}}
+@media(max-width:700px){{.trajectory-heading{{align-items:flex-start;flex-direction:column}}.trajectory-observations{{grid-template-columns:1fr 1fr}}}}
 @media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}}}
 </style></head><body><main><header><h1>DE67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")

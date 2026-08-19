@@ -198,12 +198,15 @@ class DashboardTests(unittest.TestCase):
             "latest_task_result": "active",
             "gaps": [
                 {"gap_id": "G-001", "revision": 1, "summary": "proved route",
-                 "status": "proved", "attempts": 1},
+                 "status": "proved", "attempts": 1,
+                 "implementation_relation": 0.25, "test_relation": 0.75},
                 {"gap_id": "G-002", "revision": 41, "summary": "<active route>",
-                 "status": "open", "attempts": 3},
+                 "status": "open", "attempts": 3,
+                 "implementation_relation": 0.8, "test_relation": 0.4},
             ],
             "churn_vector": {
-                "product_owner": {"direction": "product-surface-present"},
+                "product_owner": {"direction": "product-surface-present",
+                                  "evidence": ["one changed product path"]},
             },
         }
         before = set(self.workspace.rglob("*"))
@@ -217,9 +220,57 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Trajectory sidecar", first)
         self.assertIn("G-002 r41", first)
         self.assertIn("active · 3 attempts", first)
+        self.assertIn("code 0.80 · test 0.40", first)
+        self.assertIn('class="product-vector"', first)
+        self.assertIn('class="test-vector"', first)
+        self.assertIn("product surface present", first)
         self.assertIn("&lt;active route&gt;", first)
+        self.assertLess(first.index("Active workers"), first.index("Trajectory sidecar"))
+        self.assertLess(first.index("Trajectory sidecar"), first.index("Latest finding"))
         self.assertEqual(first, second)
         self.assertEqual(before, set(self.workspace.rglob("*")))
+
+    def test_trajectory_tolerates_different_gap_shapes_and_missing_fields(self) -> None:
+        single = dashboard_module.render_trajectory({
+            "claim": "R-ONE", "latest_task": None, "gaps": [
+                {"gap_id": "G-ONLY", "revision": 1, "status": "open",
+                 "summary": "single gap", "implementation_relation": "invalid"},
+            ],
+        })
+        self.assertIn("G-ONLY r1", single)
+        self.assertIn("No active attempt", single)
+        self.assertIn("code 0.00 · test 0.00", single)
+
+        many = dashboard_module.render_trajectory({
+            "claim": "R-MANY", "gaps": [
+                {"gap_id": f"G-{index:03d}", "revision": index, "status": "open",
+                 "summary": "gap", "implementation_relation": 2,
+                 "test_relation": -1}
+                for index in range(1, 15)
+            ],
+        })
+        self.assertEqual(many.count('class="trajectory-node open"'), 14)
+        self.assertIn("code 1.00 · test 0.00", many)
+
+        empty = dashboard_module.render_trajectory({"claim": "R-EXPLORE", "gaps": []})
+        self.assertIn("No closure trajectory", empty)
+
+    def test_exploration_without_closure_gaps_is_a_healthy_empty_sidecar(self) -> None:
+        script = self.workspace / "trajectory_sidecar.py"
+        script.write_text("# test sidecar\n", encoding="utf-8")
+        dashboard = dashboard_module.Dashboard(
+            self.workspace, sessions_root=self.sessions, sidecar_script=script
+        )
+        with patch.object(
+            dashboard_module, "read_sidecar",
+            side_effect=RuntimeError("error: No closure gaps found for lineage/R-009"),
+        ) as run:
+            first = dashboard.snapshot()["sidecar"]
+            second = dashboard.snapshot()["sidecar"]
+        self.assertIsNone(first["error"])
+        self.assertEqual(first["data"]["gaps"], [])
+        self.assertEqual(second, first)
+        self.assertEqual(run.call_count, 1)
 
     def test_active_workers_are_counted_by_model_and_effort(self) -> None:
         day = self.sessions / "2026/08/18"

@@ -302,6 +302,8 @@ class DeadlineHarness:
                 resolved_at REAL NOT NULL,
                 evidence TEXT NOT NULL,
                 receipt_id TEXT,
+                no_change_required INTEGER NOT NULL DEFAULT 0
+                    CHECK (no_change_required IN (0, 1)),
                 PRIMARY KEY (lineage_id, claim_id, generation, component),
                 FOREIGN KEY (lineage_id, claim_id, generation)
                     REFERENCES claim_deadline_generation_incidents(
@@ -703,6 +705,17 @@ class DeadlineHarness:
         if "receipt_id" not in deadline_component_columns:
             self.connection.execute(
                 "ALTER TABLE deadline_mutation_components ADD COLUMN receipt_id TEXT"
+            )
+        generation_component_columns = {
+            row["name"]
+            for row in self.connection.execute(
+                "PRAGMA table_info(deadline_generation_mutation_components)"
+            ).fetchall()
+        }
+        if "no_change_required" not in generation_component_columns:
+            self.connection.execute(
+                "ALTER TABLE deadline_generation_mutation_components "
+                "ADD COLUMN no_change_required INTEGER NOT NULL DEFAULT 0"
             )
         self.connection.execute(
             """
@@ -2777,13 +2790,12 @@ class DeadlineHarness:
         now: float,
         *,
         completion_invalid: bool = False,
-        forced: bool = False,
     ) -> dict[str, Any] | None:
         claim = self._task_claim(task["lineage_id"], task["task_id"])
         accepted = self._latest_valid_acceptance(
             str(task["lineage_id"]), str(task["claim_id"])
         )
-        missed = (forced or now >= claim["deadline_at"]) and (
+        missed = now >= claim["deadline_at"] and (
             completion_invalid
             or task["integrity_breached_at"] is not None
             or accepted is None
@@ -3232,7 +3244,26 @@ class DeadlineHarness:
                         if restart_generation is not None
                         else None
                     )
-                    if restart is None or restart["acknowledged_at"] is None:
+                    macro = self.connection.execute(
+                        """
+                        SELECT no_change_required
+                        FROM deadline_generation_mutation_components
+                        WHERE lineage_id = ? AND claim_id = ?
+                          AND generation = ? AND component = 'macro'
+                        """,
+                        (
+                            lineage_id,
+                            claim_id,
+                            int(claim["deadline_generation"]),
+                        ),
+                    ).fetchone()
+                    no_change_required = bool(
+                        macro is not None and macro["no_change_required"]
+                    )
+                    if (
+                        not no_change_required
+                        and (restart is None or restart["acknowledged_at"] is None)
+                    ):
                         raise DeadlineError(
                             "Resolved deadline generation requires its acknowledged "
                             "successor before a new work deadline can be armed"
@@ -3252,7 +3283,7 @@ class DeadlineHarness:
                             estimate,
                             started_at,
                             started_at + estimate,
-                            restart_generation,
+                            restart_generation if not no_change_required else None,
                         ),
                     )
                     claim = self._claim(lineage_id, claim_id)
@@ -3815,7 +3846,7 @@ class DeadlineHarness:
     def miss_claim_deadline(
         self, lineage_id: str, claim_id: str, *, now: float | None = None
     ) -> dict[str, Any]:
-        """End the current generation through its ordinary deadline-miss route."""
+        """Record an actual expired item deadline through the ordinary miss route."""
 
         lineage_id = self._identity(lineage_id, "Lineage id")
         claim_id = self._identity(claim_id, "Claim id")
@@ -3840,7 +3871,11 @@ class DeadlineHarness:
             accepted = self._latest_valid_acceptance(lineage_id, claim_id)
             if accepted is not None and accepted["accepted_at"] < claim["deadline_at"]:
                 raise DeadlineError("An accepted claim cannot miss its deadline")
-            incident = self._record_miss_if_due(task, recorded_at, forced=True)
+            if recorded_at < float(claim["deadline_at"]):
+                raise DeadlineError(
+                    "The item deadline has not expired; continue the ledger item"
+                )
+            incident = self._record_miss_if_due(task, recorded_at)
             result = {
                 "incident": incident,
                 "claim_id": claim_id,
@@ -5045,8 +5080,8 @@ class DeadlineHarness:
                     """
                     INSERT INTO deadline_generation_mutation_components (
                         lineage_id, claim_id, generation, component,
-                        resolved_at, evidence, receipt_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        resolved_at, evidence, receipt_id, no_change_required
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         lineage_id,
@@ -5056,6 +5091,7 @@ class DeadlineHarness:
                         resolved_at,
                         evidence,
                         receipt_id,
+                        int(no_change_required),
                     ),
                 )
                 if int(incident["generation"]) == 1:
@@ -5075,6 +5111,7 @@ class DeadlineHarness:
             elif (
                 existing["evidence"] == evidence
                 and existing["receipt_id"] == receipt_id
+                and bool(existing["no_change_required"]) == no_change_required
             ):
                 recorded = False
             else:
@@ -5092,7 +5129,7 @@ class DeadlineHarness:
                 refreshed = self._claim_deadline_incident(lineage_id, claim_id)
                 if refreshed is None:
                     raise DeadlineError("Failed to read claim deadline incident")
-                if refreshed["restart_generation"] is None:
+                if refreshed["restart_generation"] is None and not no_change_required:
                     restart, _ = self._request_coordinator_restart(
                         lineage_id,
                         f"deadline mutation resolved for {claim_id}",
@@ -6116,7 +6153,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     deadline_miss = commands.add_parser(
         "deadline-miss",
-        help="End the current claim generation through its ordinary deadline-miss route",
+        help="Record the current item deadline after its wall-clock expiry",
     )
     deadline_miss.add_argument("--state", dest="command_state")
     deadline_miss.add_argument("--lineage", required=True)

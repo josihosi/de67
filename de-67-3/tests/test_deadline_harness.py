@@ -2989,7 +2989,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             [],
         )
 
-    def test_terminal_gap_revision_needs_closure_or_material_revision(self) -> None:
+    def test_terminal_attempt_can_retry_the_same_gap_revision(self) -> None:
         self.harness.start_task("project", "explore", "R-REV", 100, now=0)
         self.harness.complete_task("project", "explore", "strategy known", now=1)
         self.harness.transition_claim_to_closure(
@@ -3002,10 +3002,13 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.harness.report_worker_finding(
             "project", "finding", "unexpected", "Route lacked the owner signal.", now=4
         )
-        with self.assertRaisesRegex(DeadlineError, "evidence-bound revision"):
-            self.harness.start_task(
-                "project", "finding-retry", "R-REV", 100, phase="closure", now=5
-            )
+        retry = self.harness.start_task(
+            "project", "finding-retry", "R-REV", 100, phase="closure", now=5
+        )
+        self.assertEqual(retry["closure_gap_revision"], 1)
+        self.harness.abandon_attempt(
+            "project", "finding-retry", "Changed route selected.", now=5.5
+        )
         revised = self.harness.revise_closure_gap(
             "project", "R-REV", "G-001", "finding",
             "One proof remains.", "Run an owner-visible route.", now=5,
@@ -3025,11 +3028,11 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.harness.complete_task(
             "project", "completed", "route still incomplete", now=7
         )
-        with self.assertRaisesRegex(DeadlineError, "evidence-bound revision"):
-            self.harness.start_task(
-                "project", "completed-retry", "R-REV", 100,
-                phase="closure", now=8,
-            )
+        completed_retry = self.harness.start_task(
+            "project", "completed-retry", "R-REV", 100,
+            phase="closure", now=8,
+        )
+        self.assertEqual(completed_retry["closure_gap_revision"], 2)
 
     def test_compact_views_keep_latest_result_for_each_active_closure_gap(self) -> None:
         self.harness.start_task("project", "explore", "R-COMPACT", 100, now=0)

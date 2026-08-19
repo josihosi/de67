@@ -3438,14 +3438,6 @@ class DeadlineHarness:
                                 "Closure gap revision already has a live attempt; "
                                 "abandon it before dispatching a replacement"
                             )
-                        if (
-                            valid_acceptance is None
-                            and prior["attempt_terminal_kind"] != "abandoned"
-                        ):
-                            raise DeadlineError(
-                                "Closure gap needs acceptance or an evidence-bound revision "
-                                "before another attempt"
-                            )
             cursor = self.connection.execute(
                 """
                 INSERT OR IGNORE INTO tasks (

@@ -80,6 +80,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("<h2>Waiting work</h2>", page)
         self.assertIn("waiting work", page)
         self.assertIn("<small>Mutations</small><strong>3</strong>", page)
+        self.assertIn('<small>Mutation review</small><strong>Off</strong>', page)
         self.assertNotIn("<small>Random mutations</small>", page)
         self.assertIn("Next random in 2 worker results", page)
         self.assertIn("<h2>Active workers</h2>", page)
@@ -88,6 +89,40 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("R009-M0", page)
         self.assertIn("escaped &lt;finding&gt;", page)
         self.assertNotIn("escaped <finding>", page)
+
+    def test_mutation_review_lamp_tracks_incomplete_clock_components(self) -> None:
+        database = self.workspace / ".de67/state/deadlines.sqlite3"
+        connection = sqlite3.connect(database)
+        connection.executescript("""
+            CREATE TABLE claim_deadline_generation_incidents (
+              lineage_id TEXT, claim_id TEXT, generation INTEGER, recorded_at REAL
+            );
+            CREATE TABLE deadline_generation_mutation_components (
+              lineage_id TEXT, claim_id TEXT, generation INTEGER, component TEXT
+            );
+            INSERT INTO claim_deadline_generation_incidents
+              VALUES ('lineage','R-009',12,100);
+            INSERT INTO deadline_generation_mutation_components
+              VALUES ('lineage','R-009',12,'micro');
+        """)
+        connection.commit()
+        connection.close()
+
+        dashboard = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions)
+        running = dashboard.render("overview").decode()
+        self.assertIn('<span class="dot yellow"></span><small>Mutation review</small>'
+                      '<strong>Running</strong>', running)
+
+        connection = sqlite3.connect(database)
+        connection.execute(
+            "INSERT INTO deadline_generation_mutation_components VALUES (?,?,?,?)",
+            ("lineage", "R-009", 12, "macro"),
+        )
+        connection.commit()
+        connection.close()
+        off = dashboard.render("overview").decode()
+        self.assertIn('<span class="dot grey"></span><small>Mutation review</small>'
+                      '<strong>Off</strong>', off)
 
     def test_terminal_attempt_is_not_shown_as_running_work(self) -> None:
         database = self.workspace / ".de67/state/deadlines.sqlite3"
@@ -172,6 +207,43 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("<tr><th>Luna</th><td class=\"\">0</td><td class=\"active-count\">1</td>", page)
         self.assertIn("<tr><th>Terra</th><td class=\"\">0</td><td class=\"\">0</td><td class=\"\">0</td>", page)
         self.assertNotIn("Unavailable", page)
+
+    def test_active_runner_selects_coordinator_and_reactivated_worker(self) -> None:
+        day = self.sessions / "2026/08/18"
+        day.mkdir(parents=True)
+
+        def write_session(name, session_id, parent, model, effort, events):
+            path = day / name
+            items = [
+                {"type": "session_meta", "payload": {
+                    "id": session_id, "parent_thread_id": parent,
+                    "cwd": str(self.workspace), "timestamp": "2026-08-18T08:00:00Z",
+                }},
+                {"type": "turn_context", "payload": {"model": model, "effort": effort}},
+            ] + [{"type": "event_msg", "payload": {"type": event}} for event in events]
+            path.write_text("".join(json.dumps(item) + "\n" for item in items), encoding="utf-8")
+
+        write_session("rollout-root.jsonl", "coordinator", None,
+                      "gpt-5.6-terra", "low", ["task_started"])
+        write_session("rollout-worker.jsonl", "worker", "coordinator",
+                      "gpt-5.6-luna", "high",
+                      ["task_started", "task_complete", "task_started"])
+        write_session("rollout-unrelated.jsonl", "unrelated", None,
+                      "gpt-5.6-sol", "low", ["task_started"])
+
+        runner = self.workspace / ".de67/state/runner-runs/live"
+        runner.mkdir(parents=True)
+        (runner / "status.json").write_text(
+            json.dumps({"status": "running"}), encoding="utf-8"
+        )
+        (runner / "events.jsonl").write_text(json.dumps({
+            "type": "item.started",
+            "item": {"type": "collab_tool_call", "sender_thread_id": "coordinator"},
+        }) + "\n", encoding="utf-8")
+
+        workers = dashboard_module.worker_state(self.workspace, self.sessions)
+        self.assertTrue(workers["available"])
+        self.assertEqual(workers["counts"]["luna"]["high"], 1)
 
     def test_stale_pid_file_falls_back_to_workspace_process(self) -> None:
         (self.workspace / ".de67/state/coordinator-supervisor.pid").write_text(

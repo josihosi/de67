@@ -224,6 +224,76 @@ def _completed_mutation_counts(connection: sqlite3.Connection) -> tuple[int, int
     return ordinary, random, next_random
 
 
+def _mutation_review_state(connection: sqlite3.Connection) -> dict[str, Any]:
+    """Project an active mutation review from existing append-only clock state."""
+    tables = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )}
+    pending: list[tuple[float, str]] = []
+    review_families = (
+        ("claim_deadline_generation_incidents", "deadline_generation_mutation_components",
+         ("lineage_id", "claim_id", "generation"), "Deadline"),
+        ("claim_deadline_incidents", "deadline_mutation_components",
+         ("lineage_id", "claim_id"), "Deadline"),
+    )
+    for incident_table, component_table, keys, label in review_families:
+        if incident_table not in tables or component_table not in tables:
+            continue
+        incident = connection.execute(
+            f'SELECT * FROM "{incident_table}" ORDER BY "recorded_at" DESC LIMIT 1'
+        ).fetchone()
+        if incident is None:
+            continue
+        where = " AND ".join(f'"{key}" = ?' for key in keys)
+        components = {row[0] for row in connection.execute(
+            f'SELECT "component" FROM "{component_table}" WHERE {where}',
+            tuple(incident[key] for key in keys),
+        )}
+        if not {"micro", "macro"}.issubset(components):
+            pending.append((float(incident["recorded_at"]), label))
+
+    integrity_incident_columns = _table_columns(connection, "incidents") if "incidents" in tables else set()
+    integrity_component_columns = (
+        _table_columns(connection, "integrity_mutation_components")
+        if "integrity_mutation_components" in tables else set()
+    )
+    if (
+        {"kind", "recorded_at", "lineage_id", "task_id"}.issubset(integrity_incident_columns)
+        and {"component", "lineage_id", "task_id"}.issubset(integrity_component_columns)
+    ):
+        incident = connection.execute(
+            "SELECT * FROM incidents WHERE kind = 'integrity_breach' "
+            "ORDER BY recorded_at DESC LIMIT 1"
+        ).fetchone()
+        if incident is not None:
+            components = {row[0] for row in connection.execute(
+                "SELECT component FROM integrity_mutation_components "
+                "WHERE lineage_id = ? AND task_id = ?",
+                (incident["lineage_id"], incident["task_id"]),
+            )}
+            if not {"micro", "macro"}.issubset(components):
+                pending.append((float(incident["recorded_at"]), "Integrity"))
+
+    if "random_mutation_cycles" in tables:
+        columns = _table_columns(connection, "random_mutation_cycles")
+        required = {"due_task_id", "ordinary_resolution_evidence", "universal_required",
+                    "universal_resolution_evidence", "cycle_number"}
+        if required.issubset(columns):
+            row = connection.execute(
+                "SELECT * FROM random_mutation_cycles WHERE due_task_id IS NOT NULL "
+                "AND (ordinary_resolution_evidence IS NULL "
+                "OR (universal_required = 1 AND universal_resolution_evidence IS NULL)) "
+                "ORDER BY cycle_number DESC LIMIT 1"
+            ).fetchone()
+            if row is not None:
+                pending.append((float(row["cycle_number"]), "Random"))
+
+    if not pending:
+        return {"running": False, "kind": None}
+    _order, kind = max(pending, key=lambda item: item[0])
+    return {"running": True, "kind": kind}
+
+
 def read_clock(path: Path) -> dict[str, Any]:
     uri = f"file:{quote(str(path.resolve()).replace(os.sep, '/'), safe='/:')}?mode=ro"
     connection = sqlite3.connect(uri, uri=True, timeout=0)
@@ -236,11 +306,12 @@ def read_clock(path: Path) -> dict[str, Any]:
         restart = _latest(connection, "coordinator_restart_requests", "generation")
         finding = _latest(connection, "worker_findings", "reported_at")
         mutations, random_mutations, next_random = _completed_mutation_counts(connection)
+        mutation_review = _mutation_review_state(connection)
         connection.execute("COMMIT")
         return {"task": task, "deadline": deadline, "restart": restart,
                 "finding": finding,
                 "mutations": mutations, "random_mutations": random_mutations,
-                "next_random_mutation": next_random}
+                "next_random_mutation": next_random, "mutation_review": mutation_review}
     finally:
         connection.close()
 
@@ -308,7 +379,40 @@ def _session_complete(path: Path) -> bool:
     with path.open("rb") as source:
         source.seek(max(0, size - 131072))
         tail = source.read().decode("utf-8", errors="replace")
-    return '"type":"task_complete"' in tail or '"type": "task_complete"' in tail
+    started = max(tail.rfind('"type":"task_started"'),
+                  tail.rfind('"type": "task_started"'))
+    completed = max(tail.rfind('"type":"task_complete"'),
+                    tail.rfind('"type": "task_complete"'))
+    return completed >= 0 and completed > started
+
+
+def _active_coordinator_id(workspace: Path) -> str | None:
+    """Read the active coordinator thread id from its passive runner event stream."""
+    run_root = workspace / ".de67/state/runner-runs"
+    statuses = sorted(run_root.glob("*/status.json"),
+                      key=lambda path: path.stat().st_mtime, reverse=True)
+    for status_path in statuses:
+        try:
+            status = json.loads(status_path.read_text(encoding="utf-8", errors="replace"))
+            if status.get("status") != "running":
+                continue
+            events = status_path.with_name("events.jsonl")
+            size = events.stat().st_size
+            with events.open("rb") as source:
+                source.seek(max(0, size - 524288))
+                tail = source.read().decode("utf-8", errors="replace")
+            for line in reversed(tail.splitlines()):
+                try:
+                    item = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                event = item.get("item", {})
+                coordinator_id = event.get("sender_thread_id")
+                if coordinator_id:
+                    return str(coordinator_id)
+        except (OSError, TypeError, ValueError):
+            continue
+    return None
 
 
 def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
@@ -319,13 +423,20 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     root_path: Path | None = None
     root: dict[str, Any] = {}
     target = workspace.resolve()
+    active_coordinator_id = _active_coordinator_id(workspace)
     for path in paths:
         candidate = _session_header(path)
         try:
             candidate_cwd = Path(candidate.get("cwd", "")).resolve()
         except (OSError, RuntimeError):
             continue
-        if not candidate.get("parent") and candidate_cwd == target:
+        if (
+            candidate_cwd == target
+            and (
+                candidate.get("id") == active_coordinator_id
+                or (active_coordinator_id is None and not candidate.get("parent"))
+            )
+        ):
             root_path, root = path, candidate
             break
     if root_path is None or not root.get("id"):
@@ -402,6 +513,7 @@ class Dashboard:
         deadline = clock_data.get("deadline") or {}
         restart = clock_data.get("restart") or {}
         finding = clock_data.get("finding") or {}
+        mutation_review = clock_data.get("mutation_review") or {"running": False}
         next_random = clock_data.get("next_random_mutation") or {}
         process = state["process"]
         workers = state["workers"]
@@ -457,6 +569,8 @@ class Dashboard:
                 lamp("Supervisor", supervisor.title(), "green" if supervisor == "running" else "grey"),
                 lamp("Coordinator", coordinator.title(), "green" if coordinator == "running" else "yellow" if coordinator == "waiting" else "grey"),
                 lamp("Work", work_value, work_tone),
+                lamp("Mutation review", "Running" if mutation_review.get("running") else "Off",
+                     "yellow" if mutation_review.get("running") else "grey"),
                 f'<div class="metric"><small>Deadline</small><strong>{remaining}</strong></div>',
                 f'<div class="metric"><small>Mutations</small><strong>{_escape((clock_data.get("mutations", 0) + clock_data.get("random_mutations", 0)) if clock_data else "—")}</strong><span class="metric-note">{_escape(random_note)}</span></div>',
             ])
@@ -495,6 +609,9 @@ class Dashboard:
 <style>
 :root{{--bg:#101318;--panel:#1a1e24;--line:#343a43;--text:#eee9df;--muted:#9ca3ad;--green:#75c84c;--yellow:#f0bc28;--red:#e05248;--blue:#75a7d8}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}}main{{max-width:1180px;margin:auto;padding:24px}}header{{display:flex;align-items:baseline;gap:22px}}h1{{font-size:25px;margin:0}}header span,.subtle{{color:var(--muted)}}nav{{display:flex;margin:18px 0;border-bottom:1px solid var(--line)}}nav a{{color:var(--muted);text-decoration:none;padding:10px 16px}}nav a.selected{{color:var(--text);border:1px solid var(--line);border-bottom-color:var(--bg);border-radius:6px 6px 0 0;margin-bottom:-1px}}nav a:last-child{{margin-left:auto}}.status{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}}.lamp,.metric,section,.activity{{background:var(--panel);border:1px solid var(--line);border-radius:7px}}.lamp,.metric{{padding:13px 14px;min-height:82px}}small{{display:block;color:var(--muted);margin-bottom:10px}}strong{{font-size:18px}}.metric-note{{display:block;color:var(--muted);font-size:11px;margin-top:5px;white-space:nowrap}}.workers{{padding:12px 16px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:7px 12px;text-align:center;border-top:1px solid var(--line)}}thead th{{border-top:0;color:var(--muted);font-size:12px;font-weight:500}}tbody th{{text-align:left}}td{{font-variant-numeric:tabular-nums;color:var(--muted)}}td.active-count{{color:var(--green);font-weight:700}}.activity{{display:grid;grid-template-columns:100px max-content 1fr max-content;align-items:center;gap:12px;margin-top:10px;padding:10px 14px}}.activity small{{margin:0}}.activity strong{{font-size:13px}}.activity span{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.activity em{{color:var(--muted);font-style:normal;font-size:12px}}.dot{{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:8px}}.green{{background:var(--green)}}.yellow{{background:var(--yellow)}}.red{{background:var(--red)}}.grey{{background:#737983}}section{{margin-top:12px;padding:16px}}h2{{font-size:16px;margin:0 0 12px}}h3{{font-size:15px}}p,li{{line-height:1.55}}code{{background:#11151a;padding:2px 4px;border-radius:3px}}pre{{overflow:auto;background:#11151a;padding:12px;border-radius:5px}}footer{{display:flex;gap:25px;flex-wrap:wrap;color:var(--muted);padding:14px 4px}}footer em{{font-style:normal;color:#747c87;margin-left:5px}}.document{{padding:22px}}@media(max-width:900px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}@media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}header span{{display:none}}.activity{{grid-template-columns:1fr}}.activity span{{white-space:normal}}}}
+.status{{grid-template-columns:repeat(6,1fr)}}
+@media(max-width:1000px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}
+@media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}}}
 </style></head><body><main><header><h1>DE67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")
 

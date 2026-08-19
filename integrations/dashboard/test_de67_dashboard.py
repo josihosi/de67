@@ -245,6 +245,56 @@ class DashboardTests(unittest.TestCase):
         self.assertTrue(workers["available"])
         self.assertEqual(workers["counts"]["luna"]["high"], 1)
 
+    def test_worker_inherited_from_previous_coordinator_stays_visible(self) -> None:
+        day = self.sessions / "2026/08/18"
+        day.mkdir(parents=True)
+
+        def write_session(name, session_id, parent, model, effort):
+            path = day / name
+            items = [
+                {"type": "session_meta", "payload": {
+                    "id": session_id, "parent_thread_id": parent,
+                    "cwd": str(self.workspace), "timestamp": "2026-08-18T08:00:00Z",
+                }},
+                {"type": "turn_context", "payload": {"model": model, "effort": effort}},
+                {"type": "event_msg", "payload": {"type": "task_started"}},
+            ]
+            path.write_text("".join(json.dumps(item) + "\n" for item in items), encoding="utf-8")
+
+        write_session("rollout-old-root.jsonl", "old-coordinator", None,
+                      "gpt-5.6-terra", "low")
+        write_session("rollout-worker.jsonl", "worker", "old-coordinator",
+                      "gpt-5.6-luna", "high")
+        write_session("rollout-current-root.jsonl", "current-coordinator", None,
+                      "gpt-5.6-terra", "low")
+
+        old_runner = self.workspace / ".de67/state/runner-runs/old"
+        current_runner = self.workspace / ".de67/state/runner-runs/current"
+        old_runner.mkdir(parents=True)
+        current_runner.mkdir(parents=True)
+        (old_runner / "events.jsonl").write_text(
+            json.dumps({"type": "thread.started", "thread_id": "old-coordinator"}) + "\n",
+            encoding="utf-8",
+        )
+        (old_runner / "status.json").write_text(
+            json.dumps({"status": "done"}), encoding="utf-8"
+        )
+        (current_runner / "events.jsonl").write_text(
+            json.dumps({"type": "thread.started", "thread_id": "current-coordinator"}) + "\n"
+            + json.dumps({
+                "type": "item.started",
+                "item": {"type": "collab_tool_call", "sender_thread_id": "current-coordinator"},
+            }) + "\n",
+            encoding="utf-8",
+        )
+        (current_runner / "status.json").write_text(
+            json.dumps({"status": "running"}), encoding="utf-8"
+        )
+
+        workers = dashboard_module.worker_state(self.workspace, self.sessions)
+        self.assertTrue(workers["available"])
+        self.assertEqual(workers["counts"]["luna"]["high"], 1)
+
     def test_stale_pid_file_falls_back_to_workspace_process(self) -> None:
         (self.workspace / ".de67/state/coordinator-supervisor.pid").write_text(
             "999999999", encoding="ascii"

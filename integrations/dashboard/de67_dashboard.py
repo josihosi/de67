@@ -415,6 +415,29 @@ def _active_coordinator_id(workspace: Path) -> str | None:
     return None
 
 
+def _coordinator_session_ids(workspace: Path) -> set[str]:
+    """Read coordinator ids previously recorded by this workspace's runner."""
+    result: set[str] = set()
+    run_root = workspace / ".de67/state/runner-runs"
+    for events in run_root.glob("*/events.jsonl"):
+        try:
+            with events.open("r", encoding="utf-8", errors="replace") as source:
+                for line in source:
+                    try:
+                        item = json.loads(line)
+                    except (TypeError, ValueError):
+                        continue
+                    if item.get("type") != "thread.started":
+                        continue
+                    thread_id = item.get("thread_id")
+                    if thread_id:
+                        result.add(str(thread_id))
+                    break
+        except OSError:
+            continue
+    return result
+
+
 def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     """Project active Luna/Terra subagents from Codex's existing read-only session records."""
     counts = {model: {effort: 0 for effort in ("low", "medium", "high", "max")}
@@ -441,12 +464,21 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
             break
     if root_path is None or not root.get("id"):
         return {"counts": counts, "available": False, "error": "active Codex session unavailable"}
-    root_mtime = root_path.stat().st_mtime
+    coordinator_ids = _coordinator_session_ids(workspace)
+    coordinator_ids.add(str(root["id"]))
     for path in paths:
-        if path == root_path or path.stat().st_mtime < root_mtime:
+        if path == root_path:
             continue
         candidate = _session_header(path)
-        if candidate.get("parent") != root["id"] or _session_complete(path):
+        try:
+            candidate_cwd = Path(candidate.get("cwd", "")).resolve()
+        except (OSError, RuntimeError):
+            continue
+        if (
+            candidate_cwd != target
+            or candidate.get("parent") not in coordinator_ids
+            or _session_complete(path)
+        ):
             continue
         model = str(candidate.get("model", "")).lower().rsplit("-", 1)[-1]
         effort = str(candidate.get("effort", "")).lower()

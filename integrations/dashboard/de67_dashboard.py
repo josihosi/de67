@@ -525,10 +525,7 @@ def process_state(workspace: Path) -> dict[str, Any]:
 def _session_header(path: Path) -> dict[str, Any]:
     record: dict[str, Any] = {}
     with path.open("r", encoding="utf-8", errors="replace") as source:
-        for _ in range(12):
-            line = source.readline()
-            if not line:
-                break
+        for line in source:
             try:
                 item = json.loads(line)
             except (TypeError, ValueError):

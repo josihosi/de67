@@ -372,6 +372,36 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("<tr><th>Terra</th><td class=\"\">0</td><td class=\"\">0</td><td class=\"\">0</td>", page)
         self.assertNotIn("Unavailable", page)
 
+    def test_worker_header_survives_large_metadata_before_turn_context(self) -> None:
+        day = self.sessions / "2026/08/18"
+        day.mkdir(parents=True)
+
+        def write_session(name, session_id, parent, model, effort, noise=0):
+            path = day / name
+            items = [{"type": "session_meta", "payload": {
+                "id": session_id, "parent_thread_id": parent,
+                "cwd": str(self.workspace), "timestamp": "2026-08-18T08:00:00Z",
+            }}]
+            items.extend(
+                {"type": "response_item", "payload": {"text": "x" * 32768}}
+                for _ in range(noise)
+            )
+            items.extend([
+                {"type": "turn_context", "payload": {"model": model, "effort": effort}},
+                {"type": "event_msg", "payload": {"type": "task_started"}},
+            ])
+            path.write_text(
+                "".join(json.dumps(item) + "\n" for item in items), encoding="utf-8"
+            )
+
+        write_session("rollout-root.jsonl", "root", None, "gpt-5.6-sol", "low")
+        write_session(
+            "rollout-worker.jsonl", "worker", "root", "gpt-5.6-luna", "high", noise=20
+        )
+
+        workers = dashboard_module.worker_state(self.workspace, self.sessions)
+        self.assertEqual(workers["counts"]["luna"]["high"], 1)
+
     def test_active_runner_selects_coordinator_and_reactivated_worker(self) -> None:
         day = self.sessions / "2026/08/18"
         day.mkdir(parents=True)

@@ -31,7 +31,7 @@ class MethodProvenanceTests(unittest.TestCase):
                 ("test-and-task-guidelines.md", "test\n"),
             ):
                 (local / name).write_text(text, encoding="utf-8")
-            database = state / "deadlines.sqlite3"
+            database = state / "alternate.sqlite3"
             connection = sqlite3.connect(database)
             connection.executescript("""
                 CREATE TABLE coordinator_restart_requests (generation INTEGER);
@@ -43,6 +43,9 @@ class MethodProvenanceTests(unittest.TestCase):
             """)
             connection.commit()
             connection.close()
+            (state / "workspace.json").write_text(
+                json.dumps({"clock": {"state": str(database)}}), encoding="utf-8"
+            )
             subprocess.run(["git", "init", "-q", str(workspace)], check=True)
             subprocess.run(
                 ["git", "-C", str(workspace), "config", "user.email", "test@example.invalid"],

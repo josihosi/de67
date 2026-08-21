@@ -79,6 +79,18 @@ def _clock_state(path: Path) -> dict[str, Any]:
         connection.close()
 
 
+def _workspace_clock(workspace: Path) -> Path:
+    config_path = workspace / ".de67/state/workspace.json"
+    try:
+        configured = json.loads(config_path.read_text(encoding="utf-8"))["clock"]["state"]
+        if not isinstance(configured, str) or not configured.strip():
+            raise ValueError("clock.state must be a non-empty path")
+        path = Path(configured).expanduser()
+        return path if path.is_absolute() else (workspace / path).resolve()
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return workspace / ".de67/state/deadlines.sqlite3"
+
+
 def report(method_root: Path, workspace: Path | None) -> dict[str, Any]:
     method_root = method_root.resolve()
     result: dict[str, Any] = {
@@ -98,7 +110,7 @@ def report(method_root: Path, workspace: Path | None) -> dict[str, Any]:
                 name: _sha256(local / name)
                 for name in ("DFS.md", "orchestrator-guidelines.md", "test-and-task-guidelines.md")
             },
-            "clock": _clock_state(local / "state/deadlines.sqlite3"),
+            "clock": _clock_state(_workspace_clock(workspace)),
         }
     return result
 

@@ -577,7 +577,10 @@ def _active_coordinator_id(workspace: Path) -> str | None:
         if len(commands) != 1:
             raise ValueError("active coordinator supervisor is ambiguous")
         command = commands[0]
-        arguments = shlex.split(command)
+        arguments = [
+            argument.strip('"')
+            for argument in shlex.split(command, posix=os.name != "nt")
+        ]
         run_root_index = arguments.index("--run-root") + 1
         status_root = Path(arguments[run_root_index]).expanduser().resolve()
     except (OSError, ValueError, IndexError, subprocess.SubprocessError):

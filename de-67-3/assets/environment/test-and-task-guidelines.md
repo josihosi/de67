@@ -57,8 +57,9 @@ proved. Preserve uncertainty and state what the test did not cover.
 Return what changed, the command or natural route used, the direct evidence, the result, and the
 remaining uncertainty. Use the controlled-English evidence profile. Keep identifiers exact.
 
-Keep an ordinary test failure inside the task. Inspect the first divergent production transition,
-repair it, and rerun the useful route. Return a terminal finding only when the assigned strategy is
-disproved, a materially different route is required, an external blocker exists, or the bounded
-route is exhausted. State the expected behavior, observed behavior, contradicted premise, and direct
+An ordinary test failure is not a finding. Keep it inside the task. Inspect the first divergent
+production transition, repair it, and rerun the useful route. Return a terminal finding only when
+the assigned strategy is disproved, a materially different route is required, an external blocker
+exists, or the bounded route is exhausted. State the expected behavior, observed behavior,
+contradicted premise, and direct
 evidence in plain language. A finding does not cause mutation or authorize weaker acceptance.

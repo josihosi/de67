@@ -38,9 +38,9 @@ flowchart LR
     Ledger --> Coordinator["Coordinator"]
     Clock["Clock"] --> Coordinator
     Coordinator --> Worker["Worker"]
-    Worker --> Result{"Evidence or finding?"}
+    Worker --> Result{"Evidence, ordinary failure, or terminal finding?"}
     Result -->|Evidence| Acceptance["Accept the gap or claim"]
-    Result -->|Finding| Coordinator
+    Result -->|Ordinary failure or terminal finding| Coordinator
     Acceptance --> Ledger
     Acceptance --> DFS
 ```
@@ -88,9 +88,15 @@ it does not expand a role's authority or weaken the evidence required for accept
 The clock is deterministic Python, not another language-model agent. It records deadlines, claims,
 attempts, evidence, misses, and restart generations without consuming model tokens while it waits.
 Mutation is gated and receipt-backed so a failed approach can change without rewriting the user's
-goal or erasing accepted work.
+goal or erasing accepted work. An ordinary test failure remains worker input; it is not a formal
+finding, mutation trigger, or coordinator-restart trigger.
 Add a proposed behavior correction to `.de67/mutation-suggestions.md` when the next applicable
 mutation review should consider it; evidence and guards still decide whether it is applied.
+
+For non-gating provenance, run `python de-67-3/scripts/method_provenance.py --workspace <repo>`.
+It reports the machine and workspace, method Git baseline when available, method and local-guidance
+hashes, uncheckpointed Git state, restart generation, and accepted mutation-receipt count. The
+report is visibility only: missing Git metadata or a changed local method never blocks delivery.
 
 ## Shared writing foundations
 

@@ -55,11 +55,11 @@ Give each worker a self-contained brief. Require the worker to read the relevant
 ## Receive results
 
 Judge the actual diff and direct evidence. A focused test proves only the route it exercised. An
-ordinary failed test stays inside the worker route: inspect, repair, and rerun. Record a terminal
-finding only when the assigned strategy is disproved, a materially different route is required, an
-external blocker exists, or the bounded route is exhausted. A finding does not cause mutation or a
-coordinator restart. Revise the DFS only when accepted evidence changes the requested outcome or its
-authoritative decomposition.
+ordinary failed test is not a finding. Keep it inside the worker route: inspect, repair, and rerun.
+Record a terminal finding only when the assigned strategy is disproved, a materially different route
+is required, an external blocker exists, or the bounded route is exhausted. A finding does not cause
+mutation or a coordinator restart. Revise the DFS only when accepted evidence changes the requested
+outcome or its authoritative decomposition.
 
 Do not repeat an unchanged failing route. Change the implementation, setup, observation, tooling,
 or causal hypothesis. After the MSW three-round fuse, replace narrower probes with the smallest
@@ -87,7 +87,7 @@ stored lane. If part of a suggestion is valid, apply that part. Move unapplied o
 to `.de67/human-todo.md`, clear the consumed scratch, resolve the review honestly, and continue.
 Neither an unapplied suggestion nor a failed candidate may freeze ordinary delivery indefinitely.
 
-Use a fresh `gpt-5.6-sol` reviewer at medium for ordinary incident and random mutation review. The
+Use a fresh `gpt-5.6-sol` reviewer at xhigh for ordinary incident and random mutation review. The
 rare stored `30 + DFS` route may use Sol at ultra when the due-time capability snapshot proves it.
 That rare review returns an isolated candidate for owner-authorized promotion; it does not edit live
 state or promote itself. Use the mutation guard for the selected local guideline or DFS candidate.

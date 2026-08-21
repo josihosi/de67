@@ -1859,7 +1859,7 @@ class MutationGuardTests(unittest.TestCase):
         self.assertIn("Sol is not an ordinary worker", TASK_GUIDANCE)
         self.assertIn("Choose Luna by default", ORCHESTRATOR_GUIDANCE)
         self.assertIn("Use Terra for ambiguous ownership", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("reviewer at medium", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("reviewer at xhigh", ORCHESTRATOR_GUIDANCE)
         self.assertIn(
             "a mismatch does not stop delivery",
             " ".join(ORCHESTRATOR_GUIDANCE.split()),

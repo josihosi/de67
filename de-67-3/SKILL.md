@@ -38,6 +38,8 @@ them.
 
 ## Terminal routing
 
-Ordinary worker results, findings, acceptance, ledger refill, and exploration-to-closure transition
-stay with the same coordinator. An applied method or DFS mutation requests a fresh coordinator and
+Ordinary worker results, test failures, acceptance, ledger refill, and exploration-to-closure
+transition stay with the same coordinator. A formal terminal finding also stays with that
+coordinator; it is reserved for a disproved strategy, materially different route, external blocker,
+or exhausted bounded route. An applied method or DFS mutation requests a fresh coordinator and
 retires the old one. The external supervisor launches and acknowledges the successor.

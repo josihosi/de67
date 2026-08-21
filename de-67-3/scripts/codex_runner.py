@@ -41,16 +41,21 @@ def _command(codex: str, workspace: Path, environment: dict[str, str]) -> list[s
     sandbox = environment.get("DE67_COORDINATOR_SANDBOX", "danger-full-access").strip()
     if sandbox not in {"read-only", "workspace-write", "danger-full-access"}:
         raise RunnerError(f"Unsupported Codex sandbox: {sandbox}")
-    command = [
-        codex,
-        "exec",
-        "--skip-git-repo-check",
-        "--sandbox",
-        sandbox,
-        "--json",
-        "-C",
-        str(workspace),
-    ]
+    resume_session = environment.get("DE67_COORDINATOR_RESUME_SESSION", "").strip()
+    command = [codex, "exec"]
+    if resume_session:
+        command.append("resume")
+    command.extend(["--json"])
+    if not resume_session:
+        command.extend(
+            [
+                "--skip-git-repo-check",
+                "--sandbox",
+                sandbox,
+                "-C",
+                str(workspace),
+            ]
+        )
     if environment.get("DE67_COORDINATOR_RUN_ID"):
         model = environment.get("DE67_COORDINATOR_MODEL", "gpt-5.6-sol").strip()
         effort = environment.get(
@@ -59,8 +64,29 @@ def _command(codex: str, workspace: Path, environment: dict[str, str]) -> list[s
         if not model or not effort:
             raise RunnerError("Coordinator model and reasoning effort must not be empty")
         command.extend(["-m", model, "-c", f"model_reasoning_effort={effort}"])
+    if resume_session:
+        command.append(resume_session)
     command.append("-")
     return command
+
+
+def _record_session(line: str, environment: dict[str, str]) -> str | None:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if event.get("type") != "thread.started":
+        return None
+    session_id = event.get("thread_id")
+    if not isinstance(session_id, str) or not session_id.strip():
+        return None
+    target_value = environment.get("DE67_COORDINATOR_SESSION_FILE", "").strip()
+    if target_value:
+        target = Path(target_value).expanduser().resolve()
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        temporary.write_text(session_id.strip() + "\n", encoding="utf-8")
+        temporary.replace(target)
+    return session_id.strip()
 
 
 def run(
@@ -117,10 +143,12 @@ def run(
             if process.stdout is None:
                 process.kill()
                 raise RunnerError("Codex output pipe was not created")
+            session_id: str | None = None
             for line in process.stdout:
                 output_stream.write(line)
                 output_stream.flush()
                 print(line, end="", flush=True)
+                session_id = _record_session(line, selected_environment) or session_id
             exit_code = process.wait()
     except OSError as error:
         raise RunnerError(f"Failed to launch Codex: {error}") from error
@@ -138,6 +166,7 @@ def run(
                 "reasoning_effort": selected_environment.get(
                     "DE67_COORDINATOR_REASONING_EFFORT"
                 ),
+                "session_id": session_id,
             },
             indent=2,
             sort_keys=True,

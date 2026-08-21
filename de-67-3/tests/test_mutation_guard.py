@@ -37,17 +37,6 @@ ORCHESTRATOR_GUIDANCE = guard.read_markdown(
 )
 SKILL_TEXT = (ROOT / "SKILL.md").read_text(encoding="utf-8")
 KERNEL_TEXT = (ROOT / "references" / "kernel.md").read_text(encoding="utf-8")
-ROLE_ROOT = ROOT / "references" / "roles"
-COORDINATOR_TEXT = (ROLE_ROOT / "coordinator.md").read_text(encoding="utf-8")
-DEADLINE_MUTATOR_TEXT = (ROLE_ROOT / "deadline-mutator.md").read_text(
-    encoding="utf-8"
-)
-DFS_STEWARD_TEXT = (ROLE_ROOT / "dfs-steward.md").read_text(encoding="utf-8")
-RANDOM_MUTATOR_TEXT = (ROLE_ROOT / "random-mutator.md").read_text(encoding="utf-8")
-UNIVERSAL_MUTATOR_TEXT = (ROLE_ROOT / "universal-mutator.md").read_text(
-    encoding="utf-8"
-)
-WORKER_TEXT = (ROLE_ROOT / "worker.md").read_text(encoding="utf-8")
 WORK_LEDGER_TEXT = (
     ROOT / "assets" / "environment" / "work-ledger.md"
 ).read_text(encoding="utf-8")
@@ -90,51 +79,46 @@ class MutationGuardTests(unittest.TestCase):
     def mutate_task(self) -> None:
         path = self.candidate / guard.TASK_GUIDELINES
         path.write_text(
-            TASK_GUIDANCE.replace(
-                "Read the exact working tree, affected DFS claim, current owner path, relevant tests,",
-                "Read the exact working tree and state owners before preparing the affected DFS claim,",
-            ),
+            TASK_GUIDANCE + "\nUse a saved harness route when it is the shortest honest proof.\n",
             encoding="utf-8",
         )
 
     def mutate_orchestrator(self) -> None:
         path = self.candidate / guard.ORCHESTRATOR_GUIDELINES
         path.write_text(
-            ORCHESTRATOR_GUIDANCE.replace(
-                "Begin fresh by reading",
-                "Begin independently by reading",
-            ),
+            ORCHESTRATOR_GUIDANCE + "\nPrefer a current compact state query before dispatch.\n",
             encoding="utf-8",
         )
 
-    def test_frozen_heading_change_is_rejected(self) -> None:
+    def test_guideline_heading_change_is_allowed(self) -> None:
         path = self.candidate / guard.TASK_GUIDELINES
         path.write_text(
-            TASK_GUIDANCE.replace("## Task preparation", "## Prepare work"),
+            TASK_GUIDANCE.replace("## Prepare the task", "## Prepare work"),
             encoding="utf-8",
         )
-        with self.assertRaisesRegex(guard.GuardError, "canonical template"):
+        self.assertEqual(
             guard.validate_guideline_mutation(
                 self.baseline, self.candidate, broader_mutation=False
-            )
-
-    def test_shared_corrupt_heading_is_rejected(self) -> None:
-        corrupt = TASK_GUIDANCE.replace("## Task preparation", "## Prepare work")
-        baseline_corrupt = corrupt
-        candidate_corrupt = corrupt.replace(
-            "Read the exact working tree, affected DFS claim, current owner path, relevant tests,",
-            "Read the exact working tree and state owners before preparing the affected DFS claim,",
+            ),
+            (guard.TASK_GUIDELINES,),
         )
+
+    def test_changed_baseline_heading_does_not_block_a_real_mutation(self) -> None:
+        corrupt = TASK_GUIDANCE.replace("## Prepare the task", "## Prepare work")
+        baseline_corrupt = corrupt
+        candidate_corrupt = corrupt + "\nPreserve the useful local context.\n"
         (self.baseline / guard.TASK_GUIDELINES).write_text(
             baseline_corrupt, encoding="utf-8"
         )
         (self.candidate / guard.TASK_GUIDELINES).write_text(
             candidate_corrupt, encoding="utf-8"
         )
-        with self.assertRaisesRegex(guard.GuardError, "baseline headings"):
+        self.assertEqual(
             guard.validate_guideline_mutation(
                 self.baseline, self.candidate, broader_mutation=False
-            )
+            ),
+            (guard.TASK_GUIDELINES,),
+        )
 
     def test_incident_guidance_may_change_any_evidence_backed_subset(self) -> None:
         self.mutate_task()
@@ -153,7 +137,7 @@ class MutationGuardTests(unittest.TestCase):
     def test_incident_mutations_reject_whitespace_only_ledger_consumption(self) -> None:
         task_path = self.candidate / guard.TASK_GUIDELINES
         task_path.write_text(
-            TASK_GUIDANCE.replace("Read the exact", "Read  the exact"),
+            TASK_GUIDANCE.replace("Read the current", "Read  the current"),
             encoding="utf-8",
         )
         with self.assertRaisesRegex(guard.GuardError, "whitespace-only"):
@@ -163,7 +147,7 @@ class MutationGuardTests(unittest.TestCase):
 
         orchestrator_path = self.candidate / guard.ORCHESTRATOR_GUIDELINES
         orchestrator_path.write_text(
-            ORCHESTRATOR_GUIDANCE.replace("Begin fresh", "Begin  fresh"),
+            ORCHESTRATOR_GUIDANCE.replace("Read the compact", "Read  the compact"),
             encoding="utf-8",
         )
         with self.assertRaisesRegex(guard.GuardError, "whitespace-only"):
@@ -429,7 +413,7 @@ class MutationGuardTests(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
         return path
 
-    def test_work_ledger_accepts_ten_and_rejects_eleven_active_items(self) -> None:
+    def test_work_ledger_has_no_arbitrary_active_item_limit(self) -> None:
         dfs = self.write_dfs(
             "# DFS\n\n"
             + "".join(f"- [ ] 🔴 R-{number:03d} — Work {number}\n" for number in range(1, 12))
@@ -445,8 +429,7 @@ class MutationGuardTests(unittest.TestCase):
             "# Work ledger\n\n## Active work\n\n"
             + "".join(f"- [ ] R-{number:03d} — Work {number}\n" for number in range(1, 12))
         )
-        with self.assertRaisesRegex(guard.GuardError, "maximum is 10"):
-            guard.validate_work_ledger(eleven, dfs)
+        self.assertEqual(len(guard.validate_work_ledger(eleven, dfs)), 11)
 
     def test_work_ledger_rejects_missing_and_non_red_claims(self) -> None:
         dfs = self.write_dfs(
@@ -1356,7 +1339,7 @@ class MutationGuardTests(unittest.TestCase):
         with patch.object(
             deadline.secrets, "randbelow", side_effect=[0, lane_index]
         ), deadline.DeadlineHarness(state) as harness:
-            for number in range(1, 11):
+            for number in range(1, 21):
                 task = f"terminal-{number}"
                 harness.start_task("project", task, f"R-{number:03d}", 10, now=0)
                 harness.complete_task("project", task, "green", now=1)
@@ -1372,24 +1355,23 @@ class MutationGuardTests(unittest.TestCase):
     ) -> tuple[int, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
+        arguments = [
+            "random-review",
+            "--baseline",
+            str(self.baseline),
+            "--candidate",
+            str(self.candidate),
+            "--state",
+            str(state),
+            "--lineage",
+            "project",
+            "--cycle",
+            str(cycle),
+        ]
+        if ledger is not None:
+            arguments.extend(["--ledger-candidate", str(ledger)])
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            result = guard.main(
-                [
-                    "random-review",
-                    "--baseline",
-                    str(self.baseline),
-                    "--candidate",
-                    str(self.candidate),
-                    "--state",
-                    str(state),
-                    "--lineage",
-                    "project",
-                    "--cycle",
-                    str(cycle),
-                    "--ledger-candidate",
-                    str(self.empty_ledger if ledger is None else ledger),
-                ]
-            )
+            result = guard.main(arguments)
         return result, stdout.getvalue() + stderr.getvalue()
 
     def test_random_review_applies_exactly_the_selected_guideline_lane(self) -> None:
@@ -1423,7 +1405,7 @@ class MutationGuardTests(unittest.TestCase):
         state, cycle = self.random_review_state(0)
         path = self.candidate / guard.TASK_GUIDELINES
         path.write_text(
-            TASK_GUIDANCE.replace("Read the exact", "Read  the exact"),
+            TASK_GUIDANCE.replace("Read the current", "Read  the current"),
             encoding="utf-8",
         )
         result, output = self.run_random_review_cli(state, cycle)
@@ -1456,7 +1438,7 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("Functional contract", output)
 
-    def test_successful_random_mutation_requires_empty_scratch_ledger(self) -> None:
+    def test_successful_random_mutation_does_not_require_empty_scratch_ledger(self) -> None:
         state, cycle = self.random_review_state(0)
         self.mutate_task()
         uncleared = self.root / "uncleared.md"
@@ -1464,8 +1446,8 @@ class MutationGuardTests(unittest.TestCase):
         result, output = self.run_random_review_cli(
             state, cycle, ledger=uncleared
         )
-        self.assertEqual(result, 1)
-        self.assertIn("reset mutation-suggestions.md", output)
+        self.assertEqual(result, 0, output)
+        self.assertIn("random review cycle", output)
 
     def test_random_review_requires_due_unresolved_stored_cycle(self) -> None:
         state = self.root / "not-due.sqlite"
@@ -1530,7 +1512,7 @@ class MutationGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(guard.GuardError, "outside its broad mutable surface"):
             guard.validate_method_mutation(baseline, candidate, universal=False)
 
-    def test_normal_method_mutation_preserves_guideline_asset_headings(self) -> None:
+    def test_normal_method_mutation_may_restructure_guideline_headings(self) -> None:
         baseline, candidate = self.method_candidate_roots()
         guideline = (
             candidate
@@ -1540,8 +1522,8 @@ class MutationGuardTests(unittest.TestCase):
         )
         original = guideline.read_text(encoding="utf-8")
         mutations = (
-            ("rename", "## Task preparation", "## Prepare tasks"),
-            ("delete", "## Task preparation\n", ""),
+            ("rename", "## Prepare the task", "## Prepare tasks"),
+            ("delete", "## Prepare the task\n", ""),
         )
         for name, old, new in mutations:
             with self.subTest(name=name):
@@ -1549,12 +1531,13 @@ class MutationGuardTests(unittest.TestCase):
                     original.replace(old, new, 1),
                     encoding="utf-8",
                 )
-                with self.assertRaisesRegex(
-                    guard.GuardError, "candidate headings"
-                ):
-                    guard.validate_method_mutation(
-                        baseline, candidate, universal=False
-                    )
+                changed = guard.validate_method_mutation(
+                    baseline, candidate, universal=False
+                )
+                self.assertIn(
+                    f"assets/environment/{guard.TASK_GUIDELINES}", changed
+                )
+                guideline.write_text(original, encoding="utf-8")
 
     def test_universal_method_candidate_may_challenge_the_hard_kernel(self) -> None:
         baseline, candidate = self.method_candidate_roots()
@@ -1589,7 +1572,7 @@ class MutationGuardTests(unittest.TestCase):
         )
         state = self.root / f"universal-{lane_index}-{capability_effort}.sqlite"
         with patch.object(
-            deadline.secrets, "randbelow", side_effect=[20, lane_index]
+            deadline.secrets, "randbelow", side_effect=[10, lane_index]
         ), deadline.DeadlineHarness(state) as harness:
             for number in range(1, 31):
                 task = f"terminal-{number}"
@@ -1849,79 +1832,39 @@ class MutationGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(guard.GuardError, "accepted claim R-000"):
             guard.validate_universal_dfs_mutation(before, candidate)
 
-    def test_documented_random_commands_use_the_tested_cli_surface(self) -> None:
-        command_lines = [
-            line
-            for line in RANDOM_MUTATOR_TEXT.splitlines()
-            if "mutation_guard.py random-review" in line
-            or "deadline_harness.py resolve-random-mutation" in line
-        ]
-        self.assertEqual(len(command_lines), 2)
-        self.assertNotIn("--disposition", "\n".join(command_lines))
-        self.assertIn("--ledger-candidate", command_lines[0])
-        self.assertIn("--evidence", command_lines[1])
-
-        universal_resolution = [
-            line
-            for line in UNIVERSAL_MUTATOR_TEXT.splitlines()
-            if "deadline_harness.py resolve-random-mutation" in line
-        ]
-        self.assertEqual(len(universal_resolution), 1)
-        self.assertIn("--receipt", universal_resolution[0])
-
-    def test_documented_integrity_route_requires_exact_diagnosis(self) -> None:
-        normalized = " ".join(DEADLINE_MUTATOR_TEXT.split())
-        self.assertIn("diagnose --task W-001 --kind integrity_breach", normalized)
-        self.assertIn("integrity incident", DEADLINE_MUTATOR_TEXT)
-        self.assertIn("resolve-integrity-mutation", DEADLINE_MUTATOR_TEXT)
-        macro_commands = [
-            line
-            for line in DEADLINE_MUTATOR_TEXT.splitlines()
-            if line.startswith("python ")
-            and "--component macro" in line
-            and "resolve-" in line
-        ]
-        self.assertEqual(len(macro_commands), 2)
-        self.assertTrue(all("--receipt" in line for line in macro_commands))
-
-    def test_documented_work_ledger_guard_uses_clock_identity(self) -> None:
-        command_lines = [
-            line
-            for line in DFS_STEWARD_TEXT.splitlines()
-            if line.startswith("python ") and "mutation_guard.py work-ledger" in line
-        ]
-        self.assertEqual(len(command_lines), 1)
-        self.assertIn("--state", command_lines[0])
-        self.assertIn("--lineage", command_lines[0])
+    def test_runtime_guidance_keeps_mutation_local_and_nonblocking(self) -> None:
+        self.assertIn("workspace-local files", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("no change required", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("may freeze ordinary delivery indefinitely", ORCHESTRATOR_GUIDANCE)
 
     def test_ordinary_task_results_keep_the_same_coordinator(self) -> None:
-        combined = SKILL_TEXT + "\n" + KERNEL_TEXT + "\n" + COORDINATOR_TEXT
+        combined = SKILL_TEXT + "\n" + KERNEL_TEXT + "\n" + ORCHESTRATOR_GUIDANCE
         normalized = " ".join(combined.split())
         self.assertNotIn("dispatch wave complete", combined)
         self.assertNotIn("One coordinator owns one dispatch wave", combined)
         self.assertIn(
-            "One coordinator may own many sequential or disjoint dispatch waves",
+            "stay with the same coordinator",
             normalized,
         )
-        self.assertIn("After an applied guarded method or DFS mutation", combined)
+        self.assertIn("An applied method or DFS mutation requests a fresh coordinator", combined)
 
     def test_worker_lifecycle_is_not_a_task_requirement(self) -> None:
-        combined = SKILL_TEXT + "\n" + KERNEL_TEXT + "\n" + WORKER_TEXT
+        combined = SKILL_TEXT + "\n" + KERNEL_TEXT + "\n" + TASK_GUIDANCE
         self.assertNotIn("Every task uses a fresh", combined)
         self.assertNotIn("one fresh worker thread", combined)
         self.assertNotIn("terminal task retires", combined)
         self.assertNotIn("worker retirement", combined)
 
-    def test_sol_xhigh_and_ultra_are_reserved_for_mutation_roles(self) -> None:
-        normalized_task_guidance = " ".join(TASK_GUIDANCE.split())
+    def test_worker_model_guidance_reserves_sol_without_a_worker_gate(self) -> None:
+        self.assertIn("Sol is not an ordinary worker", TASK_GUIDANCE)
+        self.assertIn("Choose Luna by default", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("Use Terra for ambiguous ownership", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("reviewer at high", ORCHESTRATOR_GUIDANCE)
         self.assertIn(
-            "exact `gpt-5.6-sol` / `xhigh` and `gpt-5.6-sol` / `ultra` pairs",
-            normalized_task_guidance,
+            "a mismatch does not stop delivery",
+            " ".join(ORCHESTRATOR_GUIDANCE.split()),
         )
-        self.assertIn("reserved exclusively for mutation roles", TASK_GUIDANCE)
-        self.assertIn("Never use either reserved pair", COORDINATOR_TEXT)
-        self.assertIn("`xhigh` and `ultra` pairs are mutation-only", WORKER_TEXT)
-        self.assertIn("Ordinary workers may be Luna, Terra, or Sol", WORKER_TEXT)
+        self.assertNotIn("stop before acting", ORCHESTRATOR_GUIDANCE)
 
 
 if __name__ == "__main__":

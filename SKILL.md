@@ -25,16 +25,18 @@ consent from a discussion or specification request.
 
 When the user supplies the de67 repository and asks Codex to install or integrate it:
 
-1. Require the OpenAI Codex CLI, Git, and Python 3.10 or newer. de67 is Codex-specific.
-2. Before enabling method mutation, create or select a user-owned writable Git fork or repository
-   for the de67 lab. Install the skill from that checkout so accepted mutations have reviewable
-   commits and can be rewound if harmful. Do not mutate a read-only release copy.
+1. Require the OpenAI Codex CLI and Python 3.10 or newer. Git is required only for repository work
+   or publishing generalized method changes. de67 is Codex-specific.
+2. Phase 3 bootstraps mutable guidance into the project workspace. Local delivery and mutation do
+   not require a writable de67 source checkout or network access. A user-owned `de67-lab` checkout
+   is useful only when the owner chooses to generalize and publish a local improvement.
 3. Preserve the repository as one intact skill folder with all phase folders, scripts, references,
    assets, and agent metadata. The checkout may be named `de67-lab`; the skill identity remains
    `$de67`.
 4. Verify that `codex` and `python` resolve in the execution environment. Phase 3's bundled runner
    invokes the local Codex CLI; do not replace it with a machine-specific wrapper.
-5. Verify access to GPT-5.6 Sol, Luna, and Terra. Phase 2 proves the useful worker roster. Reserve the
-   exact GPT-5.6 Sol `ultra` pairing for phase-3 mutation review.
+5. Record the available Luna, Terra, and Sol profiles. Missing optional profiles must not stop
+   ordinary delivery. Use Sol only for mutation review; the rare universal route may use ultra when
+   that capability is available at the stored trigger.
 6. Run the skill validator when available, then run the bundled Python tests before reporting the
    installation complete.

@@ -1,116 +1,65 @@
 # Test and task guidelines
 
-The headings in this document are frozen. Text beneath them is mutable after evidence-backed failure
-review.
+This workspace-local file is active mutable policy. Read only the sections relevant to the task.
+Do not replace it with the packaged template after bootstrap.
+Sol is not an ordinary worker. Model choice is coordinator guidance, not a worker-side gate.
 
-## Task preparation
+## Prepare the task
 
-Read the exact working tree, affected DFS claim, current owner path, relevant tests, and current tool
-state. Choose the smallest necessary task. Exploration gets one learning goal; closure gets a known strategy,
-proof route, and finite frozen gaps. Name real dependencies and collision surfaces before parallel
-dispatch. Treat uncommitted files as inheritable work. A missed commit or an ordinary overlapping
-edit is not an integrity breach by itself; preserve the useful tree, record any uncertain section,
-and let the next worker continue. Reserve integrity quarantine for false evidence or deliberate
-destruction of work that cannot be recovered.
+Read the current tree, claim context, production owner, relevant tests, and available tools. Preserve
+user-owned dirty work. Choose the smallest task whose result is independently useful. Do not ask the
+owner to choose fixtures, scenarios, disposable identities or coordinates, profiles, registry rows,
+or debug tooling when those choices stay inside the frozen outcome.
 
-For a closure precondition that must be established before an authoritative product-time
-transition, record the current product time, the required endpoint, each known scheduled
-interruption before that endpoint, and the evidence-derived duration of ordinary setup before
-dispatch. Bind whether each interruption supplies the endpoint, invalidates the witness, or permits
-a proved resume to it; an interruption alone is not endpoint proof. If setup cannot complete first,
-route an earlier valid footing or setup owner, or obtain material owner authority to change or defer
-that choice or manufacture a buffer.
+Use exploration for one concrete unknown. Return a usable strategy and proof route. Use closure when
+the strategy and proof route are already known. A closure task may cover coupled gaps when splitting
+them would leave no independently valid state.
 
-## Tooling check
+## Use tools and harnesses
 
-Confirm the tool, execution identity, environment, command, and smallest runnable route before
-estimating or dispatching. Prove a selected route with one harmless real operation; a permission
-query is not execution proof, and failure of one identity does not invalidate another approved
-route. Treat setup uncertainty as work, and give preflight no product credit. Validate brittle
-inputs and output paths early. If the route cannot expose the production fact, make observation the
-exploration goal and add the smallest useful probe; do not repeat an unchanged opaque run.
+Confirm the executable, environment, identity, input, and output path needed for the task. A small
+preflight can prevent an expensive opaque run, but preflight is not product proof and is not a
+mandatory ritual. A full run may discover a missing harness capability. Record that result as
+ordinary harness work and improve the reusable scenario or database entry.
 
-## Task definition
+Interactive harnesses should handle harmless popups, avoid preventable character-state noise, and
+provide reusable capabilities for setup, observation, hostile avoidance or removal, terrain,
+lighting, smoke, time, and other test prerequisites. Treat generated setup as evidence only after
+the production consumer accepts it.
 
-Bind the natural-language outcome to one red DFS claim. Before editing or dispatch, identify the
-production owner, direct callers, competing writers and precedence, and owning tests. Existing
-candidate code does not replace that map. When one route gives contradictory results, bind source
-and executable and capture the first divergent mutation between precondition and authoritative
-consumer before another ownership or ordering edit; an upstream helper result is not downstream
-proof.
+Do not demand that every possible input token, focus state, transition, or downstream consumer be
+pre-proved before the first useful run. After a concrete mismatch, repair the visible family of
+related transitions instead of rediscovering them one key at a time.
 
-State the exploration unknown and terminal evidence, or give every closure gap a stable id,
-description, and proof route. When a closure gap compresses an enumerated DFS mechanism, carry every
-named required element into the worker brief with its owning implementation and direct proof, then
-reconcile each element before accepting `completed`; an umbrella phrase such as “full required tables”
-is not coverage. Bind one attempt to one current gap revision. A completed or finding result consumes
-that revision: close it or materially revise its contract from the returned evidence; only
-abandonment permits repetition. Name relevant surfaces and permission boundaries without a fixed
-allowlist or receipt schema. Stop on a falsified premise. Exploration completes only with a changed
-strategy and honest proof route ready to freeze; other contradictions are findings. Attempt
-termination never stops the item clock.
+## Implement and test
 
-## Worker and model selection
+Identify the authoritative state owner and the transition the task must change or observe. Inspect
+helpers, callers, competing readers or writers, and owning tests only as needed to settle the
+current uncertainty. Stop blind repetition at the first divergent production transition.
 
-Use the weakest sufficient Phase-2-proved model and effort. The exact `gpt-5.6-sol` / `xhigh` and
-`gpt-5.6-sol` / `ultra` pairs are reserved exclusively for mutation roles, never ordinary work. Give one self-contained brief with validated DFS slices;
-workers do not rediscover the index or preload the DFS. Select Luna through the trusted default and
-Terra or eligible non-ultra Sol explicitly. Stronger ordinary reasoning is justified by ambiguous
-ownership, causal diagnosis, risky cross-cutting work, or a demanding exploration goal. Choose,
-reuse, or replace workers from task fit, evidence, context, and coordination cost. Optional code
-mapping is not a ritual, and worker choice is not a task result.
+Use the smallest honest test through the real owner. Add a negative control only when it excludes a
+real competing explanation. Static inspection, startup, helper output, synthetic setup, a focused
+test, and natural integrated behavior are different evidence classes. Do not present one as
+another.
 
-## Test definition
+For compiled proof, bind the executable to the tested source and successful build. For save/load
+proof, inspect the serialized state and its owning normalization. For long or variable playtests,
+include several relevant reruns, repairs between runs, and uncertain runtime in the ledger-item
+estimate. Unknown variability takes time, but it does not require perfect proof or repetition of an
+unchanged failed route.
 
-Define the smallest honest test through the authoritative owner. Add negative controls only to
-exclude a real competing explanation. Exploration may select a strategy but is not closure proof;
-freeze that route before implementation. Before freezing a route that consumes generated evidence,
-exercise a current production witness through its full prerequisite chain and prove that each
-producer output is accepted by the next authoritative owner, including artifact provenance and
-typed or schema vocabulary. If the current corpus cannot produce that witness, keep the missing
-route in exploration and make it part of the strategy rather than an assumed dependency. Incidental
-metadata matters only when it changes identity, the verdict, or a false-green control.
+Reasonable proof is sufficient. Apply the MSW deletion test to proposed screenshots, logs, reruns,
+and metadata. Do not require an artifact whose removal still leaves the requested behavior honestly
+proved. Preserve uncertainty and state what the test did not cover.
 
-## Test checking
+## Return the result
 
-Check the diff, command, and relevant artifact or observation. A test proves only its exercised
-claim; keep one concise evidence path. Findings drive causal review, never weaker acceptance. Reopen
-exploration only when evidence falsifies a frozen premise, and do not repeat a failing route without
-changed source, tooling, observation, or causal evidence. Close gaps only from their bound completed
-attempts; final acceptance is atomic and blocked by any open gap. Invalidated proof keeps its closed
-record and creates an open successor.
+Return what changed, the command or natural route used, the direct evidence, the result, and the
+remaining uncertainty. Use the controlled-English evidence profile. Keep identifiers exact.
 
-At a closure spanning multiple authoritative transitions, execute the smallest witness through the
-first unproved consumer before broader implementation or proof. A rejection at that gate
-terminalizes the bound attempt as a finding; causal diagnosis and any revised bridge follow after
-that terminal result, not inside the still-running closure attempt.
-
-For compiled proof, bind the invoked path and artifact identity to the unchanged production/test
-snapshot and successful build; a version or “changed executable” claim is insufficient. For
-save/load proof, inspect serialized pre-state and owning normalization, execute exact equality in
-that artifact, and name the first divergent field. Reject unbound or changed-input evidence.
-
-## Deadline estimation
-
-Estimate first dispatch through honest acceptance, including exploration, setup, implementation,
-build, proof, dependencies, and measured review/restart routes. Record the basis. Resolve unknown
-setup cost before starting. Before every later dispatch, including same-coordinator and successor
-transitions, compare inherited remaining item time with the evidence-derived critical path through
-every open gap required for honest acceptance and every method gate already known to become due on
-those terminal windows. A next-gap estimate may route useful work, but it does not prove the item
-remains on time. Never rebase. Insufficient time exposes the estimate or external wait and continues
-useful work as late, not on-time.
-
-For exploration, the estimate basis must cover the dispatched learning route through the production
-owner, helpers and callers, competing readers and writers, owning tests, natural observation,
-strategy, finite-gap freeze, and required durable disposition. Historical timing is analogous only
-when it covers that same causal and observation surface; a symbol lookup or bounded execution/report
-duration is not evidence for omitted causal source reasoning. If that route is not yet evidenced,
-expose the unknown estimate or dispatch a smaller necessary independently terminal learning slice;
-do not present the full exploration as on-time.
-
-The claim clock starts at first worker dispatch and survives every result, task id, mutation, and
-restart; attempt durations guide coordination only. Every miss yields a finite micro recovery and
-one repeatable macro candidate limited to the implicated mutable surface. Normal mutation preserves
-the protected kernel, clocks, guards, hard tests, and attempt history. Mutation volume is not
-fitness.
+An ordinary test failure is not a finding. Keep it inside the task. Inspect the first divergent
+production transition, repair it, and rerun the useful route. Return a terminal finding only when
+the assigned strategy is disproved, a materially different route is required, an external blocker
+exists, or the bounded route is exhausted. State the expected behavior, observed behavior,
+contradicted premise, and direct
+evidence in plain language. A finding does not cause mutation or authorize weaker acceptance.

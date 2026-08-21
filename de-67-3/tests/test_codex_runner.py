@@ -51,7 +51,13 @@ class CodexRunnerTests(unittest.TestCase):
         def launch(command: list[str], **options: object) -> FakeProcess:
             captured["command"] = command
             captured["options"] = options
-            return FakeProcess(['{"type":"turn.started"}\n'], 0)
+            return FakeProcess(
+                [
+                    '{"type":"thread.started","thread_id":"session-1"}\n',
+                    '{"type":"turn.started"}\n',
+                ],
+                0,
+            )
 
         with patch("codex_runner.shutil.which", return_value="/tools/codex"), patch(
             "codex_runner.subprocess.Popen", side_effect=launch
@@ -75,6 +81,31 @@ class CodexRunnerTests(unittest.TestCase):
         status = json.loads((run_directory / "status.json").read_text())
         self.assertEqual(status["status"], "done")
         self.assertEqual(status["model"], "gpt-5.6-sol")
+        self.assertEqual(status["session_id"], "session-1")
+
+    def test_runner_resumes_the_exact_coordinator_session(self) -> None:
+        captured: dict[str, object] = {}
+        environment = self.environment()
+        environment["DE67_COORDINATOR_RESUME_SESSION"] = "session-1"
+
+        def launch(command: list[str], **options: object) -> FakeProcess:
+            captured["command"] = command
+            return FakeProcess(
+                ['{"type":"thread.started","thread_id":"session-1"}\n'], 0
+            )
+
+        with patch("codex_runner.shutil.which", return_value="/tools/codex"), patch(
+            "codex_runner.subprocess.Popen", side_effect=launch
+        ):
+            self.assertEqual(
+                codex_runner.run(self.workspace, "continue\n", environment=environment),
+                0,
+            )
+
+        command = captured["command"]
+        self.assertEqual(command[0:3], ["/tools/codex", "exec", "resume"])
+        self.assertIn("session-1", command)
+        self.assertNotIn("--skip-git-repo-check", command)
 
     def test_runner_propagates_codex_failure(self) -> None:
         with patch("codex_runner.shutil.which", return_value="codex"), patch(

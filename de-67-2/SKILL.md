@@ -90,7 +90,10 @@ gate and create no coordination artifact unless it is named here.
    python <parent-of-this-phase-folder>/scripts/workspace_setup.py setup --workspace . --target REMOTE BRANCH --worker-capability MODEL REASONING_EFFORT [--worker-capability MODEL REASONING_EFFORT]
    ```
 
-   The helper binds one stable lineage clock, records its machine-only configuration under
+   The helper copies each missing Phase-3 runtime file from `de-67-3/assets/environment/` into
+   `.de67/`: `orchestrator-guidelines.md`, `test-and-task-guidelines.md`, `work-ledger.md`, and
+   `mutation-suggestions.md`. Existing local files are active mutable policy and must never be
+   overwritten. The helper then binds one stable lineage clock, records its machine-only configuration under
    `.de67/state/`, installs a guarded post-commit upstream hook, and immediately pushes the
    already-committed backlog. It never commits, switches branches, force-pushes, or launches a
    coordinator. A dirty tree is allowed because only committed `HEAD` is pushed. If the upstream,
@@ -100,10 +103,10 @@ gate and create no coordination artifact unless it is named here.
    commit. Git setup is outside the DFS and does not add dispatch policy to it.
    The machine-only configuration records the successful worker pairs; it is an availability roster,
    not a worker profile or dispatch policy.
-12. Checkpoint only `.de67/WEC.md`, `.de67/DFS.md`, the proved `.codex/config.toml` agent default,
-   required no-go-zone moves and direct reference reconciliation, and a required ignore-rule
-   change; preserve every unrelated dirty path. The installed hook pushes that commit, so do not run
-   a second routine push.
+12. Checkpoint only `.de67/WEC.md`, `.de67/DFS.md`, the four prepared Phase-3 runtime files, the
+   proved `.codex/config.toml` agent default, required no-go-zone moves and direct reference
+   reconciliation, and a required ignore-rule change; preserve every unrelated dirty path. The
+   installed hook pushes that commit, so do not run a second routine push.
 
 ## Frozen DFS
 

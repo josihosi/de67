@@ -31,42 +31,8 @@ RED_DFS_CLAIM = re.compile(r"^- \[ \] \N{LARGE RED CIRCLE} ", re.MULTILINE)
 ACTIVE_LEDGER_ITEM = re.compile(r"^- \[ \] ", re.MULTILINE)
 BLOCKED_LEDGER_ITEM = re.compile(r"^- Blocked: ", re.MULTILINE)
 BLOCKED_AUDIT_PREFIX = "supervisor audit blocked-only ledger sha256:"
-PHASE3_ROOT = Path(__file__).resolve().parents[1]
-METHOD_REPO_ROOT = PHASE3_ROOT.parent
-KERNEL_PATH = PHASE3_ROOT / "references" / "kernel.md"
-ROLE_ROOT = PHASE3_ROOT / "references" / "roles"
-COORDINATOR_ROLE_PATH = ROLE_ROOT / "coordinator.md"
-METHOD_GUIDANCE_ROOT = PHASE3_ROOT / "assets" / "environment"
-
-
 class SupervisorError(RuntimeError):
     """Raised when coordinator ownership or restart state is inconsistent."""
-
-
-def require_canonical_method_checkout() -> Path:
-    """Keep prompting, guarding, and promotion on one DE-67 method checkout."""
-
-    repository = METHOD_REPO_ROOT.resolve()
-    try:
-        completed = subprocess.run(
-            ["git", "-C", str(repository), "rev-parse", "--show-toplevel"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as error:
-        raise SupervisorError(
-            "Coordinator supervisor must run from the active DE-67 method Git checkout"
-        ) from error
-    try:
-        top_level = Path(completed.stdout.strip()).resolve(strict=True)
-    except (OSError, RuntimeError) as error:
-        raise SupervisorError("Active DE-67 method Git root cannot be resolved") from error
-    if top_level != repository or (repository / "de-67-3").resolve() != PHASE3_ROOT.resolve():
-        raise SupervisorError(
-            "Coordinator method files are not the active DE-67 Phase-3 tree"
-        )
-    return repository
 
 
 @dataclass(frozen=True)
@@ -392,14 +358,13 @@ def coordinator_prompt(
 ) -> str:
     lines = [
         f"Act as a fresh Phase-3 delivery coordinator in {workspace}.",
-        "Read only these DE-67 method files at entry:",
-        f"- {KERNEL_PATH}",
-        f"- {COORDINATOR_ROLE_PATH}",
-        f"Canonical method repository: {METHOD_REPO_ROOT}.",
-        f"Canonical mutable method guidance is only under {METHOD_GUIDANCE_ROOT}.",
-        "Never read, create, or mutate workspace-local copies of test-and-task-guidelines.md or orchestrator-guidelines.md.",
-        "Do not read the phase router or sibling role modules unless the coordinator module routes a concrete event to one of them.",
-        "Read the active ledger and extract its guarded claim-bound DFS slices; do not preload the whole DFS unless the coordinator module's indexing or recovery condition applies.",
+        "Do not read packaged DE-67 SKILL.md, kernel, role, reference, or guideline prose during delivery.",
+        "Packaged DE-67 scripts may be executed as tools; their prose is bootstrap material only.",
+        "Read .de67/orchestrator-guidelines.md before routing work and read only its relevant sections thereafter.",
+        "Require ordinary workers to read only the relevant sections of .de67/test-and-task-guidelines.md.",
+        "Require mutation and DFS reviewers to read the relevant route in .de67/orchestrator-guidelines.md; add task guidance only when their evidence review needs it.",
+        "The workspace-local guideline files are active mutable policy. Never replace them with packaged assets after bootstrap.",
+        "Read the active ledger and use its claim-bound DFS slices as the compact default. Read more of the DFS when the current decision genuinely needs it.",
         "Read current code and Git state plus only relevant durable .de67 state; do not read predecessor logs or narrative handoffs.",
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every deadline-harness command; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
@@ -452,6 +417,7 @@ def run_child(
     generation: int | None,
     *,
     extra_env: Mapping[str, str] | None = None,
+    resume_session_id: str | None = None,
 ) -> ChildResult:
     if not runner_command:
         raise SupervisorError("Runner command must not be empty")
@@ -462,7 +428,15 @@ def run_child(
     except OSError as error:
         raise SupervisorError(f"Cannot create coordinator run directory: {error}") from error
 
-    prompt = coordinator_prompt(workspace, state_path, lineage_id, run_id, generation)
+    if resume_session_id is None:
+        prompt = coordinator_prompt(workspace, state_path, lineage_id, run_id, generation)
+    else:
+        prompt = (
+            "Continue the same DE-67 coordinator lifecycle. Ordinary worker results "
+            "and findings are work input, not a reason to stop. Keep executing the "
+            "active ledger item while an executable route remains. Read durable state "
+            "that changed since the prior turn; do not reread unchanged guidance.\n"
+        )
     _write(run_dir / "prompt.txt", prompt)
     _write(run_dir / "status.txt", "STARTING\n")
 
@@ -475,13 +449,17 @@ def run_child(
             "DE67_DEADLINE_STATE": str(state_path),
             "DE67_LINEAGE": lineage_id,
             "DE67_WORKSPACE": str(workspace),
-            "DE67_METHOD_REPO": str(METHOD_REPO_ROOT.resolve()),
             "DE67_SUPERVISOR_PID": str(os.getpid()),
+            "DE67_COORDINATOR_SESSION_FILE": str(run_dir / "session_id.txt"),
             "DE67_BLOCKER_ADAPTER_STATE": str(
                 workspace / ".de67" / "state" / "blocker-adapter-state.json"
             ),
         }
     )
+    if resume_session_id is None:
+        environment.pop("DE67_COORDINATOR_RESUME_SESSION", None)
+    else:
+        environment["DE67_COORDINATOR_RESUME_SESSION"] = resume_session_id
     if generation is None:
         environment.pop("DE67_COORDINATOR_RESTART_GENERATION", None)
         environment.pop("DE67_COORDINATOR_ACK_ARGV_JSON", None)
@@ -573,8 +551,6 @@ def _run_supervisor_locked(
         raise SupervisorError("Runner command must not be empty")
     wait_for_event = event_waiter or wait_for_supervision_event
 
-    require_canonical_method_checkout()
-
     restart = read_clock(state, lineage_id)
     blocked_audit = blocked_ledger_audit_reason(workdir)
     if blocked_audit is not None:
@@ -612,6 +588,7 @@ def _run_supervisor_locked(
     records.mkdir(parents=True, exist_ok=True)
 
     generation = restart.generation if restart.required else None
+    resume_session_id: str | None = None
     attempted_generations: set[int] = set()
     while True:
         if generation is not None:
@@ -642,6 +619,7 @@ def _run_supervisor_locked(
             run_id,
             generation,
             extra_env=extra_env,
+            resume_session_id=resume_session_id,
         )
 
         # A runner that could not be launched is a concrete environment blocker,
@@ -693,24 +671,25 @@ def _run_supervisor_locked(
             )
         if work_is_complete(workdir, state, lineage_id):
             return 0
-        if not after.required and ledger_has_active_work(workdir):
+        has_executable_work = ledger_has_active_work(workdir) or dfs_has_open_work(workdir)
+        if not after.required and result.exit_code == 0 and has_executable_work:
+            session_path = result.run_dir / "session_id.txt"
+            if not session_path.is_file() or not session_path.read_text(
+                encoding="utf-8"
+            ).strip():
+                _mark_protocol_failure(
+                    result,
+                    "Coordinator returned with executable work but no resumable session id",
+                )
+                return 1
+            resume_session_id = session_path.read_text(encoding="utf-8").strip()
+            generation = None
+            continue
+        if not after.required and result.exit_code != 0 and has_executable_work:
             with DeadlineHarness(state) as harness:
                 requested = harness.request_coordinator_restart(
                     lineage_id,
-                    "supervisor observed active ledger work after coordinator exit",
-                )["coordinator_restart"]
-            after = _restart_state(
-                {"lineage_id": lineage_id, "coordinator_restart": requested},
-                lineage_id,
-            )
-        elif (
-            not after.required
-            and dfs_has_open_work(workdir)
-        ):
-            with DeadlineHarness(state) as harness:
-                requested = harness.request_coordinator_restart(
-                    lineage_id,
-                    "supervisor observed an empty ledger with open DFS work",
+                    "supervisor is recovering an abnormal coordinator exit",
                 )["coordinator_restart"]
             after = _restart_state(
                 {"lineage_id": lineage_id, "coordinator_restart": requested},
@@ -735,6 +714,7 @@ def _run_supervisor_locked(
             return 1
         restart = after
         generation = after.generation
+        resume_session_id = None
 
 
 def run_supervisor(

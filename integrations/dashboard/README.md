@@ -27,6 +27,25 @@ The dashboard uses only Python's standard library. It keeps the last good Markdo
 in memory when a source becomes unavailable. A missing workspace, locked database, malformed text,
 unknown schema, failed process probe, or dashboard crash cannot stop or mutate DE67.
 
+The overview shows active Luna and Terra workers by reasoning effort from Codex's existing local
+session records. It does not add worker fields or coordinator reporting. Use `--codex-sessions PATH`
+when the session root is not `~/.codex/sessions`; an unavailable source leaves only that table
+unavailable. The mutation tile combines completed deadline, integrity, and random mutations and
+shows how many more worker results remain before the pending random mutation.
+
+The optional trajectory spider runs the existing read-only sidecar when the clock state changes:
+
+```sh
+python3 integrations/dashboard/de67_dashboard.py \
+  --workspace /path/to/project \
+  --sidecar-script de-67-3/scripts/trajectory_sidecar.py
+```
+
+The report stays in memory until the clock changes. The dashboard does not create sidecar
+snapshots, history files, or refresh artifacts. A missing or failed sidecar cannot stop DE67.
+The plot keeps current closure gaps around the claim, draws product and test cosine similarity
+along each spoke, and shows the sidecar's categorical trajectory observations without scoring them.
+
 Run focused tests:
 
 ```sh

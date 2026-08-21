@@ -17,6 +17,8 @@ from workspace_setup import (  # noqa: E402
     CONFIG_RELATIVE_PATH,
     DEADLINE_STATE_RELATIVE_PATH,
     MANAGED_HOOK_MARKER,
+    PHASE3_ENVIRONMENT_ROOT,
+    PHASE3_WORKSPACE_FILES,
     PUSH_STATUS_RELATIVE_PATH,
     SetupError,
     configure,
@@ -186,6 +188,33 @@ class WorkspaceSetupTests(unittest.TestCase):
             (self.workspace / CONFIG_RELATIVE_PATH).read_text(encoding="utf-8"),
             original_config,
         )
+
+    def test_setup_copies_missing_phase3_files_and_preserves_local_mutations(self) -> None:
+        self.freeze_dfs()
+        local = self.workspace / ".de67" / "orchestrator-guidelines.md"
+        local.write_text("# Local mutable policy\n", encoding="utf-8")
+
+        result = configure(
+            self.workspace,
+            [("origin", "dev")],
+            bind_clock=True,
+            lineage="stable-lineage",
+            worker_capabilities=VERIFIED_WORKERS,
+        )
+
+        self.assertEqual(local.read_text(encoding="utf-8"), "# Local mutable policy\n")
+        self.assertIn(
+            "orchestrator-guidelines.md",
+            result["phase3_environment"]["preserved"],
+        )
+        for name in PHASE3_WORKSPACE_FILES:
+            destination = self.workspace / ".de67" / name
+            self.assertTrue(destination.is_file(), name)
+            if name != "orchestrator-guidelines.md":
+                self.assertEqual(
+                    destination.read_bytes(),
+                    (PHASE3_ENVIRONMENT_ROOT / name).read_bytes(),
+                )
 
     def test_repeated_setup_cannot_repin_changed_source_branch(self) -> None:
         self.freeze_dfs()

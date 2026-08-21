@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import Any
 
 
-RANDOM_INTERVAL_MIN = 10
-RANDOM_INTERVAL_MAX = 30
+RANDOM_INTERVAL_MIN = 20
+RANDOM_INTERVAL_MAX = 50
+UNIVERSAL_RANDOM_INTERVAL = 30
 RANDOM_MUTATION_LANES = (
     "test-and-task-guidelines.md",
     "orchestrator-guidelines.md",
@@ -33,6 +34,10 @@ NORMAL_METHOD_PROTECTED_FILES = (
     "scripts/mutation_guard.py",
     "tests/test_deadline_harness.py",
     "tests/test_mutation_guard.py",
+)
+WORKSPACE_METHOD_GUIDELINE_FILES = (
+    "orchestrator-guidelines.md",
+    "test-and-task-guidelines.md",
 )
 ACTIVE_SKILL_ROOT = Path(__file__).resolve().parents[1]
 
@@ -82,6 +87,29 @@ def protected_method_digest(root: Path = ACTIVE_SKILL_ROOT) -> str:
             "Active method tree is missing protected files: " + ", ".join(missing)
         )
     return _files_digest(protected)
+
+
+def workspace_method_digest(
+    state_path: Path | None, root: Path = ACTIVE_SKILL_ROOT
+) -> str | None:
+    """Project the active workspace guidelines onto the installed method tree."""
+
+    if (
+        state_path is None
+        or state_path.parent.name != "state"
+        or state_path.parent.parent.name != ".de67"
+    ):
+        return None
+    environment = state_path.parent.parent
+    guideline_paths = {
+        name: environment / name for name in WORKSPACE_METHOD_GUIDELINE_FILES
+    }
+    if any(not path.is_file() for path in guideline_paths.values()):
+        return None
+    files = _method_files(root)
+    for name, path in guideline_paths.items():
+        files[f"assets/environment/{name}"] = path.read_bytes()
+    return _files_digest(files)
 
 
 class DeadlineError(RuntimeError):
@@ -170,7 +198,7 @@ class DeadlineHarness:
                 lineage_id TEXT NOT NULL,
                 cycle_number INTEGER NOT NULL CHECK (cycle_number > 0),
                 interval_windows INTEGER NOT NULL CHECK (
-                    interval_windows BETWEEN 10 AND 30
+                    interval_windows BETWEEN 10 AND 50
                 ),
                 due_after_terminal_windows INTEGER NOT NULL CHECK (
                     due_after_terminal_windows >= interval_windows
@@ -274,6 +302,8 @@ class DeadlineHarness:
                 resolved_at REAL NOT NULL,
                 evidence TEXT NOT NULL,
                 receipt_id TEXT,
+                no_change_required INTEGER NOT NULL DEFAULT 0
+                    CHECK (no_change_required IN (0, 1)),
                 PRIMARY KEY (lineage_id, claim_id, generation, component),
                 FOREIGN KEY (lineage_id, claim_id, generation)
                     REFERENCES claim_deadline_generation_incidents(
@@ -676,6 +706,17 @@ class DeadlineHarness:
             self.connection.execute(
                 "ALTER TABLE deadline_mutation_components ADD COLUMN receipt_id TEXT"
             )
+        generation_component_columns = {
+            row["name"]
+            for row in self.connection.execute(
+                "PRAGMA table_info(deadline_generation_mutation_components)"
+            ).fetchall()
+        }
+        if "no_change_required" not in generation_component_columns:
+            self.connection.execute(
+                "ALTER TABLE deadline_generation_mutation_components "
+                "ADD COLUMN no_change_required INTEGER NOT NULL DEFAULT 0"
+            )
         self.connection.execute(
             """
             INSERT OR IGNORE INTO claim_deadline_generation_incidents (
@@ -785,6 +826,7 @@ class DeadlineHarness:
             self.connection.execute(
                 "ALTER TABLE random_mutation_cycles ADD COLUMN restart_generation INTEGER"
             )
+        self._migrate_random_interval_constraint()
         receipt_columns = {
             row["name"]
             for row in self.connection.execute(
@@ -965,6 +1007,84 @@ class DeadlineHarness:
         self._migrate_v2_closure_gaps()
         self.connection.execute("PRAGMA user_version = 5")
         self.connection.commit()
+
+    def _migrate_random_interval_constraint(self) -> None:
+        """Widen legacy cadence storage without redrawing persisted cycles."""
+
+        row = self.connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'random_mutation_cycles'"
+        ).fetchone()
+        schema = str(row["sql"] if row is not None else "").lower()
+        if "interval_windows between 10 and 30" not in " ".join(schema.split()):
+            return
+        self.connection.commit()
+        self.connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            self.connection.execute(
+                """
+                CREATE TABLE random_mutation_cycles_wider (
+                    lineage_id TEXT NOT NULL,
+                    cycle_number INTEGER NOT NULL CHECK (cycle_number > 0),
+                    interval_windows INTEGER NOT NULL CHECK (
+                        interval_windows BETWEEN 10 AND 50
+                    ),
+                    due_after_terminal_windows INTEGER NOT NULL CHECK (
+                        due_after_terminal_windows >= interval_windows
+                    ),
+                    selected_lane TEXT NOT NULL CHECK (
+                        selected_lane IN (
+                            'test-and-task-guidelines.md',
+                            'orchestrator-guidelines.md',
+                            'DFS.md'
+                        )
+                    ),
+                    due_task_id TEXT,
+                    resolution_evidence TEXT,
+                    ordinary_resolution_evidence TEXT,
+                    universal_required INTEGER NOT NULL DEFAULT 0 CHECK (
+                        universal_required IN (0, 1)
+                    ),
+                    universal_resolution_evidence TEXT,
+                    universal_receipt_id TEXT,
+                    universal_capability_status TEXT CHECK (
+                        universal_capability_status IN (
+                            'available', 'unavailable', 'legacy-resolved'
+                        )
+                    ),
+                    universal_capability_reason TEXT,
+                    universal_capability_checked_at REAL,
+                    universal_capability_roster_digest TEXT,
+                    restart_generation INTEGER,
+                    PRIMARY KEY (lineage_id, cycle_number)
+                )
+                """
+            )
+            columns = (
+                "lineage_id, cycle_number, interval_windows, due_after_terminal_windows, "
+                "selected_lane, due_task_id, resolution_evidence, ordinary_resolution_evidence, "
+                "universal_required, universal_resolution_evidence, universal_receipt_id, "
+                "universal_capability_status, universal_capability_reason, "
+                "universal_capability_checked_at, universal_capability_roster_digest, "
+                "restart_generation"
+            )
+            self.connection.execute(
+                f"INSERT INTO random_mutation_cycles_wider ({columns}) "
+                f"SELECT {columns} FROM random_mutation_cycles"
+            )
+            self.connection.execute("DROP TABLE random_mutation_cycles")
+            self.connection.execute(
+                "ALTER TABLE random_mutation_cycles_wider RENAME TO random_mutation_cycles"
+            )
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+        finally:
+            self.connection.execute("PRAGMA foreign_keys = ON")
+        violations = self.connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise DeadlineError("Random cadence migration broke persisted foreign keys")
 
     def _migrate_v1_state(self) -> None:
         """Project v1 task clocks into v2 claim state without rewriting v1 rows."""
@@ -2215,7 +2335,7 @@ class DeadlineHarness:
 
     @staticmethod
     def _universal_signature_seen(interval: int, lane: str) -> bool:
-        return interval == RANDOM_INTERVAL_MAX and lane == "DFS.md"
+        return interval == UNIVERSAL_RANDOM_INTERVAL and lane == "DFS.md"
 
     def _sol_ultra_capability_snapshot(self) -> tuple[bool, str, str | None]:
         """Read the standard persisted roster once when a rare cycle becomes due."""
@@ -2665,7 +2785,11 @@ class DeadlineHarness:
         return self._incident_result(row, recorded=True)
 
     def _record_miss_if_due(
-        self, task: sqlite3.Row, now: float, *, completion_invalid: bool = False
+        self,
+        task: sqlite3.Row,
+        now: float,
+        *,
+        completion_invalid: bool = False,
     ) -> dict[str, Any] | None:
         claim = self._task_claim(task["lineage_id"], task["task_id"])
         accepted = self._latest_valid_acceptance(
@@ -2825,6 +2949,7 @@ class DeadlineHarness:
             "estimate_seconds": (
                 claim["estimate_seconds"] if claim is not None else task["estimate_seconds"]
             ),
+            "attempt_estimate_seconds": task["estimate_seconds"],
             "started_at": claim["started_at"] if claim is not None else task["started_at"],
             "claim_started_at": (
                 claim["started_at"] if claim is not None else None
@@ -3013,6 +3138,7 @@ class DeadlineHarness:
         claim_id: str,
         estimate_seconds: float,
         *,
+        attempt_estimate_seconds: float | None = None,
         phase: str | None = None,
         gap_id: str | None = None,
         now: float | None = None,
@@ -3023,6 +3149,11 @@ class DeadlineHarness:
         if gap_id is not None:
             gap_id = self._identity(gap_id, "Closure gap id")
         estimate = self._positive_estimate(estimate_seconds)
+        attempt_estimate = (
+            estimate
+            if attempt_estimate_seconds is None
+            else self._positive_estimate(attempt_estimate_seconds)
+        )
         started_at = self._now(now)
         self._begin()
         try:
@@ -3113,7 +3244,26 @@ class DeadlineHarness:
                         if restart_generation is not None
                         else None
                     )
-                    if restart is None or restart["acknowledged_at"] is None:
+                    macro = self.connection.execute(
+                        """
+                        SELECT no_change_required
+                        FROM deadline_generation_mutation_components
+                        WHERE lineage_id = ? AND claim_id = ?
+                          AND generation = ? AND component = 'macro'
+                        """,
+                        (
+                            lineage_id,
+                            claim_id,
+                            int(claim["deadline_generation"]),
+                        ),
+                    ).fetchone()
+                    no_change_required = bool(
+                        macro is not None and macro["no_change_required"]
+                    )
+                    if (
+                        not no_change_required
+                        and (restart is None or restart["acknowledged_at"] is None)
+                    ):
                         raise DeadlineError(
                             "Resolved deadline generation requires its acknowledged "
                             "successor before a new work deadline can be armed"
@@ -3133,7 +3283,7 @@ class DeadlineHarness:
                             estimate,
                             started_at,
                             started_at + estimate,
-                            restart_generation,
+                            restart_generation if not no_change_required else None,
                         ),
                     )
                     claim = self._claim(lineage_id, claim_id)
@@ -3184,6 +3334,19 @@ class DeadlineHarness:
                 if not advanced_deadline_generation and claim["estimate_seconds"] != estimate:
                     raise DeadlineError(
                         "Repeated claim dispatch cannot change the claim estimate or deadline"
+                    )
+                if (
+                    existing is None
+                    and attempt_estimate_seconds is not None
+                    and started_at + attempt_estimate > float(claim["deadline_at"])
+                ):
+                    remaining_seconds = max(
+                        0.0, float(claim["deadline_at"]) - started_at
+                    )
+                    raise DeadlineError(
+                        "Attempt estimate exceeds the remaining claim deadline: "
+                        f"estimate={attempt_estimate:g}s "
+                        f"remaining={remaining_seconds:g}s"
                     )
                 if phase is not None and phase != claim["phase"]:
                     raise DeadlineError(
@@ -3275,14 +3438,6 @@ class DeadlineHarness:
                                 "Closure gap revision already has a live attempt; "
                                 "abandon it before dispatching a replacement"
                             )
-                        if (
-                            valid_acceptance is None
-                            and prior["attempt_terminal_kind"] != "abandoned"
-                        ):
-                            raise DeadlineError(
-                                "Closure gap needs acceptance or an evidence-bound revision "
-                                "before another attempt"
-                            )
             cursor = self.connection.execute(
                 """
                 INSERT OR IGNORE INTO tasks (
@@ -3297,7 +3452,7 @@ class DeadlineHarness:
                     lineage_id,
                     task_id,
                     claim_id,
-                    claim["estimate_seconds"],
+                    attempt_estimate,
                     started_at,
                     claim["deadline_at"],
                     claim["deadline_generation"],
@@ -3669,6 +3824,55 @@ class DeadlineHarness:
                 "claim_id": claim_id,
                 "checked_at": checked_at,
                 "deadline_at": self._claim(lineage_id, claim_id)["deadline_at"],
+                "mutation_pending": self._deadline_mutation_pending(
+                    lineage_id, claim_id
+                ),
+                "random_mutation": self._random_mutation_status(lineage_id),
+            }
+            self.connection.commit()
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def miss_claim_deadline(
+        self, lineage_id: str, claim_id: str, *, now: float | None = None
+    ) -> dict[str, Any]:
+        """Record an actual expired item deadline through the ordinary miss route."""
+
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        claim_id = self._identity(claim_id, "Claim id")
+        recorded_at = self._now(now)
+        self._begin()
+        try:
+            claim = self._claim(lineage_id, claim_id)
+            task = self.connection.execute(
+                """
+                SELECT * FROM tasks
+                WHERE lineage_id = ? AND claim_id = ?
+                  AND deadline_generation = ?
+                ORDER BY started_at DESC, task_id DESC
+                LIMIT 1
+                """,
+                (lineage_id, claim_id, claim["deadline_generation"]),
+            ).fetchone()
+            if task is None:
+                raise DeadlineError(
+                    "Claim has no current-generation worker attempt to anchor its miss"
+                )
+            accepted = self._latest_valid_acceptance(lineage_id, claim_id)
+            if accepted is not None and accepted["accepted_at"] < claim["deadline_at"]:
+                raise DeadlineError("An accepted claim cannot miss its deadline")
+            if recorded_at < float(claim["deadline_at"]):
+                raise DeadlineError(
+                    "The item deadline has not expired; continue the ledger item"
+                )
+            incident = self._record_miss_if_due(task, recorded_at)
+            result = {
+                "incident": incident,
+                "claim_id": claim_id,
+                "recorded_at": recorded_at,
+                "deadline_at": claim["deadline_at"],
                 "mutation_pending": self._deadline_mutation_pending(
                     lineage_id, claim_id
                 ),
@@ -4079,11 +4283,11 @@ class DeadlineHarness:
             if (
                 normalized_description
                 == " ".join(str(current["description"]).split()).casefold()
-                or normalized_proof_route
+                and normalized_proof_route
                 == " ".join(str(current["proof_route"]).split()).casefold()
             ):
                 raise DeadlineError(
-                    "A gap revision must materially change both its description and proof route"
+                    "A gap revision must materially change its description or proof route"
                 )
             revision = int(current["revision"]) + 1
             self.connection.execute(
@@ -4769,10 +4973,13 @@ class DeadlineHarness:
         if receipt_id != expected_id:
             raise DeadlineError("Method receipt digest does not match its contract")
 
-        current_tree_digest = method_tree_digest()
-        if current_tree_digest != receipt["candidate_digest"]:
+        candidate_digests = {
+            method_tree_digest(),
+            workspace_method_digest(self.state_path),
+        }
+        if receipt["candidate_digest"] not in candidate_digests:
             raise DeadlineError(
-                "Method receipt candidate is not the active live Phase-3 tree"
+                "Method receipt candidate is not the active published or workspace-local Phase-3 tree"
             )
         if protected_method_digest() != receipt["protected_baseline_digest"]:
             raise DeadlineError(
@@ -4824,10 +5031,6 @@ class DeadlineHarness:
                 raise DeadlineError(
                     "No-change macro resolution cannot consume a method receipt"
                 )
-            if not no_change_required and receipt_id is None:
-                raise DeadlineError(
-                    "Deadline macro mutation requires a guard-issued method receipt"
-                )
             if receipt_id is not None:
                 receipt_id = self._identity(receipt_id, "Method receipt id")
         elif no_change_required:
@@ -4848,7 +5051,7 @@ class DeadlineHarness:
                 raise DeadlineError(
                     "Claim deadline needs an independent diagnosis before mutation"
                 )
-            if component == "macro" and not no_change_required:
+            if component == "macro" and receipt_id is not None:
                 self._validate_normal_method_receipt(
                     receipt_id,
                     lineage_id=lineage_id,
@@ -4869,8 +5072,8 @@ class DeadlineHarness:
                     """
                     INSERT INTO deadline_generation_mutation_components (
                         lineage_id, claim_id, generation, component,
-                        resolved_at, evidence, receipt_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        resolved_at, evidence, receipt_id, no_change_required
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         lineage_id,
@@ -4880,6 +5083,7 @@ class DeadlineHarness:
                         resolved_at,
                         evidence,
                         receipt_id,
+                        int(no_change_required),
                     ),
                 )
                 if int(incident["generation"]) == 1:
@@ -4899,6 +5103,7 @@ class DeadlineHarness:
             elif (
                 existing["evidence"] == evidence
                 and existing["receipt_id"] == receipt_id
+                and bool(existing["no_change_required"]) == no_change_required
             ):
                 recorded = False
             else:
@@ -4916,7 +5121,7 @@ class DeadlineHarness:
                 refreshed = self._claim_deadline_incident(lineage_id, claim_id)
                 if refreshed is None:
                     raise DeadlineError("Failed to read claim deadline incident")
-                if refreshed["restart_generation"] is None:
+                if refreshed["restart_generation"] is None and not no_change_required:
                     restart, _ = self._request_coordinator_restart(
                         lineage_id,
                         f"deadline mutation resolved for {claim_id}",
@@ -4992,11 +5197,8 @@ class DeadlineHarness:
             raise DeadlineError("Integrity mutation component must be micro or macro")
         evidence = self._nonempty_text(evidence, "Mutation evidence")
         if component == "macro":
-            if receipt_id is None:
-                raise DeadlineError(
-                    "Integrity macro mutation requires a guard-issued method receipt"
-                )
-            receipt_id = self._identity(receipt_id, "Method receipt id")
+            if receipt_id is not None:
+                receipt_id = self._identity(receipt_id, "Method receipt id")
         elif receipt_id is not None:
             raise DeadlineError("Integrity micro mutation cannot consume a receipt")
         resolved_at = self._now(now)
@@ -5012,7 +5214,7 @@ class DeadlineHarness:
                 raise DeadlineError(
                     "Integrity incident needs an independent diagnosis before mutation"
                 )
-            if component == "macro":
+            if component == "macro" and receipt_id is not None:
                 self._validate_normal_method_receipt(
                     receipt_id,
                     lineage_id=lineage_id,
@@ -5287,7 +5489,7 @@ class DeadlineHarness:
                 task, recorded_at, completion_invalid=True
             )
             incident = self._record_incident(
-                lineage_id, task_id, "integrity_breach", 3, recorded_at, reason
+                lineage_id, task_id, "integrity_breach", 1, recorded_at, reason
             )
             successor_gap = None
             if task["integrity_breached_at"] is None:
@@ -5666,7 +5868,7 @@ class DeadlineHarness:
                     ).encode("utf-8")
                 ).hexdigest()
                 if (
-                    receipt["interval_windows"] != RANDOM_INTERVAL_MAX
+                    receipt["interval_windows"] != UNIVERSAL_RANDOM_INTERVAL
                     or receipt["selected_lane"] != "DFS.md"
                     or receipt["reviewer_model"] != "gpt-5.6-sol"
                     or receipt["reviewer_effort"] != "ultra"
@@ -5920,7 +6122,15 @@ def build_parser() -> argparse.ArgumentParser:
     start = commands.add_parser("start", help="Start a task once")
     add_task_identity_flags(start)
     start.add_argument("--claim", required=True)
-    start.add_argument("--estimate-seconds", required=True, type=float)
+    start.add_argument(
+        "--estimate-seconds",
+        required=True,
+        type=float,
+        help=(
+            "Evidence-derived estimate for this attempt; the first attempt also "
+            "uses it to arm the immutable claim deadline"
+        ),
+    )
     start.add_argument("--phase", choices=("exploration", "closure"))
     start.add_argument("--gap")
 
@@ -5932,6 +6142,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     expire = commands.add_parser("expire", help="Record a due miss once")
     add_task_identity_flags(expire)
+
+    deadline_miss = commands.add_parser(
+        "deadline-miss",
+        help="Record the current item deadline after its wall-clock expiry",
+    )
+    deadline_miss.add_argument("--state", dest="command_state")
+    deadline_miss.add_argument("--lineage", required=True)
+    deadline_miss.add_argument("--claim", required=True)
 
     complete = commands.add_parser(
         "complete", help="Terminalize one attempt with completion evidence"
@@ -6173,11 +6391,33 @@ def main(argv: list[str] | None = None) -> int:
         else:
             with DeadlineHarness(state_path) as harness:
                 if arguments.command == "start":
+                    claim_exists = harness.connection.execute(
+                        "SELECT 1 FROM claim_clocks "
+                        "WHERE lineage_id = ? AND claim_id = ?",
+                        (arguments.lineage, arguments.claim),
+                    ).fetchone()
+                    claim_estimate = arguments.estimate_seconds
+                    if claim_exists is not None:
+                        claim = harness._claim(arguments.lineage, arguments.claim)
+                        incident = harness._claim_deadline_incident(
+                            arguments.lineage,
+                            arguments.claim,
+                            int(claim["deadline_generation"]),
+                        )
+                        may_advance_generation = (
+                            incident is not None
+                            and not harness._deadline_mutation_pending(
+                                arguments.lineage, arguments.claim
+                            )
+                        )
+                        if not may_advance_generation:
+                            claim_estimate = float(claim["estimate_seconds"])
                     result = harness.start_task(
                         arguments.lineage,
                         arguments.task,
                         arguments.claim,
-                        arguments.estimate_seconds,
+                        claim_estimate,
+                        attempt_estimate_seconds=arguments.estimate_seconds,
                         phase=arguments.phase,
                         gap_id=arguments.gap,
                     )
@@ -6185,6 +6425,10 @@ def main(argv: list[str] | None = None) -> int:
                     result = harness.status_task(arguments.lineage, arguments.task)
                 elif arguments.command == "expire":
                     result = harness.expire_task(arguments.lineage, arguments.task)
+                elif arguments.command == "deadline-miss":
+                    result = harness.miss_claim_deadline(
+                        arguments.lineage, arguments.claim
+                    )
                 elif arguments.command == "list":
                     result = harness.coordinator_view()
                 elif arguments.command == "startup-view":

@@ -1,176 +1,107 @@
 # Orchestrator guidelines
 
-The headings in this document are frozen. Text beneath them may change after an evidence-backed
-deadline or integrity review and through a guarded random normal-method candidate.
+This workspace-local file is active mutable policy. Read the sections needed for the current route.
+Do not replace it with the packaged template after bootstrap.
 
-## Read state
+## Read and route state
 
-Begin fresh by reading compact timer status, the active work ledger and validated claim-bound DFS
-slices, both ledgers' current state, repository identity, current Git/code state, and returned worker
-evidence at the level needed to route the first event. A legacy item without slice pointers enters
-the one-time bootstrap route; only that route, invalid slice state, or a concrete context gap reads
-the whole DFS. Thereafter open only the active role module and changed or actionable guideline
-heading. Preserve attempt accounting and accepted evidence; do not inherit unsupported claims or
-logs from the previous coordinator. Default history is the latest ten short failure verdicts; fetch
-long detail only for the exact current anomaly. Never inventory or read `.de67/no-go-zone/`.
+Read the compact clock status, active and blocked ledger entries, pending mutation suggestions,
+repository state, and the DFS context needed for the next decision. DFS slices are a token-saving
+index, not an access prohibition. Read more of the DFS when the decision genuinely needs it. Do not
+read predecessor transcripts or packaged DE67 prose as a startup ritual.
 
-## Assess failures
+Keep ordinary implementation, testing, fixture construction, scenario repair, and debug-tool work
+inside the coordinator-worker route. Ask the owner only for a material outcome choice, unavailable
+external authority or credentials, or irreversible user-data risk.
 
-Separate product failure, proof failure, task-definition failure, tooling failure, estimate failure,
-external wait, integrity breach, and a same-contract DFS specification gap. Locate the first
-contradicted premise and distinguish a late but useful result from a false completion. A worker
-finding is evidence to classify, not the worker's authority to choose the lane. Repeated inability
-to observe the same fact is a tooling diagnosis, not evidence that more identical product runs or a
-second reviewer will help. Incident reviewers are fresh and independent; prefer the strongest useful
-causal reasoner without turning model choice into a fixed ritual. Every deadline miss yields a micro
-recovery for the current item and a macro candidate for the method that produced the miss.
+Use the first relevant route:
 
-## Investigate causes
+- accepted evidence that changes DFS state -> DFS review;
+- a deadline or integrity incident -> incident mutation review;
+- a due random review -> its stored lane;
+- implementation, exploration, test, build, debug, or operation -> worker;
+- proved outcome with no open gap or live state gate -> stop.
 
-Inspect the authoritative owner, its helpers and callers, every competing reader/writer of the same
-state, owning tests, relevant history, and the natural execution path. Require changed causal evidence
-before repeating a route. Expand the DFS only when this review leaves exactly one necessary
-same-contract refinement; task, test, tooling, evidence, and external-authority gaps stay out of it.
-When compact verdicts already show semantically parallel findings or repeated strategy revision and
-the next dispatch risks an adjacent rerun, optionally consult the read-only trajectory sidecar and
-place its proximity result beside the current causal evidence. Absence, staleness, or failure is
-nonblocking; its output is direction evidence only, never completion, proof, mutation authority,
-lane-merging authority, a required ledger or clock field, or a language-model call.
-Treat diagnosis as an exploration learning goal. Once a changed strategy and proof route exist,
-freeze stable ids, descriptions, and proof routes for every finite closure gap. Dispatch exactly one
-active gap revision per closure attempt. A completed or finding result must close or materially
-revise that gap before another attempt; abandonment alone permits the same revision.
-Apply the MSW `rounds = 3` fuse across a same-gap causal-diagnosis chain, including different task
-and revision ids. Three consecutive terminal findings that have not crossed a new product or proof
-transition exhaust that observational course. Before any fourth attempt, halt narrower probes and
-replace them with one finite map of the already-visible producer, serializer or normalizer, state
-writer, consumer guard, and owning test; the next admissible attempt implements or proves the first
-authoritative transition. A material revision does not reset this fuse.
-When a command resolves but its downstream effect does not, treat action delivery as established
-and trace the immediate production consumer before another end-to-end attempt. Record its selected
-operand, next-state shape, and terminal result; dispatch only an operand proved to produce the next
-required non-empty or accepted state. Alternate encodings of the already-resolved action are not
-changed causal evidence.
+These labels describe responsibility. They do not require packaged role files.
+Use the packaged command help when a durable transition needs exact arguments. Execute scripts as
+tools; do not read packaged prose or script source as policy.
 
-## Plan the work ledger
+## Plan and dispatch
 
-When the current batch is empty, project no more than ten necessary still-red DFS claims into the
-work ledger. Give every active item one pointer line naming its guarded, claim-bound DFS slices.
-Multiple slices carry non-contiguous outcome, owner, acceptance, and proof context without loading
-unrelated DFS text. Mark each current item as exploration or closure. Exploration keeps one learning
-goal and exits with a strategy plus proof route; closure keeps the frozen remaining gaps and next
-action. Before dispatching a closure gap, compare its terminal evidence with the last accepted
-production frontier and identify the first unproved producer, owner transition, or environment
-prerequisite on that route. If the current setup cannot create the terminal precondition, route that
-missing bridge first instead of spending an end-to-end closure attempt on downstream proof. A helper
-or state-reducer fixture remains setup evidence until the natural producer reaches its next consumer;
-a capacity-dependent build is dispatchable only after current capacity is measured against the
-same-configuration artifact requirement. Re-read code and define tests at planning time. Remove
-accepted items and their live pointer
-line without a batch summary or archive; leave durable DFS markers in place for history and reopen.
-For a still-red claim, replace old task notes with only the current causal frontier and active route.
-Keep attempt history in the clock rather than duplicating it in the ledger.
-If a material owner choice or external condition leaves no executable route, remove the item's
-unchecked active block and record `- Blocked: R-001 — <exact choice or condition>` under
-`## Blocked work`. Keep blocked entries concise and do not dispatch them. When the owner answers or
-the condition changes, remove the blocked entry and restore the ordinary unchecked active item.
-Choosing or generating test tooling, fixtures, scenarios, disposable identities or coordinates,
-profiles, registry database rows, and exact test bindings is coordinator/worker authority when it
-does not change the frozen product contract. A broken or absent setup remains ordinary executable
-work. Do not turn it into an owner choice or send it to Discord.
+Put the currently actionable red claims in `.de67/work-ledger.md`. Keep each entry short and point it
+to the DFS context needed for the work. Do not impose a batch-size limit. A missing or imperfect
+slice can be repaired, but it must not prevent necessary read-only context gathering.
 
-## Coordinate workers
+Use exploration when ownership, mechanism, strategy, or proof is unknown. Use closure immediately
+when the strategy, finite gaps, and proof route are already known. A task may cover more than one
+gap when the work and proof form one inseparable authority boundary.
 
-Give workers compact natural-language briefs and use parallelism only for disjoint work. Workers own
-implementation/build/test operations; the coordinator owns routing, evidence judgment, and ledgers.
-Immediately before invoking task `start`, read the exact claim clock and bind the remaining seconds
-and evidence-derived estimate through the task's required durable result disposition to the
-dispatch decision. Treat closure pre-start as one conjunction: bind the current gap revision, prove
-the first external route executable under the exact authority its next command consumes, and pass
-that arithmetic. When required closure evidence is a finalized scenario or registry report,
-pre-start also resolves each statically named required step and evidence binding through the
-current finalizer; a legacy or absent binding is a producer-consumer mismatch that must be repaired
-and proved before the full run. For a GUI-driven scenario, enumerate every statically declared
-input token, sequence mode, and focus mode through the current physical input owner and exercise a
-focused route check for each distinct transition before the full run. After one runtime input-owner
-mismatch, map and repair every remaining statically visible GUI input transition before another
-full run; do not rediscover the declared sequence one key at a time. A manifest or named scenario is inventory, not execution authority; a tokenized
-selector requires a current explicit typed token. Never invoke closure task `start` to discover
-route readiness or fit. For closure, the estimate ends only after a terminal result is consumed into its
-required gap close, material revision, or exploration reopen, including any named independent
-review; the worker terminal timestamp alone is not the item-deadline endpoint. The on-time
-comparison also binds the evidence-derived critical path through every other open gap required for
-atomic claim acceptance and every method gate already known to become due on those terminal
-windows. A next-gap estimate may route useful work, but it cannot prove the claim remains on time.
-At the first dispatch of each new deadline generation, and again after every terminal result that
-changes an open gap's description, proof route, or estimate, make this comparison inspectable:
-record one current compact component vector naming every open gap and known due method gate, its
-evidence basis and duration, durable-disposition overhead, the summed critical path, and current
-remaining item seconds. Each refreshed vector includes any prerequisite or repair slice plus the
-downstream terminal proof; an individually fitting prerequisite cannot establish on-time fit when
-that sum cannot fit.
-Any absent component leaves on-time fit unproved. A fresh generation or individually fitting
-next-gap attempts do not prove whole-claim fit. While the vector is incomplete, only an
-independently terminal estimate-discovery slice whose result is necessary to complete that vector
-may proceed as on-time work; all other continuation is honest late. Once the vector is complete, it
-must fit before any on-time closure dispatch.
-If the complete critical-path estimate exceeds the remaining time, no prerequisite, repair,
-product, or proof slice is on-time merely because it separately fits and is independently terminal.
-Preserve necessary continuation as late work without presenting or routing it as an on-time closure
-attempt. A cached comparison from an earlier dispatch is not current evidence.
-Choose model and effort from the Phase-2-proved roster without a rigid task matrix. Luna uses the
-trusted project default with an explicit proved effort; Terra is selected explicitly. Receive
-progress and final results through the native parent/child channel; clarification is allowed while
-the task is active without loading its full transcript.
-Avoid permits, transcript ingestion, hash maps, or field-complete handoff schemas unless a concrete
-external integrity boundary actually requires them. The coordinator remains responsible for the
-next causal decision; reading or rewriting a predecessor handoff is not product progress. Route
-deadline, random, DFS, and rare universal events to their named modules. Add independent
-high-reasoning work only when the evidence or named role requires it, and give it the smallest state
-that can change the decision.
+Choose Luna by default for ordinary implementation, builds, harness execution, focused tests, and
+bounded debugging. Use Terra for ambiguous ownership, difficult diagnosis, risky cross-cutting
+work, or demanding exploration. Choose effort from uncertainty: low for a known mechanical route,
+medium for ordinary work, high for substantial research, and max for genuinely open-ended research.
+Do not use Terra at max or Sol for ordinary work. These are recommendations; a mismatch does not
+stop delivery.
 
-## Accept work and update DFS
+Set one generous deadline for the whole ledger item. Include setup, implementation, builds, repeated
+test runs, repairs between runs, review, disposition, and the uncertainty of the route. Unknown work
+does not take zero time. Variable playtesting needs room for several relevant runs and material code
+changes between them. Finish early when possible. Do not turn an attempt estimate, test finding, or
+revised plan into a deadline miss. A deadline miss occurs only when the item clock actually expires.
 
-Judge the real diff and honest test. Close nonfinal named gaps with their bound evidence. Accept the
-claim only through the final gap, which closes atomically; any other open gap blocks acceptance.
-Only then remove the claim's red marker and its active work item.
-Preserve prior evidence and attempt accounting without treating a failed product mutation as the
-accepted frontier. Send closure and source-grounded DFS questions to the DFS steward. A broader DFS
-candidate may challenge mechanisms, proof routes, or claim structure, but it cannot change the user
-outcome, permissions, or honest proof. Count progress by a new accepted product transition, not by
-tests run, artifacts written, reviews completed, or handoffs read.
-An integrity breach against a closed gap's owning proof preserves the closed disposition, appends an
-open successor gap, invalidates affected acceptance, and routes the DFS claim back to red.
+Give each worker a self-contained brief. Require the worker to read the relevant sections of
+`.de67/test-and-task-guidelines.md`. Use parallel workers only when their work is genuinely disjoint.
 
-## Mutate and hand over
+## Receive results
 
-After each incident, require both the micro item recovery and macro method-learning candidate. The
-normal candidate may change role modules, mutable guidance, DFS mechanics, task/test/debug design,
-and nonprotected orchestration, but preserves the protected kernel, clocks, guards, hard tests, and
-attempt accounting. Change only the evidence-implicated surface and apply only what explicit
-authority and the applicable guard cover. Failed validation clears nothing. Keep simultaneous DFS
-and incident mutations independent.
+Judge the actual diff and direct evidence. A focused test proves only the route it exercised. An
+ordinary failed test is not a finding. Keep it inside the worker route: inspect, repair, and rerun.
+Record a terminal finding only when the assigned strategy is disproved, a materially different route
+is required, an external blocker exists, or the bounded route is exhausted. A finding does not cause
+mutation or a coordinator restart. Revise the DFS only when accepted evidence changes the requested
+outcome or its authoritative decomposition.
 
-When the harness reports a due random improvement review, block new dispatch. Give a fresh
-`gpt-5.6-sol` reviewer at `xhigh` the stored target, necessary current guidance or DFS, compact
-failure evidence, and pending scratch. Use the same profile for incident mutation. Model choice
-changes no authority. Route the exact stored cycle to its named mutator module; do not redraw or
-reselect it.
+Do not repeat an unchanged failing route. Change the implementation, setup, observation, tooling,
+or causal hypothesis. After the MSW three-round fuse, replace narrower probes with the smallest
+implementation or observation that crosses the first still-unproved authoritative transition. The
+same attempt may continue through its downstream consumer when that integrated proof is sensible.
 
-When the persisted draw is exactly `k = 30` with lane `DFS.md` and the workspace roster proves
-`gpt-5.6-sol` at `ultra`, route its additional component to the rare universal role. If that exact
-capability was unproved when due, expose the unavailable component and continue the ordinary review;
-never substitute a weaker reviewer or rewrite the frozen snapshot.
+Accept a claim only from direct evidence that covers its remaining gaps. Preserve prior attempts,
+misses, findings, and accepted evidence. New contradictory evidence may reopen accepted work.
 
-Prefer deleting or condensing implicated text over parallel explanation. Add no artifact, gate, or
-handover unless direct evidence proves the existing method cannot express the required distinction;
-similarity alone never authorizes merging different lane authority. After guarded promotion, consume only the applicable scratch, request one
-restart, and retire. The external supervisor alone launches and acknowledges the successor.
+## Mutate guidance
 
-## Continue and stop
+The active mutation targets are the workspace-local files:
 
-Continue after misses, rejected attempts, mutations, and coordinator retirement while an authorized
-materially different route remains. Stop for honestly proved user outcome with no closure gaps or
-live gates, revoked authority, a material Phase-2 owner choice, or a genuine permission/environment
-blocker after materially different routes are exhausted. A due random review does not manufacture
-post-contract work.
+- `.de67/orchestrator-guidelines.md`;
+- `.de67/test-and-task-guidelines.md`;
+- `.de67/DFS.md` when the selected route authorizes a same-outcome DFS change.
+
+Start from the exact live file. Prefer deleting or generalizing redundant situational prose. Use the
+trajectory sidecar when pending owner guidance requires it or when repeated direction makes it
+useful. The sidecar advises; it does not decide acceptance.
+
+Every deadline or integrity incident gets a practical recovery. Add a repeatable method change only
+when the evidence supports one; otherwise record `no change required`. A random review examines its
+stored lane. If part of a suggestion is valid, apply that part. Move unapplied owner-visible ideas
+to `.de67/human-todo.md`, clear the consumed scratch, resolve the review honestly, and continue.
+Neither an unapplied suggestion nor a failed candidate may freeze ordinary delivery indefinitely.
+
+Use a fresh `gpt-5.6-sol` reviewer at high for ordinary incident and random mutation review. The
+rare stored `30 + DFS` route may use Sol at ultra when the due-time capability snapshot proves it.
+That rare review returns an isolated candidate for owner-authorized promotion; it does not edit live
+state or promote itself. Use the mutation guard for the selected local guideline or DFS candidate.
+
+Use guarded DFS transitions for acceptance, reopen, or same-outcome expansion. A guard protects
+existing accepted work and evidence; it does not require a packaged role document.
+
+A successful local mutation requests one fresh coordinator. The external supervisor owns that
+restart. Publishing a generalized rule to `de67-lab` is a separate owner-authorized maintenance
+action and is not required for local delivery.
+
+## Stop or block
+
+Stop when the requested outcome is honestly proved and no product gap or required state transition
+remains. Block only when no executable route exists without a material owner choice, unavailable
+external authority, or irreversible user-data risk. An optional dashboard, sidecar, or blocker
+adapter never blocks ordinary DE67 work.

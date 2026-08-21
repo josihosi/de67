@@ -73,7 +73,6 @@ NORMAL_METHOD_MUTABLE_ROOTS = (
     "SKILL.md",
     "agents/",
     "assets/environment/",
-    "references/roles/",
     "scripts/",
     "tests/",
 )
@@ -151,7 +150,6 @@ def protected_method_digest(root: Path = SKILL_ROOT) -> str:
 
 def normal_method_candidate_snapshot(
     guideline_candidate_root: Path,
-    ledger_candidate: Path,
     method_candidate_root: Path | None,
 ) -> tuple[str, str, str, tuple[str, ...]]:
     """Bind a normal candidate to the active tree and its hard protected files."""
@@ -166,7 +164,6 @@ def normal_method_candidate_snapshot(
         f"assets/environment/{name}": (guideline_candidate_root / name).read_bytes()
         for name in GUIDELINE_FILES
     }
-    overlays[f"assets/environment/{MUTATION_LEDGER}"] = ledger_candidate.read_bytes()
     if method_candidate_root is None:
         candidate.update(overlays)
     else:
@@ -177,7 +174,7 @@ def normal_method_candidate_snapshot(
         ]
         if mismatched:
             raise GuardError(
-                "Method candidate must contain the exact guarded guideline and ledger candidates: "
+                "Method candidate must contain the exact guarded guideline candidates: "
                 + ", ".join(sorted(mismatched))
             )
 
@@ -281,61 +278,7 @@ def validate_method_mutation(
             "Normal method mutation changed a path outside its broad mutable surface: "
             + ", ".join(outside)
         )
-    for name in GUIDELINE_FILES:
-        relative = f"assets/environment/{name}"
-        if relative not in baseline or relative not in candidate:
-            raise GuardError(
-                f"Normal method candidate must preserve guideline asset: {relative}"
-            )
-        try:
-            before = baseline[relative].decode("utf-8")
-            after = candidate[relative].decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise GuardError(f"Guideline asset is not UTF-8: {relative}") from error
-        _require_frozen_headings(name, before, after)
     return changed
-
-
-def validate_consumed_mutation_ledger(candidate: Path) -> None:
-    """Require a successful mutation candidate to consume all scratch suggestions."""
-
-    expected = read_markdown(CANONICAL_GUIDELINES_ROOT / MUTATION_LEDGER)
-    actual = read_markdown(candidate)
-    if actual != expected:
-        raise GuardError(
-            "A successful mutation must reset mutation-suggestions.md to its empty template"
-        )
-
-
-def markdown_headings(text: str) -> tuple[str, ...]:
-    """Return exact ATX headings outside fenced examples."""
-
-    headings: list[str] = []
-    fence_character: str | None = None
-    for line in text.splitlines():
-        fence = FENCE.match(line)
-        if fence:
-            character = fence.group("marker")[0]
-            if fence_character is None:
-                fence_character = character
-            elif fence_character == character:
-                fence_character = None
-            continue
-        if fence_character is None and ATX_HEADING.match(line):
-            headings.append(line.rstrip())
-    return tuple(headings)
-
-
-def _require_frozen_headings(name: str, baseline: str, candidate: str) -> None:
-    expected = markdown_headings(read_markdown(CANONICAL_GUIDELINES_ROOT / name))
-    before = markdown_headings(baseline)
-    after = markdown_headings(candidate)
-    if not expected:
-        raise GuardError(f"Canonical {name} has no frozen Markdown headings")
-    if before != expected:
-        raise GuardError(f"{name} baseline headings differ from the canonical template")
-    if after != expected:
-        raise GuardError(f"{name} candidate headings differ from the canonical template")
 
 
 def validate_guideline_mutation(
@@ -345,7 +288,7 @@ def validate_guideline_mutation(
     broader_mutation: bool,
     require_change: bool = True,
 ) -> tuple[str, ...]:
-    """Validate mutable bodies while keeping every guideline heading frozen."""
+    """Validate meaningful changes to workspace-local mutable guidance."""
 
     if not isinstance(broader_mutation, bool):
         raise GuardError("Guideline mutation scope must be derived from a stored incident")
@@ -353,7 +296,6 @@ def validate_guideline_mutation(
     for name in GUIDELINE_FILES:
         baseline = read_markdown(baseline_root / name)
         candidate = read_markdown(candidate_root / name)
-        _require_frozen_headings(name, baseline, candidate)
         if baseline != candidate:
             changed.append(name)
 
@@ -888,11 +830,6 @@ def validate_random_review_mutation(
         name: read_markdown(candidate_root / name)
         for name in (*GUIDELINE_FILES, DFS_FILE)
     }
-    for name in GUIDELINE_FILES:
-        _require_frozen_headings(
-            name, baseline_files[name], candidate_files[name]
-        )
-
     changed = tuple(
         name
         for name in (*GUIDELINE_FILES, DFS_FILE)
@@ -1967,9 +1904,6 @@ def validate_work_ledger(
     ledger_text = read_markdown(ledger)
     blocks = _active_work_blocks(ledger_text)
     items = tuple(reference for reference, _ in blocks)
-    if len(items) > 10:
-        raise GuardError(f"Work ledger has {len(items)} active items; maximum is 10")
-
     dfs_text = read_markdown(dfs)
     red_claims = red_dfs_claims(dfs_text)
     slices = parse_dfs_slices(dfs_text)
@@ -2162,7 +2096,7 @@ def build_parser() -> argparse.ArgumentParser:
     guidelines.add_argument("--lineage", required=True)
     guidelines.add_argument("--task", required=True)
     guidelines.add_argument("--incident-kind", choices=INCIDENT_KINDS, required=True)
-    guidelines.add_argument("--ledger-candidate", type=Path, required=True)
+    guidelines.add_argument("--ledger-candidate", type=Path)
     guidelines.add_argument("--method-baseline", type=Path)
     guidelines.add_argument("--method-candidate", type=Path)
 
@@ -2227,7 +2161,7 @@ def build_parser() -> argparse.ArgumentParser:
     expansion.add_argument("--state", type=Path, required=True)
     expansion.add_argument("--lineage", required=True)
     expansion.add_argument("--task", required=True)
-    expansion.add_argument("--ledger-candidate", type=Path, required=True)
+    expansion.add_argument("--ledger-candidate", type=Path)
 
     random_review = commands.add_parser(
         "random-review",
@@ -2238,7 +2172,7 @@ def build_parser() -> argparse.ArgumentParser:
     random_review.add_argument("--state", type=Path, required=True)
     random_review.add_argument("--lineage", required=True)
     random_review.add_argument("--cycle", type=int, required=True)
-    random_review.add_argument("--ledger-candidate", type=Path, required=True)
+    random_review.add_argument("--ledger-candidate", type=Path)
     random_review.add_argument("--method-baseline", type=Path)
     random_review.add_argument("--method-candidate", type=Path)
 
@@ -2291,7 +2225,6 @@ def main(argv: list[str] | None = None) -> int:
                 raise GuardError(
                     "Deadline macro mutation needs an evidence-backed guideline or method change"
                 )
-            validate_consumed_mutation_ledger(arguments.ledger_candidate)
             (
                 candidate_digest,
                 protected_baseline_digest,
@@ -2299,7 +2232,6 @@ def main(argv: list[str] | None = None) -> int:
                 changed_paths,
             ) = normal_method_candidate_snapshot(
                 arguments.candidate,
-                arguments.ledger_candidate,
                 arguments.method_candidate,
             )
             receipt_id = persist_normal_method_receipt(
@@ -2385,7 +2317,6 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.candidate,
                 task_claim,
             )
-            validate_consumed_mutation_ledger(arguments.ledger_candidate)
             print(
                 f"ok: {finding_kind} finding expanded {task_claim}; added "
                 + ", ".join(added)
@@ -2416,8 +2347,6 @@ def main(argv: list[str] | None = None) -> int:
                     require_change=False,
                 )
             all_changed = (*changed, *method_changed)
-            if all_changed:
-                validate_consumed_mutation_ledger(arguments.ledger_candidate)
             if all_changed:
                 print(
                     f"ok: random review cycle {arguments.cycle}; changed "

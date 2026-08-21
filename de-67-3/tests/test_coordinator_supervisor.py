@@ -58,9 +58,15 @@ event = {
     "ack_argv": json.loads(os.environ["DE67_COORDINATOR_ACK_ARGV_JSON"])
     if generation is not None
     else None,
+    "resume_session": os.environ.get("DE67_COORDINATOR_RESUME_SESSION"),
 }
 with Path(os.environ["FAKE_EVENTS"]).open("a", encoding="utf-8") as output:
     output.write(json.dumps(event) + "\n")
+event_count = len(Path(os.environ["FAKE_EVENTS"]).read_text(encoding="utf-8").splitlines())
+Path(os.environ["DE67_COORDINATOR_SESSION_FILE"]).write_text(
+    os.environ.get("DE67_COORDINATOR_RESUME_SESSION", "fake-session") + "\n",
+    encoding="utf-8",
+)
 
 mode = os.environ["FAKE_MODE"]
 with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
@@ -138,12 +144,13 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             encoding="utf-8",
         )
     elif mode == "handover-then-complete":
-        if generation is not None:
-            harness.acknowledge_coordinator_restart(
-                os.environ["DE67_LINEAGE"],
-                generation,
-                os.environ["DE67_COORDINATOR_RUN_ID"],
-            )
+        if event_count > 1:
+            if generation is not None:
+                harness.acknowledge_coordinator_restart(
+                    os.environ["DE67_LINEAGE"],
+                    generation,
+                    os.environ["DE67_COORDINATOR_RUN_ID"],
+                )
             harness.complete_task(
                 os.environ["DE67_LINEAGE"], "seed", "final proof"
             )
@@ -158,7 +165,7 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             )
     elif mode == "drain-then-no-refill":
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
-        if generation is None:
+        if event_count == 1:
             harness.complete_task(
                 os.environ["DE67_LINEAGE"], "seed", "ledger item retired"
             )
@@ -167,20 +174,20 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                 encoding="utf-8",
             )
         else:
-            harness.acknowledge_coordinator_restart(
-                os.environ["DE67_LINEAGE"],
-                generation,
-                os.environ["DE67_COORDINATOR_RUN_ID"],
+            if generation is not None:
+                harness.acknowledge_coordinator_restart(
+                    os.environ["DE67_LINEAGE"],
+                    generation,
+                    os.environ["DE67_COORDINATOR_RUN_ID"],
+                )
+            (root / "DFS.md").write_text(
+                "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+                encoding="utf-8",
             )
-            if generation == 2:
-                (root / "DFS.md").write_text(
-                    "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
-                    encoding="utf-8",
-                )
-                (root / "work-ledger.md").write_text(
-                    "# Work ledger\n\n## Active work\n",
-                    encoding="utf-8",
-                )
+            (root / "work-ledger.md").write_text(
+                "# Work ledger\n\n## Active work\n",
+                encoding="utf-8",
+            )
     elif mode == "crash-then-complete":
         if generation is None:
             raise SystemExit(9)
@@ -790,7 +797,14 @@ class CoordinatorSupervisorTests(unittest.TestCase):
                         ]
                         self.assertEqual(len(recorded), 2)
                         self.assertIsNone(recorded[0]["generation"])
-                        self.assertEqual(recorded[1]["generation"], 1)
+                        self.assertEqual(
+                            recorded[1]["generation"],
+                            None if first_exit == 0 else 1,
+                        )
+                        self.assertEqual(
+                            recorded[1]["resume_session"],
+                            "fake-session" if first_exit == 0 else None,
+                        )
                         self.assertEqual(
                             {
                                 path.parent.name: path.read_text(encoding="utf-8").strip()
@@ -869,9 +883,9 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(len(self.read_events()), 2)
 
-    def test_empty_replenishment_hands_red_dfs_to_another_successor(self) -> None:
+    def test_empty_replenishment_keeps_same_coordinator_session(self) -> None:
         self.write_work_documents(red=True, active=True)
-        run_ids = iter(("draining-run", "empty-replenishment", "restoring-run"))
+        run_ids = iter(("draining-run", "empty-replenishment"))
 
         result = run_supervisor(
             self.state_path,
@@ -885,16 +899,15 @@ class CoordinatorSupervisorTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         events = self.read_events()
-        self.assertEqual(len(events), 3)
+        self.assertEqual(len(events), 2)
         self.assertIsNone(events[0]["generation"])
-        self.assertEqual(events[1]["generation"], 1)
-        self.assertEqual(events[2]["generation"], 2)
+        self.assertIsNone(events[1]["generation"])
+        self.assertEqual(events[1]["resume_session"], "fake-session")
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.coordinator_restart_status("project")[
                 "coordinator_restart"
             ]
-        self.assertIsNotNone(restart)
-        self.assertFalse(restart_required(restart))
+        self.assertIsNone(restart)
 
     def test_crashed_coordinator_with_active_work_gets_a_successor(self) -> None:
         self.write_work_documents(red=True, active=True)
@@ -936,11 +949,12 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertFalse(self.events.exists())
         self.assertEqual(self.statuses(), {"missing-runner": "FAILED"})
 
-    def test_active_ledger_restarts_immediately_without_a_deadline_event(self) -> None:
+    def test_active_ledger_resumes_same_session_without_restart(self) -> None:
         self.write_work_documents(active=True)
         with DeadlineHarness(self.state_path) as harness:
             harness.complete_task("project", "seed", "green", now=time.time())
 
+        run_ids = iter(("active-ledger-initial", "active-ledger-continuation"))
         result = run_supervisor(
             self.state_path,
             "project",
@@ -948,22 +962,25 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.runner_command(),
             self.run_root,
             extra_env=self.environment("handover-then-complete"),
-            run_id_factory=lambda generation: (
-                "active-ledger-initial" if generation is None else "active-ledger-successor"
-            ),
+            run_id_factory=lambda _generation: next(run_ids),
         )
 
         self.assertEqual(result, 0)
         events = self.read_events()
         self.assertEqual(len(events), 2)
         self.assertIsNone(events[0]["generation"])
-        self.assertEqual(events[1]["generation"], 1)
+        self.assertIsNone(events[1]["generation"])
+        self.assertEqual(events[1]["resume_session"], "fake-session")
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.coordinator_restart_status("project")[
                 "coordinator_restart"
             ]
-        self.assertIsNotNone(restart)
-        self.assertFalse(restart_required(restart))
+        self.assertIsNone(restart)
+        continuation_prompt = (
+            self.run_root / "active-ledger-continuation" / "prompt.txt"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("orchestrator-guidelines.md", continuation_prompt)
+        self.assertIn("findings are work input", continuation_prompt)
 
     def test_active_clock_prevents_completion(self) -> None:
         self.write_work_documents()

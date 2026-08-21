@@ -390,11 +390,14 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertFalse(repeated["incident"]["recorded"])
         self.assertEqual(repeated["status"]["cumulative_miss_units"], 1)
 
-    def test_coordinator_can_end_generation_as_ordinary_deadline_miss(self) -> None:
+    def test_deadline_miss_command_rejects_an_early_item_miss(self) -> None:
         self.harness.start_task("project", "task", "R-1", 100, now=100)
 
-        first = self.harness.miss_claim_deadline("project", "R-1", now=110)
-        repeated = self.harness.miss_claim_deadline("project", "R-1", now=120)
+        with self.assertRaisesRegex(DeadlineError, "has not expired"):
+            self.harness.miss_claim_deadline("project", "R-1", now=110)
+
+        first = self.harness.miss_claim_deadline("project", "R-1", now=200)
+        repeated = self.harness.miss_claim_deadline("project", "R-1", now=220)
 
         self.assertTrue(first["incident"]["recorded"])
         self.assertEqual(first["deadline_at"], 200)
@@ -402,7 +405,7 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertFalse(repeated["incident"]["recorded"])
         self.assertEqual(repeated["deadline_at"], 200)
         self.assertEqual(
-            self.harness.coordinator_view(now=120)["pending_incident_reviews"],
+            self.harness.coordinator_view(now=220)["pending_incident_reviews"],
             [{"claim_id": "R-1", "task_id": "task", "kind": "deadline_miss"}],
         )
 
@@ -2986,7 +2989,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             [],
         )
 
-    def test_terminal_gap_revision_needs_closure_or_material_revision(self) -> None:
+    def test_terminal_attempt_can_retry_the_same_gap_revision(self) -> None:
         self.harness.start_task("project", "explore", "R-REV", 100, now=0)
         self.harness.complete_task("project", "explore", "strategy known", now=1)
         self.harness.transition_claim_to_closure(
@@ -2999,10 +3002,13 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.harness.report_worker_finding(
             "project", "finding", "unexpected", "Route lacked the owner signal.", now=4
         )
-        with self.assertRaisesRegex(DeadlineError, "evidence-bound revision"):
-            self.harness.start_task(
-                "project", "finding-retry", "R-REV", 100, phase="closure", now=5
-            )
+        retry = self.harness.start_task(
+            "project", "finding-retry", "R-REV", 100, phase="closure", now=5
+        )
+        self.assertEqual(retry["closure_gap_revision"], 1)
+        self.harness.abandon_attempt(
+            "project", "finding-retry", "Changed route selected.", now=5.5
+        )
         revised = self.harness.revise_closure_gap(
             "project", "R-REV", "G-001", "finding",
             "One proof remains.", "Run an owner-visible route.", now=5,
@@ -3022,11 +3028,11 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.harness.complete_task(
             "project", "completed", "route still incomplete", now=7
         )
-        with self.assertRaisesRegex(DeadlineError, "evidence-bound revision"):
-            self.harness.start_task(
-                "project", "completed-retry", "R-REV", 100,
-                phase="closure", now=8,
-            )
+        completed_retry = self.harness.start_task(
+            "project", "completed-retry", "R-REV", 100,
+            phase="closure", now=8,
+        )
+        self.assertEqual(completed_retry["closure_gap_revision"], 2)
 
     def test_compact_views_keep_latest_result_for_each_active_closure_gap(self) -> None:
         self.harness.start_task("project", "explore", "R-COMPACT", 100, now=0)
@@ -3395,10 +3401,15 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertEqual(resolved["disposition"], "no_change_required")
         self.assertIsNone(resolved["receipt_id"])
         self.assertEqual(resolved["pending_components"], [])
-        self.assertIsNotNone(resolved["coordinator_restart"])
+        self.assertIsNone(resolved["coordinator_restart"])
         self.assertEqual(
             self.harness.coordinator_view(now=5)["pending_deadline_mutations"], []
         )
+        resumed = self.harness.start_task(
+            "project", "retry", "R-LATE", 100, now=6
+        )
+        self.assertEqual(resumed["deadline_generation"], 2)
+        self.assertEqual(resumed["deadline_at"], 106)
 
     def test_no_change_required_is_macro_only_and_cannot_consume_receipt(self) -> None:
         self.harness.start_task("project", "late", "R-LATE", 1, now=0)

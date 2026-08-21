@@ -16,7 +16,7 @@ external authority or credentials, or irreversible user-data risk.
 
 Use the first relevant route:
 
-- accepted evidence or a finding that changes DFS state -> DFS review;
+- accepted evidence that changes DFS state -> DFS review;
 - a deadline or integrity incident -> incident mutation review;
 - a due random review -> its stored lane;
 - implementation, exploration, test, build, debug, or operation -> worker;
@@ -43,21 +43,23 @@ medium for ordinary work, high for substantial research, and max for genuinely o
 Do not use Terra at max or Sol for ordinary work. These are recommendations; a mismatch does not
 stop delivery.
 
-Estimate from the evidence currently available. Include known setup, implementation, build, proof,
-and disposition costs. Keep unknowns visible. Do not require a complete model of every future gap
-before useful work starts. If the known necessary route cannot fit the remaining item time, record
-an ordinary deadline miss immediately instead of waiting for wall time. The next generation may
-continue the same claim with a new deadline.
+Set one generous deadline for the whole ledger item. Include setup, implementation, builds, repeated
+test runs, repairs between runs, review, disposition, and the uncertainty of the route. Unknown work
+does not take zero time. Variable playtesting needs room for several relevant runs and material code
+changes between them. Finish early when possible. Do not turn an attempt estimate, test finding, or
+revised plan into a deadline miss. A deadline miss occurs only when the item clock actually expires.
 
 Give each worker a self-contained brief. Require the worker to read the relevant sections of
 `.de67/test-and-task-guidelines.md`. Use parallel workers only when their work is genuinely disjoint.
 
 ## Receive results
 
-Judge the actual diff and direct evidence. A focused test proves only the route it exercised. A
-finding ends its attempt but does not close the claim. Revise a gap when evidence materially changes
-the implementation, observation, proof route, or next action. Do not require changes to particular
-text fields merely to authorize another attempt.
+Judge the actual diff and direct evidence. A focused test proves only the route it exercised. An
+ordinary failed test stays inside the worker route: inspect, repair, and rerun. Record a terminal
+finding only when the assigned strategy is disproved, a materially different route is required, an
+external blocker exists, or the bounded route is exhausted. A finding does not cause mutation or a
+coordinator restart. Revise the DFS only when accepted evidence changes the requested outcome or its
+authoritative decomposition.
 
 Do not repeat an unchanged failing route. Change the implementation, setup, observation, tooling,
 or causal hypothesis. After the MSW three-round fuse, replace narrower probes with the smallest

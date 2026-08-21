@@ -44,8 +44,9 @@ another.
 
 For compiled proof, bind the executable to the tested source and successful build. For save/load
 proof, inspect the serialized state and its owning normalization. For long or variable playtests,
-use an evidence-based estimate that fits a reasonable scenario rerun; unknown variability is not
-permission to claim perfect proof or to repeat the same failed route indefinitely.
+include several relevant reruns, repairs between runs, and uncertain runtime in the ledger-item
+estimate. Unknown variability takes time, but it does not require perfect proof or repetition of an
+unchanged failed route.
 
 Reasonable proof is sufficient. Apply the MSW deletion test to proposed screenshots, logs, reruns,
 and metadata. Do not require an artifact whose removal still leaves the requested behavior honestly
@@ -56,7 +57,8 @@ proved. Preserve uncertainty and state what the test did not cover.
 Return what changed, the command or natural route used, the direct evidence, the result, and the
 remaining uncertainty. Use the controlled-English evidence profile. Keep identifiers exact.
 
-A finding should state the expected behavior, observed behavior, first contradicted premise, and
-direct evidence in plain language. A finding ends the attempt. It does not authorize weaker
-acceptance. The next attempt may keep the same gap wording when its implementation, setup,
-observation, tooling, or causal route materially changes.
+Keep an ordinary test failure inside the task. Inspect the first divergent production transition,
+repair it, and rerun the useful route. Return a terminal finding only when the assigned strategy is
+disproved, a materially different route is required, an external blocker exists, or the bounded
+route is exhausted. State the expected behavior, observed behavior, contradicted premise, and direct
+evidence in plain language. A finding does not cause mutation or authorize weaker acceptance.

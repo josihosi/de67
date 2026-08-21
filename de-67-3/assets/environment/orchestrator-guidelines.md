@@ -87,7 +87,7 @@ stored lane. If part of a suggestion is valid, apply that part. Move unapplied o
 to `.de67/human-todo.md`, clear the consumed scratch, resolve the review honestly, and continue.
 Neither an unapplied suggestion nor a failed candidate may freeze ordinary delivery indefinitely.
 
-Use a fresh `gpt-5.6-sol` reviewer at xhigh for ordinary incident and random mutation review. The
+Use a fresh `gpt-5.6-sol` reviewer at high for ordinary incident and random mutation review. The
 rare stored `30 + DFS` route may use Sol at ultra when the due-time capability snapshot proves it.
 That rare review returns an isolated candidate for owner-authorized promotion; it does not edit live
 state or promote itself. Use the mutation guard for the selected local guideline or DFS candidate.

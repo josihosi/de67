@@ -64,7 +64,7 @@ flowchart LR
 de67 is deliberately hostile to coordination theatre. It tries to minimize prompt churn, handovers,
 duplicated contracts, speculative documents, repeated tests, and agents reading material they do not
 need. Ordinary work mostly uses GPT-5.6 Sol at low reasoning plus Luna and Terra workers selected for
-the task. GPT-5.6 Sol at `xhigh` is reserved for ordinary independent mutation review, while the
+the task. GPT-5.6 Sol at `high` is reserved for ordinary independent mutation review, while the
 rare universal mutation uses `ultra`, rather
 than routine implementation.
 
@@ -76,7 +76,7 @@ than routine implementation.
 | Phase 2 specification owner | Inspects the repository and freezes the DFS. | GPT-5.6 Sol at `high` |
 | Coordinator | Routes the ledger, workers, evidence, and blockers. | GPT-5.6 Sol at `low` |
 | Ordinary worker | Implements, investigates, builds, or tests one bounded task. | Luna by default; Terra for difficult diagnosis or risky cross-cutting work; never Terra/`max`; no Sol |
-| Deadline, integrity, or random mutator | Independently diagnoses failure and proposes a guarded method change. | Fresh GPT-5.6 Sol at `xhigh` |
+| Deadline, integrity, or random mutator | Independently diagnoses failure and proposes a guarded method change. | Fresh GPT-5.6 Sol at `high` |
 | Rare universal mutator | Reviews the whole method after the exact rare trigger. | Fresh GPT-5.6 Sol at `ultra` |
 
 This is the shipped roster, not a claim that every installation needs the same price-performance
@@ -113,7 +113,7 @@ de67 is built specifically for **OpenAI Codex**. It is not an Anthropic or gener
 It requires:
 
 - the current Codex CLI with subagents and reasoning-effort selection;
-- access to GPT-5.6 Sol, GPT-5.6 Luna, and GPT-5.6 Terra, including Sol at `xhigh` and `ultra`;
+- access to GPT-5.6 Sol, GPT-5.6 Luna, and GPT-5.6 Terra, including Sol at `high` and `ultra`;
 - Python 3.10 or newer, using only the standard library;
 - Git and a repository with an upstream branch for guarded routine checkpoints.
 

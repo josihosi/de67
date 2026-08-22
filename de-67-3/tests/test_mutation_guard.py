@@ -1855,6 +1855,14 @@ class MutationGuardTests(unittest.TestCase):
         self.assertNotIn("terminal task retires", combined)
         self.assertNotIn("worker retirement", combined)
 
+    def test_each_spawned_worker_owns_one_random_mutation_window(self) -> None:
+        normalized = " ".join(ORCHESTRATOR_GUIDANCE.split())
+        self.assertIn("Before spawning a worker, start one unique deadline-harness task", normalized)
+        self.assertIn("spawned only to verify its model or suitability still owns a window", normalized)
+        self.assertIn("terminalize that task as abandoned", normalized)
+        self.assertIn("record exactly one completion, finding, or abandonment", normalized)
+        self.assertIn("A coordinator start, exit, or restart does not itself create", normalized)
+
     def test_worker_model_guidance_reserves_sol_without_a_worker_gate(self) -> None:
         self.assertIn("Sol is not an ordinary worker", TASK_GUIDANCE)
         self.assertIn("Choose Luna by default", ORCHESTRATOR_GUIDANCE)

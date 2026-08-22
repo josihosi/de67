@@ -560,6 +560,9 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         )
         self.assertIn("DE67_DEADLINE_STATE", initial_prompt)
         self.assertIn("DE67_LINEAGE", initial_prompt)
+        self.assertIn("Before spawning each worker", initial_prompt)
+        self.assertIn("model-verification child", initial_prompt)
+        self.assertIn("Never count a coordinator restart as a worker window", initial_prompt)
 
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.list_tasks()["coordinator_restart"]

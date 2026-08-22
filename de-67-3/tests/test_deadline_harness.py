@@ -2418,6 +2418,29 @@ class DeadlineHarnessTests(unittest.TestCase):
             abandoned["random_mutation"]["completed_terminal_windows"], 1
         )
 
+    def test_retired_model_probe_and_replacement_count_two_worker_windows(self) -> None:
+        self.harness.start_task("project", "model-probe", "R-001", 100, now=0)
+        retired = self.harness.abandon_attempt(
+            "project", "model-probe", "worker model could not be verified", now=1
+        )
+        self.harness.start_task("project", "replacement", "R-001", 100, now=2)
+        completed = self.harness.complete_task(
+            "project", "replacement", "bounded worker result accepted", now=3
+        )
+
+        self.assertEqual(
+            retired["random_mutation"]["completed_terminal_windows"], 1
+        )
+        self.assertEqual(
+            completed["random_mutation"]["completed_terminal_windows"], 2
+        )
+        repeated = self.harness.complete_task(
+            "project", "replacement", "duplicate callback", now=4
+        )
+        self.assertEqual(
+            repeated["random_mutation"]["completed_terminal_windows"], 2
+        )
+
     def test_random_cadence_carries_terminal_overflow_to_next_boundary(self) -> None:
         with patch(
             "deadline_harness.secrets.randbelow", side_effect=[0, 0, 0, 1]

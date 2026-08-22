@@ -52,6 +52,14 @@ revised plan into a deadline miss. A deadline miss occurs only when the item clo
 Give each worker a self-contained brief. Require the worker to read the relevant sections of
 `.de67/test-and-task-guidelines.md`. Use parallel workers only when their work is genuinely disjoint.
 
+Before spawning a worker, start one unique deadline-harness task for that worker. That task is one
+random-mutation work window. Never share one task between workers or reuse a terminal task. A child
+spawned only to verify its model or suitability still owns a window: if it is retired without doing
+the assigned repository work, terminalize that task as abandoned before dispatching its replacement.
+After every worker exit, record exactly one completion, finding, or abandonment. Parallel workers
+therefore need distinct task ids. A coordinator start, exit, or restart does not itself create or
+terminalize a worker window.
+
 ## Receive results
 
 Judge the actual diff and direct evidence. A focused test proves only the route it exercised. An

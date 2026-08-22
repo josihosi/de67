@@ -74,6 +74,10 @@ class TrajectorySidecarTests(unittest.TestCase):
                     phase_sequence_at_dispatch INTEGER, closure_gap_id TEXT,
                     attempt_terminal_kind TEXT, started_at REAL
                 );
+                CREATE TABLE worker_findings (
+                    lineage_id TEXT, task_id TEXT, kind TEXT, reported_at REAL,
+                    short_verdict TEXT, evidence TEXT
+                );
                 INSERT INTO lineage_binding VALUES ('project');
                 INSERT INTO closure_gaps VALUES
                     ('project', 'R-001', 2, 'G-001', 1, 'W-001', 3, 'bound production proof'),
@@ -88,6 +92,10 @@ class TrajectorySidecarTests(unittest.TestCase):
                 INSERT INTO tasks VALUES
                     ('project', 'W-001', 'R-001', 2, 'G-001', 'completed', 1),
                     ('project', 'W-002', 'R-001', 2, 'G-002', 'finding', 2);
+                INSERT INTO worker_findings VALUES
+                    ('project', 'W-002', 'finding', 3,
+                     'Night scheduler still needs proof',
+                     'Continue darkness wait after reload');
                 """
             )
             connection.commit()
@@ -109,6 +117,16 @@ class TrajectorySidecarTests(unittest.TestCase):
         self.assertGreater(proved.test_relation, open_gap.test_relation)
         self.assertIn("owner.cpp", proved.implementation_unit)
         self.assertNotIn("work-ledger", proved.implementation_unit)
+        attention = {series.key: series for series in report.attention}
+        self.assertEqual(set(attention), {"target", "code", "test", "result"})
+        self.assertEqual(attention["target"].source, "W-002")
+        self.assertEqual(
+            [point.relative_pull for point in attention["target"].points],
+            [0.0, 1.0],
+        )
+        self.assertEqual(attention["code"].source, "Current uncommitted diff")
+        self.assertEqual(max(point.relative_pull for point in attention["code"].points), 1.0)
+        self.assertEqual(attention["result"].source, "W-002")
 
         rendered = sidecar.render_text(report)
         self.assertIn("semantic proximity, not completion or proof", rendered)

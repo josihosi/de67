@@ -244,16 +244,102 @@ def render_trajectory(report: dict[str, Any]) -> str:
             f'<span title="{_escape(evidence)}"><b>{_escape(str(name).replace("_", " "))}</b>'
             f'{_escape(str(value["direction"]).replace("-", " "))}</span>'
         )
+    attention_html = render_attention_spider(report, gaps)
     return (
         '<section class="trajectory"><div class="trajectory-heading"><h2>Trajectory sidecar</h2>'
         '<span><i class="vector-key product"></i>Code similarity '
         '<i class="vector-key test"></i>Test similarity</span></div>'
-        '<div class="trajectory-scroll">'
+        '<div class="trajectory-visuals"><div class="trajectory-scroll">'
         f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="Trajectory for {_escape(claim)}">'
         f'<g class="trajectory-lines">{"".join(lines)}</g><g class="trajectory-vectors">'
-        f'{"".join(vectors)}</g>{"".join(nodes)}{center_node}</svg></div>'
+        f'{"".join(vectors)}</g>{"".join(nodes)}{center_node}</svg></div>{attention_html}</div>'
         f'<div class="trajectory-gaps">{"".join(gap_text)}</div>'
         f'<div class="trajectory-observations">{"".join(observation_chips)}</div></section>'
+    )
+
+
+def render_attention_spider(report: dict[str, Any], gaps: list[dict[str, Any]]) -> str:
+    gap_ids = [str(gap.get("gap_id", "?")) for gap in gaps]
+    raw_series = report.get("attention")
+    series = [item for item in raw_series if isinstance(item, dict)] if isinstance(raw_series, list) else []
+    if not series:
+        return (
+            '<article class="attention-panel"><div class="attention-heading">'
+            '<h3>Attention spider</h3><span>Waiting for attention data</span></div></article>'
+        )
+    size = 420
+    center = size / 2
+    radius = 142
+    label_radius = 174
+
+    def point(index: int, distance: float) -> tuple[float, float]:
+        angle = -math.pi / 2 + (2 * math.pi * index / len(gap_ids))
+        return center + distance * math.cos(angle), center + distance * math.sin(angle)
+
+    grid: list[str] = []
+    for fraction in (0.25, 0.5, 0.75, 1.0):
+        coordinates = " ".join(
+            f"{x:.1f},{y:.1f}" for x, y in (point(index, radius * fraction) for index in range(len(gap_ids)))
+        )
+        grid.append(f'<polygon points="{coordinates}" />')
+    axes: list[str] = []
+    labels: list[str] = []
+    for index, gap_id in enumerate(gap_ids):
+        x, y = point(index, radius)
+        label_x, label_y = point(index, label_radius)
+        anchor = "middle" if abs(label_x - center) < 18 else "start" if label_x > center else "end"
+        axes.append(f'<line x1="{center:.1f}" y1="{center:.1f}" x2="{x:.1f}" y2="{y:.1f}" />')
+        labels.append(
+            f'<text x="{label_x:.1f}" y="{label_y + 4:.1f}" text-anchor="{anchor}">{_escape(gap_id)}</text>'
+        )
+
+    shapes: list[str] = []
+    legend: list[str] = []
+    available_keys = {"target", "code", "test", "result"}
+    for item in series:
+        key = str(item.get("key", "other"))
+        css_key = key if key in available_keys else "other"
+        values = {
+            str(entry.get("gap_id")): entry
+            for entry in item.get("points", [])
+            if isinstance(entry, dict)
+        }
+        coordinates: list[str] = []
+        circles: list[str] = []
+        for index, gap_id in enumerate(gap_ids):
+            entry = values.get(gap_id, {})
+            try:
+                relative = max(0.0, min(1.0, float(entry.get("relative_pull", 0))))
+            except (TypeError, ValueError):
+                relative = 0.0
+            try:
+                raw = max(0.0, float(entry.get("raw_relation", 0)))
+            except (TypeError, ValueError):
+                raw = 0.0
+            x, y = point(index, radius * relative)
+            coordinates.append(f"{x:.1f},{y:.1f}")
+            circles.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3"><title>{_escape(str(item.get("label", key)))} '
+                f'→ {_escape(gap_id)} · relative {relative:.2f} · cosine {raw:.3f}</title></circle>'
+            )
+        label = str(item.get("label", key))
+        source = str(item.get("source", ""))
+        shapes.append(
+            f'<g class="attention-series attention-{css_key}"><polygon points="{" ".join(coordinates)}">'
+            f'<title>{_escape(label)} · {_escape(source)}</title></polygon>{"".join(circles)}</g>'
+        )
+        legend.append(
+            f'<span title="{_escape(source)}"><i class="attention-key attention-{css_key}"></i>{_escape(label)}</span>'
+        )
+    return (
+        '<article class="attention-panel"><div class="attention-heading"><h3>Attention spider</h3>'
+        '<span>Relative pull · not completion</span></div>'
+        f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="Attention distribution across closure gaps">'
+        f'<g class="attention-grid">{"".join(grid)}{"".join(axes)}</g>'
+        f'<g class="attention-labels">{"".join(labels)}</g>{"".join(shapes)}</svg>'
+        f'<div class="attention-legend">{"".join(legend)}</div>'
+        '<p>Each line is scaled to its own strongest gap. Hover a point for raw cosine similarity.</p>'
+        '</article>'
     )
 
 
@@ -1001,10 +1087,11 @@ class Dashboard:
 :root{{--bg:#101318;--panel:#1a1e24;--line:#343a43;--text:#eee9df;--muted:#9ca3ad;--green:#75c84c;--yellow:#f0bc28;--red:#e05248;--blue:#75a7d8}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}}main{{max-width:1180px;margin:auto;padding:24px}}header{{display:flex;align-items:baseline;gap:22px}}h1{{font-size:25px;margin:0}}header span,.subtle{{color:var(--muted)}}nav{{display:flex;margin:18px 0;border-bottom:1px solid var(--line)}}nav a{{color:var(--muted);text-decoration:none;padding:10px 16px}}nav a.selected{{color:var(--text);border:1px solid var(--line);border-bottom-color:var(--bg);border-radius:6px 6px 0 0;margin-bottom:-1px}}nav a:last-child{{margin-left:auto}}.status{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}}.lamp,.metric,section,.activity{{background:var(--panel);border:1px solid var(--line);border-radius:7px}}.lamp,.metric{{padding:13px 14px;min-height:82px}}small{{display:block;color:var(--muted);margin-bottom:10px}}strong{{font-size:18px}}.metric-note{{display:block;color:var(--muted);font-size:11px;margin-top:5px;white-space:nowrap}}.workers{{padding:12px 16px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:7px 12px;text-align:center;border-top:1px solid var(--line)}}thead th{{border-top:0;color:var(--muted);font-size:12px;font-weight:500}}tbody th{{text-align:left}}td{{font-variant-numeric:tabular-nums;color:var(--muted)}}td.active-count{{color:var(--green);font-weight:700}}.activity{{display:grid;grid-template-columns:100px max-content 1fr max-content;align-items:center;gap:12px;margin-top:10px;padding:10px 14px}}.activity small{{margin:0}}.activity strong{{font-size:13px}}.activity span{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.activity em{{color:var(--muted);font-style:normal;font-size:12px}}.dot{{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:8px}}.green{{background:var(--green)}}.yellow{{background:var(--yellow)}}.red{{background:var(--red)}}.grey{{background:#737983}}section{{margin-top:12px;padding:16px}}h2{{font-size:16px;margin:0 0 12px}}h3{{font-size:15px}}p,li{{line-height:1.55}}code{{background:#11151a;padding:2px 4px;border-radius:3px}}pre{{overflow:auto;background:#11151a;padding:12px;border-radius:5px}}.ledger-list{{margin-top:12px}}.ledger-item{{position:relative;margin:10px 0 0;padding:12px 16px 12px 22px;border:0;border-radius:0;background:linear-gradient(90deg,rgba(117,167,216,.08),transparent 68%)}}.ledger-item::before{{content:"";position:absolute;left:0;top:6px;bottom:6px;width:4px;border-radius:4px;background:linear-gradient(180deg,var(--blue),#536c86)}}.ledger-title{{font-weight:650;line-height:1.45}}.ledger-item ul{{list-style:none;margin:8px 0 0;padding-left:0;color:var(--muted)}}.ledger-item li{{padding:4px 0}}.ledger-item p{{margin:8px 0 0;color:var(--muted)}}.trajectory{{padding-bottom:12px}}.trajectory-scroll{{overflow:auto;display:flex;justify-content:center}}.trajectory svg{{display:block;width:min(100%,560px);height:auto;min-width:500px}}.trajectory-lines line{{stroke:var(--line);stroke-width:2}}.trajectory-node rect{{fill:#20252c;stroke:var(--line);stroke-width:2}}.trajectory-node.open rect{{stroke:var(--yellow)}}.trajectory-node.proved rect{{stroke:var(--green)}}.trajectory-node.active rect{{fill:#202b35;stroke:var(--blue);stroke-width:3}}.trajectory-node text,.trajectory-center text{{fill:var(--text);font:600 13px system-ui,sans-serif;text-anchor:middle}}.trajectory-node .node-state,.trajectory-center .node-state{{fill:var(--muted);font-size:10px;font-weight:500}}.trajectory-center rect{{fill:#111820;stroke:var(--blue);stroke-width:3}}.trajectory-note{{color:var(--muted);font-size:11px;text-align:center;line-height:1.5;padding:0 8px 4px}}footer{{display:flex;gap:25px;flex-wrap:wrap;color:var(--muted);padding:14px 4px}}footer em{{font-style:normal;color:#747c87;margin-left:5px}}.document{{padding:22px}}@media(max-width:900px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}@media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}header span{{display:none}}.activity{{grid-template-columns:1fr}}.activity span{{white-space:normal}}.trajectory svg{{min-width:460px}}}}
 .status{{grid-template-columns:repeat(6,1fr)}}
-.trajectory-heading{{display:flex;align-items:center;justify-content:space-between;gap:16px}}.trajectory-heading h2{{margin:0}}.trajectory-heading>span{{color:var(--muted);font-size:11px;white-space:nowrap}}.vector-key{{display:inline-block;width:16px;height:3px;border-radius:3px;margin:0 5px 3px 10px}}.vector-key.product{{background:var(--blue)}}.vector-key.test{{background:var(--yellow)}}.trajectory-vectors line{{stroke-width:5;stroke-linecap:round}}.trajectory-vectors circle{{stroke:none}}.product-vector line{{stroke:var(--blue)}}.product-vector circle{{fill:var(--blue)}}.test-vector line{{stroke:var(--yellow)}}.test-vector circle{{fill:var(--yellow)}}.trajectory-node .node-vector{{fill:#b8c0ca;font-size:9px;font-weight:500}}.trajectory-observations{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:4px}}.trajectory-observations span{{display:flex;flex-direction:column;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:5px;color:var(--muted);font-size:10px;line-height:1.35}}.trajectory-observations b{{color:var(--text);font-size:10px;font-weight:600;text-transform:capitalize;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.trajectory-heading{{display:flex;align-items:center;justify-content:space-between;gap:16px}}.trajectory-heading h2{{margin:0}}.trajectory-heading>span{{color:var(--muted);font-size:11px;white-space:nowrap}}.trajectory-visuals{{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(330px,.85fr);gap:12px;align-items:stretch;margin-top:10px}}.vector-key{{display:inline-block;width:16px;height:3px;border-radius:3px;margin:0 5px 3px 10px}}.vector-key.product{{background:var(--blue)}}.vector-key.test{{background:var(--yellow)}}.trajectory-vectors line{{stroke-width:5;stroke-linecap:round}}.trajectory-vectors circle{{stroke:none}}.product-vector line{{stroke:var(--blue)}}.product-vector circle{{fill:var(--blue)}}.test-vector line{{stroke:var(--yellow)}}.test-vector circle{{fill:var(--yellow)}}.trajectory-node .node-vector{{fill:#b8c0ca;font-size:9px;font-weight:500}}.trajectory-observations{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:4px}}.trajectory-observations span{{display:flex;flex-direction:column;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:5px;color:var(--muted);font-size:10px;line-height:1.35}}.trajectory-observations b{{color:var(--text);font-size:10px;font-weight:600;text-transform:capitalize;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.attention-panel{{min-width:0;padding:12px 12px 10px;border:1px solid var(--line);border-radius:6px;background:#151a20}}.attention-heading{{display:flex;align-items:baseline;justify-content:space-between;gap:12px}}.attention-heading h3{{margin:0;font-size:13px}}.attention-heading span,.attention-panel>p{{color:var(--muted);font-size:10px}}.attention-panel svg{{display:block;width:100%;max-height:470px;margin:auto}}.attention-grid polygon{{fill:none;stroke:#303741;stroke-width:1}}.attention-grid line{{stroke:#303741;stroke-width:1}}.attention-labels text{{fill:#cbd1d8;font:600 11px system-ui,sans-serif}}.attention-series polygon{{stroke-width:2.5;stroke-linejoin:round}}.attention-series circle{{stroke:none}}.attention-target polygon{{fill:none;stroke:#eee9df;stroke-dasharray:6 5}}.attention-target circle{{fill:#eee9df}}.attention-code polygon{{fill:rgba(117,167,216,.13);stroke:var(--blue)}}.attention-code circle{{fill:var(--blue)}}.attention-test polygon{{fill:rgba(240,188,40,.09);stroke:var(--yellow)}}.attention-test circle{{fill:var(--yellow)}}.attention-result polygon{{fill:rgba(189,128,214,.08);stroke:#bd80d6}}.attention-result circle{{fill:#bd80d6}}.attention-other polygon{{fill:none;stroke:#aab0b8}}.attention-other circle{{fill:#aab0b8}}.attention-legend{{display:flex;justify-content:center;gap:8px 13px;flex-wrap:wrap;color:var(--muted);font-size:10px}}.attention-legend span{{white-space:nowrap}}.attention-key{{display:inline-block;width:14px;height:3px;margin:0 5px 3px 0;border-radius:3px}}.attention-key.attention-target{{background:#eee9df}}.attention-key.attention-code{{background:var(--blue)}}.attention-key.attention-test{{background:var(--yellow)}}.attention-key.attention-result{{background:#bd80d6}}.attention-key.attention-other{{background:#aab0b8}}.attention-panel>p{{margin:8px 0 0;text-align:center;line-height:1.4}}
 .trajectory-gaps{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:4px 0 10px}}.trajectory-gap{{padding:9px 11px;border-left:3px solid var(--blue);background:#151a20}}.trajectory-gap strong{{font-size:11px}}.trajectory-gap p{{margin:5px 0 0;color:var(--muted);font-size:11px}}
 @media(max-width:1000px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}
-@media(max-width:700px){{.trajectory-heading{{align-items:flex-start;flex-direction:column}}.trajectory-observations{{grid-template-columns:1fr 1fr}}}}
+@media(max-width:980px){{.trajectory-visuals{{grid-template-columns:1fr}}.attention-panel svg{{max-width:500px}}}}
+@media(max-width:700px){{.trajectory-heading{{align-items:flex-start;flex-direction:column}}.trajectory-observations{{grid-template-columns:1fr 1fr}}.attention-heading{{align-items:flex-start;flex-direction:column}}}}
 @media(max-width:700px){{.trajectory-gaps{{grid-template-columns:1fr}}}}
 @media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}}}
 </style></head><body><main><header><h1>DE67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''

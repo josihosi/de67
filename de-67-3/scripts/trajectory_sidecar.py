@@ -69,6 +69,21 @@ class GapReport:
 
 
 @dataclass(frozen=True)
+class AttentionPoint:
+    gap_id: str
+    raw_relation: float
+    relative_pull: float
+
+
+@dataclass(frozen=True)
+class AttentionSeries:
+    key: str
+    label: str
+    source: str
+    points: tuple[AttentionPoint, ...]
+
+
+@dataclass(frozen=True)
 class TrajectoryReport:
     lineage: str
     claim: str
@@ -77,6 +92,7 @@ class TrajectoryReport:
     latest_task: str | None
     latest_task_gap: str | None
     latest_task_result: str
+    attention: tuple[AttentionSeries, ...]
     churn_vector: ChurnVector
 
 
@@ -311,6 +327,29 @@ def nearest_relation(
     return round(score, 3), units[index][0]
 
 
+def attention_series(
+    key: str,
+    label: str,
+    source: str,
+    gap_ids: list[str],
+    relations: list[float],
+) -> AttentionSeries:
+    strongest = max(relations, default=0.0)
+    points = tuple(
+        AttentionPoint(
+            gap_id,
+            round(relation, 3),
+            round(relation / strongest, 3) if strongest else 0.0,
+        )
+        for gap_id, relation in zip(gap_ids, relations)
+    )
+    return AttentionSeries(key, label, source, points)
+
+
+def table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row["name"]) for row in connection.execute(f"PRAGMA table_info({table})")}
+
+
 def compact_path(kinds: list[str]) -> tuple[str, ...]:
     compact: list[str] = []
     for kind in kinds:
@@ -442,7 +481,70 @@ def build_report(
             """,
             (lineage_id, claim),
         ).fetchone()
+        result_text = ""
+        result_label = ""
+        result_source = ""
+        finding_columns = table_columns(connection, "worker_findings")
+        if finding_columns:
+            finding = connection.execute(
+                """
+                SELECT finding.task_id, finding.short_verdict, finding.evidence
+                FROM worker_findings AS finding
+                JOIN tasks AS task
+                  ON task.lineage_id = finding.lineage_id
+                 AND task.task_id = finding.task_id
+                WHERE finding.lineage_id = ? AND task.claim_id = ?
+                ORDER BY finding.reported_at DESC
+                LIMIT 1
+                """,
+                (lineage_id, claim),
+            ).fetchone()
+            if finding is not None:
+                result_text = f"{finding['short_verdict']}\n{finding['evidence']}"
+                result_label = "Latest finding"
+                result_source = str(finding["task_id"])
     latest_result = str(latest["attempt_terminal_kind"] or "active") if latest is not None else "none"
+    gap_ids = [report.gap_id for report in reports]
+    active_gap = (
+        str(latest["closure_gap_id"])
+        if latest is not None and latest["closure_gap_id"]
+        else ""
+    )
+    attention = [
+        attention_series(
+            "target",
+            "Assigned gap",
+            str(latest["task_id"]) if latest is not None else "No active task",
+            gap_ids,
+            [1.0 if gap_id == active_gap else 0.0 for gap_id in gap_ids],
+        ),
+        attention_series(
+            "code",
+            "Workspace code",
+            "Current uncommitted diff",
+            gap_ids,
+            [report.implementation_relation for report in reports],
+        ),
+        attention_series(
+            "test",
+            "Workspace tests",
+            "Current uncommitted diff",
+            gap_ids,
+            [report.test_relation for report in reports],
+        ),
+    ]
+    if result_text:
+        result_vectors = tfidf_vectors([*obligations, result_text])
+        result_vector = result_vectors[-1]
+        attention.append(
+            attention_series(
+                "result",
+                result_label,
+                result_source,
+                gap_ids,
+                [round(cosine(vector, result_vector), 3) for vector in result_vectors[:-1]],
+            )
+        )
     churn_vector = derive_churn_vector(reports, changed_paths, latest_result)
     return TrajectoryReport(
         lineage_id,
@@ -452,6 +554,7 @@ def build_report(
         str(latest["task_id"]) if latest is not None else None,
         str(latest["closure_gap_id"]) if latest is not None and latest["closure_gap_id"] else None,
         latest_result,
+        tuple(attention),
         churn_vector,
     )
 

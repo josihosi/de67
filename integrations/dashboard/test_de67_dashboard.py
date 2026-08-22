@@ -407,6 +407,23 @@ class DashboardTests(unittest.TestCase):
                 "product_owner": {"direction": "product-surface-present",
                                   "evidence": ["one changed product path"]},
             },
+            "attention": [
+                {"key": "target", "label": "Assigned gap", "source": "R009-M1",
+                 "points": [
+                     {"gap_id": "G-001", "raw_relation": 0, "relative_pull": 0},
+                     {"gap_id": "G-002", "raw_relation": 1, "relative_pull": 1},
+                 ]},
+                {"key": "code", "label": "Workspace code", "source": "Current <diff>",
+                 "points": [
+                     {"gap_id": "G-001", "raw_relation": .25, "relative_pull": .3125},
+                     {"gap_id": "G-002", "raw_relation": .8, "relative_pull": 1},
+                 ]},
+                {"key": "test", "label": "Workspace tests", "source": "Current diff",
+                 "points": [
+                     {"gap_id": "G-001", "raw_relation": .75, "relative_pull": 1},
+                     {"gap_id": "G-002", "raw_relation": .4, "relative_pull": .533},
+                 ]},
+            ],
         }
         before = set(self.workspace.rglob("*"))
         with patch.object(dashboard_module, "read_sidecar", return_value=report) as run:
@@ -423,6 +440,12 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('class="product-vector"', first)
         self.assertIn('class="test-vector"', first)
         self.assertIn("product surface present", first)
+        self.assertIn("Attention spider", first)
+        self.assertIn("Relative pull · not completion", first)
+        self.assertIn('class="attention-series attention-code"', first)
+        self.assertIn("Current &lt;diff&gt;", first)
+        self.assertIn("Each line is scaled to its own strongest gap", first)
+        self.assertIn("@media(max-width:980px)", first)
         self.assertEqual(first.count('class="trajectory-gap"'), 2)
         self.assertIn("<p>&lt;active route&gt;</p>", first)
         self.assertIn("&lt;active route&gt;", first)

@@ -362,6 +362,7 @@ def coordinator_prompt(
         "The hash-bound .de67/phase3-policy.d67 file is the machine-canonical routing policy.",
         "Before every route decision, execute the argument array in DE67_POLICY_DECIDE_ARGV_JSON as a subprocess without a shell.",
         "Obey its action, read only its named sources, and preserve every emitted obligation in worker or reviewer briefs.",
+        "Write every owner-facing text field rendered on the hosted dashboard in simple English. This includes ledger items, latest findings, waiting work, mutation or incident summaries, and any DFS summary that the dashboard displays. First explain what happened and why it matters in terms any reader can understand. Then preserve the necessary technical identifiers and evidence, state what remains or happens next, and use one concrete statement per sentence. If the simple explanation exposes a contradiction or a missing causal step, record that problem instead of hiding it behind technical language. Internal machine state and DFS detail that the dashboard does not display do not need this rewrite.",
         "A policy mutation is only a candidate until DE67_POLICY_GUARD_ARGV_JSON succeeds; promote both candidate source and bytecode together, then request one fresh coordinator.",
         "Do not infer policy from workspace guideline prose; those files are legacy differential fixtures on this branch.",
         "Read current code or DFS detail only when the compiled decision names ledger, dfs, or dfs_slice.",

@@ -502,6 +502,12 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("machine-canonical", prompt)
         self.assertIn("DE67_POLICY_GUARD_ARGV_JSON", prompt)
         self.assertIn("legacy differential fixtures", prompt)
+        self.assertIn("Write every owner-facing text field rendered on the hosted dashboard in simple English", prompt)
+        self.assertIn("ledger items, latest findings, waiting work", prompt)
+        self.assertIn("explain what happened and why it matters", prompt)
+        self.assertIn("state what remains or happens next", prompt)
+        self.assertIn("exposes a contradiction or a missing causal step", prompt)
+        self.assertIn("Internal machine state and DFS detail", prompt)
         self.assertNotIn("Read .de67/orchestrator-guidelines.md", prompt)
         self.assertNotIn("test-and-task-guidelines.md", prompt)
 

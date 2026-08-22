@@ -39,6 +39,15 @@ Prefer concrete user-visible contrasts over abstract architecture questions. Ask
 mechanics only when the user owns that choice; otherwise leave phase 2 to inspect the code and choose
 the smallest compatible mechanism.
 
+Before writing the WEC, do one bounded research checkpoint if needed:
+
+1. Keep a short frontier of only research-valid questions (terminology edge cases, policy precedent,
+   or comparable behavior from other repositories).
+2. Run a tiny online/GitHub research sweep only for those frontier questions.
+3. If the evidence changes intent or required wording, add the missing items as another
+   `Decisions` entry or `Prototype or reaction question` and continue grilling.
+4. If the evidence does not change scope, keep a short `Research outcome` note in the WEC and proceed.
+
 ## Write the WEC
 
 When the frontier is empty, read `assets/WEC.md` and fill its sections in concise Markdown. Preserve

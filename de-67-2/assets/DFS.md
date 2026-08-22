@@ -35,6 +35,14 @@ interface languages. Do not let current code silently rename the user's concept.
 |---|---|---|---|
 | `<concern>` | `<path :: symbol>` | `<what happens now>` | `<call site, test, or observation>` |
 
+## External research sweep
+
+Use only for unresolved red items or ambiguous ownership.
+
+| Source | What was searched | Claim to validate | Effect on DFS |
+|---|---|---|---|
+| `<URL/repo ref>` | `<feature / symbol / behavior>` | `<matching behavior or pattern>` | `<new red item, clarifying wording, or no change>` |
+
 ## Mechanistic requirements
 
 ### 1. <Behavior or subsystem>

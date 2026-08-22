@@ -55,17 +55,21 @@ gate and create no coordination artifact unless it is named here.
    relevant configuration.
 6. Read [references/dfs-pattern.md](references/dfs-pattern.md) completely and use
    [assets/DFS.md](assets/DFS.md) as the output template.
-7. For every affected state or action, identify every current reader, writer, and competing owner.
+7. Run a bounded external-research pass only for unresolved red items, ambiguous ownership edges, or
+   external-reference risk. Use GitHub or upstream docs only for short, directly relevant evidence.
+8. For every affected state or action, identify every current reader, writer, and competing owner.
    Decide and document the authoritative owner, precedence, yield/override rules, and atomic or
    idempotent boundaries. Ask the user when a decision would alter product intent or vocabulary;
    otherwise make the smallest code-grounded design decision that satisfies the WEC.
-8. Write `.de67/DFS.md` mechanistically. Name concrete files, symbols, functions, parameters,
+9. Write `.de67/DFS.md` mechanistically. Name concrete files, symbols, functions, parameters,
    inputs, outputs, preconditions, transitions, postconditions, failure behavior, and persistence
    effects. Mark every absent, wrong, or unproved requirement with a stable line beginning
    `- [ ] 🔴 R-...`. Define the outcome test and production proof that closes each red item.
-9. Check the DFS against the current code again, resolve internal contradictions, record its source
+   If research confirms a reusable mechanism, add stable IDs and source-identity notes in the DFS and
+   convert one affected gap to a revised red-item plan.
+10. Check the DFS against the current code again, resolve internal contradictions, record its source
    baseline, and freeze it.
-10. Prepare and prove the native worker choices needed by phase 3. Preserve any existing project
+11. Prepare and prove the native worker choices needed by phase 3. Preserve any existing project
    configuration while setting the trusted project's `.codex/config.toml` agent default to Luna;
    do not pin a default effort:
 
@@ -81,7 +85,7 @@ gate and create no coordination artifact unless it is named here.
    prove both models and more than one effort level. Record only successful model/effort pairs. If
    the installed runner rejects the project agent default, update that runner to a compatible
    version and repeat the probes; do not invent an alias, a custom role taxonomy, or a model matrix.
-11. After freeze, perform the one-time workspace setup. Ensure `.de67/state/` is ignored, keep the
+12. After freeze, perform the one-time workspace setup. Ensure `.de67/state/` is ignored, keep the
    current branch's configured upstream as the sole managed automatic target. A checkpoint repository
    is pushed only as a separate one-shot action after the user explicitly requests it; never persist
    it in the hook or clock configuration. Run:

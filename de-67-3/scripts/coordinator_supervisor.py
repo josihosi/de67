@@ -367,6 +367,7 @@ def coordinator_prompt(
         "Read the active ledger and use its claim-bound DFS slices as the compact default. Read more of the DFS when the current decision genuinely needs it.",
         "Read current code and Git state plus only relevant durable .de67 state; do not read predecessor logs or narrative handoffs.",
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every deadline-harness command; do not infer replacements.",
+        "Before spawning each worker, start one unique deadline-harness task for that child. After the child exits, terminalize that task exactly once as completed, finding, or abandoned. A model-verification child that is retired still counts as an abandoned worker window; its replacement needs a new task. Never count a coordinator restart as a worker window.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
         "If .de67/state/blocker-adapter-state.json contains an authenticated owner reply for the "
         "current blocked ledger, treat its exact reply text as durable owner authority. Consume "
@@ -672,19 +673,23 @@ def _run_supervisor_locked(
         if work_is_complete(workdir, state, lineage_id):
             return 0
         has_executable_work = ledger_has_active_work(workdir) or dfs_has_open_work(workdir)
-        if not after.required and result.exit_code == 0 and has_executable_work:
+        if not after.required and has_executable_work:
             session_path = result.run_dir / "session_id.txt"
-            if not session_path.is_file() or not session_path.read_text(
-                encoding="utf-8"
-            ).strip():
+            session_id = (
+                session_path.read_text(encoding="utf-8").strip()
+                if session_path.is_file()
+                else ""
+            )
+            if session_id:
+                resume_session_id = session_id
+                generation = None
+                continue
+            if result.exit_code == 0:
                 _mark_protocol_failure(
                     result,
                     "Coordinator returned with executable work but no resumable session id",
                 )
                 return 1
-            resume_session_id = session_path.read_text(encoding="utf-8").strip()
-            generation = None
-            continue
         if not after.required and result.exit_code != 0 and has_executable_work:
             with DeadlineHarness(state) as harness:
                 requested = harness.request_coordinator_restart(

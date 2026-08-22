@@ -63,12 +63,13 @@ event = {
 with Path(os.environ["FAKE_EVENTS"]).open("a", encoding="utf-8") as output:
     output.write(json.dumps(event) + "\n")
 event_count = len(Path(os.environ["FAKE_EVENTS"]).read_text(encoding="utf-8").splitlines())
-Path(os.environ["DE67_COORDINATOR_SESSION_FILE"]).write_text(
-    os.environ.get("DE67_COORDINATOR_RESUME_SESSION", "fake-session") + "\n",
-    encoding="utf-8",
-)
-
 mode = os.environ["FAKE_MODE"]
+if not (mode == "crash-without-session-then-complete" and event_count == 1):
+    Path(os.environ["DE67_COORDINATOR_SESSION_FILE"]).write_text(
+        os.environ.get("DE67_COORDINATOR_RESUME_SESSION", "fake-session") + "\n",
+        encoding="utf-8",
+    )
+
 with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
     if mode == "two-restarts":
         if generation is None:
@@ -189,8 +190,27 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                 encoding="utf-8",
             )
     elif mode == "crash-then-complete":
-        if generation is None:
+        if event_count == 1:
             raise SystemExit(9)
+        if generation is not None:
+            raise AssertionError("resumable crash must keep the same coordinator generation")
+        harness.complete_task(
+            os.environ["DE67_LINEAGE"], "seed", "successor proof"
+        )
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        (root / "DFS.md").write_text(
+            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+            encoding="utf-8",
+        )
+        (root / "work-ledger.md").write_text(
+            "# Work ledger\n\n## Active work\n",
+            encoding="utf-8",
+        )
+    elif mode == "crash-without-session-then-complete":
+        if event_count == 1:
+            raise SystemExit(9)
+        if generation is None:
+            raise AssertionError("non-resumable crash must get a fresh generation")
         harness.acknowledge_coordinator_restart(
             os.environ["DE67_LINEAGE"],
             generation,
@@ -560,6 +580,9 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         )
         self.assertIn("DE67_DEADLINE_STATE", initial_prompt)
         self.assertIn("DE67_LINEAGE", initial_prompt)
+        self.assertIn("Before spawning each worker", initial_prompt)
+        self.assertIn("model-verification child", initial_prompt)
+        self.assertIn("Never count a coordinator restart as a worker window", initial_prompt)
 
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.list_tasks()["coordinator_restart"]
@@ -797,14 +820,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
                         ]
                         self.assertEqual(len(recorded), 2)
                         self.assertIsNone(recorded[0]["generation"])
-                        self.assertEqual(
-                            recorded[1]["generation"],
-                            None if first_exit == 0 else 1,
-                        )
-                        self.assertEqual(
-                            recorded[1]["resume_session"],
-                            "fake-session" if first_exit == 0 else None,
-                        )
+                        self.assertIsNone(recorded[1]["generation"])
+                        self.assertEqual(recorded[1]["resume_session"], "fake-session")
                         self.assertEqual(
                             {
                                 path.parent.name: path.read_text(encoding="utf-8").strip()
@@ -909,7 +926,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             ]
         self.assertIsNone(restart)
 
-    def test_crashed_coordinator_with_active_work_gets_a_successor(self) -> None:
+    def test_crashed_cli_with_active_work_resumes_the_same_coordinator(self) -> None:
         self.write_work_documents(red=True, active=True)
         run_ids = iter(("crashed-run", "recovery-run"))
 
@@ -928,10 +945,44 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             [event["run_id"] for event in self.read_events()],
             ["crashed-run", "recovery-run"],
         )
+        events = self.read_events()
+        self.assertIsNone(events[0]["generation"])
+        self.assertIsNone(events[1]["generation"])
+        self.assertEqual(events[1]["resume_session"], "fake-session")
+        with DeadlineHarness(self.state_path) as harness:
+            self.assertIsNone(
+                harness.coordinator_restart_status("project")["coordinator_restart"]
+            )
         self.assertEqual(
             self.statuses(),
             {"crashed-run": "FAILED", "recovery-run": "DONE"},
         )
+
+    def test_nonresumable_crash_with_active_work_gets_a_fresh_coordinator(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        run_ids = iter(("crashed-run", "recovery-run"))
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("crash-without-session-then-complete"),
+            run_id_factory=lambda _generation: next(run_ids),
+        )
+
+        self.assertEqual(result, 0)
+        events = self.read_events()
+        self.assertIsNone(events[0]["generation"])
+        self.assertEqual(events[1]["generation"], 1)
+        self.assertIsNone(events[1]["resume_session"])
+        with DeadlineHarness(self.state_path) as harness:
+            restart = harness.coordinator_restart_status("project")[
+                "coordinator_restart"
+            ]
+        self.assertEqual(restart["generation"], 1)
+        self.assertFalse(restart_required(restart))
 
     def test_missing_runner_is_a_concrete_environment_blocker(self) -> None:
         self.write_work_documents(red=True, active=True)

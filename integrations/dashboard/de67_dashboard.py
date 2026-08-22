@@ -98,6 +98,8 @@ def render_markdown(text: str) -> str:
 
 def render_ledger_section(text: str) -> str:
     """Keep each top-level ledger item inside one continuous decorative rail."""
+    if re.search(r"^#{1,6}\s+", text, re.M):
+        return render_markdown(text) if text.strip() else "<p>None.</p>"
     blocks: list[list[str]] = []
     preface: list[str] = []
     current: list[str] | None = None
@@ -156,70 +158,16 @@ def read_sidecar(script: Path, workspace: Path, state: Path, claim: str) -> dict
 
 
 def render_trajectory(report: dict[str, Any]) -> str:
-    gaps = report.get("gaps") or []
+    raw_gaps = report.get("gaps")
+    gaps = [
+        gap if isinstance(gap, dict) else {"summary": str(gap)}
+        for gap in raw_gaps
+    ] if isinstance(raw_gaps, list) else []
     if not gaps:
         return '<section class="trajectory"><h2>Trajectory sidecar</h2><p class="subtle">No closure trajectory.</p></section>'
-    radius = max(170, len(gaps) * 20)
-    size = radius * 2 + 220
-    center = size / 2
-    lines: list[str] = []
-    vectors: list[str] = []
-    nodes: list[str] = []
-    latest_gap = str(report.get("latest_task_gap") or "")
-    for index, gap in enumerate(gaps):
-        angle = -math.pi / 2 + (2 * math.pi * index / len(gaps))
-        x = center + radius * math.cos(angle)
-        y = center + radius * math.sin(angle)
-        gap_id = str(gap.get("gap_id", "?"))
-        status = str(gap.get("status", "open"))
-        active = gap_id == latest_gap and report.get("latest_task_result") == "active"
-        tone = "active" if active else "proved" if status == "proved" else "open"
-        lines.append(
-            f'<line x1="{center:.1f}" y1="{center:.1f}" x2="{x:.1f}" y2="{y:.1f}" />'
-        )
-        try:
-            product_relation = max(0.0, min(1.0, float(gap.get("implementation_relation", 0))))
-        except (TypeError, ValueError):
-            product_relation = 0.0
-        try:
-            test_relation = max(0.0, min(1.0, float(gap.get("test_relation", 0))))
-        except (TypeError, ValueError):
-            test_relation = 0.0
-        perpendicular_x = -math.sin(angle) * 3
-        perpendicular_y = math.cos(angle) * 3
-        for relation, css_class, offset in (
-            (product_relation, "product-vector", -1),
-            (test_relation, "test-vector", 1),
-        ):
-            inner_radius = 82
-            visible_radius = inner_radius + (radius - inner_radius) * relation
-            end_x = center + visible_radius * math.cos(angle) + perpendicular_x * offset
-            end_y = center + visible_radius * math.sin(angle) + perpendicular_y * offset
-            start_x = center + inner_radius * math.cos(angle) + perpendicular_x * offset
-            start_y = center + inner_radius * math.sin(angle) + perpendicular_y * offset
-            vectors.append(
-                f'<g class="{css_class}"><line x1="{start_x:.1f}" y1="{start_y:.1f}" '
-                f'x2="{end_x:.1f}" y2="{end_y:.1f}" /><circle cx="{end_x:.1f}" '
-                f'cy="{end_y:.1f}" r="3" /></g>'
-            )
-        summary = " ".join(str(gap.get("summary", "")).split())
-        nodes.append(
-            f'<g class="trajectory-node {tone}" transform="translate({x - 58:.1f} {y - 36:.1f})">'
-            f'<title>{_escape(summary)}</title><rect width="116" height="72" rx="8" />'
-            f'<text x="58" y="21">{_escape(gap_id)} r{_escape(gap.get("revision", "?"))}</text>'
-            f'<text class="node-state" x="58" y="40">{_escape("active" if active else status)} · {_escape(gap.get("attempts", 0))} attempts</text>'
-            f'<text class="node-vector" x="58" y="58">code {product_relation:.2f} · test {test_relation:.2f}</text>'
-            '</g>'
-        )
-    claim = report.get("claim", "Claim")
-    latest_task = report.get("latest_task") or "No active attempt"
-    center_node = (
-        f'<g class="trajectory-center" transform="translate({center - 78:.1f} {center - 39:.1f})">'
-        '<rect width="156" height="78" rx="39" />'
-        f'<text x="78" y="32">{_escape(claim)}</text>'
-        f'<text class="node-state" x="78" y="53">{_escape(latest_task)}</text></g>'
-    )
     churn = report.get("churn_vector") or {}
+    if not isinstance(churn, dict):
+        churn = {}
     observation_chips: list[str] = []
     for name, value in churn.items():
         if not isinstance(value, dict) or not value.get("direction"):
@@ -230,14 +178,99 @@ def render_trajectory(report: dict[str, Any]) -> str:
             f'{_escape(str(value["direction"]).replace("-", " "))}</span>'
         )
     return (
-        '<section class="trajectory"><div class="trajectory-heading"><h2>Trajectory sidecar</h2>'
-        '<span><i class="vector-key product"></i>Code similarity '
-        '<i class="vector-key test"></i>Test similarity</span></div>'
-        '<div class="trajectory-scroll">'
-        f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="Trajectory for {_escape(claim)}">'
-        f'<g class="trajectory-lines">{"".join(lines)}</g><g class="trajectory-vectors">'
-        f'{"".join(vectors)}</g>{"".join(nodes)}{center_node}</svg></div>'
+        '<section class="trajectory"><h2>Trajectory sidecar</h2>'
+        f'{render_attention_spider(report, gaps)}'
         f'<div class="trajectory-observations">{"".join(observation_chips)}</div></section>'
+    )
+
+
+def render_attention_spider(report: dict[str, Any], gaps: list[dict[str, Any]]) -> str:
+    gap_ids = [str(gap.get("gap_id", "?")) for gap in gaps]
+    raw_series = report.get("attention")
+    series = [item for item in raw_series if isinstance(item, dict)] if isinstance(raw_series, list) else []
+    radius = max(174, len(gap_ids) * 18)
+    node_radius = radius + 80
+    size = node_radius * 2 + 130
+    center = size / 2
+
+    def point(index: int, distance: float) -> tuple[float, float]:
+        angle = -math.pi / 2 + (2 * math.pi * index / len(gap_ids))
+        return center + distance * math.cos(angle), center + distance * math.sin(angle)
+
+    grid: list[str] = []
+    for fraction in (0.25, 0.5, 0.75, 1.0):
+        coordinates = " ".join(
+            f"{x:.1f},{y:.1f}" for x, y in (point(index, radius * fraction) for index in range(len(gap_ids)))
+        )
+        grid.append(f'<polygon points="{coordinates}" />')
+    axes: list[str] = []
+    nodes: list[str] = []
+    latest_gap = str(report.get("latest_task_gap") or "")
+    for index, (gap_id, gap) in enumerate(zip(gap_ids, gaps)):
+        x, y = point(index, radius)
+        node_x, node_y = point(index, node_radius)
+        axes.append(f'<line x1="{center:.1f}" y1="{center:.1f}" x2="{x:.1f}" y2="{y:.1f}" />')
+        status = str(gap.get("status", "open"))
+        active = gap_id == latest_gap and report.get("latest_task_result") == "active"
+        tone = "active" if active else "proved" if status == "proved" else "open"
+        summary = " ".join(str(gap.get("summary", "")).split())
+        nodes.append(
+            f'<g class="trajectory-node {tone}" transform="translate({node_x - 58:.1f} {node_y - 28:.1f})">'
+            f'<title>{_escape(summary)}</title><rect width="116" height="56" rx="8" />'
+            f'<text x="58" y="21">{_escape(gap_id)} r{_escape(gap.get("revision", "?"))}</text>'
+            f'<text class="node-state" x="58" y="41">{_escape("active" if active else status)} · '
+            f'{_escape(gap.get("attempts", 0))} attempts</text></g>'
+        )
+
+    shapes: list[str] = []
+    legend: list[str] = []
+    available_keys = {"target", "code", "test", "result"}
+    for item in series:
+        key = str(item.get("key", "other"))
+        css_key = key if key in available_keys else "other"
+        values = {
+            str(entry.get("gap_id")): entry
+            for entry in item.get("points", [])
+            if isinstance(entry, dict)
+        }
+        coordinates: list[str] = []
+        circles: list[str] = []
+        for index, gap_id in enumerate(gap_ids):
+            entry = values.get(gap_id, {})
+            try:
+                relative = max(0.0, min(1.0, float(entry.get("relative_pull", 0))))
+            except (TypeError, ValueError):
+                relative = 0.0
+            try:
+                raw = max(0.0, float(entry.get("raw_relation", 0)))
+            except (TypeError, ValueError):
+                raw = 0.0
+            x, y = point(index, radius * relative)
+            coordinates.append(f"{x:.1f},{y:.1f}")
+            circles.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3"><title>{_escape(str(item.get("label", key)))} '
+                f'→ {_escape(gap_id)} · relative {relative:.2f} · cosine {raw:.3f}</title></circle>'
+            )
+        label = str(item.get("label", key))
+        source = str(item.get("source", ""))
+        shapes.append(
+            f'<g class="attention-series attention-{css_key}"><polygon points="{" ".join(coordinates)}">'
+            f'<title>{_escape(label)} · {_escape(source)}</title></polygon>{"".join(circles)}</g>'
+        )
+        legend.append(
+            f'<span title="{_escape(source)}"><i class="attention-key attention-{css_key}"></i>{_escape(label)}</span>'
+        )
+    return (
+        '<article class="attention-panel"><div class="attention-heading"><h3>Attention spider</h3>'
+        f'<span>{"Relative pull · not completion" if series else "Waiting for attention data"}</span></div>'
+        f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="Attention distribution across closure gaps">'
+        f'<g class="attention-grid">{"".join(grid)}{"".join(axes)}</g>'
+        f'{"".join(shapes)}<g class="attention-nodes">{"".join(nodes)}</g></svg>'
+        f'<div class="attention-legend">{"".join(legend)}</div>'
+        f'<div class="attention-claim"><strong>{_escape(report.get("claim", "Claim"))}</strong>'
+        f'<span>{_escape(report.get("latest_task") or "No active attempt")}</span></div>'
+        '<p>Each line is scaled to its own strongest gap. Hover a point for raw cosine similarity.</p>'
+        '</article>'
     )
 
 
@@ -264,28 +297,105 @@ def parse_ledger(text: str) -> dict[str, Any]:
     sections: dict[str, list[str]] = {"active": [], "waiting": [], "blocked": []}
     current: str | None = None
     for line in text.splitlines():
-        heading = re.match(r"^##\s+(.+?)\s*$", line, re.I)
+        heading = re.match(r"^#{1,6}\s+(.+?)\s*$", line, re.I)
         if heading:
             name = heading.group(1).lower()
+            target = None
             if "active" in name:
-                current = "active"
+                target = "active"
             elif any(label in name for label in ("waiting", "queued", "pending")):
-                current = "waiting"
+                target = "waiting"
             elif "blocked" in name:
-                current = "blocked"
-            else:
-                current = None
+                target = "blocked"
+            if target:
+                current = target
+            elif current:
+                sections[current].append(line)
         elif current and line.strip():
             sections[current].append(line)
+    if not any(sections.values()) and text.strip():
+        sections["active"].append(text.strip())
     active = "\n".join(sections["active"]).strip()
     waiting = "\n".join(sections["waiting"]).strip()
     blocked = "\n".join(sections["blocked"]).strip()
-    first = re.search(r"[-*]\s+\[[ xX]\]\s+([^\n]+)", active)
-    claim = None
-    if first:
-        match = re.search(r"\b(R[- ]?\d+)\b", first.group(1), re.I)
-        claim = match.group(1) if match else None
+    claim = next(
+        (
+            match.group("claim")
+            for line in active.splitlines()
+            if (match := OWNING_CLAIM.match(line))
+        ),
+        None,
+    )
     return {"active": active, "waiting": waiting, "blocked": blocked, "claim": claim}
+
+
+CLAIM_ID_PATTERN = r"R-[A-Za-z0-9._-]+"
+CLAIM_ID = re.compile(rf"^{CLAIM_ID_PATTERN}$")
+OWNING_CLAIM = re.compile(
+    rf"^(?:(?:#{{1,6}}\s+)|(?:[-*]\s+(?:\[[ xX]\]\s+|Blocked:\s+)))?"
+    rf"(?P<claim>{CLAIM_ID_PATTERN})(?=[ \t]+—|[ \t]*$)",
+)
+RED_DFS_CLAIM = re.compile(
+    rf"^- \[ \] 🔴 (?P<claim>{CLAIM_ID_PATTERN})[ \t]+—[ \t]+\S.*$"
+)
+DFS_STATUS = re.compile(r"^\s*(?:-\s*)?Status:\s*`?(?P<status>[A-Za-z]+)\b", re.I)
+FENCE = re.compile(r"^[ \t]*(?P<marker>`{3,}|~{3,})")
+FENCE_CLOSE = re.compile(r"^[ \t]*(?P<marker>`{3,}|~{3,})[ \t]*$")
+
+
+def _owning_claim_ids(text: str) -> set[str]:
+    return {
+        match.group("claim")
+        for line in _outside_fences(text)
+        if (match := OWNING_CLAIM.match(line))
+    }
+
+
+def _claim_id(value: Any) -> str | None:
+    return value if isinstance(value, str) and CLAIM_ID.fullmatch(value) else None
+
+
+def _outside_fences(text: str):
+    opening_marker: str | None = None
+    for line in text.splitlines():
+        if opening_marker is not None:
+            closing = FENCE_CLOSE.match(line)
+            if closing:
+                marker = closing.group("marker")
+                if marker[0] == opening_marker[0] and len(marker) >= len(opening_marker):
+                    opening_marker = None
+            continue
+        if opening := FENCE.match(line):
+            opening_marker = opening.group("marker")
+            continue
+        yield line
+
+
+def _dfs_status(dfs: str) -> str | None:
+    for line in _outside_fences(dfs):
+        if match := DFS_STATUS.match(line):
+            return match.group("status").casefold()
+    return None
+
+
+def upcoming_dfs_work(dfs: str, ledger: dict[str, Any], active_claim: str | None) -> str:
+    """Project later frozen-DFS claims without creating another work authority."""
+    if _dfs_status(dfs) not in {"frozen", "refrozen"}:
+        return ""
+    excluded = _owning_claim_ids(
+        "\n".join((ledger["active"], ledger["waiting"], ledger["blocked"]))
+    )
+    if isinstance(active_claim, str):
+        excluded.update(_owning_claim_ids(active_claim))
+    upcoming: list[str] = []
+    for line in _outside_fences(dfs):
+        claim = RED_DFS_CLAIM.match(line)
+        if not claim:
+            continue
+        if claim.group("claim") in excluded:
+            continue
+        upcoming.append(line)
+    return "\n".join(upcoming)
 
 
 def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
@@ -760,7 +870,9 @@ class Dashboard:
             clock = self._clock_source()
             clock_data = clock.get("data", {})
             task = clock_data.get("task") or {}
-            claim = task.get("claim_id") or parse_ledger(ledger.get("text", "")).get("claim")
+            claim = _claim_id(task.get("claim_id")) or parse_ledger(
+                ledger.get("text", "")
+            ).get("claim")
             clock_path = clock.get("path")
             if isinstance(clock_path, Path):
                 sidecar = self._sidecar_source(clock_path, claim)
@@ -790,6 +902,8 @@ class Dashboard:
         ledger_data = parse_ledger(ledger.get("text", ""))
         clock_data = clock.get("data", {})
         task = clock_data.get("task") or {}
+        active_claim = _claim_id(task.get("claim_id")) or ledger_data["claim"]
+        upcoming = upcoming_dfs_work(dfs.get("text", ""), ledger_data, active_claim)
         deadline = clock_data.get("deadline") or {}
         restart = clock_data.get("restart") or {}
         finding = clock_data.get("finding") or {}
@@ -867,7 +981,12 @@ class Dashboard:
                 worker_body = f'<p class="subtle">Unavailable · {_escape(workers.get("error", "unknown source"))}</p>'
             workers_html = f'<section class="workers"><h2>Active workers</h2>{worker_body}</section>'
             active_html = render_ledger_section(ledger_data["active"])
-            waiting_html = render_ledger_section(ledger_data["waiting"])
+            upcoming_html = render_ledger_section(upcoming)
+            waiting_html = (
+                '<section><h2>Waiting on event</h2><div class="ledger-list">'
+                f'{render_ledger_section(ledger_data["waiting"])}</div></section>'
+                if ledger_data["waiting"] else ""
+            )
             blocked_html = render_ledger_section(ledger_data["blocked"])
             if sidecar.get("data"):
                 sidecar_html = render_trajectory(sidecar["data"])
@@ -892,16 +1011,16 @@ class Dashboard:
                     f'<span>{_escape(finding.get("short_verdict", ""))}</span>'
                     f'<em>{_escape(finding_age)}</em></div>'
                 )
-            body = f'<div class="status">{cards}</div>{workers_html}{sidecar_html}{finding_html}<section><h2>Active work ledger</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section><h2>Waiting work</h2><div class="ledger-list">{waiting_html}</div></section><section><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
+            body = f'<div class="status">{cards}</div>{workers_html}{sidecar_html}{finding_html}<section><h2>Active work ledger</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section><h2>Upcoming DFS work</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
         page = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>DE67</title>
 <style>
 :root{{--bg:#101318;--panel:#1a1e24;--line:#343a43;--text:#eee9df;--muted:#9ca3ad;--green:#75c84c;--yellow:#f0bc28;--red:#e05248;--blue:#75a7d8}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}}main{{max-width:1180px;margin:auto;padding:24px}}header{{display:flex;align-items:baseline;gap:22px}}h1{{font-size:25px;margin:0}}header span,.subtle{{color:var(--muted)}}nav{{display:flex;margin:18px 0;border-bottom:1px solid var(--line)}}nav a{{color:var(--muted);text-decoration:none;padding:10px 16px}}nav a.selected{{color:var(--text);border:1px solid var(--line);border-bottom-color:var(--bg);border-radius:6px 6px 0 0;margin-bottom:-1px}}nav a:last-child{{margin-left:auto}}.status{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}}.lamp,.metric,section,.activity{{background:var(--panel);border:1px solid var(--line);border-radius:7px}}.lamp,.metric{{padding:13px 14px;min-height:82px}}small{{display:block;color:var(--muted);margin-bottom:10px}}strong{{font-size:18px}}.metric-note{{display:block;color:var(--muted);font-size:11px;margin-top:5px;white-space:nowrap}}.workers{{padding:12px 16px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:7px 12px;text-align:center;border-top:1px solid var(--line)}}thead th{{border-top:0;color:var(--muted);font-size:12px;font-weight:500}}tbody th{{text-align:left}}td{{font-variant-numeric:tabular-nums;color:var(--muted)}}td.active-count{{color:var(--green);font-weight:700}}.activity{{display:grid;grid-template-columns:100px max-content 1fr max-content;align-items:center;gap:12px;margin-top:10px;padding:10px 14px}}.activity small{{margin:0}}.activity strong{{font-size:13px}}.activity span{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.activity em{{color:var(--muted);font-style:normal;font-size:12px}}.dot{{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:8px}}.green{{background:var(--green)}}.yellow{{background:var(--yellow)}}.red{{background:var(--red)}}.grey{{background:#737983}}section{{margin-top:12px;padding:16px}}h2{{font-size:16px;margin:0 0 12px}}h3{{font-size:15px}}p,li{{line-height:1.55}}code{{background:#11151a;padding:2px 4px;border-radius:3px}}pre{{overflow:auto;background:#11151a;padding:12px;border-radius:5px}}.ledger-list{{margin-top:12px}}.ledger-item{{position:relative;margin:10px 0 0;padding:12px 16px 12px 22px;border:0;border-radius:0;background:linear-gradient(90deg,rgba(117,167,216,.08),transparent 68%)}}.ledger-item::before{{content:"";position:absolute;left:0;top:6px;bottom:6px;width:4px;border-radius:4px;background:linear-gradient(180deg,var(--blue),#536c86)}}.ledger-title{{font-weight:650;line-height:1.45}}.ledger-item ul{{list-style:none;margin:8px 0 0;padding-left:0;color:var(--muted)}}.ledger-item li{{padding:4px 0}}.ledger-item p{{margin:8px 0 0;color:var(--muted)}}.trajectory{{padding-bottom:12px}}.trajectory-scroll{{overflow:auto;display:flex;justify-content:center}}.trajectory svg{{display:block;width:min(100%,560px);height:auto;min-width:500px}}.trajectory-lines line{{stroke:var(--line);stroke-width:2}}.trajectory-node rect{{fill:#20252c;stroke:var(--line);stroke-width:2}}.trajectory-node.open rect{{stroke:var(--yellow)}}.trajectory-node.proved rect{{stroke:var(--green)}}.trajectory-node.active rect{{fill:#202b35;stroke:var(--blue);stroke-width:3}}.trajectory-node text,.trajectory-center text{{fill:var(--text);font:600 13px system-ui,sans-serif;text-anchor:middle}}.trajectory-node .node-state,.trajectory-center .node-state{{fill:var(--muted);font-size:10px;font-weight:500}}.trajectory-center rect{{fill:#111820;stroke:var(--blue);stroke-width:3}}.trajectory-note{{color:var(--muted);font-size:11px;text-align:center;line-height:1.5;padding:0 8px 4px}}footer{{display:flex;gap:25px;flex-wrap:wrap;color:var(--muted);padding:14px 4px}}footer em{{font-style:normal;color:#747c87;margin-left:5px}}.document{{padding:22px}}@media(max-width:900px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}@media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}header span{{display:none}}.activity{{grid-template-columns:1fr}}.activity span{{white-space:normal}}.trajectory svg{{min-width:460px}}}}
 .status{{grid-template-columns:repeat(6,1fr)}}
-.trajectory-heading{{display:flex;align-items:center;justify-content:space-between;gap:16px}}.trajectory-heading h2{{margin:0}}.trajectory-heading>span{{color:var(--muted);font-size:11px;white-space:nowrap}}.vector-key{{display:inline-block;width:16px;height:3px;border-radius:3px;margin:0 5px 3px 10px}}.vector-key.product{{background:var(--blue)}}.vector-key.test{{background:var(--yellow)}}.trajectory-vectors line{{stroke-width:5;stroke-linecap:round}}.trajectory-vectors circle{{stroke:none}}.product-vector line{{stroke:var(--blue)}}.product-vector circle{{fill:var(--blue)}}.test-vector line{{stroke:var(--yellow)}}.test-vector circle{{fill:var(--yellow)}}.trajectory-node .node-vector{{fill:#b8c0ca;font-size:9px;font-weight:500}}.trajectory-observations{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:4px}}.trajectory-observations span{{display:flex;flex-direction:column;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:5px;color:var(--muted);font-size:10px;line-height:1.35}}.trajectory-observations b{{color:var(--text);font-size:10px;font-weight:600;text-transform:capitalize;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.trajectory-observations{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}}.trajectory-observations span{{display:flex;flex-direction:column;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:5px;color:var(--muted);font-size:10px;line-height:1.35}}.trajectory-observations b{{color:var(--text);font-size:10px;font-weight:600;text-transform:capitalize;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.attention-panel{{min-width:0;padding:12px 12px 10px;border:1px solid var(--line);border-radius:6px;background:#151a20;overflow:auto}}.attention-heading{{display:flex;align-items:baseline;justify-content:space-between;gap:12px}}.attention-heading h3{{margin:0;font-size:13px}}.attention-heading span{{color:var(--muted);font-size:12px}}.attention-panel svg{{display:block;width:min(100%,760px);height:auto;min-width:540px;margin:auto}}.attention-grid polygon{{fill:none;stroke:#303741;stroke-width:1}}.attention-grid line{{stroke:#303741;stroke-width:1}}.attention-series polygon{{stroke-width:2.5;stroke-linejoin:round}}.attention-series circle{{stroke:none}}.attention-target polygon{{fill:none;stroke:#eee9df;stroke-dasharray:6 5}}.attention-target circle{{fill:#eee9df}}.attention-code polygon{{fill:rgba(117,167,216,.13);stroke:var(--blue)}}.attention-code circle{{fill:var(--blue)}}.attention-test polygon{{fill:rgba(240,188,40,.09);stroke:var(--yellow)}}.attention-test circle{{fill:var(--yellow)}}.attention-result polygon{{fill:rgba(189,128,214,.08);stroke:#bd80d6}}.attention-result circle{{fill:#bd80d6}}.attention-other polygon{{fill:none;stroke:#aab0b8}}.attention-other circle{{fill:#aab0b8}}.attention-legend{{display:flex;justify-content:center;gap:8px 13px;flex-wrap:wrap;color:var(--muted);font-size:12px}}.attention-legend span{{white-space:nowrap}}.attention-key{{display:inline-block;width:14px;height:3px;margin:0 5px 3px 0;border-radius:3px}}.attention-key.attention-target{{background:#eee9df}}.attention-key.attention-code{{background:var(--blue)}}.attention-key.attention-test{{background:var(--yellow)}}.attention-key.attention-result{{background:#bd80d6}}.attention-key.attention-other{{background:#aab0b8}}.attention-claim{{display:flex;justify-content:center;align-items:baseline;gap:9px;margin-top:7px}}.attention-claim strong{{font-size:14px}}.attention-claim span{{color:var(--muted);font-size:11px}}.attention-panel>p{{margin:6px 0 0;text-align:center;color:var(--muted);font-size:10px;line-height:1.4}}
 @media(max-width:1000px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}
-@media(max-width:700px){{.trajectory-heading{{align-items:flex-start;flex-direction:column}}.trajectory-observations{{grid-template-columns:1fr 1fr}}}}
+@media(max-width:700px){{.trajectory-observations{{grid-template-columns:1fr 1fr}}.attention-heading{{align-items:flex-start;flex-direction:column}}}}
 @media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}}}
 </style></head><body><main><header><h1>DE67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")

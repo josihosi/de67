@@ -22,6 +22,14 @@ What belongs in scope, what does not, and what must remain unchanged.
 
 Settled user choices and the reason for any non-obvious choice.
 
+## Research outcome
+
+If online research was run, list only evidence that changed the wording or boundary:
+
+- source: `<URL or repository path>`
+- what changed: `<short outcome>`
+- resulting frontier action: `<additional decision | added question | no change>`
+
 ## Prototype or reaction questions
 
 Questions that require a concrete example, prototype, or user reaction rather than more discussion.

@@ -254,6 +254,29 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("continues here", rendered)
         self.assertNotIn("☐", rendered)
 
+    def test_ledger_accepts_projection_heading_and_preserves_nested_claim_text(self) -> None:
+        ledger = (
+            "# Active Phase-3 projection\n\n"
+            "## R-001 — immutable evidence class and gate authority\n\n"
+            "- Claim: preserve every evidence class.\n"
+            "- Current route: R001-M002.\n"
+        )
+        parsed = dashboard_module.parse_ledger(ledger)
+        rendered = dashboard_module.render_ledger_section(parsed["active"])
+
+        self.assertEqual(parsed["claim"], "R-001")
+        self.assertIn("## R-001", parsed["active"])
+        self.assertIn("preserve every evidence class", parsed["active"])
+        self.assertIn("<h2>R-001 — immutable evidence class and gate authority</h2>", rendered)
+        self.assertIn("Current route: R001-M002.", rendered)
+
+    def test_ledger_without_section_template_is_shown_as_active_text(self) -> None:
+        parsed = dashboard_module.parse_ledger("Coordinator note without special headings.\n")
+
+        self.assertEqual(parsed["active"], "Coordinator note without special headings.")
+        self.assertEqual(parsed["waiting"], "")
+        self.assertEqual(parsed["blocked"], "")
+
     def test_sidecar_is_cached_by_clock_state_and_rendered_without_artifacts(self) -> None:
         script = self.workspace / "trajectory_sidecar.py"
         script.write_text("# test sidecar\n", encoding="utf-8")
@@ -291,6 +314,8 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('class="product-vector"', first)
         self.assertIn('class="test-vector"', first)
         self.assertIn("product surface present", first)
+        self.assertEqual(first.count('class="trajectory-gap"'), 2)
+        self.assertIn("<p>&lt;active route&gt;</p>", first)
         self.assertIn("&lt;active route&gt;", first)
         self.assertLess(first.index("Active workers"), first.index("Trajectory sidecar"))
         self.assertLess(first.index("Trajectory sidecar"), first.index("Latest finding"))
@@ -302,11 +327,13 @@ class DashboardTests(unittest.TestCase):
             "claim": "R-ONE", "latest_task": None, "gaps": [
                 {"gap_id": "G-ONLY", "revision": 1, "status": "open",
                  "summary": "single gap", "implementation_relation": "invalid"},
-            ],
+                "unstructured gap text",
+            ], "churn_vector": "optional non-mapping value",
         })
         self.assertIn("G-ONLY r1", single)
         self.assertIn("No active attempt", single)
         self.assertIn("code 0.00 · test 0.00", single)
+        self.assertIn("unstructured gap text", single)
 
         many = dashboard_module.render_trajectory({
             "claim": "R-MANY", "gaps": [

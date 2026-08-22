@@ -98,6 +98,8 @@ def render_markdown(text: str) -> str:
 
 def render_ledger_section(text: str) -> str:
     """Keep each top-level ledger item inside one continuous decorative rail."""
+    if re.search(r"^#{1,6}\s+", text, re.M):
+        return render_markdown(text) if text.strip() else "<p>None.</p>"
     blocks: list[list[str]] = []
     preface: list[str] = []
     current: list[str] | None = None
@@ -156,7 +158,11 @@ def read_sidecar(script: Path, workspace: Path, state: Path, claim: str) -> dict
 
 
 def render_trajectory(report: dict[str, Any]) -> str:
-    gaps = report.get("gaps") or []
+    raw_gaps = report.get("gaps")
+    gaps = [
+        gap if isinstance(gap, dict) else {"summary": str(gap)}
+        for gap in raw_gaps
+    ] if isinstance(raw_gaps, list) else []
     if not gaps:
         return '<section class="trajectory"><h2>Trajectory sidecar</h2><p class="subtle">No closure trajectory.</p></section>'
     radius = max(170, len(gaps) * 20)
@@ -165,6 +171,7 @@ def render_trajectory(report: dict[str, Any]) -> str:
     lines: list[str] = []
     vectors: list[str] = []
     nodes: list[str] = []
+    gap_text: list[str] = []
     latest_gap = str(report.get("latest_task_gap") or "")
     for index, gap in enumerate(gaps):
         angle = -math.pi / 2 + (2 * math.pi * index / len(gaps))
@@ -211,6 +218,12 @@ def render_trajectory(report: dict[str, Any]) -> str:
             f'<text class="node-vector" x="58" y="58">code {product_relation:.2f} · test {test_relation:.2f}</text>'
             '</g>'
         )
+        gap_text.append(
+            '<article class="trajectory-gap">'
+            f'<strong>{_escape(gap_id)} r{_escape(gap.get("revision", "?"))} · '
+            f'{_escape("active" if active else status)}</strong>'
+            f'<p>{_escape(summary or "No description supplied.")}</p></article>'
+        )
     claim = report.get("claim", "Claim")
     latest_task = report.get("latest_task") or "No active attempt"
     center_node = (
@@ -220,6 +233,8 @@ def render_trajectory(report: dict[str, Any]) -> str:
         f'<text class="node-state" x="78" y="53">{_escape(latest_task)}</text></g>'
     )
     churn = report.get("churn_vector") or {}
+    if not isinstance(churn, dict):
+        churn = {}
     observation_chips: list[str] = []
     for name, value in churn.items():
         if not isinstance(value, dict) or not value.get("direction"):
@@ -237,6 +252,7 @@ def render_trajectory(report: dict[str, Any]) -> str:
         f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="Trajectory for {_escape(claim)}">'
         f'<g class="trajectory-lines">{"".join(lines)}</g><g class="trajectory-vectors">'
         f'{"".join(vectors)}</g>{"".join(nodes)}{center_node}</svg></div>'
+        f'<div class="trajectory-gaps">{"".join(gap_text)}</div>'
         f'<div class="trajectory-observations">{"".join(observation_chips)}</div></section>'
     )
 
@@ -264,27 +280,29 @@ def parse_ledger(text: str) -> dict[str, Any]:
     sections: dict[str, list[str]] = {"active": [], "waiting": [], "blocked": []}
     current: str | None = None
     for line in text.splitlines():
-        heading = re.match(r"^##\s+(.+?)\s*$", line, re.I)
+        heading = re.match(r"^#{1,6}\s+(.+?)\s*$", line, re.I)
         if heading:
             name = heading.group(1).lower()
+            target = None
             if "active" in name:
-                current = "active"
+                target = "active"
             elif any(label in name for label in ("waiting", "queued", "pending")):
-                current = "waiting"
+                target = "waiting"
             elif "blocked" in name:
-                current = "blocked"
-            else:
-                current = None
+                target = "blocked"
+            if target:
+                current = target
+            elif current:
+                sections[current].append(line)
         elif current and line.strip():
             sections[current].append(line)
+    if not any(sections.values()) and text.strip():
+        sections["active"].append(text.strip())
     active = "\n".join(sections["active"]).strip()
     waiting = "\n".join(sections["waiting"]).strip()
     blocked = "\n".join(sections["blocked"]).strip()
-    first = re.search(r"[-*]\s+\[[ xX]\]\s+([^\n]+)", active)
-    claim = None
-    if first:
-        match = re.search(r"\b(R[- ]?\d+)\b", first.group(1), re.I)
-        claim = match.group(1) if match else None
+    match = re.search(r"\b(R[- ]?\d+)\b", active, re.I)
+    claim = match.group(1) if match else None
     return {"active": active, "waiting": waiting, "blocked": blocked, "claim": claim}
 
 
@@ -900,8 +918,10 @@ class Dashboard:
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}}main{{max-width:1180px;margin:auto;padding:24px}}header{{display:flex;align-items:baseline;gap:22px}}h1{{font-size:25px;margin:0}}header span,.subtle{{color:var(--muted)}}nav{{display:flex;margin:18px 0;border-bottom:1px solid var(--line)}}nav a{{color:var(--muted);text-decoration:none;padding:10px 16px}}nav a.selected{{color:var(--text);border:1px solid var(--line);border-bottom-color:var(--bg);border-radius:6px 6px 0 0;margin-bottom:-1px}}nav a:last-child{{margin-left:auto}}.status{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}}.lamp,.metric,section,.activity{{background:var(--panel);border:1px solid var(--line);border-radius:7px}}.lamp,.metric{{padding:13px 14px;min-height:82px}}small{{display:block;color:var(--muted);margin-bottom:10px}}strong{{font-size:18px}}.metric-note{{display:block;color:var(--muted);font-size:11px;margin-top:5px;white-space:nowrap}}.workers{{padding:12px 16px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:7px 12px;text-align:center;border-top:1px solid var(--line)}}thead th{{border-top:0;color:var(--muted);font-size:12px;font-weight:500}}tbody th{{text-align:left}}td{{font-variant-numeric:tabular-nums;color:var(--muted)}}td.active-count{{color:var(--green);font-weight:700}}.activity{{display:grid;grid-template-columns:100px max-content 1fr max-content;align-items:center;gap:12px;margin-top:10px;padding:10px 14px}}.activity small{{margin:0}}.activity strong{{font-size:13px}}.activity span{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.activity em{{color:var(--muted);font-style:normal;font-size:12px}}.dot{{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:8px}}.green{{background:var(--green)}}.yellow{{background:var(--yellow)}}.red{{background:var(--red)}}.grey{{background:#737983}}section{{margin-top:12px;padding:16px}}h2{{font-size:16px;margin:0 0 12px}}h3{{font-size:15px}}p,li{{line-height:1.55}}code{{background:#11151a;padding:2px 4px;border-radius:3px}}pre{{overflow:auto;background:#11151a;padding:12px;border-radius:5px}}.ledger-list{{margin-top:12px}}.ledger-item{{position:relative;margin:10px 0 0;padding:12px 16px 12px 22px;border:0;border-radius:0;background:linear-gradient(90deg,rgba(117,167,216,.08),transparent 68%)}}.ledger-item::before{{content:"";position:absolute;left:0;top:6px;bottom:6px;width:4px;border-radius:4px;background:linear-gradient(180deg,var(--blue),#536c86)}}.ledger-title{{font-weight:650;line-height:1.45}}.ledger-item ul{{list-style:none;margin:8px 0 0;padding-left:0;color:var(--muted)}}.ledger-item li{{padding:4px 0}}.ledger-item p{{margin:8px 0 0;color:var(--muted)}}.trajectory{{padding-bottom:12px}}.trajectory-scroll{{overflow:auto;display:flex;justify-content:center}}.trajectory svg{{display:block;width:min(100%,560px);height:auto;min-width:500px}}.trajectory-lines line{{stroke:var(--line);stroke-width:2}}.trajectory-node rect{{fill:#20252c;stroke:var(--line);stroke-width:2}}.trajectory-node.open rect{{stroke:var(--yellow)}}.trajectory-node.proved rect{{stroke:var(--green)}}.trajectory-node.active rect{{fill:#202b35;stroke:var(--blue);stroke-width:3}}.trajectory-node text,.trajectory-center text{{fill:var(--text);font:600 13px system-ui,sans-serif;text-anchor:middle}}.trajectory-node .node-state,.trajectory-center .node-state{{fill:var(--muted);font-size:10px;font-weight:500}}.trajectory-center rect{{fill:#111820;stroke:var(--blue);stroke-width:3}}.trajectory-note{{color:var(--muted);font-size:11px;text-align:center;line-height:1.5;padding:0 8px 4px}}footer{{display:flex;gap:25px;flex-wrap:wrap;color:var(--muted);padding:14px 4px}}footer em{{font-style:normal;color:#747c87;margin-left:5px}}.document{{padding:22px}}@media(max-width:900px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}@media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}header span{{display:none}}.activity{{grid-template-columns:1fr}}.activity span{{white-space:normal}}.trajectory svg{{min-width:460px}}}}
 .status{{grid-template-columns:repeat(6,1fr)}}
 .trajectory-heading{{display:flex;align-items:center;justify-content:space-between;gap:16px}}.trajectory-heading h2{{margin:0}}.trajectory-heading>span{{color:var(--muted);font-size:11px;white-space:nowrap}}.vector-key{{display:inline-block;width:16px;height:3px;border-radius:3px;margin:0 5px 3px 10px}}.vector-key.product{{background:var(--blue)}}.vector-key.test{{background:var(--yellow)}}.trajectory-vectors line{{stroke-width:5;stroke-linecap:round}}.trajectory-vectors circle{{stroke:none}}.product-vector line{{stroke:var(--blue)}}.product-vector circle{{fill:var(--blue)}}.test-vector line{{stroke:var(--yellow)}}.test-vector circle{{fill:var(--yellow)}}.trajectory-node .node-vector{{fill:#b8c0ca;font-size:9px;font-weight:500}}.trajectory-observations{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:4px}}.trajectory-observations span{{display:flex;flex-direction:column;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:5px;color:var(--muted);font-size:10px;line-height:1.35}}.trajectory-observations b{{color:var(--text);font-size:10px;font-weight:600;text-transform:capitalize;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.trajectory-gaps{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:4px 0 10px}}.trajectory-gap{{padding:9px 11px;border-left:3px solid var(--blue);background:#151a20}}.trajectory-gap strong{{font-size:11px}}.trajectory-gap p{{margin:5px 0 0;color:var(--muted);font-size:11px}}
 @media(max-width:1000px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}
 @media(max-width:700px){{.trajectory-heading{{align-items:flex-start;flex-direction:column}}.trajectory-observations{{grid-template-columns:1fr 1fr}}}}
+@media(max-width:700px){{.trajectory-gaps{{grid-template-columns:1fr}}}}
 @media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}}}
 </style></head><body><main><header><h1>DE67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")

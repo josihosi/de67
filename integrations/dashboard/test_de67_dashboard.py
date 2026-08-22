@@ -26,7 +26,14 @@ class DashboardTests(unittest.TestCase):
             "version": 1,
             "clock": {"state": str(state / "deadlines.sqlite3"), "lineage": "lineage"},
         }), encoding="utf-8")
-        (self.workspace / ".de67/DFS.md").write_text("# DFS\n\n<script>alert(1)</script>\n", encoding="utf-8")
+        (self.workspace / ".de67/DFS.md").write_text(
+            "# DFS\n\nStatus: Frozen\n\n<script>alert(1)</script>\n\n"
+            "- [ ] R-009 — active work\n"
+            "- [ ] R-010 — waiting on an event\n"
+            "- [ ] 🔴 R-011 — upcoming work\n"
+            "- [x] R-012 — accepted work\n",
+            encoding="utf-8",
+        )
         (self.workspace / ".de67/work-ledger.md").write_text(
             "# Ledger\n\n## Active work\n\n- [ ] R-009 — useful work\n\n"
             "## Waiting work\n\n- [ ] R-010 — waiting work\n\n## Blocked work\n",
@@ -81,7 +88,10 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("deadline generation 11", page)
         self.assertIn("restart 12", page)
         self.assertIn("useful work", page)
-        self.assertIn("<h2>Waiting work</h2>", page)
+        self.assertIn("<h2>Upcoming DFS work</h2>", page)
+        self.assertIn("R-011 — upcoming work", page)
+        self.assertNotIn("R-012 — accepted work", page)
+        self.assertIn("<h2>Waiting on event</h2>", page)
         self.assertIn("waiting work", page)
         self.assertIn("<small>Mutations</small><strong>3</strong>", page)
         self.assertIn('<small>Mutation review</small><strong>Off</strong>', page)
@@ -93,6 +103,98 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("R009-M0", page)
         self.assertIn("escaped &lt;finding&gt;", page)
         self.assertNotIn("escaped <finding>", page)
+
+    def test_overview_falls_back_to_ledger_for_non_string_clock_claim(self) -> None:
+        database = self.workspace / ".de67/state/deadlines.sqlite3"
+        connection = sqlite3.connect(database)
+        connection.execute(
+            "UPDATE tasks SET claim_id = ?", (sqlite3.Binary(b"R-011"),)
+        )
+        connection.commit()
+        connection.close()
+
+        page = dashboard_module.Dashboard(
+            self.workspace, sessions_root=self.sessions
+        ).render("overview").decode()
+
+        self.assertIn("<h2>Upcoming DFS work</h2>", page)
+        self.assertIn("R-011 — upcoming work", page)
+
+    def test_upcoming_dfs_work_excludes_active_waiting_blocked_and_accepted_claims(self) -> None:
+        ledger = dashboard_module.parse_ledger(
+            "## Active work\n- [ ] R-002 — active depends on R-light.response\n"
+            "## Waiting work\n- [ ] R-003 — waiting\n"
+            "## Blocked work\n- Blocked: R-004 — blocked\n"
+        )
+        dfs = (
+            "# DFS\n\nStatus: Refrozen\n\n"
+            "- [ ] 🔴 R-002 — active\n"
+            "- [ ] 🔴 R-003 — waiting\n"
+            "- [ ] 🔴 R-004 — blocked\n"
+            "- [ ] 🔴 R-light.response — first upcoming claim references R-002\n"
+            "- [x] R-006 — accepted\n"
+            "  - [ ] 🔴 R-nested — nested implementation detail\n"
+            "~~~markdown\n"
+            "- [ ] 🔴 R-example — fenced example\n"
+            "``` does not close a tilde fence\n"
+            "~~~\n"
+            "````markdown\n"
+            "```\n"
+            "- [ ] 🔴 R-short-fence — still inside four backticks\n"
+            "````\n"
+        )
+
+        upcoming = dashboard_module.upcoming_dfs_work(dfs, ledger, "R-002")
+
+        self.assertEqual(
+            upcoming,
+            "- [ ] 🔴 R-light.response — first upcoming claim references R-002",
+        )
+
+    def test_upcoming_dfs_work_accepts_workspace_setup_frozen_status_forms(self) -> None:
+        ledger = dashboard_module.parse_ledger("## Active work\n- [ ] R-002 — active\n")
+        for status in (
+            "Status: Frozen against inspected source baseline",
+            "Status: Refrozen against inspected source baseline",
+            "- Status: `Frozen` against inspected source baseline",
+        ):
+            with self.subTest(status=status):
+                upcoming = dashboard_module.upcoming_dfs_work(
+                    f"# DFS\n\n{status}\n\n- [ ] 🔴 R-next_1 — upcoming\n",
+                    ledger,
+                    "R-002",
+                )
+                self.assertEqual(upcoming, "- [ ] 🔴 R-next_1 — upcoming")
+
+    def test_draft_dfs_does_not_project_upcoming_work(self) -> None:
+        ledger = dashboard_module.parse_ledger("## Active work\n- [ ] R-002 — active\n")
+
+        upcoming = dashboard_module.upcoming_dfs_work(
+            "# DFS\n\nStatus: Draft\n\n"
+            "~~~markdown\nStatus: Frozen\n~~~\n"
+            "## Freeze record\n\nStatus: Refrozen\n\n"
+            "- [ ] 🔴 R-003 — not authoritative\n",
+            ledger,
+            "R-002",
+        )
+
+        self.assertEqual(upcoming, "")
+
+    def test_upcoming_claim_identity_is_case_sensitive_and_ignores_ledger_fences(self) -> None:
+        ledger = dashboard_module.parse_ledger(
+            "## Active work\n- [ ] R-foo — active\n"
+            "~~~markdown\n- [ ] R-fenced — example only\n~~~\n"
+        )
+        dfs = (
+            "# DFS\n\nStatus: Frozen\n\n"
+            "- [ ] 🔴 R-FOO — distinct uppercase claim\n"
+            "- [ ] 🔴 R-fenced — not owned by the ledger example\n"
+        )
+
+        upcoming = dashboard_module.upcoming_dfs_work(dfs, ledger, "R-foo")
+
+        self.assertIn("R-FOO — distinct uppercase claim", upcoming)
+        self.assertIn("R-fenced — not owned by the ledger example", upcoming)
 
     def test_deadline_matches_active_claim_when_generations_are_equal(self) -> None:
         database = self.workspace / ".de67/state/deadlines.sqlite3"
@@ -276,6 +378,13 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(parsed["active"], "Coordinator note without special headings.")
         self.assertEqual(parsed["waiting"], "")
         self.assertEqual(parsed["blocked"], "")
+
+    def test_ledger_claim_accepts_the_authoritative_nonnumeric_id_grammar(self) -> None:
+        parsed = dashboard_module.parse_ledger(
+            "# Active Phase-3 projection\n\n## R-light.response — active claim\n"
+        )
+
+        self.assertEqual(parsed["claim"], "R-light.response")
 
     def test_sidecar_is_cached_by_clock_state_and_rendered_without_artifacts(self) -> None:
         script = self.workspace / "trajectory_sidecar.py"

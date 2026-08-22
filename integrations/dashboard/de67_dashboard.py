@@ -301,9 +301,84 @@ def parse_ledger(text: str) -> dict[str, Any]:
     active = "\n".join(sections["active"]).strip()
     waiting = "\n".join(sections["waiting"]).strip()
     blocked = "\n".join(sections["blocked"]).strip()
-    match = re.search(r"\b(R[- ]?\d+)\b", active, re.I)
-    claim = match.group(1) if match else None
+    claim = next(
+        (
+            match.group("claim")
+            for line in active.splitlines()
+            if (match := OWNING_CLAIM.match(line))
+        ),
+        None,
+    )
     return {"active": active, "waiting": waiting, "blocked": blocked, "claim": claim}
+
+
+CLAIM_ID_PATTERN = r"R-[A-Za-z0-9._-]+"
+CLAIM_ID = re.compile(rf"^{CLAIM_ID_PATTERN}$")
+OWNING_CLAIM = re.compile(
+    rf"^(?:(?:#{{1,6}}\s+)|(?:[-*]\s+(?:\[[ xX]\]\s+|Blocked:\s+)))?"
+    rf"(?P<claim>{CLAIM_ID_PATTERN})(?=[ \t]+—|[ \t]*$)",
+)
+RED_DFS_CLAIM = re.compile(
+    rf"^- \[ \] 🔴 (?P<claim>{CLAIM_ID_PATTERN})[ \t]+—[ \t]+\S.*$"
+)
+DFS_STATUS = re.compile(r"^\s*(?:-\s*)?Status:\s*`?(?P<status>[A-Za-z]+)\b", re.I)
+FENCE = re.compile(r"^[ \t]*(?P<marker>`{3,}|~{3,})")
+FENCE_CLOSE = re.compile(r"^[ \t]*(?P<marker>`{3,}|~{3,})[ \t]*$")
+
+
+def _owning_claim_ids(text: str) -> set[str]:
+    return {
+        match.group("claim")
+        for line in _outside_fences(text)
+        if (match := OWNING_CLAIM.match(line))
+    }
+
+
+def _claim_id(value: Any) -> str | None:
+    return value if isinstance(value, str) and CLAIM_ID.fullmatch(value) else None
+
+
+def _outside_fences(text: str):
+    opening_marker: str | None = None
+    for line in text.splitlines():
+        if opening_marker is not None:
+            closing = FENCE_CLOSE.match(line)
+            if closing:
+                marker = closing.group("marker")
+                if marker[0] == opening_marker[0] and len(marker) >= len(opening_marker):
+                    opening_marker = None
+            continue
+        if opening := FENCE.match(line):
+            opening_marker = opening.group("marker")
+            continue
+        yield line
+
+
+def _dfs_status(dfs: str) -> str | None:
+    for line in _outside_fences(dfs):
+        if match := DFS_STATUS.match(line):
+            return match.group("status").casefold()
+    return None
+
+
+def upcoming_dfs_work(dfs: str, ledger: dict[str, Any], active_claim: str | None) -> str:
+    """Project later frozen-DFS claims without creating another work authority."""
+    if _dfs_status(dfs) not in {"frozen", "refrozen"}:
+        return ""
+    excluded = _owning_claim_ids(
+        "\n".join((ledger["active"], ledger["waiting"], ledger["blocked"]))
+    )
+    if isinstance(active_claim, str):
+        excluded.update(_owning_claim_ids(active_claim))
+    upcoming: list[str] = []
+    for line in _outside_fences(dfs):
+        claim = RED_DFS_CLAIM.match(line)
+        if not claim:
+            continue
+        if claim.group("claim") in excluded:
+            continue
+        upcoming.append(line)
+    return "\n".join(upcoming)
 
 
 def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
@@ -778,7 +853,9 @@ class Dashboard:
             clock = self._clock_source()
             clock_data = clock.get("data", {})
             task = clock_data.get("task") or {}
-            claim = task.get("claim_id") or parse_ledger(ledger.get("text", "")).get("claim")
+            claim = _claim_id(task.get("claim_id")) or parse_ledger(
+                ledger.get("text", "")
+            ).get("claim")
             clock_path = clock.get("path")
             if isinstance(clock_path, Path):
                 sidecar = self._sidecar_source(clock_path, claim)
@@ -808,6 +885,8 @@ class Dashboard:
         ledger_data = parse_ledger(ledger.get("text", ""))
         clock_data = clock.get("data", {})
         task = clock_data.get("task") or {}
+        active_claim = _claim_id(task.get("claim_id")) or ledger_data["claim"]
+        upcoming = upcoming_dfs_work(dfs.get("text", ""), ledger_data, active_claim)
         deadline = clock_data.get("deadline") or {}
         restart = clock_data.get("restart") or {}
         finding = clock_data.get("finding") or {}
@@ -885,7 +964,12 @@ class Dashboard:
                 worker_body = f'<p class="subtle">Unavailable · {_escape(workers.get("error", "unknown source"))}</p>'
             workers_html = f'<section class="workers"><h2>Active workers</h2>{worker_body}</section>'
             active_html = render_ledger_section(ledger_data["active"])
-            waiting_html = render_ledger_section(ledger_data["waiting"])
+            upcoming_html = render_ledger_section(upcoming)
+            waiting_html = (
+                '<section><h2>Waiting on event</h2><div class="ledger-list">'
+                f'{render_ledger_section(ledger_data["waiting"])}</div></section>'
+                if ledger_data["waiting"] else ""
+            )
             blocked_html = render_ledger_section(ledger_data["blocked"])
             if sidecar.get("data"):
                 sidecar_html = render_trajectory(sidecar["data"])
@@ -910,7 +994,7 @@ class Dashboard:
                     f'<span>{_escape(finding.get("short_verdict", ""))}</span>'
                     f'<em>{_escape(finding_age)}</em></div>'
                 )
-            body = f'<div class="status">{cards}</div>{workers_html}{sidecar_html}{finding_html}<section><h2>Active work ledger</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section><h2>Waiting work</h2><div class="ledger-list">{waiting_html}</div></section><section><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
+            body = f'<div class="status">{cards}</div>{workers_html}{sidecar_html}{finding_html}<section><h2>Active work ledger</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section><h2>Upcoming DFS work</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
         page = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>DE67</title>
 <style>

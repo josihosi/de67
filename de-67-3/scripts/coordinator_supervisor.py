@@ -673,19 +673,23 @@ def _run_supervisor_locked(
         if work_is_complete(workdir, state, lineage_id):
             return 0
         has_executable_work = ledger_has_active_work(workdir) or dfs_has_open_work(workdir)
-        if not after.required and result.exit_code == 0 and has_executable_work:
+        if not after.required and has_executable_work:
             session_path = result.run_dir / "session_id.txt"
-            if not session_path.is_file() or not session_path.read_text(
-                encoding="utf-8"
-            ).strip():
+            session_id = (
+                session_path.read_text(encoding="utf-8").strip()
+                if session_path.is_file()
+                else ""
+            )
+            if session_id:
+                resume_session_id = session_id
+                generation = None
+                continue
+            if result.exit_code == 0:
                 _mark_protocol_failure(
                     result,
                     "Coordinator returned with executable work but no resumable session id",
                 )
                 return 1
-            resume_session_id = session_path.read_text(encoding="utf-8").strip()
-            generation = None
-            continue
         if not after.required and result.exit_code != 0 and has_executable_work:
             with DeadlineHarness(state) as harness:
                 requested = harness.request_coordinator_restart(

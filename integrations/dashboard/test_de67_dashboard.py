@@ -436,18 +436,17 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Trajectory sidecar", first)
         self.assertIn("G-002 r41", first)
         self.assertIn("active · 3 attempts", first)
-        self.assertIn("code 0.80 · test 0.40", first)
-        self.assertIn('class="product-vector"', first)
-        self.assertIn('class="test-vector"', first)
+        self.assertNotIn("code 0.80 · test 0.40", first)
+        self.assertNotIn('class="product-vector"', first)
+        self.assertNotIn('class="test-vector"', first)
         self.assertIn("product surface present", first)
         self.assertIn("Attention spider", first)
         self.assertIn("Relative pull · not completion", first)
         self.assertIn('class="attention-series attention-code"', first)
         self.assertIn("Current &lt;diff&gt;", first)
         self.assertIn("Each line is scaled to its own strongest gap", first)
-        self.assertIn("@media(max-width:980px)", first)
-        self.assertEqual(first.count('class="trajectory-gap"'), 2)
-        self.assertIn("<p>&lt;active route&gt;</p>", first)
+        self.assertIn('class="attention-claim"', first)
+        self.assertEqual(first.count('class="trajectory-node '), 2)
         self.assertIn("&lt;active route&gt;", first)
         self.assertLess(first.index("Active workers"), first.index("Trajectory sidecar"))
         self.assertLess(first.index("Trajectory sidecar"), first.index("Latest finding"))
@@ -464,8 +463,9 @@ class DashboardTests(unittest.TestCase):
         })
         self.assertIn("G-ONLY r1", single)
         self.assertIn("No active attempt", single)
-        self.assertIn("code 0.00 · test 0.00", single)
         self.assertIn("unstructured gap text", single)
+        self.assertIn("Waiting for attention data", single)
+        self.assertEqual(single.count('class="trajectory-node '), 2)
 
         many = dashboard_module.render_trajectory({
             "claim": "R-MANY", "gaps": [
@@ -476,7 +476,7 @@ class DashboardTests(unittest.TestCase):
             ],
         })
         self.assertEqual(many.count('class="trajectory-node open"'), 14)
-        self.assertIn("code 1.00 · test 0.00", many)
+        self.assertIn('viewBox="0 0 794 794"', many)
 
         empty = dashboard_module.render_trajectory({"claim": "R-EXPLORE", "gaps": []})
         self.assertIn("No closure trajectory", empty)

@@ -21,8 +21,10 @@ choice, or changed user outcome returns to de67 2.
 Copy each missing environment artifact individually. Never overwrite an existing project file.
 Machine state stays under `.de67/state/`; the DFS and ledgers remain ordinary project artifacts.
 The machine-canonical runtime policy is `.de67/phase3-policy.d67`, compiled from the branch's Phase-3
-policy source and bound to its canonical digest. Guideline Markdown is retained only as a legacy
-differential fixture during this experiment; runtime coordinators must not read it as policy.
+policy source and bound to its canonical digest. Route priorities, predicates, actions, reads,
+obligations, fallback behavior, event vocabulary, temporal transitions, and keyed lifecycle rules
+are mutable source data. The immutable kernel only authenticates and interprets that data. Guideline
+Markdown is retained only as a legacy differential fixture during this experiment.
 
 Before every route decision, execute `scripts/policy_kernel.py decide` against the local compiled
 policy, workspace, and deadline database. The returned action names the only policy reads and
@@ -33,6 +35,9 @@ Policy mutations operate on a candidate machine source and contract corpus under
 Promote the candidate source and compiled bytecode together only after `policy_kernel.py guard`
 proves every contract, temporal invariant, mutation-ledger route, deadline wake, and rule necessity.
 The successful promotion requests one fresh coordinator; failed candidates have no authority.
+Compilation lowers object-shaped policy into positional instruction vectors, interns repeated
+symbols, and compresses the resulting tape. `policy_kernel.py decompile` must recover the normalized
+source exactly; lossy or noncanonical artifacts fail closed.
 
 ## Route locally
 

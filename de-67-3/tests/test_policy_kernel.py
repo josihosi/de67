@@ -63,6 +63,16 @@ class PolicyKernelTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(kernel.load_policy_bytes(first), kernel.validate_policy(policy))
 
+    def test_production_vocabulary_is_not_frozen_into_the_interpreter(self) -> None:
+        interpreter = SCRIPT.read_text(encoding="utf-8")
+        for word in (
+            "review_deadline_incident", "wait_for_worker_event",
+            "wake_no_later_than_item_deadline", "suggestions_pending",
+            "claim_accepted", "task_completed",
+        ):
+            with self.subTest(word=word):
+                self.assertNotIn(word, interpreter)
+
     def test_packaged_bytecode_exactly_matches_source(self) -> None:
         packaged = ROOT / "assets" / "environment" / "phase3-policy.d67"
         self.assertEqual(packaged.read_bytes(), kernel.compile_policy(source_policy()))
@@ -90,14 +100,14 @@ class PolicyKernelTests(unittest.TestCase):
         policy = source_policy()
         deadline = next(rule for rule in policy["rules"] if rule["id"] == "D1")
         deadline["obligations"].remove("disposition_relevant_suggestions")
-        with self.assertRaisesRegex(kernel.PolicyError, "ignore pending suggestions"):
+        with self.assertRaisesRegex(kernel.PolicyError, "required obligations"):
             kernel.guard_policy_candidate(policy, kernel.load_contracts(CONTRACTS))
 
     def test_machine_candidate_guard_rejects_unbounded_worker_wait(self) -> None:
         policy = source_policy()
         wait = next(rule for rule in policy["rules"] if rule["id"] == "W1")
         wait["obligations"].remove("wake_no_later_than_item_deadline")
-        with self.assertRaisesRegex(kernel.PolicyError, "cross the immutable"):
+        with self.assertRaisesRegex(kernel.PolicyError, "required obligations"):
             kernel.guard_policy_candidate(policy, kernel.load_contracts(CONTRACTS))
 
     def test_compiled_policy_is_smaller_than_runtime_markdown(self) -> None:
@@ -260,8 +270,8 @@ class PolicyKernelTests(unittest.TestCase):
                 self.assertEqual(first, second)
 
     def test_trace_rejects_late_acceptance_before_incident_review(self) -> None:
-        with self.assertRaisesRegex(kernel.PolicyError, "before deadline incident review"):
-            kernel.validate_trace([
+        with self.assertRaisesRegex(kernel.PolicyError, "deadline_open"):
+            kernel.validate_trace(source_policy(), [
                 {"event": "task_started", "task_id": "M1"},
                 {"event": "deadline_expired"},
                 {"event": "task_completed", "task_id": "M1"},
@@ -269,7 +279,7 @@ class PolicyKernelTests(unittest.TestCase):
             ])
 
     def test_trace_allows_completion_then_review_then_acceptance(self) -> None:
-        kernel.validate_trace([
+        kernel.validate_trace(source_policy(), [
             {"event": "task_started", "task_id": "M1"},
             {"event": "deadline_expired"},
             {"event": "task_completed", "task_id": "M1"},
@@ -278,20 +288,41 @@ class PolicyKernelTests(unittest.TestCase):
         ])
 
     def test_trace_rejects_mutation_that_ignores_suggestions(self) -> None:
-        with self.assertRaisesRegex(kernel.PolicyError, "pending suggestions"):
-            kernel.validate_trace([
+        with self.assertRaisesRegex(kernel.PolicyError, "suggestions_pending"):
+            kernel.validate_trace(source_policy(), [
                 {"event": "suggestion_added"},
                 {"event": "mutation_started"},
                 {"event": "mutation_resolved"},
             ])
 
     def test_trace_accepts_explicit_suggestion_disposition(self) -> None:
-        kernel.validate_trace([
+        kernel.validate_trace(source_policy(), [
             {"event": "suggestion_added"},
             {"event": "mutation_started"},
             {"event": "suggestions_dispositioned"},
             {"event": "mutation_resolved"},
         ])
+
+    def test_temporal_safety_is_mutable_policy_not_python(self) -> None:
+        policy = source_policy()
+        policy["trace"]["events"]["claim_accepted"]["forbids"] = []
+        kernel.validate_trace(policy, [
+            {"event": "deadline_expired"},
+            {"event": "claim_accepted"},
+        ])
+
+    def test_guard_obligation_floor_is_mutable_contract_data(self) -> None:
+        policy = source_policy()
+        contracts = kernel.load_contracts(CONTRACTS)
+        wait = next(rule for rule in policy["rules"] if rule["id"] == "W1")
+        wait["obligations"].remove("wake_no_later_than_item_deadline")
+        case = next(case for case in contracts["decision_cases"] if case["name"] == "wait")
+        case["required_obligations"] = []
+        guarded = kernel.guard_policy_candidate(policy, contracts)
+        self.assertNotIn(
+            "wake_no_later_than_item_deadline",
+            kernel.decide(guarded, {"live_task"}).obligations,
+        )
 
     def test_trace_rejects_reused_or_double_terminal_task(self) -> None:
         for events in (
@@ -307,7 +338,7 @@ class PolicyKernelTests(unittest.TestCase):
         ):
             with self.subTest(events=events):
                 with self.assertRaises(kernel.PolicyError):
-                    kernel.validate_trace(events)
+                    kernel.validate_trace(source_policy(), events)
 
     def test_cli_compile_inspect_and_decide(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -330,6 +361,12 @@ class PolicyKernelTests(unittest.TestCase):
             )
             self.assertEqual(decided.returncode, 0, decided.stderr)
             self.assertEqual(json.loads(decided.stdout)["action"], "review_deadline_incident")
+            decompiled = subprocess.run(
+                [sys.executable, str(SCRIPT), "decompile", "--policy", str(output)],
+                text=True, capture_output=True,
+            )
+            self.assertEqual(decompiled.returncode, 0, decompiled.stderr)
+            self.assertEqual(json.loads(decompiled.stdout), kernel.validate_policy(source_policy()))
 
     def test_cli_guard_emits_exact_packaged_policy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

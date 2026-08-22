@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import sys
+import zlib
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -41,9 +42,9 @@ def legacy_trace_accepts(events: Sequence[Mapping[str, Any]]) -> bool:
     return True
 
 
-def compiled_trace_accepts(events: Sequence[Mapping[str, Any]]) -> bool:
+def compiled_trace_accepts(policy: Mapping[str, Any], events: Sequence[Mapping[str, Any]]) -> bool:
     try:
-        kernel.validate_trace(events)
+        kernel.validate_trace(policy, events)
         return True
     except kernel.PolicyError:
         return False
@@ -66,7 +67,7 @@ def compare(
     traces: list[dict[str, Any]] = []
     for case in contracts["trace_cases"]:
         main = legacy_trace_accepts(case["events"])
-        lab = compiled_trace_accepts(case["events"])
+        lab = compiled_trace_accepts(policy, case["events"])
         traces.append({
             "name": case["name"], "main": main, "lab": lab,
             "expected_main": case["main"], "expected_lab": case["lab"],
@@ -78,10 +79,15 @@ def compare(
     )
     baseline_bytes = sum(len(kernel.source_from_git(baseline_ref, path)) for path in baseline_paths)
     compiled_bytes = policy_path.stat().st_size
+    normalized_source = kernel.canonical_bytes(policy)
+    instruction_tape = kernel.symbol_codec.encode(kernel._lower_policy(policy))
     return {
         "baseline_ref": baseline_ref,
         "baseline_policy_bytes": baseline_bytes,
         "compiled_policy_bytes": compiled_bytes,
+        "normalized_source_bytes": len(normalized_source),
+        "instruction_tape_bytes": len(instruction_tape),
+        "plain_json_compiled_bytes": kernel.HEADER.size + len(zlib.compress(normalized_source, 9)),
         "byte_reduction": baseline_bytes - compiled_bytes,
         "ratio": round(compiled_bytes / baseline_bytes, 4),
         "decision_cases": decisions,

@@ -15,10 +15,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+SCRIPT_ROOT = str(Path(__file__).resolve().parent)
+if SCRIPT_ROOT not in sys.path:
+    sys.path.insert(0, SCRIPT_ROOT)
+import symbol_codec
+
 
 MAGIC = b"D67P"
 HEADER = struct.Struct(">4sB32sI")
 FORMAT = "de67.phase3.policy"
+VERSION = 2
 
 
 class PolicyError(RuntimeError):
@@ -41,13 +47,14 @@ def canonical_bytes(value: Mapping[str, Any]) -> bytes:
 
 def validate_policy(value: Mapping[str, Any]) -> dict[str, Any]:
     policy = dict(value)
-    if policy.get("format") != FORMAT or policy.get("version") != 1:
+    if policy.get("format") != FORMAT or policy.get("version") != VERSION:
         raise PolicyError("Unsupported Phase-3 policy format or version")
     fallback = policy.get("fallback")
     rules = policy.get("rules")
     if not isinstance(fallback, dict) or not isinstance(rules, list) or not rules:
         raise PolicyError("Policy requires one fallback and at least one rule")
     ids: set[str] = set()
+    normalized_rules: list[dict[str, Any]] = []
     for rule in rules:
         if not isinstance(rule, dict):
             raise PolicyError("Every policy rule must be an object")
@@ -67,10 +74,49 @@ def validate_policy(value: Mapping[str, Any]) -> dict[str, Any]:
                 raise PolicyError(f"Rule {rule_id} has invalid {key}")
         if not any(rule.get(key) for key in ("all", "any")):
             raise PolicyError(f"Rule {rule_id} has no positive predicate")
+        normalized_rule = dict(rule)
+        for key in ("all", "any", "none", "reads", "obligations"):
+            normalized_rule.setdefault(key, [])
+        normalized_rules.append(normalized_rule)
     for key in ("action", "reads", "obligations"):
         if key not in fallback:
             raise PolicyError(f"Fallback requires {key}")
-    policy["rules"] = sorted(rules, key=lambda rule: (-rule["priority"], rule["id"]))
+    trace = policy.get("trace")
+    if not isinstance(trace, dict) or not isinstance(trace.get("events"), dict):
+        raise PolicyError("Policy requires a mutable trace event program")
+    normalized_events: dict[str, dict[str, Any]] = {}
+    for event, program in trace["events"].items():
+        if not isinstance(event, str) or not event or not isinstance(program, dict):
+            raise PolicyError("Trace events require named object programs")
+        for key in ("requires", "forbids", "set", "clear"):
+            if key in program and not (
+                isinstance(program[key], list)
+                and all(isinstance(item, str) and item for item in program[key])
+            ):
+                raise PolicyError(f"Trace event {event} has invalid {key}")
+        keyed = program.get("keyed")
+        if keyed is not None and not (
+            isinstance(keyed, dict)
+            and isinstance(keyed.get("field"), str)
+            and keyed.get("operation") in {"start", "finish"}
+        ):
+            raise PolicyError(f"Trace event {event} has invalid keyed transition")
+        normalized_program = dict(program)
+        for key in ("requires", "forbids", "set", "clear"):
+            normalized_program.setdefault(key, [])
+        if keyed is not None:
+            normalized_keyed = dict(keyed)
+            normalized_keyed.setdefault("namespace", normalized_keyed["field"])
+            normalized_keyed.setdefault("from", "live")
+            normalized_keyed.setdefault("state", "live")
+            normalized_program["keyed"] = normalized_keyed
+        normalized_events[event] = normalized_program
+    normalized_fallback = dict(fallback)
+    normalized_fallback.setdefault("reads", [])
+    normalized_fallback.setdefault("obligations", [])
+    policy["fallback"] = normalized_fallback
+    policy["rules"] = sorted(normalized_rules, key=lambda rule: (-rule["priority"], rule["id"]))
+    policy["trace"] = {"events": normalized_events}
     return policy
 
 
@@ -78,29 +124,92 @@ def compile_policy(policy: Mapping[str, Any]) -> bytes:
     normalized = validate_policy(policy)
     raw = canonical_bytes(normalized)
     digest = hashlib.sha256(raw).digest()
-    compressed = zlib.compress(raw, level=9)
-    return HEADER.pack(MAGIC, 1, digest, len(raw)) + compressed
+    tape = symbol_codec.encode(_lower_policy(normalized))
+    compressed = zlib.compress(tape, level=9)
+    return HEADER.pack(MAGIC, VERSION, digest, len(tape)) + compressed
 
 
 def load_policy_bytes(data: bytes) -> dict[str, Any]:
     if len(data) < HEADER.size:
         raise PolicyError("Compiled policy is truncated")
     magic, version, expected_digest, raw_size = HEADER.unpack(data[: HEADER.size])
-    if magic != MAGIC or version != 1:
+    if magic != MAGIC or version != VERSION:
         raise PolicyError("Compiled policy has an invalid header")
     try:
-        raw = zlib.decompress(data[HEADER.size :])
+        tape = zlib.decompress(data[HEADER.size :])
     except zlib.error as error:
         raise PolicyError("Compiled policy payload is corrupt") from error
-    if len(raw) != raw_size or hashlib.sha256(raw).digest() != expected_digest:
-        raise PolicyError("Compiled policy identity does not match its payload")
+    if len(tape) != raw_size:
+        raise PolicyError("Compiled policy size does not match its payload")
     try:
-        value = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise PolicyError("Compiled policy payload is not canonical JSON") from error
-    if canonical_bytes(value) != raw:
-        raise PolicyError("Compiled policy payload is not canonical")
-    return validate_policy(value)
+        value = _raise_policy(symbol_codec.decode(tape))
+    except symbol_codec.CodecError as error:
+        raise PolicyError("Compiled policy symbol tape is invalid") from error
+    normalized = validate_policy(value)
+    if hashlib.sha256(canonical_bytes(normalized)).digest() != expected_digest:
+        raise PolicyError("Compiled policy identity does not match its payload")
+    return normalized
+
+
+def _lower_policy(policy: Mapping[str, Any]) -> list[Any]:
+    """Remove schema words and lower mutable policy values to positional vectors."""
+    fallback = policy["fallback"]
+    rules = [
+        [
+            rule["id"], rule["priority"], rule.get("all", []), rule.get("any", []),
+            rule.get("none", []), rule["action"], rule.get("reads", []),
+            rule.get("obligations", []),
+        ]
+        for rule in policy["rules"]
+    ]
+    events = []
+    for name, program in sorted(policy["trace"]["events"].items()):
+        keyed = program.get("keyed")
+        keyed_vector = [] if keyed is None else [
+            keyed["field"], keyed.get("namespace", keyed["field"]),
+            keyed["operation"], keyed.get("from", "live"),
+            keyed.get("state", "live"),
+        ]
+        events.append([
+            name, program.get("requires", []), program.get("forbids", []),
+            program.get("set", []), program.get("clear", []), keyed_vector,
+        ])
+    return [[fallback["action"], fallback.get("reads", []), fallback.get("obligations", [])], rules, events]
+
+
+def _raise_policy(tape: Any) -> dict[str, Any]:
+    """Reconstruct source-shaped policy from a schema-lowered instruction tape."""
+    try:
+        fallback_vector, rule_vectors, event_vectors = tape
+        fallback = {
+            "action": fallback_vector[0], "reads": fallback_vector[1],
+            "obligations": fallback_vector[2],
+        }
+        rules = []
+        for vector in rule_vectors:
+            rule = {
+                "id": vector[0], "priority": vector[1], "all": vector[2],
+                "any": vector[3], "none": vector[4], "action": vector[5],
+                "reads": vector[6], "obligations": vector[7],
+            }
+            rules.append(rule)
+        events = {}
+        for vector in event_vectors:
+            program = {
+                "requires": vector[1], "forbids": vector[2], "set": vector[3],
+                "clear": vector[4],
+            }
+            if vector[5]:
+                keyed = vector[5]
+                program["keyed"] = {
+                    "field": keyed[0], "namespace": keyed[1],
+                    "operation": keyed[2], "from": keyed[3], "state": keyed[4],
+                }
+            events[vector[0]] = program
+    except (IndexError, TypeError, ValueError) as error:
+        raise PolicyError("Compiled policy instruction tape has an invalid shape") from error
+    return {"format": FORMAT, "version": VERSION, "fallback": fallback, "rules": rules,
+            "trace": {"events": events}}
 
 
 def load_policy(path: Path) -> dict[str, Any]:
@@ -183,18 +292,23 @@ def guard_policy_candidate(
         expected = case.get("action")
         if not isinstance(expected, str):
             raise PolicyError(f"Decision contract {case['name']} lacks an action")
-        actual = decide(policy, facts).action
+        decision = decide(policy, facts)
+        actual = decision.action
         if actual != expected:
             raise PolicyError(
                 f"Decision contract {case['name']} expected {expected}, got {actual}"
             )
+        for field in ("reads", "obligations"):
+            required = case.get(f"required_{field}", [])
+            if not isinstance(required, list) or not set(required) <= set(getattr(decision, field)):
+                raise PolicyError(f"Decision contract {case['name']} lacks required {field}")
         cases.append((facts, expected))
     for case in contracts["trace_cases"]:
         expected = case.get("lab")
         if not isinstance(expected, bool) or not isinstance(case.get("events"), list):
             raise PolicyError(f"Trace contract {case['name']} is invalid")
         try:
-            validate_trace(case["events"])
+            validate_trace(policy, case["events"])
             actual = True
         except PolicyError:
             actual = False
@@ -205,18 +319,6 @@ def guard_policy_candidate(
     minimized, removed = minimize_policy(policy, cases)
     if removed:
         raise PolicyError("Behaviorally redundant policy rules: " + ", ".join(removed))
-    mutation_facts = (
-        "integrity_incident", "deadline_incident", "random_mutation_due",
-        "dfs_review_due", "universal_review_due",
-    )
-    for fact in mutation_facts:
-        decision = decide(policy, {fact, "pending_suggestions"})
-        required = {"probe_pending_suggestions", "disposition_relevant_suggestions"}
-        if not required <= set(decision.obligations):
-            raise PolicyError(f"Mutation route {fact} can ignore pending suggestions")
-    wait = decide(policy, {"live_task"})
-    if "wake_no_later_than_item_deadline" not in wait.obligations:
-        raise PolicyError("Worker wait can cross the immutable item deadline")
     return minimized
 
 
@@ -240,51 +342,41 @@ def minimize_policy(
     return candidate, tuple(removed)
 
 
-def validate_trace(events: Sequence[Mapping[str, Any]]) -> None:
-    """Reject lifecycle traces that violate the compiled kernel's temporal contracts."""
-    deadline_incident = False
-    pending_suggestions = False
-    mutation_open = False
-    suggestions_dispositioned = False
-    attempts: dict[str, str] = {}
+def validate_trace(policy: Mapping[str, Any], events: Sequence[Mapping[str, Any]]) -> None:
+    """Execute the policy's mutable temporal event program."""
+    programs = validate_policy(policy)["trace"]["events"]
+    flags: set[str] = set()
+    keyed: dict[tuple[str, str], str] = {}
     for index, event in enumerate(events):
-        kind = event.get("event")
-        if kind == "deadline_expired":
-            deadline_incident = True
-        elif kind == "deadline_incident_reviewed":
-            if not deadline_incident:
-                raise PolicyError(f"trace[{index}] reviews no deadline incident")
-            deadline_incident = False
-        elif kind == "claim_accepted" and deadline_incident:
-            raise PolicyError(f"trace[{index}] accepts a claim before deadline incident review")
-        elif kind == "suggestion_added":
-            pending_suggestions = True
-        elif kind == "mutation_started":
-            if mutation_open:
-                raise PolicyError(f"trace[{index}] nests mutation reviews")
-            mutation_open = True
-            suggestions_dispositioned = not pending_suggestions
-        elif kind == "suggestions_dispositioned":
-            if not mutation_open:
-                raise PolicyError(f"trace[{index}] dispositions suggestions outside mutation")
-            pending_suggestions = False
-            suggestions_dispositioned = True
-        elif kind == "mutation_resolved":
-            if not mutation_open:
-                raise PolicyError(f"trace[{index}] resolves no mutation")
-            if not suggestions_dispositioned:
-                raise PolicyError(f"trace[{index}] resolves mutation with pending suggestions")
-            mutation_open = False
-        elif kind == "task_started":
-            task_id = str(event.get("task_id", ""))
-            if not task_id or task_id in attempts:
-                raise PolicyError(f"trace[{index}] starts a missing or reused task id")
-            attempts[task_id] = "live"
-        elif kind in {"task_completed", "task_finding", "task_abandoned"}:
-            task_id = str(event.get("task_id", ""))
-            if attempts.get(task_id) != "live":
-                raise PolicyError(f"trace[{index}] terminalizes a non-live task")
-            attempts[task_id] = kind
+        kind = str(event.get("event", ""))
+        program = programs.get(kind)
+        if program is None:
+            continue
+        required = set(program.get("requires", []))
+        forbidden = set(program.get("forbids", []))
+        if not required <= flags:
+            raise PolicyError(f"trace[{index}] {kind} lacks state: {sorted(required - flags)}")
+        if forbidden & flags:
+            raise PolicyError(f"trace[{index}] {kind} conflicts with state: {sorted(forbidden & flags)}")
+        transition = program.get("keyed")
+        if transition:
+            field = transition["field"]
+            value = str(event.get(field, ""))
+            namespace = str(transition.get("namespace", field))
+            key = (namespace, value)
+            if not value:
+                raise PolicyError(f"trace[{index}] {kind} lacks {field}")
+            if transition["operation"] == "start":
+                if key in keyed:
+                    raise PolicyError(f"trace[{index}] {kind} reuses {field}")
+                keyed[key] = str(transition.get("state", "live"))
+            else:
+                expected = str(transition.get("from", "live"))
+                if keyed.get(key) != expected:
+                    raise PolicyError(f"trace[{index}] {kind} finishes non-{expected} {field}")
+                keyed[key] = str(transition.get("state", kind))
+        flags.difference_update(program.get("clear", []))
+        flags.update(program.get("set", []))
 
 
 def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
@@ -422,6 +514,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     decide_parser.add_argument("--now", type=float)
     inspect_parser = subparsers.add_parser("inspect")
     inspect_parser.add_argument("--policy", type=Path, required=True)
+    decompile_parser = subparsers.add_parser("decompile")
+    decompile_parser.add_argument("--policy", type=Path, required=True)
     guard_parser = subparsers.add_parser("guard")
     guard_parser.add_argument("--candidate", type=Path, required=True)
     guard_parser.add_argument("--contracts", type=Path, required=True)
@@ -438,6 +532,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "inspect":
             policy = load_policy(args.policy)
             print(json.dumps({"digest": policy_digest(policy), "rules": len(policy["rules"])}))
+            return 0
+        if args.command == "decompile":
+            print(json.dumps(load_policy(args.policy), indent=2, sort_keys=True))
             return 0
         if args.command == "guard":
             candidate = json.loads(args.candidate.read_text(encoding="utf-8"))

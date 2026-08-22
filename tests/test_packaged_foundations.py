@@ -37,8 +37,9 @@ class PackagedFoundationTests(unittest.TestCase):
         self.assertIn("../references/controlled-english.md", phase_one)
         self.assertIn("../references/msw-kernel.md", phase_two)
         self.assertIn("../references/controlled-english.md", phase_two)
-        self.assertIn("must not read packaged Phase-3 prose", phase_three)
-        self.assertIn(".de67/orchestrator-guidelines.md", phase_three)
+        self.assertIn("not packaged or workspace guideline prose", phase_three)
+        self.assertIn(".de67/phase3-policy.d67", phase_three)
+        self.assertIn("scripts/policy_kernel.py decide", phase_three)
         self.assertIn("../../references/msw-kernel.md", phase_three_kernel)
 
     def test_authoring_roles_route_to_controlled_english(self) -> None:

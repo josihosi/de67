@@ -58,6 +58,8 @@ event = {
     "ack_argv": json.loads(os.environ["DE67_COORDINATOR_ACK_ARGV_JSON"])
     if generation is not None
     else None,
+    "policy_argv": json.loads(os.environ["DE67_POLICY_DECIDE_ARGV_JSON"]),
+    "policy_guard_argv": json.loads(os.environ["DE67_POLICY_GUARD_ARGV_JSON"]),
     "resume_session": os.environ.get("DE67_COORDINATOR_RESUME_SESSION"),
 }
 with Path(os.environ["FAKE_EVENTS"]).open("a", encoding="utf-8") as output:
@@ -485,7 +487,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             for line in self.events.read_text(encoding="utf-8").splitlines()
         ]
 
-    def test_supervisor_prompt_routes_only_workspace_local_guidance(self) -> None:
+    def test_supervisor_prompt_routes_only_compiled_workspace_policy(self) -> None:
         prompt = coordinator_prompt(
             self.workspace.resolve(),
             self.state_path.resolve(),
@@ -495,14 +497,36 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         )
 
         self.assertIn("Do not read packaged DE-67", prompt)
-        self.assertIn(".de67/orchestrator-guidelines.md", prompt)
-        self.assertIn(".de67/test-and-task-guidelines.md", prompt)
-        self.assertIn("active mutable policy", prompt)
-        self.assertIn("DFS slices as the compact default", prompt)
-        self.assertIn("Read more of the DFS", prompt)
-        self.assertIn("If the ledger is blocked-only, audit", prompt)
-        self.assertIn("terminalize every live attempt", prompt)
-        self.assertIn("Never ask the owner or an external contact adapter", prompt)
+        self.assertIn(".de67/phase3-policy.d67", prompt)
+        self.assertIn("DE67_POLICY_DECIDE_ARGV_JSON", prompt)
+        self.assertIn("machine-canonical", prompt)
+        self.assertIn("DE67_POLICY_GUARD_ARGV_JSON", prompt)
+        self.assertIn("legacy differential fixtures", prompt)
+        self.assertNotIn("Read .de67/orchestrator-guidelines.md", prompt)
+        self.assertNotIn("test-and-task-guidelines.md", prompt)
+
+    def test_supervisor_exports_exact_compiled_policy_decision_command(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("complete-program"),
+            run_id_factory=lambda _generation: "policy-command",
+        )
+
+        self.assertEqual(result, 0)
+        command = self.read_events()[0]["policy_argv"]
+        self.assertEqual(command[2], "decide")
+        self.assertEqual(command[3:5], ["--policy", str(self.workspace / ".de67" / "phase3-policy.d67")])
+        self.assertIn("--workspace", command)
+        self.assertIn("--state", command)
+        guard = self.read_events()[0]["policy_guard_argv"]
+        self.assertEqual(guard[2], "guard")
+        self.assertTrue(any(str(item).endswith("phase3-policy.candidate.json") for item in guard))
+        self.assertTrue(any(str(item).endswith("phase3-policy.candidate.d67") for item in guard))
 
     def test_cli_defaults_coordinator_to_sol_low_without_changing_runner_args(self) -> None:
         arguments = build_parser().parse_args(
@@ -580,9 +604,9 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         )
         self.assertIn("DE67_DEADLINE_STATE", initial_prompt)
         self.assertIn("DE67_LINEAGE", initial_prompt)
-        self.assertIn("Before spawning each worker", initial_prompt)
-        self.assertIn("model-verification child", initial_prompt)
-        self.assertIn("Never count a coordinator restart as a worker window", initial_prompt)
+        self.assertIn("DE67_POLICY_DECIDE_ARGV_JSON", initial_prompt)
+        self.assertIn("preserve every emitted obligation", initial_prompt)
+        self.assertNotIn("Before spawning each worker", initial_prompt)
 
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.list_tasks()["coordinator_restart"]
@@ -1031,7 +1055,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.run_root / "active-ledger-continuation" / "prompt.txt"
         ).read_text(encoding="utf-8")
         self.assertNotIn("orchestrator-guidelines.md", continuation_prompt)
-        self.assertIn("findings are work input", continuation_prompt)
+        self.assertIn("findings are state events", continuation_prompt)
+        self.assertIn("minimal action brief", continuation_prompt)
 
     def test_active_clock_prevents_completion(self) -> None:
         self.write_work_documents()

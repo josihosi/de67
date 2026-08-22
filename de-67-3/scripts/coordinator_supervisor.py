@@ -359,25 +359,14 @@ def coordinator_prompt(
     lines = [
         f"Act as a fresh Phase-3 delivery coordinator in {workspace}.",
         "Do not read packaged DE-67 SKILL.md, kernel, role, reference, or guideline prose during delivery.",
-        "Packaged DE-67 scripts may be executed as tools; their prose is bootstrap material only.",
-        "Read .de67/orchestrator-guidelines.md before routing work and read only its relevant sections thereafter.",
-        "Require ordinary workers to read only the relevant sections of .de67/test-and-task-guidelines.md.",
-        "Require mutation and DFS reviewers to read the relevant route in .de67/orchestrator-guidelines.md; add task guidance only when their evidence review needs it.",
-        "The workspace-local guideline files are active mutable policy. Never replace them with packaged assets after bootstrap.",
-        "Read the active ledger and use its claim-bound DFS slices as the compact default. Read more of the DFS when the current decision genuinely needs it.",
-        "Read current code and Git state plus only relevant durable .de67 state; do not read predecessor logs or narrative handoffs.",
-        "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every deadline-harness command; do not infer replacements.",
-        "Before spawning each worker, start one unique deadline-harness task for that child. After the child exits, terminalize that task exactly once as completed, finding, or abandoned. A model-verification child that is retired still counts as an abandoned worker window; its replacement needs a new task. Never count a coordinator restart as a worker window.",
+        "The hash-bound .de67/phase3-policy.d67 file is the machine-canonical routing policy.",
+        "Before every route decision, execute the argument array in DE67_POLICY_DECIDE_ARGV_JSON as a subprocess without a shell.",
+        "Obey its action, read only its named sources, and preserve every emitted obligation in worker or reviewer briefs.",
+        "A policy mutation is only a candidate until DE67_POLICY_GUARD_ARGV_JSON succeeds; promote both candidate source and bytecode together, then request one fresh coordinator.",
+        "Do not infer policy from workspace guideline prose; those files are legacy differential fixtures on this branch.",
+        "Read current code or DFS detail only when the compiled decision names ledger, dfs, or dfs_slice.",
+        "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every state transition; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
-        "If .de67/state/blocker-adapter-state.json contains an authenticated owner reply for the "
-        "current blocked ledger, treat its exact reply text as durable owner authority. Consume "
-        "it by restoring executable work or by writing a materially changed blocker.",
-        "If the ledger is blocked-only, audit whether each blocker is still genuine. Restore "
-        "recoverable work; otherwise terminalize every live attempt with honest blocker evidence "
-        "before leaving the exact blocked ledger unchanged.",
-        "Test tooling, fixtures, scenarios, disposable identities or coordinates, profiles, "
-        "registry database rows, and exact test bindings inside the frozen DFS are ordinary "
-        "executable work. Never ask the owner or an external contact adapter to choose them.",
     ]
     if generation is not None:
         lines.append(
@@ -434,9 +423,8 @@ def run_child(
     else:
         prompt = (
             "Continue the same DE-67 coordinator lifecycle. Ordinary worker results "
-            "and findings are work input, not a reason to stop. Keep executing the "
-            "active ledger item while an executable route remains. Read durable state "
-            "that changed since the prior turn; do not reread unchanged guidance.\n"
+            "and findings are state events, not a reason to stop. Before acting, execute "
+            "DE67_POLICY_DECIDE_ARGV_JSON without a shell and obey its minimal action brief.\n"
         )
     _write(run_dir / "prompt.txt", prompt)
     _write(run_dir / "status.txt", "STARTING\n")
@@ -454,6 +442,34 @@ def run_child(
             "DE67_COORDINATOR_SESSION_FILE": str(run_dir / "session_id.txt"),
             "DE67_BLOCKER_ADAPTER_STATE": str(
                 workspace / ".de67" / "state" / "blocker-adapter-state.json"
+            ),
+            "DE67_POLICY_DECIDE_ARGV_JSON": json.dumps(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().with_name("policy_kernel.py")),
+                    "decide",
+                    "--policy",
+                    str(workspace / ".de67" / "phase3-policy.d67"),
+                    "--workspace",
+                    str(workspace),
+                    "--state",
+                    str(state_path),
+                    "--lineage",
+                    lineage_id,
+                ]
+            ),
+            "DE67_POLICY_GUARD_ARGV_JSON": json.dumps(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().with_name("policy_kernel.py")),
+                    "guard",
+                    "--candidate",
+                    str(workspace / ".de67" / "state" / "phase3-policy.candidate.json"),
+                    "--contracts",
+                    str(workspace / ".de67" / "phase3-contracts.json"),
+                    "--output",
+                    str(workspace / ".de67" / "state" / "phase3-policy.candidate.d67"),
+                ]
             ),
         }
     )

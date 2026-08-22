@@ -26,6 +26,9 @@ PHASE3_ENVIRONMENT_ROOT = (
     Path(__file__).resolve().parents[1] / "de-67-3" / "assets" / "environment"
 )
 PHASE3_WORKSPACE_FILES = (
+    "phase3-policy.d67",
+    "phase3-policy.json",
+    "phase3-contracts.json",
     "orchestrator-guidelines.md",
     "test-and-task-guidelines.md",
     "work-ledger.md",
@@ -451,7 +454,7 @@ def _require_frozen_dfs(workspace: Path) -> None:
 
 
 def _prepare_phase3_environment(workspace: Path) -> dict[str, list[str]]:
-    """Copy missing mutable Phase-3 files without replacing workspace policy."""
+    """Copy missing Phase-3 policy/state inputs without replacing workspace files."""
 
     environment = workspace / ".de67"
     environment.mkdir(parents=True, exist_ok=True)

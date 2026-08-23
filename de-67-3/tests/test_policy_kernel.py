@@ -43,6 +43,7 @@ CASES = (
     ({"live_task"}, "wait_for_worker_event"),
     ({"closure_ready", "open_gap", "executable_route"}, "dispatch_closure_worker"),
     ({"open_claim", "executable_route"}, "dispatch_exploration_worker"),
+    ({"ledger_work", "executable_route"}, "dispatch_exploration_worker"),
     ({"red_dfs_work"}, "refill_ledger"),
     ({"dfs_complete"}, "stop"),
     (set(), "inspect_state"),
@@ -426,6 +427,44 @@ class PolicyKernelTests(unittest.TestCase):
                 "ledger_work", "executable_route", "pending_suggestions", "red_dfs_work",
             } <= facts)
             self.assertNotIn("worker_failed", facts)
+
+    def test_initial_red_ledger_routes_exploration_without_a_claim_clock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            de67 = workspace / ".de67"
+            de67.mkdir()
+            (de67 / "work-ledger.md").write_text(
+                "## R-004\n- Claim status: red and unaccepted.\n"
+                "- Next executable route: inspect the production owners.\n",
+                encoding="utf-8",
+            )
+            (de67 / "DFS.md").write_text("- [ ] 🔴 R-004\n", encoding="utf-8")
+            state = workspace / "state.sqlite3"
+            connection = sqlite3.connect(state)
+            connection.executescript(
+                """
+                CREATE TABLE tasks (
+                    lineage_id TEXT, task_id TEXT, started_at REAL,
+                    attempt_terminal_at REAL, attempt_terminal_kind TEXT
+                );
+                CREATE TABLE claim_clocks (
+                    lineage_id TEXT, claim_id TEXT, started_at REAL,
+                    deadline_at REAL, phase TEXT
+                );
+                CREATE TABLE closure_gaps (
+                    lineage_id TEXT, claim_id TEXT, closed_at REAL
+                );
+                """
+            )
+            connection.close()
+
+            facts = kernel.workspace_facts(workspace, state, "project", now=1)
+
+            self.assertNotIn("open_claim", facts)
+            self.assertEqual(
+                kernel.decide(source_policy(), facts).action,
+                "dispatch_exploration_worker",
+            )
 
     def test_main_branch_has_no_compiled_kernel_and_remains_recoverable(self) -> None:
         result = subprocess.run(

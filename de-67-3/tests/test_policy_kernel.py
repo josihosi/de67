@@ -104,6 +104,30 @@ class PolicyKernelTests(unittest.TestCase):
         with self.assertRaisesRegex(kernel.PolicyError, "required obligations"):
             kernel.guard_policy_candidate(policy, kernel.load_contracts(CONTRACTS))
 
+    def test_machine_candidate_guard_rejects_deadline_cadence_restart_authority(self) -> None:
+        policy = source_policy()
+        deadline = next(rule for rule in policy["rules"] if rule["id"] == "D1")
+        deadline["obligations"].remove(
+            "cadence_is_observation_not_restart_authority"
+        )
+        with self.assertRaisesRegex(kernel.PolicyError, "required obligations"):
+            kernel.guard_policy_candidate(policy, kernel.load_contracts(CONTRACTS))
+
+    def test_machine_candidate_guard_rejects_underspecified_dispatch_clock(self) -> None:
+        for rule_id in ("C1", "E1"):
+            with self.subTest(rule_id=rule_id):
+                policy = source_policy()
+                dispatch = next(
+                    rule for rule in policy["rules"] if rule["id"] == rule_id
+                )
+                dispatch["obligations"].remove(
+                    "size_one_generous_claim_deadline_for_full_route"
+                )
+                with self.assertRaisesRegex(kernel.PolicyError, "required obligations"):
+                    kernel.guard_policy_candidate(
+                        policy, kernel.load_contracts(CONTRACTS)
+                    )
+
     def test_machine_candidate_guard_rejects_unbounded_worker_wait(self) -> None:
         policy = source_policy()
         wait = next(rule for rule in policy["rules"] if rule["id"] == "W1")
@@ -192,6 +216,33 @@ class PolicyKernelTests(unittest.TestCase):
         )
         self.assertIn("admit_full_downstream_route_to_clock", decision.obligations)
         self.assertIn("start_unique_worker_window", decision.obligations)
+        self.assertIn(
+            "size_one_generous_claim_deadline_for_full_route",
+            decision.obligations,
+        )
+
+    def test_exploration_dispatch_sizes_the_full_route_clock(self) -> None:
+        for facts in (
+            {"open_claim", "executable_route"},
+            {"ledger_work", "executable_route"},
+        ):
+            with self.subTest(facts=facts):
+                decision = kernel.decide(source_policy(), facts)
+                self.assertEqual(decision.action, "dispatch_exploration_worker")
+                self.assertIn(
+                    "size_one_generous_claim_deadline_for_full_route",
+                    decision.obligations,
+                )
+
+    def test_deadline_incident_cadence_cannot_authorize_restart(self) -> None:
+        decision = kernel.decide(
+            source_policy(), {"deadline_incident", "worker_abandoned"}
+        )
+        self.assertEqual(decision.action, "review_deadline_incident")
+        self.assertIn(
+            "cadence_is_observation_not_restart_authority",
+            decision.obligations,
+        )
 
     def test_live_task_prevents_second_dispatch(self) -> None:
         facts = {"live_task", "closure_ready", "open_gap", "executable_route"}

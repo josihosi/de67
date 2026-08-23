@@ -233,6 +233,14 @@ class PolicyKernelTests(unittest.TestCase):
                     "size_one_generous_claim_deadline_for_full_route",
                     decision.obligations,
                 )
+                self.assertIn(
+                    "forfeit_claim_window_when_next_attempt_cannot_fit",
+                    decision.obligations,
+                )
+
+    def test_acceptance_requires_guarded_dfs_projection(self) -> None:
+        decision = kernel.decide(source_policy(), {"accepted_evidence"})
+        self.assertIn("guard_and_apply_exact_dfs_completion", decision.obligations)
 
     def test_deadline_incident_cadence_cannot_authorize_restart(self) -> None:
         decision = kernel.decide(

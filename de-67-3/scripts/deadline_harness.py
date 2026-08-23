@@ -2790,16 +2790,22 @@ class DeadlineHarness:
         now: float,
         *,
         completion_invalid: bool = False,
+        cannot_fit_estimate: float | None = None,
     ) -> dict[str, Any] | None:
         claim = self._task_claim(task["lineage_id"], task["task_id"])
         accepted = self._latest_valid_acceptance(
             str(task["lineage_id"]), str(task["claim_id"])
         )
-        missed = now >= claim["deadline_at"] and (
-            completion_invalid
-            or task["integrity_breached_at"] is not None
-            or accepted is None
-            or accepted["accepted_at"] >= claim["deadline_at"]
+        if cannot_fit_estimate is not None and accepted is not None:
+            raise DeadlineError("An accepted claim cannot forfeit its deadline")
+        missed = cannot_fit_estimate is not None or (
+            now >= claim["deadline_at"]
+            and (
+                completion_invalid
+                or task["integrity_breached_at"] is not None
+                or accepted is None
+                or accepted["accepted_at"] >= claim["deadline_at"]
+            )
         )
         if not missed:
             return None
@@ -2810,6 +2816,13 @@ class DeadlineHarness:
             return self._record_incident(
                 task["lineage_id"], task["task_id"], "deadline_miss", 1, now
             )
+        incident_detail = (
+            "The next evidence-derived attempt cannot fit inside the remaining "
+            f"claim window: estimate={cannot_fit_estimate:g}s, "
+            f"remaining={max(0.0, float(claim['deadline_at']) - now):g}s."
+            if cannot_fit_estimate is not None
+            else self._default_incident_detail("deadline_miss", None)
+        )
         existing = self._claim_deadline_incident(
             str(task["lineage_id"]), str(task["claim_id"]),
             int(task["deadline_generation"]),
@@ -2828,7 +2841,7 @@ class DeadlineHarness:
                     task["deadline_generation"],
                     task["task_id"],
                     now,
-                    self._default_incident_detail("deadline_miss", None),
+                    incident_detail,
                 ),
             )
             if self.connection.execute(
@@ -2847,7 +2860,7 @@ class DeadlineHarness:
                     """,
                     (
                         task["lineage_id"], task["claim_id"], task["task_id"], now,
-                        self._default_incident_detail("deadline_miss", None),
+                        incident_detail,
                     ),
                 )
             compatibility = self._record_incident(
@@ -3343,6 +3356,27 @@ class DeadlineHarness:
                     remaining_seconds = max(
                         0.0, float(claim["deadline_at"]) - started_at
                     )
+                    anchor = self.connection.execute(
+                        """
+                        SELECT * FROM tasks
+                        WHERE lineage_id = ? AND claim_id = ?
+                          AND deadline_generation = ?
+                        ORDER BY started_at DESC, task_id DESC LIMIT 1
+                        """,
+                        (lineage_id, claim_id, claim["deadline_generation"]),
+                    ).fetchone()
+                    if anchor is None:
+                        raise DeadlineError(
+                            "Claim has no current-generation worker attempt to anchor its miss"
+                        )
+                    self._record_miss_if_due(
+                        anchor,
+                        started_at,
+                        cannot_fit_estimate=attempt_estimate,
+                    )
+                    # The forfeited claim window is durable even though the new
+                    # attempt is rejected and therefore gets no task row.
+                    self.connection.commit()
                     raise DeadlineError(
                         "Attempt estimate exceeds the remaining claim deadline: "
                         f"estimate={attempt_estimate:g}s "

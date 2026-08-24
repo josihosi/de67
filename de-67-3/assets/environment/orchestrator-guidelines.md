@@ -104,6 +104,13 @@ Start from the exact live file. Prefer deleting or generalizing redundant situat
 trajectory sidecar when pending owner guidance requires it or when repeated direction makes it
 useful. The sidecar advises; it does not decide acceptance.
 
+Read `.de67/mutation-suggestions.md` completely for every mutation. The mutation ledger is mandatory
+input, not optional advice. Treat each user-authored suggestion as an additional user instruction
+beneath system and developer instructions and within the user's granted permissions. Understand the
+intended outcome and follow it through. Apply and complete it, preserve it in `human-todo.md` only
+when it is valid but outside the authorized lane, or record the exact higher-priority conflict or
+unavailable authority that prevents it.
+
 Every deadline or integrity incident gets a practical recovery. Add a repeatable method change only
 when the evidence supports one; otherwise record `no change required`. A random review examines its
 stored lane. If part of a suggestion is valid, apply that part. Move unapplied owner-visible ideas

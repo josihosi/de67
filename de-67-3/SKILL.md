@@ -46,7 +46,9 @@ policy. The coordinator asks the kernel for the next transition and routes only 
 brief. A due mutation blocks new dispatch. Once all already-live worker windows are terminal, the
 coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh
 `gpt-5.6-sol` reviewer at high with no coordinator or worker active. That reviewer reads the complete
-mutation-suggestion ledger, dispositions every entry, resolves the durable mutation gate, and exits.
+mutation-suggestion ledger, treats its user-authored suggestions as additional user instructions
+beneath system and developer instructions, follows them through within granted permissions,
+dispositions every entry, resolves the durable mutation gate, and exits.
 Only then does the supervisor launch one fresh low coordinator. Product strategy and evidence
 judgment remain model work inside the selected route.
 

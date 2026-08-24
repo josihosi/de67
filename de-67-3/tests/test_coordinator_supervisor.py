@@ -644,6 +644,9 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         )
         reviewer_prompt = (reviewer_run / "prompt.txt").read_text(encoding="utf-8")
         self.assertIn("mutation-suggestions.md completely", reviewer_prompt)
+        self.assertIn("mandatory input, not optional advice", reviewer_prompt)
+        self.assertIn("additional user instruction beneath system and developer instructions", reviewer_prompt)
+        self.assertIn("understand its intended outcome and follow it through", reviewer_prompt)
         self.assertIn("Disposition every pending suggestion explicitly", reviewer_prompt)
         self.assertIn("supervisor alone starts the fresh coordinator", reviewer_prompt)
 

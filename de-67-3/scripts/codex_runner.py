@@ -7,16 +7,113 @@ import argparse
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 
 class RunnerError(RuntimeError):
     """Raised when the local Codex runner cannot start safely."""
+
+
+class CoordinatorLoopGuard:
+    """Reject a coordinator wait while a durable task has no roster handoff."""
+
+    def __init__(
+        self,
+        *,
+        initial_unbound_tasks: Sequence[str] = (),
+        roster_resolver: Callable[[str, float, str | None, frozenset[str]], str | None]
+        | None = None,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self._clock = clock
+        self._unbound = {
+            task_id: clock() for task_id in dict.fromkeys(initial_unbound_tasks)
+        }
+        self._task_workers: dict[str, str] = {}
+        self._parent_thread_id: str | None = None
+        self._roster_resolver = roster_resolver
+
+    @property
+    def unbound_tasks(self) -> tuple[str, ...]:
+        return tuple(self._unbound)
+
+    @staticmethod
+    def _command_result(item: dict[str, object]) -> dict[str, object] | None:
+        if item.get("type") != "command_execution" or item.get("status") != "completed":
+            return None
+        if item.get("exit_code") not in (0, None):
+            return None
+        output = item.get("aggregated_output")
+        if not isinstance(output, str):
+            return None
+        try:
+            result = json.loads(output)
+        except json.JSONDecodeError:
+            return None
+        return result if isinstance(result, dict) else None
+
+    def observe(self, event: dict[str, object]) -> None:
+        item = event.get("item")
+        if event.get("type") == "thread.started":
+            thread_id = event.get("thread_id")
+            if isinstance(thread_id, str) and thread_id:
+                self._parent_thread_id = thread_id
+            return
+        if not isinstance(item, dict):
+            return
+
+        result = self._command_result(item)
+        if result is not None:
+            task_id = result.get("task_id")
+            if isinstance(task_id, str) and task_id:
+                if result.get("attempt_created") is True and result.get("state") == "running":
+                    if task_id not in self._unbound and task_id not in self._task_workers:
+                        self._unbound[task_id] = self._clock()
+                if result.get("attempt_completed") is True or result.get("state") in {
+                    "completed", "finding", "abandoned"
+                }:
+                    if task_id in self._unbound:
+                        del self._unbound[task_id]
+                    self._task_workers.pop(task_id, None)
+
+        if item.get("type") != "collab_tool_call":
+            return
+        tool = item.get("tool")
+        receivers = item.get("receiver_thread_ids")
+        worker_ids = [value for value in receivers or [] if isinstance(value, str) and value]
+        if (
+            tool in {"spawn_agent", "followup_task"}
+            and event.get("type") == "item.completed"
+            and item.get("status") == "completed"
+            and worker_ids
+            and self._unbound
+        ):
+            task_id = next(iter(self._unbound))
+            del self._unbound[task_id]
+            self._task_workers[task_id] = worker_ids[0]
+            return
+        if tool == "wait" and event.get("type") == "item.started":
+            if self._roster_resolver is not None:
+                for task_id, started_at in tuple(self._unbound.items()):
+                    worker_id = self._roster_resolver(
+                        task_id,
+                        started_at,
+                        self._parent_thread_id,
+                        frozenset(self._task_workers.values()),
+                    )
+                    if worker_id:
+                        del self._unbound[task_id]
+                        self._task_workers[task_id] = worker_id
+            if not self._unbound:
+                return
+            tasks = ", ".join(self._unbound)
+            raise RunnerError(f"Running task {tasks} has no roster worker before wait")
 
 
 def _timestamp() -> str:
@@ -89,6 +186,108 @@ def _record_session(line: str, environment: dict[str, str]) -> str | None:
     return session_id.strip()
 
 
+def _initial_unbound_tasks(environment: dict[str, str]) -> tuple[str, ...]:
+    state_value = environment.get("DE67_DEADLINE_STATE", "").strip()
+    lineage = environment.get("DE67_LINEAGE", "").strip()
+    if not state_value or not lineage:
+        return ()
+    state = Path(state_value).expanduser().resolve()
+    if not state.is_file():
+        return ()
+    connection = sqlite3.connect(f"file:{state}?mode=ro", uri=True)
+    try:
+        rows = connection.execute(
+            """
+            SELECT task_id FROM tasks
+            WHERE lineage_id = ? AND attempt_terminal_at IS NULL
+            ORDER BY started_at
+            """,
+            (lineage,),
+        ).fetchall()
+    finally:
+        connection.close()
+    return tuple(str(row[0]) for row in rows)
+
+
+def _roster_resolver(
+    workspace: Path, environment: dict[str, str]
+) -> Callable[[str, float, str | None, frozenset[str]], str | None]:
+    state_value = environment.get("DE67_CODEX_STATE", "").strip()
+    state = (
+        Path(state_value).expanduser().resolve()
+        if state_value
+        else Path.home() / ".codex" / "state_5.sqlite"
+    )
+
+    def resolve(
+        _task_id: str,
+        started_at: float,
+        parent_thread_id: str | None,
+        used_workers: frozenset[str],
+    ) -> str | None:
+        if parent_thread_id is None or not state.is_file():
+            return None
+        connection = sqlite3.connect(f"file:{state}?mode=ro", uri=True)
+        try:
+            rows = connection.execute(
+                """
+                SELECT child.id, child.model, child.updated_at_ms, child.updated_at
+                FROM thread_spawn_edges AS edge
+                JOIN threads AS child ON child.id = edge.child_thread_id
+                WHERE edge.parent_thread_id = ? AND child.cwd = ?
+                ORDER BY COALESCE(child.updated_at_ms, child.updated_at * 1000) DESC
+                """,
+                (parent_thread_id, str(workspace)),
+            ).fetchall()
+        finally:
+            connection.close()
+        for worker_id, model, updated_at_ms, updated_at in rows:
+            updated = (
+                float(updated_at_ms) / 1000.0
+                if updated_at_ms is not None
+                else float(updated_at)
+            )
+            if (
+                str(worker_id) not in used_workers
+                and updated >= started_at
+                and any(name in str(model or "").lower() for name in ("luna", "terra"))
+            ):
+                return str(worker_id)
+        return None
+
+    return resolve
+
+
+def _abandon_unbound_tasks(
+    task_ids: Sequence[str], environment: dict[str, str]
+) -> None:
+    state = environment.get("DE67_DEADLINE_STATE", "").strip()
+    lineage = environment.get("DE67_LINEAGE", "").strip()
+    if not state or not lineage:
+        return
+    harness = Path(__file__).resolve().with_name("deadline_harness.py")
+    for task_id in task_ids:
+        subprocess.run(
+            [
+                sys.executable,
+                str(harness),
+                "abandon-attempt",
+                "--state",
+                state,
+                "--lineage",
+                lineage,
+                "--task",
+                task_id,
+                "--reason",
+                "Coordinator attempted to wait without delegating this task to a roster worker.",
+            ],
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+
 def run(
     workspace_path: str | Path,
     prompt: str,
@@ -124,6 +323,10 @@ def run(
     print(f"DE67_RUN_DIR={run_directory}", flush=True)
 
     command = _command(codex, workspace, selected_environment)
+    loop_guard = CoordinatorLoopGuard(
+        initial_unbound_tasks=_initial_unbound_tasks(selected_environment),
+        roster_resolver=_roster_resolver(workspace, selected_environment),
+    )
     started = time.monotonic()
     try:
         with prompt_path.open("r", encoding="utf-8") as prompt_stream, output_path.open(
@@ -149,6 +352,18 @@ def run(
                 output_stream.flush()
                 print(line, end="", flush=True)
                 session_id = _record_session(line, selected_environment) or session_id
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                try:
+                    loop_guard.observe(event)
+                except RunnerError:
+                    process.terminate()
+                    _abandon_unbound_tasks(
+                        loop_guard.unbound_tasks, selected_environment
+                    )
+                    raise
             exit_code = process.wait()
     except OSError as error:
         raise RunnerError(f"Failed to launch Codex: {error}") from error

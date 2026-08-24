@@ -401,11 +401,12 @@ def workspace_facts(
             live = [row for row in rows if row["attempt_terminal_at"] is None]
             if live:
                 facts.add("live_task")
-            for row in rows:
-                kind = row["attempt_terminal_kind"]
-                if kind:
-                    facts.add(f"worker_{kind}")
-                    break
+            else:
+                for row in rows:
+                    kind = row["attempt_terminal_kind"]
+                    if kind:
+                        facts.add(f"worker_{kind}")
+                        break
         for table, fact in (
             ("claim_deadline_generation_incidents", "deadline_incident"),
             ("incidents", "integrity_incident"),

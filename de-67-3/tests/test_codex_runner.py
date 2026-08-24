@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -18,12 +20,16 @@ class FakeProcess:
     def __init__(self, lines: list[str], exit_code: int) -> None:
         self.stdout = iter(lines)
         self.exit_code = exit_code
+        self.terminated = False
 
     def wait(self) -> int:
         return self.exit_code
 
     def kill(self) -> None:
         pass
+
+    def terminate(self) -> None:
+        self.terminated = True
 
 
 class CodexRunnerTests(unittest.TestCase):
@@ -128,6 +134,126 @@ class CodexRunnerTests(unittest.TestCase):
                 )
         with self.assertRaisesRegex(codex_runner.RunnerError, "non-empty prompt"):
             codex_runner.run(self.workspace, "  ", environment=self.environment())
+
+    def test_runner_stops_and_abandons_exact_phantom_handoff_trace(self) -> None:
+        started = {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "command": "python3 deadline_harness.py start --task R-008-closure-003",
+                "aggregated_output": json.dumps(
+                    {
+                        "attempt_created": True,
+                        "state": "running",
+                        "task_id": "R-008-closure-003",
+                    }
+                ),
+                "exit_code": 0,
+                "status": "completed",
+            },
+        }
+        waited = {
+            "type": "item.started",
+            "item": {
+                "type": "collab_tool_call",
+                "tool": "wait",
+                "receiver_thread_ids": [],
+                "agents_states": {},
+                "status": "in_progress",
+            },
+        }
+        process = FakeProcess([json.dumps(started) + "\n", json.dumps(waited) + "\n"], 0)
+
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=process
+        ), patch("codex_runner._abandon_unbound_tasks") as abandon:
+            with self.assertRaisesRegex(codex_runner.RunnerError, "no roster worker"):
+                codex_runner.run(
+                    self.workspace, "coordinate this", environment=self.environment()
+                )
+
+        self.assertTrue(process.terminated)
+        abandon.assert_called_once()
+        self.assertEqual(abandon.call_args.args[0], ("R-008-closure-003",))
+
+    def write_roster_state(self, model: str) -> Path:
+        state = self.root / "codex-state.sqlite3"
+        connection = sqlite3.connect(state)
+        connection.executescript(
+            """
+            CREATE TABLE thread_spawn_edges (
+                parent_thread_id TEXT, child_thread_id TEXT, status TEXT
+            );
+            CREATE TABLE threads (
+                id TEXT, model TEXT, cwd TEXT, updated_at_ms INTEGER, updated_at INTEGER
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO thread_spawn_edges VALUES ('coordinator', 'worker', 'open')"
+        )
+        connection.execute(
+            "INSERT INTO threads VALUES (?, ?, ?, ?, ?)",
+            (
+                "worker",
+                model,
+                str(self.workspace.resolve()),
+                int((time.time() + 60) * 1000),
+                int(time.time() + 60),
+            ),
+        )
+        connection.commit()
+        connection.close()
+        return state
+
+    def handoff_trace(self) -> list[str]:
+        started = {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "aggregated_output": json.dumps(
+                    {"attempt_created": True, "state": "running", "task_id": "route"}
+                ),
+                "exit_code": 0,
+                "status": "completed",
+            },
+        }
+        waited = {
+            "type": "item.started",
+            "item": {
+                "type": "collab_tool_call",
+                "tool": "wait",
+                "receiver_thread_ids": [],
+                "agents_states": {},
+                "status": "in_progress",
+            },
+        }
+        return [
+            json.dumps({"type": "thread.started", "thread_id": "coordinator"}) + "\n",
+            json.dumps(started) + "\n",
+            json.dumps(waited) + "\n",
+        ]
+
+    def test_runner_accepts_real_luna_child_lineage_before_empty_wait(self) -> None:
+        environment = self.environment()
+        environment["DE67_CODEX_STATE"] = str(self.write_roster_state("gpt-5.6-luna"))
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen",
+            return_value=FakeProcess(self.handoff_trace(), 0),
+        ):
+            self.assertEqual(
+                codex_runner.run(self.workspace, "coordinate", environment=environment), 0
+            )
+
+    def test_runner_rejects_inherited_sol_child_as_ordinary_handoff(self) -> None:
+        environment = self.environment()
+        environment["DE67_CODEX_STATE"] = str(self.write_roster_state("gpt-5.6-sol"))
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen",
+            return_value=FakeProcess(self.handoff_trace(), 0),
+        ), patch("codex_runner._abandon_unbound_tasks"):
+            with self.assertRaisesRegex(codex_runner.RunnerError, "no roster worker"):
+                codex_runner.run(self.workspace, "coordinate", environment=environment)
 
 
 if __name__ == "__main__":

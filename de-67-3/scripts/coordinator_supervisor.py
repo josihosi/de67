@@ -388,6 +388,7 @@ def coordinator_prompt(
         "Do not infer policy from workspace guideline prose; those files are legacy differential fixtures on this branch.",
         "Read current code or DFS detail only when the compiled decision names ledger, dfs, or dfs_slice.",
         "For every newly spawned ordinary worker, set fork_turns=\"none\", provide a self-contained task brief, and explicitly select gpt-5.6-luna or gpt-5.6-terra with the chosen effort. Never omit model selection, inherit this Sol coordinator, or pass coordinator or predecessor history. Reusing an already relevant worker remains allowed.",
+        "A deadline-harness task is only a worker clock, not a delegation. Immediately after starting one, spawn its Luna or Terra worker or send the assigned work to one relevant reusable worker. Never wait while a started task lacks that roster handoff. If the handoff fails, abandon the attempt before any replacement.",
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every state transition; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
     ]
@@ -562,7 +563,9 @@ def run_child(
             "DE67_POLICY_DECIDE_ARGV_JSON without a shell and obey its minimal action brief. "
             "Every newly spawned ordinary worker must use fork_turns=\"none\", a self-contained "
             "brief, and an explicitly selected gpt-5.6-luna or gpt-5.6-terra model; never inherit "
-            "the Sol coordinator or its history.\n"
+            "the Sol coordinator or its history. A deadline-harness task is only a worker clock, "
+            "not a delegation: immediately spawn or reuse its assigned roster worker, never wait "
+            "with an unbound task, and abandon the attempt if that handoff fails.\n"
         )
     _write(run_dir / "prompt.txt", prompt)
     _write(run_dir / "status.txt", "STARTING\n")

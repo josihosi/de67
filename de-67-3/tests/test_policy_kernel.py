@@ -544,6 +544,48 @@ class PolicyKernelTests(unittest.TestCase):
                 "dispatch_exploration_worker",
             )
 
+    def test_new_live_handoff_supersedes_the_previous_terminal_result(self) -> None:
+        """Replay the R-008 loop: an old finding must not mask a new live worker."""
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            de67 = workspace / ".de67"
+            de67.mkdir()
+            (de67 / "work-ledger.md").write_text(
+                "## R-008\n- Active gap\n- Next executable route\n", encoding="utf-8"
+            )
+            (de67 / "DFS.md").write_text("- [ ] 🔴 R-008\n", encoding="utf-8")
+            state = workspace / "state.sqlite3"
+            connection = sqlite3.connect(state)
+            connection.executescript(
+                """
+                CREATE TABLE tasks (
+                    lineage_id TEXT, task_id TEXT, started_at REAL,
+                    attempt_terminal_at REAL, attempt_terminal_kind TEXT
+                );
+                CREATE TABLE claim_clocks (
+                    lineage_id TEXT, claim_id TEXT, started_at REAL,
+                    deadline_at REAL, phase TEXT
+                );
+                CREATE TABLE closure_gaps (
+                    lineage_id TEXT, claim_id TEXT, closed_at REAL
+                );
+                INSERT INTO tasks VALUES ('project', 'R-008-closure-002', 10, 20, 'finding');
+                INSERT INTO tasks VALUES ('project', 'R-008-closure-003', 30, NULL, NULL);
+                INSERT INTO claim_clocks VALUES ('project', 'R-008', 1, 1000, 'closure');
+                INSERT INTO closure_gaps VALUES ('project', 'R-008', NULL);
+                """
+            )
+            connection.close()
+
+            facts = kernel.workspace_facts(workspace, state, "project", now=40)
+
+            self.assertIn("live_task", facts)
+            self.assertNotIn("worker_finding", facts)
+            self.assertEqual(
+                kernel.decide(source_policy(), facts).action,
+                "wait_for_worker_event",
+            )
+
     def test_preserved_baseline_has_no_compiled_kernel_and_remains_recoverable(self) -> None:
         result = subprocess.run(
             [

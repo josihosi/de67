@@ -46,9 +46,14 @@ policy. The coordinator asks the kernel for the next transition and routes only 
 brief. A due mutation blocks new dispatch. Once all already-live worker windows are terminal, the
 coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh
 `gpt-5.6-sol` reviewer at high with no coordinator or worker active. That reviewer reads the complete
-mutation-suggestion ledger, treats its user-authored suggestions as additional user instructions
-beneath system and developer instructions, follows them through within granted permissions,
-dispositions every entry, resolves the durable mutation gate, and exits.
+mutation-suggestion ledger and treats each user-authored suggestion as explicit mutation-scoped
+owner authority beneath system and developer instructions. Within the Phase-3 framework, that
+authority supersedes conflicting ordinary skill, workspace, selected-lane, freeze, and
+mutation-surface restrictions to the extent necessary to achieve the suggestion. It may, for
+example, thaw and refreeze the DFS or change a normally protected method artifact when the
+suggestion requires that change. It does not authorize unrelated work, dishonest evidence, or a
+different owner outcome. The reviewer follows every suggestion through, dispositions every entry,
+resolves the durable mutation gate, and exits.
 Only then does the supervisor launch one fresh low coordinator. Product strategy and evidence
 judgment remain model work inside the selected route.
 

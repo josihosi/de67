@@ -645,8 +645,11 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         reviewer_prompt = (reviewer_run / "prompt.txt").read_text(encoding="utf-8")
         self.assertIn("mutation-suggestions.md completely", reviewer_prompt)
         self.assertIn("mandatory input, not optional advice", reviewer_prompt)
-        self.assertIn("additional user instruction beneath system and developer instructions", reviewer_prompt)
-        self.assertIn("understand its intended outcome and follow it through", reviewer_prompt)
+        self.assertIn("explicit mutation-scoped owner authority beneath system and developer instructions", reviewer_prompt)
+        self.assertIn("supersedes conflicting ordinary skill, workspace, selected-lane, freeze", reviewer_prompt)
+        self.assertIn("thawing and refreezing the DFS", reviewer_prompt)
+        self.assertIn("ordinary selected lane or frozen status is not a reason", reviewer_prompt)
+        self.assertIn("Understand its intended outcome and follow it through", reviewer_prompt)
         self.assertIn("Disposition every pending suggestion explicitly", reviewer_prompt)
         self.assertIn("supervisor alone starts the fresh coordinator", reviewer_prompt)
 

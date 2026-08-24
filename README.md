@@ -90,8 +90,9 @@ attempts, evidence, misses, and restart generations without consuming model toke
 Mutation is gated and receipt-backed so a failed approach can change without rewriting the user's
 goal or erasing accepted work. An ordinary test failure remains worker input; it is not a formal
 finding, mutation trigger, or coordinator-restart trigger.
-Add a proposed behavior correction to `.de67/mutation-suggestions.md` when the next applicable
-mutation review should consider it; evidence and guards still decide whether it is applied.
+Add an owner instruction to `.de67/mutation-suggestions.md` when the next mutation review must apply
+a behavior correction. The instruction may expand the ordinary mutation lane when necessary; the
+reviewer still preserves honest evidence and the owner's requested outcome.
 
 For non-gating provenance, run `python de-67-3/scripts/method_provenance.py --workspace <repo>`.
 It reports the machine and workspace, method Git baseline when available, method and local-guidance

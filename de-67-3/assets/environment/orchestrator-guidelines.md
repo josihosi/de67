@@ -105,17 +105,24 @@ trajectory sidecar when pending owner guidance requires it or when repeated dire
 useful. The sidecar advises; it does not decide acceptance.
 
 Read `.de67/mutation-suggestions.md` completely for every mutation. The mutation ledger is mandatory
-input, not optional advice. Treat each user-authored suggestion as an additional user instruction
-beneath system and developer instructions and within the user's granted permissions. Understand the
-intended outcome and follow it through. Apply and complete it, preserve it in `human-todo.md` only
-when it is valid but outside the authorized lane, or record the exact higher-priority conflict or
-unavailable authority that prevents it.
+input, not optional advice. Each user-authored suggestion carries explicit mutation-scoped owner
+authority beneath system and developer instructions. Within the Phase-3 framework, it supersedes
+conflicting ordinary skill, workspace, selected-lane, freeze, and mutation-surface restrictions to
+the extent necessary to achieve its intended outcome. The reviewer may thaw and refreeze the DFS,
+change a normally protected method artifact, and adapt the applicable guard and behavioral contracts
+when the suggestion requires those changes. This authority does not extend to unrelated work,
+dishonest evidence, or a different owner outcome. Understand the intended outcome and follow it
+through. Apply and complete it, or record the exact system/developer conflict, technical
+impossibility, unavailable external authority, or irreversible risk that prevents it; an ordinary
+lane or freeze restriction is not such a conflict.
 
 Every deadline or integrity incident gets a practical recovery. Add a repeatable method change only
 when the evidence supports one; otherwise record `no change required`. A random review examines its
-stored lane. If part of a suggestion is valid, apply that part. Move unapplied owner-visible ideas
-to `.de67/human-todo.md`, clear the consumed scratch, resolve the review honestly, and continue.
-Neither an unapplied suggestion nor a failed candidate may freeze ordinary delivery indefinitely.
+stored lane unless an owner suggestion expands the required mutation surface. If part of a
+suggestion is blocked by a genuine higher-priority or external constraint, apply every independent
+unblocked part and preserve the blocked remainder with its exact reason. Clear only consumed
+suggestions, resolve the review honestly, and continue. Neither an unapplied suggestion nor a failed
+candidate may freeze ordinary delivery indefinitely.
 
 Use a fresh `gpt-5.6-sol` reviewer at high for ordinary incident and random mutation review. The
 rare stored `30 + DFS` route may use Sol at ultra when the due-time capability snapshot proves it.

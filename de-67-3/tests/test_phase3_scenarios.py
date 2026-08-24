@@ -66,11 +66,12 @@ class Phase3ScenarioTests(unittest.TestCase):
             )
 
             self.assertEqual(resolved["pending_components"], [])
-            self.assertIsNone(resolved["coordinator_restart"])
-            self.assertIsNone(
+            self.assertTrue(resolved["coordinator_restart"]["pending"])
+            self.assertIn(
+                "successor must set a fresh clock",
                 harness.coordinator_restart_status("project")[
                     "coordinator_restart"
-                ]
+                ]["reason"],
             )
 
     def test_attempt_that_cannot_fit_immediately_forfeits_claim_window(self) -> None:

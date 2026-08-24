@@ -29,6 +29,7 @@ def source_policy() -> dict:
 
 CASES = (
     ({"integrity_incident", "live_task"}, "review_integrity_incident"),
+    ({"deadline_expired", "worker_completed"}, "record_deadline_miss"),
     ({"deadline_incident", "worker_completed"}, "review_deadline_incident"),
     ({"restart_requested", "open_claim"}, "acknowledge_restart"),
     ({"random_mutation_due"}, "review_scheduled_mutation"),
@@ -544,6 +545,57 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertEqual(
                 kernel.decide(source_policy(), facts).action,
                 "dispatch_exploration_worker",
+            )
+
+    def test_persistent_completed_result_is_consumed_then_expiry_preempts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            de67 = workspace / ".de67"
+            de67.mkdir()
+            (de67 / "work-ledger.md").write_text(
+                "## R-004\n- Active gap\n- Next executable route: run proof.\n",
+                encoding="utf-8",
+            )
+            (de67 / "DFS.md").write_text("- [ ] 🔴 R-004\n", encoding="utf-8")
+            state = workspace / "state.sqlite3"
+            connection = sqlite3.connect(state)
+            connection.executescript(
+                """
+                CREATE TABLE tasks (
+                    lineage_id TEXT, task_id TEXT, started_at REAL,
+                    attempt_terminal_at REAL, attempt_terminal_kind TEXT,
+                    result_received_at REAL
+                );
+                CREATE TABLE claim_clocks (
+                    lineage_id TEXT, claim_id TEXT, started_at REAL,
+                    deadline_at REAL, phase TEXT
+                );
+                CREATE TABLE closure_gaps (
+                    lineage_id TEXT, claim_id TEXT, closed_at REAL
+                );
+                INSERT INTO tasks VALUES ('project', 'M1', 0, 5, 'completed', NULL);
+                INSERT INTO claim_clocks VALUES ('project', 'R-004', 0, 10, 'closure');
+                INSERT INTO closure_gaps VALUES ('project', 'R-004', NULL);
+                """
+            )
+            connection.commit()
+
+            before_receipt = kernel.workspace_facts(workspace, state, "project", now=6)
+            self.assertEqual(
+                kernel.decide(source_policy(), before_receipt).action,
+                "receive_worker_result",
+            )
+            connection.execute(
+                "UPDATE tasks SET result_received_at = 7 WHERE lineage_id = 'project'"
+            )
+            connection.commit()
+            connection.close()
+
+            after_expiry = kernel.workspace_facts(workspace, state, "project", now=11)
+            self.assertNotIn("worker_completed", after_expiry)
+            self.assertEqual(
+                kernel.decide(source_policy(), after_expiry).action,
+                "record_deadline_miss",
             )
 
     def test_preserved_baseline_has_no_compiled_kernel_and_remains_recoverable(self) -> None:

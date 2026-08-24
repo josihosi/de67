@@ -403,7 +403,11 @@ def workspace_facts(
                 facts.add("live_task")
             for row in rows:
                 kind = row["attempt_terminal_kind"]
-                if kind:
+                result_unreceived = (
+                    "result_received_at" not in row.keys()
+                    or row["result_received_at"] is None
+                )
+                if kind and result_unreceived:
                     facts.add(f"worker_{kind}")
                     break
         for table, fact in (

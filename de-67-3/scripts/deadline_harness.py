@@ -150,6 +150,8 @@ class DeadlineHarness:
                 terminal_at REAL,
                 attempt_terminal_at REAL,
                 attempt_terminal_kind TEXT,
+                result_received_at REAL,
+                result_receipt_evidence TEXT,
                 abandoned_at REAL,
                 abandonment_reason TEXT,
                 closure_gap_id TEXT,
@@ -614,6 +616,10 @@ class DeadlineHarness:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN attempt_terminal_at REAL")
         if "attempt_terminal_kind" not in task_columns:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN attempt_terminal_kind TEXT")
+        if "result_received_at" not in task_columns:
+            self.connection.execute("ALTER TABLE tasks ADD COLUMN result_received_at REAL")
+        if "result_receipt_evidence" not in task_columns:
+            self.connection.execute("ALTER TABLE tasks ADD COLUMN result_receipt_evidence TEXT")
         if "abandoned_at" not in task_columns:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN abandoned_at REAL")
         if "abandonment_reason" not in task_columns:
@@ -3300,29 +3306,10 @@ class DeadlineHarness:
                         if restart_generation is not None
                         else None
                     )
-                    macro = self.connection.execute(
-                        """
-                        SELECT no_change_required
-                        FROM deadline_generation_mutation_components
-                        WHERE lineage_id = ? AND claim_id = ?
-                          AND generation = ? AND component = 'macro'
-                        """,
-                        (
-                            lineage_id,
-                            claim_id,
-                            int(claim["deadline_generation"]),
-                        ),
-                    ).fetchone()
-                    no_change_required = bool(
-                        macro is not None and macro["no_change_required"]
-                    )
-                    if (
-                        not no_change_required
-                        and (restart is None or restart["acknowledged_at"] is None)
-                    ):
+                    if restart is None or restart["acknowledged_at"] is None:
                         raise DeadlineError(
-                            "Resolved deadline generation requires its acknowledged "
-                            "successor before a new work deadline can be armed"
+                            "Every resolved deadline miss requires its acknowledged "
+                            "successor to set a fresh whole-item deadline"
                         )
                     next_generation = int(claim["deadline_generation"]) + 1
                     self.connection.execute(
@@ -3339,7 +3326,7 @@ class DeadlineHarness:
                             estimate,
                             started_at,
                             started_at + estimate,
-                            restart_generation if not no_change_required else None,
+                            restart_generation,
                         ),
                     )
                     claim = self._claim(lineage_id, claim_id)
@@ -3869,6 +3856,44 @@ class DeadlineHarness:
                 raise DeadlineError("Attempt already has another terminal outcome")
             result = self._status(lineage_id, task_id, completed_at)
             result["random_mutation"] = self._random_mutation_status(lineage_id)
+            self.connection.commit()
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def receive_worker_result(
+        self,
+        lineage_id: str,
+        task_id: str,
+        evidence: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Consume one terminal worker event after its durable projection."""
+
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        task_id = self._identity(task_id, "Task id")
+        evidence = self._nonempty_text(evidence, "Result receipt evidence")
+        received_at = self._now(now)
+        self._begin()
+        try:
+            task = self._task(lineage_id, task_id)
+            if task["attempt_terminal_at"] is None:
+                raise DeadlineError("Cannot receive a non-terminal worker result")
+            if task["result_received_at"] is None:
+                self.connection.execute(
+                    """
+                    UPDATE tasks
+                    SET result_received_at = ?, result_receipt_evidence = ?
+                    WHERE lineage_id = ? AND task_id = ?
+                      AND result_received_at IS NULL
+                    """,
+                    (received_at, evidence, lineage_id, task_id),
+                )
+            elif task["result_receipt_evidence"] != evidence:
+                raise DeadlineError("Worker result was already received with different evidence")
+            result = self._status(lineage_id, task_id, received_at)
             self.connection.commit()
             return result
         except Exception:
@@ -5198,10 +5223,10 @@ class DeadlineHarness:
                 refreshed = self._claim_deadline_incident(lineage_id, claim_id)
                 if refreshed is None:
                     raise DeadlineError("Failed to read claim deadline incident")
-                if refreshed["restart_generation"] is None and not no_change_required:
+                if refreshed["restart_generation"] is None:
                     restart, _ = self._request_coordinator_restart(
                         lineage_id,
-                        f"deadline mutation resolved for {claim_id}",
+                        f"deadline miss reviewed for {claim_id}; successor must set a fresh clock",
                         resolved_at,
                     )
                     self.connection.execute(
@@ -6234,6 +6259,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_task_identity_flags(complete)
     complete.add_argument("--evidence", required=True)
 
+    receive_result = commands.add_parser(
+        "receive-result",
+        help="Consume one terminal worker event after durable ledger projection",
+    )
+    add_task_identity_flags(receive_result)
+    receive_result.add_argument("--evidence", required=True)
+
     finding = commands.add_parser(
         "finding", help="Record one terminal worker blocker or unexpected result"
     )
@@ -6512,6 +6544,10 @@ def main(argv: list[str] | None = None) -> int:
                     result = harness.coordinator_view(include_recent_verdicts=True)
                 elif arguments.command == "complete":
                     result = harness.complete_task(
+                        arguments.lineage, arguments.task, arguments.evidence
+                    )
+                elif arguments.command == "receive-result":
+                    result = harness.receive_worker_result(
                         arguments.lineage, arguments.task, arguments.evidence
                     )
                 elif arguments.command == "transition-closure":

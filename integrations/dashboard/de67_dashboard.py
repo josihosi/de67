@@ -165,23 +165,25 @@ def render_trajectory(report: dict[str, Any]) -> str:
     ] if isinstance(raw_gaps, list) else []
     if not gaps:
         return '<section class="trajectory"><h2>Trajectory sidecar</h2><p class="subtle">No closure trajectory.</p></section>'
-    churn = report.get("churn_vector") or {}
-    if not isinstance(churn, dict):
-        churn = {}
-    observation_chips: list[str] = []
-    for name, value in churn.items():
-        if not isinstance(value, dict) or not value.get("direction"):
-            continue
-        evidence = "; ".join(str(item) for item in value.get("evidence", []) if item)
-        observation_chips.append(
-            f'<span title="{_escape(evidence)}"><b>{_escape(str(name).replace("_", " "))}</b>'
-            f'{_escape(str(value["direction"]).replace("-", " "))}</span>'
-        )
     return (
         '<section class="trajectory"><h2>Trajectory sidecar</h2>'
         f'{render_attention_spider(report, gaps)}'
-        f'<div class="trajectory-observations">{"".join(observation_chips)}</div></section>'
+        '</section>'
     )
+
+
+def _gap_card_title(summary: str, limit: int = 58) -> str:
+    """Extract a short display title from existing gap prose without inventing content."""
+    clean = " ".join(summary.split())
+    first_clause = re.split(r"(?<=[.!?;:])\s+", clean, maxsplit=1)[0].rstrip(".;:")
+    if len(first_clause) <= limit:
+        return first_clause
+    words: list[str] = []
+    for word in first_clause.split():
+        if words and len(" ".join((*words, word))) > limit - 1:
+            break
+        words.append(word)
+    return (" ".join(words) or first_clause[:limit - 1]).rstrip() + "…"
 
 
 def render_attention_spider(report: dict[str, Any], gaps: list[dict[str, Any]]) -> str:
@@ -260,6 +262,19 @@ def render_attention_spider(report: dict[str, Any], gaps: list[dict[str, Any]]) 
         legend.append(
             f'<span title="{_escape(source)}"><i class="attention-key attention-{css_key}"></i>{_escape(label)}</span>'
         )
+    gap_cards: list[str] = []
+    for gap_id, gap in zip(gap_ids, gaps):
+        summary = " ".join(str(gap.get("summary", "No explanation recorded.")).split())
+        status = str(gap.get("status", "open"))
+        active = gap_id == latest_gap and report.get("latest_task_result") == "active"
+        tone = "active" if active else "proved" if status == "proved" else "open"
+        gap_cards.append(
+            f'<article class="gap-explanation {tone}">'
+            f'<div><span>{_escape(gap_id)} r{_escape(gap.get("revision", "?"))}</span>'
+            f'<em>{_escape("active" if active else status)}</em></div>'
+            f'<strong>{_escape(_gap_card_title(summary))}</strong>'
+            f'<p>{_escape(summary)}</p></article>'
+        )
     return (
         '<article class="attention-panel"><div class="attention-heading"><h3>Attention spider</h3>'
         f'<span>{"Relative pull · not completion" if series else "Waiting for attention data"}</span></div>'
@@ -269,6 +284,7 @@ def render_attention_spider(report: dict[str, Any], gaps: list[dict[str, Any]]) 
         f'<div class="attention-legend">{"".join(legend)}</div>'
         f'<div class="attention-claim"><strong>{_escape(report.get("claim", "Claim"))}</strong>'
         f'<span>{_escape(report.get("latest_task") or "No active attempt")}</span></div>'
+        f'<div class="gap-explanations"><h4>What the boxes mean</h4>{"".join(gap_cards)}</div>'
         '<p>Each line is scaled to its own strongest gap. Hover a point for raw cosine similarity.</p>'
         '</article>'
     )
@@ -1043,8 +1059,9 @@ class Dashboard:
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}}main{{max-width:1180px;margin:auto;padding:24px}}header{{display:flex;align-items:baseline;gap:22px}}h1{{font-size:25px;margin:0}}header span,.subtle{{color:var(--muted)}}nav{{display:flex;margin:18px 0;border-bottom:1px solid var(--line)}}nav a{{color:var(--muted);text-decoration:none;padding:10px 16px}}nav a.selected{{color:var(--text);border:1px solid var(--line);border-bottom-color:var(--bg);border-radius:6px 6px 0 0;margin-bottom:-1px}}nav a:last-child{{margin-left:auto}}.status{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}}.lamp,.metric,section,.activity{{background:var(--panel);border:1px solid var(--line);border-radius:7px}}.lamp,.metric{{padding:13px 14px;min-height:82px}}small{{display:block;color:var(--muted);margin-bottom:10px}}strong{{font-size:18px}}.metric-note{{display:block;color:var(--muted);font-size:11px;margin-top:5px;white-space:nowrap}}.workers{{padding:12px 16px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:7px 12px;text-align:center;border-top:1px solid var(--line)}}thead th{{border-top:0;color:var(--muted);font-size:12px;font-weight:500}}tbody th{{text-align:left}}td{{font-variant-numeric:tabular-nums;color:var(--muted)}}td.active-count{{color:var(--green);font-weight:700}}.activity{{display:grid;grid-template-columns:100px max-content 1fr max-content;align-items:center;gap:12px;margin-top:10px;padding:10px 14px}}.activity small{{margin:0}}.activity strong{{font-size:13px}}.activity span{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.activity em{{color:var(--muted);font-style:normal;font-size:12px}}.dot{{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:8px}}.green{{background:var(--green)}}.yellow{{background:var(--yellow)}}.red{{background:var(--red)}}.grey{{background:#737983}}section{{margin-top:12px;padding:16px}}h2{{font-size:16px;margin:0 0 12px}}h3{{font-size:15px}}p,li{{line-height:1.55}}code{{background:#11151a;padding:2px 4px;border-radius:3px}}pre{{overflow:auto;background:#11151a;padding:12px;border-radius:5px}}.ledger-list{{margin-top:12px}}.ledger-item{{position:relative;margin:10px 0 0;padding:12px 16px 12px 22px;border:0;border-radius:0;background:linear-gradient(90deg,rgba(117,167,216,.08),transparent 68%)}}.ledger-item::before{{content:"";position:absolute;left:0;top:6px;bottom:6px;width:4px;border-radius:4px;background:linear-gradient(180deg,var(--blue),#536c86)}}.ledger-title{{font-weight:650;line-height:1.45}}.ledger-item ul{{list-style:none;margin:8px 0 0;padding-left:0;color:var(--muted)}}.ledger-item li{{padding:4px 0}}.ledger-item p{{margin:8px 0 0;color:var(--muted)}}.trajectory{{padding-bottom:12px}}.trajectory-scroll{{overflow:auto;display:flex;justify-content:center}}.trajectory svg{{display:block;width:min(100%,560px);height:auto;min-width:500px}}.trajectory-lines line{{stroke:var(--line);stroke-width:2}}.trajectory-node rect{{fill:#20252c;stroke:var(--line);stroke-width:2}}.trajectory-node.open rect{{stroke:var(--yellow)}}.trajectory-node.proved rect{{stroke:var(--green)}}.trajectory-node.active rect{{fill:#202b35;stroke:var(--blue);stroke-width:3}}.trajectory-node text,.trajectory-center text{{fill:var(--text);font:600 13px system-ui,sans-serif;text-anchor:middle}}.trajectory-node .node-state,.trajectory-center .node-state{{fill:var(--muted);font-size:10px;font-weight:500}}.trajectory-center rect{{fill:#111820;stroke:var(--blue);stroke-width:3}}.trajectory-note{{color:var(--muted);font-size:11px;text-align:center;line-height:1.5;padding:0 8px 4px}}footer{{display:flex;gap:25px;flex-wrap:wrap;color:var(--muted);padding:14px 4px}}footer em{{font-style:normal;color:#747c87;margin-left:5px}}.document{{padding:22px}}@media(max-width:900px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}@media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}header span{{display:none}}.activity{{grid-template-columns:1fr}}.activity span{{white-space:normal}}.trajectory svg{{min-width:460px}}}}
 .status{{grid-template-columns:repeat(6,1fr)}}
 .trajectory-observations{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}}.trajectory-observations span{{display:flex;flex-direction:column;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:5px;color:var(--muted);font-size:10px;line-height:1.35}}.trajectory-observations b{{color:var(--text);font-size:10px;font-weight:600;text-transform:capitalize;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.attention-panel{{min-width:0;padding:12px 12px 10px;border:1px solid var(--line);border-radius:6px;background:#151a20;overflow:auto}}.attention-heading{{display:flex;align-items:baseline;justify-content:space-between;gap:12px}}.attention-heading h3{{margin:0;font-size:13px}}.attention-heading span{{color:var(--muted);font-size:12px}}.attention-panel svg{{display:block;width:min(100%,760px);height:auto;min-width:540px;margin:auto}}.attention-grid polygon{{fill:none;stroke:#303741;stroke-width:1}}.attention-grid line{{stroke:#303741;stroke-width:1}}.attention-series polygon{{stroke-width:2.5;stroke-linejoin:round}}.attention-series circle{{stroke:none}}.attention-target polygon{{fill:none;stroke:#eee9df;stroke-dasharray:6 5}}.attention-target circle{{fill:#eee9df}}.attention-code polygon{{fill:rgba(117,167,216,.13);stroke:var(--blue)}}.attention-code circle{{fill:var(--blue)}}.attention-test polygon{{fill:rgba(240,188,40,.09);stroke:var(--yellow)}}.attention-test circle{{fill:var(--yellow)}}.attention-result polygon{{fill:rgba(189,128,214,.08);stroke:#bd80d6}}.attention-result circle{{fill:#bd80d6}}.attention-other polygon{{fill:none;stroke:#aab0b8}}.attention-other circle{{fill:#aab0b8}}.attention-legend{{display:flex;justify-content:center;gap:8px 13px;flex-wrap:wrap;color:var(--muted);font-size:12px}}.attention-legend span{{white-space:nowrap}}.attention-key{{display:inline-block;width:14px;height:3px;margin:0 5px 3px 0;border-radius:3px}}.attention-key.attention-target{{background:#eee9df}}.attention-key.attention-code{{background:var(--blue)}}.attention-key.attention-test{{background:var(--yellow)}}.attention-key.attention-result{{background:#bd80d6}}.attention-key.attention-other{{background:#aab0b8}}.attention-claim{{display:flex;justify-content:center;align-items:baseline;gap:9px;margin-top:7px}}.attention-claim strong{{font-size:14px}}.attention-claim span{{color:var(--muted);font-size:11px}}.attention-panel>p{{margin:6px 0 0;text-align:center;color:var(--muted);font-size:10px;line-height:1.4}}
+.gap-explanations{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-width:900px;margin:14px auto 0}}.gap-explanations h4{{grid-column:1/-1;margin:0 0 2px;font-size:12px}}.gap-explanation{{position:relative;margin:0;padding:10px 12px 11px;border:1px solid var(--line);border-left:4px solid var(--yellow);border-radius:6px;background:#171c22}}.gap-explanation.proved{{border-left-color:var(--green)}}.gap-explanation.active{{border-left-color:var(--blue);background:#18212a}}.gap-explanation div{{display:flex;justify-content:space-between;gap:8px;margin-bottom:6px}}.gap-explanation div span{{font-size:12px;font-weight:700}}.gap-explanation em{{color:var(--muted);font-size:10px;font-style:normal;text-transform:capitalize}}.gap-explanation strong{{display:block;font-size:13px;line-height:1.35}}.gap-explanation p{{margin:5px 0 0;color:var(--muted);font-size:11px;line-height:1.45}}
 @media(max-width:1000px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}
-@media(max-width:700px){{.trajectory-observations{{grid-template-columns:1fr 1fr}}.attention-heading{{align-items:flex-start;flex-direction:column}}}}
+@media(max-width:700px){{.gap-explanations{{grid-template-columns:1fr}}.attention-heading{{align-items:flex-start;flex-direction:column}}}}
 @media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}}}
 </style></head><body><main><header><h1>DE67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")

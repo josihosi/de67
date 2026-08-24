@@ -2207,6 +2207,27 @@ class DeadlineHarness:
             ]
             if not pending:
                 continue
+            history_rows = self.connection.execute(
+                """
+                SELECT generation.generation, generation.estimate_seconds,
+                       generation.started_at, generation.deadline_at,
+                       incident.source_task_id, incident.recorded_at,
+                       incident.short_verdict, incident.long_detail,
+                       task.attempt_terminal_at, task.attempt_terminal_kind
+                FROM claim_deadline_generations AS generation
+                LEFT JOIN claim_deadline_generation_incidents AS incident
+                  ON incident.lineage_id = generation.lineage_id
+                 AND incident.claim_id = generation.claim_id
+                 AND incident.generation = generation.generation
+                LEFT JOIN tasks AS task
+                  ON task.lineage_id = incident.lineage_id
+                 AND task.task_id = incident.source_task_id
+                WHERE generation.lineage_id = ? AND generation.claim_id = ?
+                  AND generation.generation <= ?
+                ORDER BY generation.generation
+                """,
+                (lineage_id, row["claim_id"], row["generation"]),
+            ).fetchall()
             result.append(
                 {
                     "claim_id": row["claim_id"],
@@ -2216,6 +2237,28 @@ class DeadlineHarness:
                     "reviewed": row["reviewed_at"] is not None,
                     "pending_components": pending,
                     "restart_generation": row["restart_generation"],
+                    "deadline_history": [
+                        {
+                            "generation": history["generation"],
+                            "planned_seconds": history["estimate_seconds"],
+                            "actual_seconds": (
+                                (history["attempt_terminal_at"] or history["recorded_at"])
+                                - history["started_at"]
+                                if (history["attempt_terminal_at"] is not None
+                                    or history["recorded_at"] is not None) else None
+                            ),
+                            "overrun_seconds": max(
+                                0.0, history["recorded_at"] - history["deadline_at"]
+                            ) if history["recorded_at"] is not None else None,
+                            "task_id": history["source_task_id"],
+                            "outcome": history["attempt_terminal_kind"] or (
+                                "deadline_miss" if history["recorded_at"] is not None else None
+                            ),
+                            "short_verdict": history["short_verdict"],
+                            "long_detail": history["long_detail"],
+                        }
+                        for history in history_rows
+                    ],
                 }
             )
         return result
@@ -5085,27 +5128,6 @@ class DeadlineHarness:
                 raise DeadlineError(
                     "Claim deadline needs an independent diagnosis before mutation"
                 )
-            previous_incident = None
-            if int(incident["generation"]) > 1:
-                previous_incident = self.connection.execute(
-                    """
-                    SELECT 1 FROM claim_deadline_generation_incidents
-                    WHERE lineage_id = ? AND claim_id = ? AND generation = ?
-                    """,
-                    (lineage_id, claim_id, int(incident["generation"]) - 1),
-                ).fetchone()
-            repeated_generation_miss = previous_incident is not None
-            if component == "macro" and repeated_generation_miss:
-                if no_change_required:
-                    raise DeadlineError(
-                        "Repeated consecutive claim deadline misses disprove no-change; "
-                        "correct the estimation method before rearming"
-                    )
-                if receipt_id is None:
-                    raise DeadlineError(
-                        "Repeated consecutive claim deadline misses require a "
-                        "guard-issued method receipt"
-                    )
             if component == "macro" and receipt_id is not None:
                 self._validate_normal_method_receipt(
                     receipt_id,

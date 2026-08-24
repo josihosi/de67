@@ -100,6 +100,15 @@ stored lane. If part of a suggestion is valid, apply that part. Move unapplied o
 to `.de67/human-todo.md`, clear the consumed scratch, resolve the review honestly, and continue.
 Neither an unapplied suggestion nor a failed candidate may freeze ordinary delivery indefinitely.
 
+Give the mutation reviewer the evidence needed to reason rather than a requested verdict. For a
+deadline review, include the full available deadline history for the claim: every planned window,
+actual attempt duration and outcome, overrun, and recorded diagnosis, together with the relevant
+ledger item, DFS gap, active guideline or policy surface, and pending owner suggestions. For other
+reviews, provide the equivalent incident history and product context. The reviewer may inspect
+local implementation and history, and may research analogous systems in primary sources when the
+causal pattern is unfamiliar or external comparison would materially reduce guesswork. Research is
+evidence, not authority. The reviewer remains free to conclude that no change is required.
+
 Use a fresh `gpt-5.6-sol` reviewer at high for ordinary incident and random mutation review. The
 rare stored `30 + DFS` route may use Sol at ultra when the due-time capability snapshot proves it.
 That rare review returns an isolated candidate for owner-authorized promotion; it does not edit live

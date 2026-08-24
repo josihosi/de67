@@ -268,9 +268,10 @@ class PolicyKernelTests(unittest.TestCase):
             decision.obligations,
         )
         self.assertIn(
-            "correct_repeated_underestimation_before_rearming",
+            "review_evidence_before_proposing_change",
             decision.obligations,
         )
+        self.assertIn("deadline_history", decision.reads)
 
     def test_live_task_prevents_second_dispatch(self) -> None:
         facts = {"live_task", "closure_ready", "open_gap", "executable_route"}

@@ -2705,6 +2705,18 @@ class DeadlineHarnessTests(unittest.TestCase):
                         "reviewed": True,
                         "pending_components": ["micro", "macro"],
                         "restart_generation": None,
+                        "deadline_history": [
+                            {
+                                "generation": 1,
+                                "planned_seconds": 10,
+                                "actual_seconds": 11,
+                                "overrun_seconds": 1,
+                                "task_id": "legacy",
+                                "outcome": "deadline_miss",
+                                "short_verdict": "estimate unsound",
+                                "long_detail": "Legacy diagnosis only.",
+                            }
+                        ],
                     }
                 ],
             )
@@ -3450,7 +3462,7 @@ class DeadlineHarnessTests(unittest.TestCase):
                 now=4,
             )
 
-    def test_repeated_consecutive_deadline_miss_requires_guarded_method_change(self) -> None:
+    def test_repeated_deadline_review_receives_history_without_forcing_verdict(self) -> None:
         self.harness.start_task("project", "first", "R-REPEAT", 1, now=0)
         self.harness.expire_task("project", "first", now=2)
         self.harness.diagnose_claim_deadline(
@@ -3474,23 +3486,34 @@ class DeadlineHarnessTests(unittest.TestCase):
             "project", "R-REPEAT", "micro", "preserve the second result", now=10
         )
 
-        with self.assertRaisesRegex(DeadlineError, "disprove no-change"):
-            self.harness.resolve_deadline_mutation(
-                "project", "R-REPEAT", "macro", "still no change",
-                no_change_required=True, now=11,
-            )
-        with self.assertRaisesRegex(DeadlineError, "guard-issued method receipt"):
-            self.harness.resolve_deadline_mutation(
-                "project", "R-REPEAT", "macro", "method changed", now=11
-            )
+        pending = self.harness.coordinator_view(now=10)["pending_deadline_mutations"][0]
+        self.assertEqual(
+            [entry["generation"] for entry in pending["deadline_history"]], [1, 2]
+        )
+        self.assertEqual(
+            [entry["planned_seconds"] for entry in pending["deadline_history"]],
+            [1, 1],
+        )
+        self.assertEqual(
+            [entry["actual_seconds"] for entry in pending["deadline_history"]],
+            [2, 2],
+        )
+        self.assertEqual(
+            [entry["overrun_seconds"] for entry in pending["deadline_history"]],
+            [1, 1],
+        )
+        self.assertEqual(
+            pending["deadline_history"][1]["long_detail"],
+            "The replacement deadline repeated the same failure.",
+        )
 
-        receipt_id = self.record_normal_receipt("second", "deadline_miss")
+        # Rich evidence informs the trusted reviewer; it does not dictate its verdict.
         resolved = self.harness.resolve_deadline_mutation(
-            "project", "R-REPEAT", "macro", "deadline estimation method changed",
-            receipt_id=receipt_id, now=11,
+            "project", "R-REPEAT", "macro", "reviewed full history; no change",
+            no_change_required=True, now=11,
         )
         self.assertEqual(resolved["pending_components"], [])
-        self.assertIsNotNone(resolved["coordinator_restart"])
+        self.assertIsNone(resolved["coordinator_restart"])
         with self.assertRaisesRegex(DeadlineError, "cannot consume"):
             self.harness.resolve_deadline_mutation(
                 "project",

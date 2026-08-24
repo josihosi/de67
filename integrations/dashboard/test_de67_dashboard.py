@@ -653,6 +653,43 @@ class DashboardTests(unittest.TestCase):
         self.assertTrue(workers["available"])
         self.assertEqual(workers["counts"]["luna"]["medium"], 0)
 
+    def test_dead_running_marker_does_not_make_coordinator_ambiguous(self) -> None:
+        day = self.sessions / "2026/08/24"
+        day.mkdir(parents=True)
+        for name, session_id in (("rollout-stale.jsonl", "stale-coordinator"),
+                                 ("rollout-current.jsonl", "current-coordinator")):
+            (day / name).write_text("".join(json.dumps(item) + "\n" for item in (
+                {"type": "session_meta", "payload": {
+                    "id": session_id, "parent_thread_id": None,
+                    "cwd": str(self.workspace), "timestamp": "2026-08-24T08:00:00Z",
+                }},
+                {"type": "turn_context", "payload": {
+                    "model": "gpt-5.6-sol", "effort": "low",
+                }},
+                {"type": "event_msg", "payload": {"type": "task_started"}},
+            )), encoding="utf-8")
+
+        runs = self.workspace / ".de67/state/coordinator-runs"
+        stale = runs / "stale"
+        current = runs / "current"
+        stale.mkdir(parents=True)
+        current.mkdir(parents=True)
+        for path, session_id, pid in ((stale, "stale-coordinator", "111"),
+                                      (current, "current-coordinator", "222")):
+            (path / "session_id.txt").write_text(session_id + "\n", encoding="ascii")
+            (path / "status.txt").write_text("RUNNING\n", encoding="ascii")
+            (path / "pid.txt").write_text(pid + "\n", encoding="ascii")
+
+        command = type("Completed", (), {
+            "stdout": (f"123 python coordinator_supervisor.py --workspace {self.workspace} "
+                       f"--run-root {runs}")
+        })()
+        with patch.object(dashboard_module.subprocess, "run", return_value=command), \
+                patch.object(dashboard_module, "_recorded_run_pid_is_alive",
+                             side_effect=lambda path: path.parent == current):
+            workers = dashboard_module.worker_state(self.workspace, self.sessions)
+        self.assertTrue(workers["available"])
+
     def test_stale_pid_file_falls_back_to_workspace_process(self) -> None:
         (self.workspace / ".de67/state/coordinator-supervisor.pid").write_text(
             "999999999", encoding="ascii"

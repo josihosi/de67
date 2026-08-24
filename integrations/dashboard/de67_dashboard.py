@@ -668,6 +668,28 @@ def _session_complete(path: Path) -> bool:
     return completed >= 0 and completed > started
 
 
+def _recorded_run_pid_is_alive(status_path: Path) -> bool | None:
+    """Return whether a recorded runner PID is alive, or None for legacy records."""
+    pid_path = status_path.with_name("pid.txt")
+    try:
+        pid = int(pid_path.read_text(encoding="ascii").strip())
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def _active_coordinator_id(workspace: Path) -> str | None:
     """Read one unambiguous active coordinator id from passive durable run records."""
     status_root = workspace / ".de67/state"
@@ -696,6 +718,8 @@ def _active_coordinator_id(workspace: Path) -> str | None:
     for status_path in status_root.glob("**/status.txt"):
         try:
             if status_path.read_text(encoding="ascii").strip() != "RUNNING":
+                continue
+            if _recorded_run_pid_is_alive(status_path) is False:
                 continue
             session_id = status_path.with_name("session_id.txt").read_text(
                 encoding="ascii"

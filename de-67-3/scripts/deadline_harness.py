@@ -5085,6 +5085,27 @@ class DeadlineHarness:
                 raise DeadlineError(
                     "Claim deadline needs an independent diagnosis before mutation"
                 )
+            previous_incident = None
+            if int(incident["generation"]) > 1:
+                previous_incident = self.connection.execute(
+                    """
+                    SELECT 1 FROM claim_deadline_generation_incidents
+                    WHERE lineage_id = ? AND claim_id = ? AND generation = ?
+                    """,
+                    (lineage_id, claim_id, int(incident["generation"]) - 1),
+                ).fetchone()
+            repeated_generation_miss = previous_incident is not None
+            if component == "macro" and repeated_generation_miss:
+                if no_change_required:
+                    raise DeadlineError(
+                        "Repeated consecutive claim deadline misses disprove no-change; "
+                        "correct the estimation method before rearming"
+                    )
+                if receipt_id is None:
+                    raise DeadlineError(
+                        "Repeated consecutive claim deadline misses require a "
+                        "guard-issued method receipt"
+                    )
             if component == "macro" and receipt_id is not None:
                 self._validate_normal_method_receipt(
                     receipt_id,

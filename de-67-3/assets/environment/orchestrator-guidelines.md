@@ -48,6 +48,11 @@ test runs, repairs between runs, review, disposition, and the uncertainty of the
 does not take zero time. Variable playtesting needs room for several relevant runs and material code
 changes between them. Finish early when possible. Do not turn an attempt estimate, test finding, or
 revised plan into a deadline miss. A deadline miss occurs only when the item clock actually expires.
+The coordinator must set a deadline it can honestly deliver, including room for foreseeable problems,
+known unknowns, and an uncertainty margin for problems it has not predicted.
+Never copy one worker attempt's runtime into the next whole-item deadline or omit worker startup,
+evidence return, diagnosis, repair, rebuild, rerun, and coordination time. After repeated underestimates,
+correct the estimation method before arming another generation; `no change required` is not honest.
 
 Give each worker a self-contained brief. Require the worker to read the relevant sections of
 `.de67/test-and-task-guidelines.md`. Use parallel workers only when their work is genuinely disjoint.

@@ -121,7 +121,7 @@ class PolicyKernelTests(unittest.TestCase):
                     rule for rule in policy["rules"] if rule["id"] == rule_id
                 )
                 dispatch["obligations"].remove(
-                    "size_one_generous_claim_deadline_for_full_route"
+                    "set_deliverable_deadline_with_problem_margin"
                 )
                 with self.assertRaisesRegex(kernel.PolicyError, "required obligations"):
                     kernel.guard_policy_candidate(
@@ -217,7 +217,15 @@ class PolicyKernelTests(unittest.TestCase):
         self.assertIn("admit_full_downstream_route_to_clock", decision.obligations)
         self.assertIn("start_unique_worker_window", decision.obligations)
         self.assertIn(
-            "size_one_generous_claim_deadline_for_full_route",
+            "set_deliverable_deadline_with_problem_margin",
+            decision.obligations,
+        )
+        self.assertIn(
+            "include_known_unknown_and_unpredicted_problem_margin",
+            decision.obligations,
+        )
+        self.assertIn(
+            "never_copy_one_attempt_runtime_into_whole_item_deadline",
             decision.obligations,
         )
 
@@ -230,7 +238,15 @@ class PolicyKernelTests(unittest.TestCase):
                 decision = kernel.decide(source_policy(), facts)
                 self.assertEqual(decision.action, "dispatch_exploration_worker")
                 self.assertIn(
-                    "size_one_generous_claim_deadline_for_full_route",
+                    "set_deliverable_deadline_with_problem_margin",
+                    decision.obligations,
+                )
+                self.assertIn(
+                    "include_known_unknown_and_unpredicted_problem_margin",
+                    decision.obligations,
+                )
+                self.assertIn(
+                    "never_copy_one_attempt_runtime_into_whole_item_deadline",
                     decision.obligations,
                 )
                 self.assertIn(
@@ -249,6 +265,10 @@ class PolicyKernelTests(unittest.TestCase):
         self.assertEqual(decision.action, "review_deadline_incident")
         self.assertIn(
             "cadence_is_observation_not_restart_authority",
+            decision.obligations,
+        )
+        self.assertIn(
+            "correct_repeated_underestimation_before_rearming",
             decision.obligations,
         )
 

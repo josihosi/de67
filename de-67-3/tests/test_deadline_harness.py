@@ -3449,6 +3449,48 @@ class DeadlineHarnessTests(unittest.TestCase):
                 no_change_required=True,
                 now=4,
             )
+
+    def test_repeated_consecutive_deadline_miss_requires_guarded_method_change(self) -> None:
+        self.harness.start_task("project", "first", "R-REPEAT", 1, now=0)
+        self.harness.expire_task("project", "first", now=2)
+        self.harness.diagnose_claim_deadline(
+            "project", "R-REPEAT", "first", "The first deadline was too short.", now=3
+        )
+        self.harness.resolve_deadline_mutation(
+            "project", "R-REPEAT", "micro", "preserve useful evidence", now=4
+        )
+        self.harness.resolve_deadline_mutation(
+            "project", "R-REPEAT", "macro", "one-off miss; no change",
+            no_change_required=True, now=5,
+        )
+
+        self.harness.start_task("project", "second", "R-REPEAT", 1, now=6)
+        self.harness.expire_task("project", "second", now=8)
+        self.harness.diagnose_claim_deadline(
+            "project", "R-REPEAT", "second",
+            "The replacement deadline repeated the same failure.", now=9,
+        )
+        self.harness.resolve_deadline_mutation(
+            "project", "R-REPEAT", "micro", "preserve the second result", now=10
+        )
+
+        with self.assertRaisesRegex(DeadlineError, "disprove no-change"):
+            self.harness.resolve_deadline_mutation(
+                "project", "R-REPEAT", "macro", "still no change",
+                no_change_required=True, now=11,
+            )
+        with self.assertRaisesRegex(DeadlineError, "guard-issued method receipt"):
+            self.harness.resolve_deadline_mutation(
+                "project", "R-REPEAT", "macro", "method changed", now=11
+            )
+
+        receipt_id = self.record_normal_receipt("second", "deadline_miss")
+        resolved = self.harness.resolve_deadline_mutation(
+            "project", "R-REPEAT", "macro", "deadline estimation method changed",
+            receipt_id=receipt_id, now=11,
+        )
+        self.assertEqual(resolved["pending_components"], [])
+        self.assertIsNotNone(resolved["coordinator_restart"])
         with self.assertRaisesRegex(DeadlineError, "cannot consume"):
             self.harness.resolve_deadline_mutation(
                 "project",

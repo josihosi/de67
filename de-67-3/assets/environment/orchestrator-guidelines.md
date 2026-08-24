@@ -45,8 +45,10 @@ Choose Luna by default for ordinary implementation, builds, harness execution, f
 bounded debugging. Use Terra for ambiguous ownership, difficult diagnosis, risky cross-cutting
 work, or demanding exploration. Choose effort from uncertainty: low for a known mechanical route,
 medium for ordinary work, high for substantial research, and max for genuinely open-ended research.
-Do not use Terra at max or Sol for ordinary work. These are recommendations; a mismatch does not
-stop delivery.
+Do not use Terra at max or Sol for ordinary work. Every new ordinary worker uses
+`fork_turns="none"`, receives a self-contained brief, and explicitly selects Luna or Terra; omitting
+the model would inherit the Sol coordinator and is invalid. Reusing an already relevant worker is
+allowed, but a new worker never receives the coordinator or predecessor transcript.
 
 Set one generous deadline for the whole ledger item. Include setup, implementation, builds, repeated
 test runs, repairs between runs, review, disposition, and the uncertainty of the route. Unknown work

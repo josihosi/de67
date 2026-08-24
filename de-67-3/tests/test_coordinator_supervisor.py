@@ -554,6 +554,10 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("state what remains or happens next", prompt)
         self.assertIn("exposes a contradiction or a missing causal step", prompt)
         self.assertIn("Internal machine state and DFS detail", prompt)
+        self.assertIn('fork_turns="none"', prompt)
+        self.assertIn("explicitly select gpt-5.6-luna or gpt-5.6-terra", prompt)
+        self.assertIn("Never omit model selection", prompt)
+        self.assertIn("pass coordinator or predecessor history", prompt)
         self.assertNotIn("Read .de67/orchestrator-guidelines.md", prompt)
         self.assertNotIn("test-and-task-guidelines.md", prompt)
 

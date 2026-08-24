@@ -765,9 +765,9 @@ def _active_coordinator_id(workspace: Path) -> str | None:
 
 
 def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
-    """Project active Luna/Terra subagents from Codex's existing read-only session records."""
+    """Project active roster subagents from Codex's existing read-only session records."""
     counts = {model: {effort: 0 for effort in ("low", "medium", "high", "max")}
-              for model in ("luna", "terra")}
+              for model in ("luna", "terra", "sol")}
     paths = sorted(sessions_root.glob("**/rollout-*.jsonl"), reverse=True)
     root_path: Path | None = None
     root: dict[str, Any] = {}
@@ -1001,7 +1001,7 @@ class Dashboard:
                     f'<tr><th>{model.title()}</th>' + "".join(
                         f'<td class="{"active-count" if worker_counts.get(model, {}).get(effort, 0) else ""}">{_escape(worker_counts.get(model, {}).get(effort, 0))}</td>'
                         for effort in ("low", "medium", "high", "max")
-                    ) + "</tr>" for model in ("luna", "terra")
+                    ) + "</tr>" for model in ("luna", "terra", "sol")
                 )
                 worker_body = f'<table><thead><tr><th>Model</th><th>Low</th><th>Medium</th><th>High</th><th>Max</th></tr></thead><tbody>{rows}</tbody></table>'
             else:

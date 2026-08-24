@@ -539,6 +539,8 @@ class DashboardTests(unittest.TestCase):
                       "gpt-5.6-luna", "medium")
         write_session("rollout-2026-08-18T08-02-00-terra.jsonl", "terra", "root",
                       "gpt-5.6-terra", "high", complete=True)
+        write_session("rollout-2026-08-18T08-03-00-sol.jsonl", "sol", "root",
+                      "gpt-5.6-sol", "low")
 
         page = dashboard_module.Dashboard(
             self.workspace, sessions_root=self.sessions
@@ -546,6 +548,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("<h2>Active workers</h2>", page)
         self.assertIn("<tr><th>Luna</th><td class=\"\">0</td><td class=\"active-count\">1</td>", page)
         self.assertIn("<tr><th>Terra</th><td class=\"\">0</td><td class=\"\">0</td><td class=\"\">0</td>", page)
+        self.assertIn("<tr><th>Sol</th><td class=\"active-count\">1</td>", page)
         self.assertNotIn("Unavailable", page)
 
     def test_worker_header_survives_large_metadata_before_turn_context(self) -> None:

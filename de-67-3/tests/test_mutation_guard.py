@@ -1893,16 +1893,14 @@ class MutationGuardTests(unittest.TestCase):
         self.assertIn("record exactly one completion, finding, or abandonment", normalized)
         self.assertIn("A coordinator start, exit, or restart does not itself create", normalized)
 
-    def test_worker_model_guidance_reserves_sol_without_a_worker_gate(self) -> None:
+    def test_worker_model_guidance_isolates_new_workers_and_reserves_sol(self) -> None:
         self.assertIn("Sol is not an ordinary worker", TASK_GUIDANCE)
         self.assertIn("Choose Luna by default", ORCHESTRATOR_GUIDANCE)
         self.assertIn("Use Terra for ambiguous ownership", ORCHESTRATOR_GUIDANCE)
         self.assertIn("reviewer at high", ORCHESTRATOR_GUIDANCE)
-        self.assertIn(
-            "a mismatch does not stop delivery",
-            " ".join(ORCHESTRATOR_GUIDANCE.split()),
-        )
-        self.assertNotIn("stop before acting", ORCHESTRATOR_GUIDANCE)
+        self.assertIn('`fork_turns="none"`', ORCHESTRATOR_GUIDANCE)
+        self.assertIn("explicitly selects Luna or Terra", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("never receives the coordinator or predecessor transcript", ORCHESTRATOR_GUIDANCE)
 
 
 if __name__ == "__main__":

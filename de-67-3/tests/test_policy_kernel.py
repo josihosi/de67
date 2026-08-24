@@ -198,6 +198,21 @@ class PolicyKernelTests(unittest.TestCase):
         self.assertEqual(decision.action, "wait_for_worker_event")
         self.assertIn("wake_no_later_than_item_deadline", decision.obligations)
 
+    def test_every_worker_result_requires_a_convergence_disposition(self) -> None:
+        for fact in ("worker_completed", "worker_finding", "worker_abandoned"):
+            with self.subTest(fact=fact):
+                decision = kernel.decide(source_policy(), {fact})
+                self.assertEqual(decision.action, "receive_worker_result")
+                self.assertIn("evaluate_convergence_after_every_worker", decision.obligations)
+                self.assertIn(
+                    "transition_to_named_closure_gaps_when_finite",
+                    decision.obligations,
+                )
+                self.assertIn(
+                    "record_specific_uncertainty_before_more_exploration",
+                    decision.obligations,
+                )
+
     def test_every_mutation_route_probes_pending_suggestions(self) -> None:
         policy = source_policy()
         for fact in (

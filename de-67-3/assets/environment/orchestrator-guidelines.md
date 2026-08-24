@@ -78,6 +78,12 @@ is required, an external blocker exists, or the bounded route is exhausted. A fi
 mutation or a coordinator restart. Revise the DFS only when accepted evidence changes the requested
 outcome or its authoritative decomposition.
 
+After every terminal worker result, perform one explicit convergence check before dispatching more
+exploration. If ownership, mechanism, remaining gaps, and the proof route are now finite, immediately
+transition the claim to closure and record the named gaps in plain English. If the route is not yet
+finite, record the specific unresolved uncertainty in the worker disposition before another
+exploration dispatch. Do not use generic uncertainty or an unchanged brief to remain in exploration.
+
 Do not repeat an unchanged failing route. Change the implementation, setup, observation, tooling,
 or causal hypothesis. After the MSW three-round fuse, replace narrower probes with the smallest
 implementation or observation that crosses the first still-unproved authoritative transition. The

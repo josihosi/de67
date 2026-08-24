@@ -573,9 +573,17 @@ class PolicyKernelTests(unittest.TestCase):
                 CREATE TABLE closure_gaps (
                     lineage_id TEXT, claim_id TEXT, closed_at REAL
                 );
+                CREATE TABLE claim_deadline_generations (
+                    lineage_id TEXT, claim_id TEXT, generation INTEGER
+                );
+                CREATE TABLE claim_deadline_generation_incidents (
+                    lineage_id TEXT, claim_id TEXT, generation INTEGER,
+                    reviewed_at REAL
+                );
                 INSERT INTO tasks VALUES ('project', 'M1', 0, 5, 'completed', NULL);
                 INSERT INTO claim_clocks VALUES ('project', 'R-004', 0, 10, 'closure');
                 INSERT INTO closure_gaps VALUES ('project', 'R-004', NULL);
+                INSERT INTO claim_deadline_generations VALUES ('project', 'R-004', 1);
                 """
             )
             connection.commit()
@@ -596,6 +604,21 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertEqual(
                 kernel.decide(source_policy(), after_expiry).action,
                 "record_deadline_miss",
+            )
+            connection = sqlite3.connect(state)
+            connection.execute(
+                "INSERT INTO claim_deadline_generation_incidents VALUES "
+                "('project', 'R-004', 1, 12)"
+            )
+            connection.commit()
+            connection.close()
+            after_recording = kernel.workspace_facts(
+                workspace, state, "project", now=13
+            )
+            self.assertNotIn("deadline_expired", after_recording)
+            self.assertEqual(
+                kernel.decide(source_policy(), after_recording).action,
+                "dispatch_closure_worker",
             )
 
     def test_preserved_baseline_has_no_compiled_kernel_and_remains_recoverable(self) -> None:

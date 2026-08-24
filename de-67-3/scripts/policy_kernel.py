@@ -436,7 +436,39 @@ def workspace_facts(
                 current_claim = str(clock["claim_id"])
                 facts.add("open_claim")
                 if float(clock["deadline_at"]) <= now:
-                    facts.add("deadline_expired")
+                    expiry_recorded = False
+                    if (
+                        _table_exists(connection, "claim_deadline_generations")
+                        and _table_exists(
+                            connection, "claim_deadline_generation_incidents"
+                        )
+                    ):
+                        current_generation = connection.execute(
+                            """
+                            SELECT MAX(generation) AS generation
+                            FROM claim_deadline_generations
+                            WHERE lineage_id = ? AND claim_id = ?
+                            """,
+                            (lineage_id, current_claim),
+                        ).fetchone()
+                        if (
+                            current_generation is not None
+                            and current_generation["generation"] is not None
+                        ):
+                            expiry_recorded = connection.execute(
+                                """
+                                SELECT 1 FROM claim_deadline_generation_incidents
+                                WHERE lineage_id = ? AND claim_id = ?
+                                  AND generation = ?
+                                """,
+                                (
+                                    lineage_id,
+                                    current_claim,
+                                    current_generation["generation"],
+                                ),
+                            ).fetchone() is not None
+                    if not expiry_recorded:
+                        facts.add("deadline_expired")
                 if str(clock["phase"]) == "closure":
                     facts.add("closure_ready")
         if _table_exists(connection, "closure_gaps") and current_claim is not None:

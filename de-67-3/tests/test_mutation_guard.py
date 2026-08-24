@@ -1846,7 +1846,7 @@ class MutationGuardTests(unittest.TestCase):
             "stay with the same coordinator",
             normalized,
         )
-        self.assertIn("An applied method or DFS mutation requests a fresh coordinator", combined)
+        self.assertIn("Mutation completion is the only planned fresh-coordinator boundary", combined)
 
     def test_worker_lifecycle_is_not_a_task_requirement(self) -> None:
         combined = SKILL_TEXT + "\n" + KERNEL_TEXT + "\n" + TASK_GUIDANCE

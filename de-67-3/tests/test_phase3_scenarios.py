@@ -40,11 +40,8 @@ class Phase3ScenarioTests(unittest.TestCase):
             self.assertTrue(expired["incident"]["recorded"])
             facts, routed = self.decision(11)
             self.assertIn("deadline_incident", facts)
-            self.assertEqual(routed.action, "review_deadline_incident")
-            self.assertIn(
-                "cadence_is_observation_not_restart_authority",
-                routed.obligations,
-            )
+            self.assertEqual(routed.action, "wait_for_mutation_quiescence")
+            self.assertIn("dispatch_no_new_worker", routed.obligations)
 
             harness.diagnose_claim_deadline(
                 "project",
@@ -103,7 +100,7 @@ class Phase3ScenarioTests(unittest.TestCase):
             self.assertTrue(expired["incident"]["recorded"])
             facts_after, routed_after = self.decision(101)
             self.assertIn("deadline_incident", facts_after)
-            self.assertEqual(routed_after.action, "review_deadline_incident")
+            self.assertEqual(routed_after.action, "retire_for_mutation_review")
 
     def test_worker_twenty_three_runs_stored_mutation_once_then_restarts(self) -> None:
         with patch(
@@ -127,8 +124,8 @@ class Phase3ScenarioTests(unittest.TestCase):
             )
             facts, routed = self.decision(2)
             self.assertIn("random_mutation_due", facts)
-            self.assertEqual(routed.action, "review_scheduled_mutation")
-            self.assertIn("use_stored_lane", routed.obligations)
+            self.assertEqual(routed.action, "retire_for_mutation_review")
+            self.assertIn("exit_to_external_supervisor", routed.obligations)
 
             first = harness.resolve_random_mutation(
                 "project", mutation["cycle_number"], "Guarded stored-lane review."

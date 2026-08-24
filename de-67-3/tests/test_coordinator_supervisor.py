@@ -55,6 +55,9 @@ event = {
     "workspace_argument": arguments.cwd,
     "generation": generation,
     "run_id": os.environ["DE67_COORDINATOR_RUN_ID"],
+    "role": os.environ.get("DE67_PROCESS_ROLE"),
+    "model": os.environ.get("DE67_COORDINATOR_MODEL"),
+    "effort": os.environ.get("DE67_COORDINATOR_REASONING_EFFORT"),
     "ack_argv": json.loads(os.environ["DE67_COORDINATOR_ACK_ARGV_JSON"])
     if generation is not None
     else None,
@@ -73,7 +76,57 @@ if not (mode == "crash-without-session-then-complete" and event_count == 1):
     )
 
 with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
-    if mode == "two-restarts":
+    if mode in {"mutation-lifecycle", "mutation-after-coordinator", "deadline-mutation-lifecycle"}:
+        if os.environ.get("DE67_PROCESS_ROLE") == "mutation-reviewer":
+            suggestions = Path(os.environ["DE67_WORKSPACE"]) / ".de67" / "mutation-suggestions.md"
+            if not suggestions.is_file():
+                raise AssertionError("mutation reviewer must receive the suggestion ledger")
+            if mode in {"mutation-lifecycle", "mutation-after-coordinator"}:
+                cycle = harness.list_tasks()["random_mutation"]
+                harness.resolve_random_mutation(
+                    os.environ["DE67_LINEAGE"],
+                    cycle["cycle_number"],
+                    "reviewed the complete suggestion ledger; no change required",
+                )
+            else:
+                incident = harness.list_tasks()["pending_incident_reviews"][0]
+                harness.diagnose_claim_deadline(
+                    os.environ["DE67_LINEAGE"],
+                    incident["claim_id"],
+                    incident["task_id"],
+                    "The deadline expired before the worker returned.",
+                )
+                harness.resolve_deadline_mutation(
+                    os.environ["DE67_LINEAGE"], incident["claim_id"],
+                    "micro", "Recover with a fresh whole-item clock."
+                )
+                harness.resolve_deadline_mutation(
+                    os.environ["DE67_LINEAGE"], incident["claim_id"],
+                    "macro", "Keep the existing general deadline guidance."
+                )
+        else:
+            if mode == "mutation-after-coordinator" and generation is None:
+                harness.complete_task(
+                    os.environ["DE67_LINEAGE"], "seed", "trigger mutation boundary"
+                )
+                raise SystemExit(0)
+            if generation is None:
+                raise AssertionError("post-mutation coordinator must be a fresh generation")
+            harness.acknowledge_coordinator_restart(
+                os.environ["DE67_LINEAGE"],
+                generation,
+                os.environ["DE67_COORDINATOR_RUN_ID"],
+            )
+            root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+            (root / "DFS.md").write_text(
+                "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+                encoding="utf-8",
+            )
+            (root / "work-ledger.md").write_text(
+                "# Work ledger\n\n## Active work\n",
+                encoding="utf-8",
+            )
+    elif mode == "two-restarts":
         if generation is None:
             harness.request_coordinator_restart(
                 os.environ["DE67_LINEAGE"], "fake first retirement"
@@ -211,13 +264,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
     elif mode == "crash-without-session-then-complete":
         if event_count == 1:
             raise SystemExit(9)
-        if generation is None:
-            raise AssertionError("non-resumable crash must get a fresh generation")
-        harness.acknowledge_coordinator_restart(
-            os.environ["DE67_LINEAGE"],
-            generation,
-            os.environ["DE67_COORDINATOR_RUN_ID"],
-        )
+        if generation is not None:
+            raise AssertionError("crash recovery must not manufacture a mutation generation")
         harness.complete_task(
             os.environ["DE67_LINEAGE"], "seed", "successor proof"
         )
@@ -324,7 +372,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.waiter.stop()
         self.temporary.cleanup()
 
-    def test_clock_event_waits_once_and_requests_a_successor(self) -> None:
+    def test_clock_event_waits_once_and_signals_mutation_without_restart(self) -> None:
         base = time.time()
         with DeadlineHarness(self.state_path) as harness:
             deadline = harness._claim("project", "R-000")["deadline_at"]
@@ -341,15 +389,14 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         assert event is not None
         self.assertAlmostEqual(sleeps[0], float(deadline) - base, places=3)
         self.assertTrue(event.signature.startswith("gate:"))
-        self.assertTrue(event.restart.required)
-        self.assertEqual(event.restart.generation, 1)
+        self.assertIsNone(event.restart)
         with DeadlineHarness(self.state_path) as harness:
             summary = harness.list_tasks(now=float(deadline))
         self.assertEqual(
             summary["pending_incident_reviews"][0]["kind"], "deadline_miss"
         )
 
-    def test_pending_incident_requests_a_successor_without_sleeping(self) -> None:
+    def test_pending_incident_signals_mutation_without_sleeping(self) -> None:
         with DeadlineHarness(self.state_path) as harness:
             deadline = float(harness._claim("project", "R-000")["deadline_at"])
             harness.expire_claim("project", "R-000", now=deadline)
@@ -365,10 +412,10 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIsNotNone(event)
         self.assertEqual(sleeps, [])
         assert event is not None
-        self.assertTrue(event.restart.required)
+        self.assertIsNone(event.restart)
         self.assertTrue(event.signature.startswith("gate:"))
 
-    def test_unchanged_incident_hands_off_to_another_successor(self) -> None:
+    def test_unchanged_incident_does_not_manufacture_restarts(self) -> None:
         with DeadlineHarness(self.state_path) as harness:
             deadline = float(harness._claim("project", "R-000")["deadline_at"])
             harness.expire_claim("project", "R-000", now=deadline)
@@ -378,14 +425,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             now=lambda: deadline,
             sleep=lambda _seconds: None,
         )
-        assert first is not None and first.restart.generation is not None
-        with DeadlineHarness(self.state_path) as harness:
-            harness.claim_coordinator_restart(
-                "project", first.restart.generation, "successor-1", now=deadline
-            )
-            harness.acknowledge_coordinator_restart(
-                "project", first.restart.generation, "successor-1", now=deadline
-            )
+        assert first is not None
+        self.assertIsNone(first.restart)
 
         second = wait_for_supervision_event(
             self.state_path,
@@ -399,9 +440,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             restart = harness.coordinator_restart_status("project")[
                 "coordinator_restart"
             ]
-        self.assertEqual(restart["generation"], 2)
-        self.assertTrue(restart["pending"])
-        self.assertEqual(second.restart.generation, 2)
+        self.assertIsNone(restart)
+        self.assertIsNone(second.restart)
 
     def test_resolved_deadline_does_not_rearm_a_successor(self) -> None:
         with DeadlineHarness(self.state_path) as harness:
@@ -468,6 +508,10 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             "# Work ledger\n\n## Active work\n\n" + item,
             encoding="utf-8",
         )
+        (state_root / "mutation-suggestions.md").write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n\n- Review this.\n",
+            encoding="utf-8",
+        )
 
     def request_restart(self) -> int:
         with DeadlineHarness(self.state_path) as harness:
@@ -526,7 +570,10 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(result, 0)
         command = self.read_events()[0]["policy_argv"]
         self.assertEqual(command[2], "decide")
-        self.assertEqual(command[3:5], ["--policy", str(self.workspace / ".de67" / "phase3-policy.d67")])
+        self.assertEqual(
+            command[3:5],
+            ["--policy", str((self.workspace / ".de67" / "phase3-policy.d67").resolve())],
+        )
         self.assertIn("--workspace", command)
         self.assertIn("--state", command)
         guard = self.read_events()[0]["policy_guard_argv"]
@@ -548,6 +595,96 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(arguments.coordinator_model, "gpt-5.6-sol")
         self.assertEqual(arguments.coordinator_reasoning_effort, "low")
         self.assertEqual(arguments.runner, ["runner", "--runner-owned-option"])
+
+    def test_due_mutation_exclusively_runs_high_reviewer_then_fresh_low_coordinator(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.connection.execute(
+                """
+                UPDATE random_mutation_cycles
+                SET interval_windows = 10, due_after_terminal_windows = 10,
+                    selected_lane = 'orchestrator-guidelines.md'
+                WHERE lineage_id = 'project' AND cycle_number = 1
+                """
+            )
+            harness.connection.commit()
+            harness.complete_task("project", "seed", "terminal one")
+            for number in range(2, 11):
+                task_id = f"terminal-{number}"
+                harness.start_task("project", task_id, "R-001", 3600)
+                harness.complete_task("project", task_id, f"terminal {number}")
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env={
+                **self.environment("mutation-lifecycle"),
+                "DE67_COORDINATOR_MODEL": "gpt-5.6-sol",
+                "DE67_COORDINATOR_REASONING_EFFORT": "low",
+            },
+            run_id_factory=lambda _generation: "fresh-low-coordinator",
+        )
+
+        self.assertEqual(result, 0)
+        events = self.read_events()
+        self.assertEqual([event["role"] for event in events], [
+            "mutation-reviewer", "coordinator",
+        ])
+        self.assertEqual(
+            [(event["model"], event["effort"]) for event in events],
+            [("gpt-5.6-sol", "high"), ("gpt-5.6-sol", "low")],
+        )
+        reviewer_run = next(
+            path for path in self.run_root.iterdir() if path.name.startswith("mutation-")
+        )
+        reviewer_prompt = (reviewer_run / "prompt.txt").read_text(encoding="utf-8")
+        self.assertIn("mutation-suggestions.md completely", reviewer_prompt)
+        self.assertIn("Disposition every pending suggestion explicitly", reviewer_prompt)
+        self.assertIn("supervisor alone starts the fresh coordinator", reviewer_prompt)
+
+    def test_mutation_becoming_due_retires_coordinator_before_reviewer(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.connection.execute(
+                """
+                UPDATE random_mutation_cycles
+                SET interval_windows = 10, due_after_terminal_windows = 10,
+                    selected_lane = 'test-and-task-guidelines.md'
+                WHERE lineage_id = 'project' AND cycle_number = 1
+                """
+            )
+            harness.connection.commit()
+            for number in range(2, 11):
+                task_id = f"terminal-{number}"
+                harness.start_task("project", task_id, "R-001", 3600)
+                harness.complete_task("project", task_id, f"terminal {number}")
+
+        run_ids = iter(("retiring-low-coordinator", "fresh-low-coordinator"))
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env={
+                **self.environment("mutation-after-coordinator"),
+                "DE67_COORDINATOR_MODEL": "gpt-5.6-sol",
+                "DE67_COORDINATOR_REASONING_EFFORT": "low",
+            },
+            run_id_factory=lambda _generation: next(run_ids),
+        )
+
+        self.assertEqual(result, 0)
+        events = self.read_events()
+        self.assertEqual(
+            [(event["role"], event["effort"]) for event in events],
+            [("coordinator", "low"), ("mutation-reviewer", "high"),
+             ("coordinator", "low")],
+        )
+        self.assertEqual([event["generation"] for event in events], [None, None, 1])
 
     def test_optional_adapter_argument_stays_outside_runner_arguments(self) -> None:
         arguments = build_parser().parse_args(
@@ -1005,14 +1142,13 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(result, 0)
         events = self.read_events()
         self.assertIsNone(events[0]["generation"])
-        self.assertEqual(events[1]["generation"], 1)
+        self.assertIsNone(events[1]["generation"])
         self.assertIsNone(events[1]["resume_session"])
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.coordinator_restart_status("project")[
                 "coordinator_restart"
             ]
-        self.assertEqual(restart["generation"], 1)
-        self.assertFalse(restart_required(restart))
+        self.assertIsNone(restart)
 
     def test_missing_runner_is_a_concrete_environment_blocker(self) -> None:
         self.write_work_documents(red=True, active=True)
@@ -1176,12 +1312,16 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.workspace,
             self.runner_command(),
             self.run_root,
-            extra_env=self.environment("unacknowledged"),
+            extra_env=self.environment("deadline-mutation-lifecycle"),
             run_id_factory=lambda _generation: "incident-run",
         )
 
         self.assertEqual(result, 0)
-        self.assertEqual(len(self.read_events()), 1)
+        events = self.read_events()
+        self.assertEqual(len(events), 2)
+        self.assertEqual([event["role"] for event in events], [
+            "mutation-reviewer", "coordinator",
+        ])
 
     def test_pending_integrity_mutation_prevents_completion(self) -> None:
         self.write_work_documents()

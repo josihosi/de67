@@ -41,15 +41,20 @@ source exactly; lossy or noncanonical artifacts fail closed.
 
 ## Route locally
 
-The supervisor launches a coordinator against the compiled workspace policy. The coordinator asks
-the kernel for the next transition and routes only the returned minimal brief. Deadline, integrity,
-random, DFS, universal, worker, blocker, acceptance, and restart routes are policy actions over
-durable state. Product strategy and evidence judgment remain model work inside the selected route.
+The supervisor launches an ordinary `gpt-5.6-sol` coordinator at low against the compiled workspace
+policy. The coordinator asks the kernel for the next transition and routes only the returned minimal
+brief. A due mutation blocks new dispatch. Once all already-live worker windows are terminal, the
+coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh
+`gpt-5.6-sol` reviewer at high with no coordinator or worker active. That reviewer reads the complete
+mutation-suggestion ledger, dispositions every entry, resolves the durable mutation gate, and exits.
+Only then does the supervisor launch one fresh low coordinator. Product strategy and evidence
+judgment remain model work inside the selected route.
 
 ## Terminal routing
 
 Ordinary worker results, test failures, acceptance, ledger refill, and exploration-to-closure
 transition stay with the same coordinator. A formal terminal finding also stays with that
 coordinator; it is reserved for a disproved strategy, materially different route, external blocker,
-or exhausted bounded route. An applied method or DFS mutation requests a fresh coordinator and
-retires the old one. The external supervisor launches and acknowledges the successor.
+or exhausted bounded route. Mutation completion is the only planned fresh-coordinator boundary.
+An abnormal process exit remains recoverable, but it is recorded as recovery rather than treated as
+a policy restart. The external supervisor exclusively launches and acknowledges every process.

@@ -28,12 +28,14 @@ def source_policy() -> dict:
 
 
 CASES = (
-    ({"integrity_incident", "live_task"}, "review_integrity_incident"),
-    ({"deadline_incident", "worker_completed"}, "review_deadline_incident"),
+    ({"integrity_incident", "live_task"}, "wait_for_mutation_quiescence"),
+    ({"integrity_incident"}, "retire_for_mutation_review"),
+    ({"deadline_incident", "worker_completed"}, "retire_for_mutation_review"),
     ({"restart_requested", "open_claim"}, "acknowledge_restart"),
-    ({"random_mutation_due"}, "review_scheduled_mutation"),
-    ({"dfs_review_due", "pending_suggestions"}, "review_scheduled_mutation"),
-    ({"universal_review_due"}, "review_scheduled_mutation"),
+    ({"random_mutation_due"}, "retire_for_mutation_review"),
+    ({"random_mutation_due", "live_task"}, "wait_for_mutation_quiescence"),
+    ({"dfs_review_due", "pending_suggestions"}, "retire_for_mutation_review"),
+    ({"universal_review_due"}, "retire_for_mutation_review"),
     ({"accepted_evidence"}, "review_dfs_acceptance"),
     ({"worker_completed"}, "receive_worker_result"),
     ({"worker_finding"}, "receive_worker_result"),
@@ -100,16 +102,14 @@ class PolicyKernelTests(unittest.TestCase):
     def test_machine_candidate_guard_rejects_mutation_route_that_ignores_ledger(self) -> None:
         policy = source_policy()
         deadline = next(rule for rule in policy["rules"] if rule["id"] == "D1")
-        deadline["obligations"].remove("disposition_relevant_suggestions")
+        deadline["obligations"].remove("perform_no_mutation")
         with self.assertRaisesRegex(kernel.PolicyError, "required obligations"):
             kernel.guard_policy_candidate(policy, kernel.load_contracts(CONTRACTS))
 
-    def test_machine_candidate_guard_rejects_deadline_cadence_restart_authority(self) -> None:
+    def test_machine_candidate_guard_rejects_deadline_coordinator_retirement(self) -> None:
         policy = source_policy()
         deadline = next(rule for rule in policy["rules"] if rule["id"] == "D1")
-        deadline["obligations"].remove(
-            "cadence_is_observation_not_restart_authority"
-        )
+        deadline["obligations"].remove("exit_to_external_supervisor")
         with self.assertRaisesRegex(kernel.PolicyError, "required obligations"):
             kernel.guard_policy_candidate(policy, kernel.load_contracts(CONTRACTS))
 
@@ -159,7 +159,7 @@ class PolicyKernelTests(unittest.TestCase):
 
     def test_rule_without_positive_predicate_is_rejected(self) -> None:
         policy = source_policy()
-        policy["rules"][0].pop("all")
+        policy["rules"][1].pop("all")
         with self.assertRaisesRegex(kernel.PolicyError, "positive"):
             kernel.validate_policy(policy)
 
@@ -176,7 +176,7 @@ class PolicyKernelTests(unittest.TestCase):
         policy = source_policy()
         policy["rules"].append({
             "id": "I2", "priority": 100, "all": ["integrity_incident"],
-            "action": "review_integrity_incident", "reads": ["extra"],
+            "none": ["live_task"], "action": "retire_for_mutation_review", "reads": ["extra"],
             "obligations": ["extra_check"],
         })
         decision = kernel.decide(policy, {"integrity_incident"})
@@ -186,8 +186,8 @@ class PolicyKernelTests(unittest.TestCase):
     def test_incidents_preempt_late_worker_results_and_acceptance(self) -> None:
         policy = source_policy()
         for incident, expected in (
-            ("deadline_incident", "review_deadline_incident"),
-            ("integrity_incident", "review_integrity_incident"),
+            ("deadline_incident", "retire_for_mutation_review"),
+            ("integrity_incident", "retire_for_mutation_review"),
         ):
             for result in ("worker_completed", "worker_finding", "accepted_evidence"):
                 with self.subTest(incident=incident, result=result):
@@ -213,7 +213,7 @@ class PolicyKernelTests(unittest.TestCase):
                     decision.obligations,
                 )
 
-    def test_every_mutation_route_probes_pending_suggestions(self) -> None:
+    def test_every_mutation_route_retires_without_mutating(self) -> None:
         policy = source_policy()
         for fact in (
             "integrity_incident", "deadline_incident", "random_mutation_due",
@@ -221,9 +221,10 @@ class PolicyKernelTests(unittest.TestCase):
         ):
             with self.subTest(fact=fact):
                 decision = kernel.decide(policy, {fact, "pending_suggestions"})
-                self.assertIn("probe_pending_suggestions", decision.obligations)
-                self.assertIn("disposition_relevant_suggestions", decision.obligations)
-                self.assertIn("pending_suggestions", decision.reads)
+                self.assertEqual(decision.action, "retire_for_mutation_review")
+                self.assertIn("perform_no_mutation", decision.obligations)
+                self.assertIn("exit_to_external_supervisor", decision.obligations)
+                self.assertNotIn("pending_suggestions", decision.reads)
 
     def test_closure_dispatch_requires_full_route_clock_admission(self) -> None:
         decision = kernel.decide(
@@ -263,15 +264,12 @@ class PolicyKernelTests(unittest.TestCase):
         decision = kernel.decide(source_policy(), {"accepted_evidence"})
         self.assertIn("guard_and_apply_exact_dfs_completion", decision.obligations)
 
-    def test_deadline_incident_cadence_cannot_authorize_restart(self) -> None:
+    def test_deadline_incident_retires_to_external_reviewer(self) -> None:
         decision = kernel.decide(
             source_policy(), {"deadline_incident", "worker_abandoned"}
         )
-        self.assertEqual(decision.action, "review_deadline_incident")
-        self.assertIn(
-            "cadence_is_observation_not_restart_authority",
-            decision.obligations,
-        )
+        self.assertEqual(decision.action, "retire_for_mutation_review")
+        self.assertIn("exit_to_external_supervisor", decision.obligations)
 
     def test_live_task_prevents_second_dispatch(self) -> None:
         facts = {"live_task", "closure_ready", "open_gap", "executable_route"}
@@ -441,7 +439,7 @@ class PolicyKernelTests(unittest.TestCase):
                 text=True, capture_output=True
             )
             self.assertEqual(decided.returncode, 0, decided.stderr)
-            self.assertEqual(json.loads(decided.stdout)["action"], "review_deadline_incident")
+            self.assertEqual(json.loads(decided.stdout)["action"], "retire_for_mutation_review")
             decompiled = subprocess.run(
                 [sys.executable, str(SCRIPT), "decompile", "--policy", str(output)],
                 text=True, capture_output=True,

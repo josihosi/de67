@@ -54,8 +54,15 @@ class ChildResult:
 
 @dataclass(frozen=True)
 class SupervisionEvent:
-    restart: RestartState
+    restart: RestartState | None
     signature: str
+
+
+@dataclass(frozen=True)
+class MutationGate:
+    kind: str
+    identity: str
+    selected_lane: str | None
 
 
 def _write(path: Path, value: str) -> None:
@@ -143,6 +150,42 @@ def read_clock(state_path: Path, lineage_id: str) -> RestartState:
         )
 
 
+def mutation_gate(state_path: Path, lineage_id: str) -> MutationGate | None:
+    """Return the first durable mutation gate only after workers are quiet."""
+    with DeadlineHarness(state_path) as harness:
+        summary = harness.list_tasks()
+    if any(task.get("state") == "running" for task in summary["tasks"]):
+        return None
+    random_review = summary.get("random_mutation")
+    if isinstance(random_review, Mapping) and random_review.get("due") is True:
+        return MutationGate(
+            "random",
+            f"cycle {random_review['cycle_number']}",
+            str(random_review["selected_lane"]),
+        )
+    pending_reviews = summary.get("pending_incident_reviews", [])
+    if pending_reviews:
+        incident = pending_reviews[0]
+        return MutationGate(
+            "incident-review",
+            str(incident.get("task_id") or incident.get("claim_id") or "pending incident"),
+            None,
+        )
+    for key, kind in (
+        ("pending_deadline_mutations", "deadline-mutation"),
+        ("pending_integrity_mutations", "integrity-mutation"),
+    ):
+        pending = summary.get(key, [])
+        if pending:
+            item = pending[0]
+            return MutationGate(
+                kind,
+                str(item.get("task_id") or item.get("claim_id") or kind),
+                None,
+            )
+    return None
+
+
 def _gate_signature(
     pending_reviews: Sequence[object],
     pending_mutations: Sequence[object],
@@ -178,18 +221,7 @@ def wait_for_supervision_event(
         ]
         if pending_reviews or pending_mutations:
             signature = _gate_signature(pending_reviews, pending_mutations)
-            requested = harness.request_coordinator_restart(
-                lineage_id,
-                "supervisor observed a persisted incident or mutation gate",
-                now=now(),
-            )["coordinator_restart"]
-            return SupervisionEvent(
-                _restart_state(
-                    {"lineage_id": lineage_id, "coordinator_restart": requested},
-                    lineage_id,
-                ),
-                signature,
-            )
+            return SupervisionEvent(None, signature)
 
         deadlines = [
             (float(task["deadline_at"]), str(task["claim_id"]))
@@ -222,18 +254,7 @@ def wait_for_supervision_event(
         if not pending_reviews and not pending_mutations:
             return None
         signature = _gate_signature(pending_reviews, pending_mutations)
-        requested = harness.request_coordinator_restart(
-            lineage_id,
-            f"claim {claim_id} reached its immutable deadline",
-            now=max(deadline_at, now()),
-        )["coordinator_restart"]
-    return SupervisionEvent(
-        _restart_state(
-            {"lineage_id": lineage_id, "coordinator_restart": requested},
-            lineage_id,
-        ),
-        signature,
-    )
+    return SupervisionEvent(None, signature)
 
 
 def work_is_complete(
@@ -379,6 +400,31 @@ def coordinator_prompt(
     return "\n".join(lines) + "\n"
 
 
+def mutation_reviewer_prompt(
+    workspace: Path,
+    state_path: Path,
+    lineage_id: str,
+    gate: MutationGate,
+) -> str:
+    lane = gate.selected_lane or "the incident-selected mutable guidance"
+    return "\n".join(
+        [
+            f"Act as the exclusive Phase-3 mutation reviewer in {workspace}.",
+            "You are a fresh gpt-5.6-sol reviewer at high reasoning effort.",
+            "No coordinator or roster worker is active. Do not dispatch work and do not start a coordinator.",
+            f"Resolve the durable {gate.kind} gate {gate.identity}; its selected lane is {lane}.",
+            f"Use {state_path} and lineage {lineage_id} for every durable transition.",
+            "Read .de67/mutation-suggestions.md completely, including the Pending suggestions section.",
+            "Read the exact live selected mutation target and the clock evidence needed to understand the failure or opportunity.",
+            "Disposition every pending suggestion explicitly: apply its general lesson, preserve it in human-todo.md when it is valid but outside this lane, or reject it with a concrete reason.",
+            "Revise the whole selected guidance coherently. Prefer replacing, generalizing, shortening, or deleting stale rules over tacking on situational prose.",
+            "Use the mutation guard for policy or DFS candidates and preserve source and compiled policy together.",
+            "Use deadline_harness.py command help for the exact review and resolution transitions. Continue until this mutation gate is durably resolved and its fresh-coordinator restart request exists.",
+            "Exit immediately after resolution. The external supervisor alone starts the fresh coordinator.",
+        ]
+    ) + "\n"
+
+
 def _default_run_id(generation: int | None) -> str:
     label = "initial" if generation is None else f"restart-{generation}"
     return f"{label}-{uuid.uuid4().hex}"
@@ -398,6 +444,79 @@ def _mark_protocol_failure(result: ChildResult, reason: str) -> None:
     _write(result.run_dir / "status.txt", "FAILED\n")
 
 
+def run_mutation_reviewer(
+    runner_command: Sequence[str],
+    workspace: Path,
+    state_path: Path,
+    lineage_id: str,
+    run_root: Path,
+    gate: MutationGate,
+    *,
+    extra_env: Mapping[str, str] | None = None,
+) -> ChildResult:
+    reviewer_env = dict(extra_env or {})
+    reviewer_env.update(
+        {
+            "DE67_COORDINATOR_MODEL": "gpt-5.6-sol",
+            "DE67_COORDINATOR_REASONING_EFFORT": "high",
+        }
+    )
+    return run_child(
+        runner_command,
+        workspace,
+        state_path,
+        lineage_id,
+        run_root,
+        f"mutation-{uuid.uuid4().hex}",
+        None,
+        extra_env=reviewer_env,
+        prompt_override=mutation_reviewer_prompt(
+            workspace, state_path, lineage_id, gate
+        ),
+        role="mutation-reviewer",
+    )
+
+
+def _complete_mutation_review(
+    runner_command: Sequence[str],
+    workspace: Path,
+    state_path: Path,
+    lineage_id: str,
+    run_root: Path,
+    gate: MutationGate,
+    *,
+    extra_env: Mapping[str, str] | None,
+) -> RestartState:
+    result = run_mutation_reviewer(
+        runner_command,
+        workspace,
+        state_path,
+        lineage_id,
+        run_root,
+        gate,
+        extra_env=extra_env,
+    )
+    if not result.launched or result.exit_code != 0:
+        raise SupervisorError(
+            f"Mutation reviewer failed for {gate.kind} {gate.identity}; ordinary work remains stopped"
+        )
+    remaining = mutation_gate(state_path, lineage_id)
+    if remaining is not None:
+        _mark_protocol_failure(
+            result,
+            f"Mutation reviewer exited without resolving {remaining.kind} {remaining.identity}",
+        )
+        raise SupervisorError("Mutation reviewer left a durable mutation gate unresolved")
+    restart = read_clock(state_path, lineage_id)
+    if not restart.required or restart.generation is None:
+        _mark_protocol_failure(
+            result,
+            "Mutation reviewer resolved the gate without requesting one fresh coordinator",
+        )
+        raise SupervisorError("Resolved mutation lacks its fresh-coordinator handoff")
+    return restart
+
+
 def run_child(
     runner_command: Sequence[str],
     workspace: Path,
@@ -409,6 +528,8 @@ def run_child(
     *,
     extra_env: Mapping[str, str] | None = None,
     resume_session_id: str | None = None,
+    prompt_override: str | None = None,
+    role: str = "coordinator",
 ) -> ChildResult:
     if not runner_command:
         raise SupervisorError("Runner command must not be empty")
@@ -419,7 +540,9 @@ def run_child(
     except OSError as error:
         raise SupervisorError(f"Cannot create coordinator run directory: {error}") from error
 
-    if resume_session_id is None:
+    if prompt_override is not None:
+        prompt = prompt_override
+    elif resume_session_id is None:
         prompt = coordinator_prompt(workspace, state_path, lineage_id, run_id, generation)
     else:
         prompt = (
@@ -436,6 +559,7 @@ def run_child(
     environment.update(
         {
             "DE67_COORDINATOR_RUN_ID": run_id,
+            "DE67_PROCESS_ROLE": role,
             "DE67_DEADLINE_STATE": str(state_path),
             "DE67_LINEAGE": lineage_id,
             "DE67_WORKSPACE": str(workspace),
@@ -604,6 +728,17 @@ def _run_supervisor_locked(
         return 0
 
     records.mkdir(parents=True, exist_ok=True)
+    gate = mutation_gate(state, lineage_id)
+    if gate is not None:
+        restart = _complete_mutation_review(
+            runner_command,
+            workdir,
+            state,
+            lineage_id,
+            records,
+            gate,
+            extra_env=extra_env,
+        )
 
     generation = restart.generation if restart.required else None
     resume_session_id: str | None = None
@@ -669,6 +804,18 @@ def _run_supervisor_locked(
                 _mark_protocol_failure(result, "Coordinator restart generation moved backwards")
                 return 1
 
+        gate = mutation_gate(state, lineage_id)
+        if gate is not None:
+            after = _complete_mutation_review(
+                runner_command,
+                workdir,
+                state,
+                lineage_id,
+                records,
+                gate,
+                extra_env=extra_env,
+            )
+
         blocked_audit = blocked_ledger_audit_reason(workdir)
         if blocked_audit is not None and blocked_work_is_quiescent(
             state, lineage_id
@@ -708,15 +855,12 @@ def _run_supervisor_locked(
                 )
                 return 1
         if not after.required and result.exit_code != 0 and has_executable_work:
-            with DeadlineHarness(state) as harness:
-                requested = harness.request_coordinator_restart(
-                    lineage_id,
-                    "supervisor is recovering an abnormal coordinator exit",
-                )["coordinator_restart"]
-            after = _restart_state(
-                {"lineage_id": lineage_id, "coordinator_restart": requested},
-                lineage_id,
-            )
+            # Process recovery is not a semantic coordinator restart. Start a
+            # clean low coordinator against the same durable frontier without
+            # manufacturing a mutation generation.
+            resume_session_id = None
+            generation = None
+            continue
         if not after.required:
             if event_waiter is None:
                 event = wait_for_supervision_event(state, lineage_id)
@@ -724,7 +868,25 @@ def _run_supervisor_locked(
                 event = wait_for_event(state, lineage_id)
             if event is None:
                 return result.exit_code if result.exit_code > 0 else 0
-            after = event.restart
+            if event.restart is None:
+                gate = mutation_gate(state, lineage_id)
+                if gate is None:
+                    _mark_protocol_failure(
+                        result,
+                        "Mutation event became active before all worker windows were terminal",
+                    )
+                    return 1
+                after = _complete_mutation_review(
+                    runner_command,
+                    workdir,
+                    state,
+                    lineage_id,
+                    records,
+                    gate,
+                    extra_env=extra_env,
+                )
+            else:
+                after = event.restart
         if after.generation is None:
             _mark_protocol_failure(result, "Required coordinator restart lacks a generation")
             return 1

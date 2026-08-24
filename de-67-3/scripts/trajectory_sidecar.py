@@ -400,6 +400,23 @@ def build_report(
         if sequence_row is None or sequence_row[0] is None:
             raise TrajectoryError(f"No closure gaps found for {lineage_id}/{claim}")
         sequence = int(sequence_row[0])
+        claim_reopened = False
+        if connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claim_phase_events'"
+        ).fetchone() is not None:
+            latest_phase = connection.execute(
+                """
+                SELECT sequence, phase FROM claim_phase_events
+                WHERE lineage_id = ? AND claim_id = ?
+                ORDER BY sequence DESC LIMIT 1
+                """,
+                (lineage_id, claim),
+            ).fetchone()
+            claim_reopened = bool(
+                latest_phase is not None
+                and str(latest_phase["phase"]) == "exploration"
+                and int(latest_phase["sequence"]) > sequence
+            )
         rows = connection.execute(
             """
             SELECT g.gap_id, g.closed_at, g.closure_evidence,
@@ -458,12 +475,19 @@ def build_report(
                     gap_id=str(row["gap_id"]),
                     revision=int(row["revision"]),
                     summary=" ".join(str(row["description"]).split()),
-                    status="proved" if row["closed_at"] is not None else "open",
+                    status=(
+                        "reopened" if claim_reopened and row["closed_at"] is not None
+                        else "proved" if row["closed_at"] is not None else "open"
+                    ),
                     implementation_relation=implementation_relation,
                     implementation_unit=implementation_unit,
                     test_relation=test_relation,
                     test_unit=test_unit,
-                    accepted_proof=bool(row["closed_at"] is not None and row["closure_evidence"]),
+                    accepted_proof=bool(
+                        not claim_reopened
+                        and row["closed_at"] is not None
+                        and row["closure_evidence"]
+                    ),
                     attempts=len(kinds),
                     completed=kind_counts["completed"],
                     findings=kind_counts["finding"],

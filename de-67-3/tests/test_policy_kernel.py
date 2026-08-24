@@ -574,16 +574,17 @@ class PolicyKernelTests(unittest.TestCase):
                     lineage_id TEXT, claim_id TEXT, closed_at REAL
                 );
                 CREATE TABLE claim_deadline_generations (
-                    lineage_id TEXT, claim_id TEXT, generation INTEGER
+                    lineage_id TEXT, claim_id TEXT, generation INTEGER,
+                    deadline_at REAL
                 );
                 CREATE TABLE claim_deadline_generation_incidents (
                     lineage_id TEXT, claim_id TEXT, generation INTEGER,
                     reviewed_at REAL
                 );
                 INSERT INTO tasks VALUES ('project', 'M1', 0, 5, 'completed', NULL);
-                INSERT INTO claim_clocks VALUES ('project', 'R-004', 0, 10, 'closure');
+                INSERT INTO claim_clocks VALUES ('project', 'R-004', 0, 1, 'closure');
                 INSERT INTO closure_gaps VALUES ('project', 'R-004', NULL);
-                INSERT INTO claim_deadline_generations VALUES ('project', 'R-004', 1);
+                INSERT INTO claim_deadline_generations VALUES ('project', 'R-004', 1, 10);
                 """
             )
             connection.commit()

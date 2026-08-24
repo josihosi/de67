@@ -435,7 +435,29 @@ def workspace_facts(
             if clock is not None:
                 current_claim = str(clock["claim_id"])
                 facts.add("open_claim")
-                if float(clock["deadline_at"]) <= now:
+                current_deadline = float(clock["deadline_at"])
+                current_generation_number: int | None = None
+                if _table_exists(connection, "claim_deadline_generations"):
+                    generation_columns = {
+                        str(row["name"])
+                        for row in connection.execute(
+                            "PRAGMA table_info(claim_deadline_generations)"
+                        ).fetchall()
+                    }
+                    if {"generation", "deadline_at"} <= generation_columns:
+                        generation = connection.execute(
+                            """
+                            SELECT generation, deadline_at
+                            FROM claim_deadline_generations
+                            WHERE lineage_id = ? AND claim_id = ?
+                            ORDER BY generation DESC LIMIT 1
+                            """,
+                            (lineage_id, current_claim),
+                        ).fetchone()
+                        if generation is not None:
+                            current_generation_number = int(generation["generation"])
+                            current_deadline = float(generation["deadline_at"])
+                if current_deadline <= now:
                     expiry_recorded = False
                     if (
                         _table_exists(connection, "claim_deadline_generations")
@@ -443,18 +465,7 @@ def workspace_facts(
                             connection, "claim_deadline_generation_incidents"
                         )
                     ):
-                        current_generation = connection.execute(
-                            """
-                            SELECT MAX(generation) AS generation
-                            FROM claim_deadline_generations
-                            WHERE lineage_id = ? AND claim_id = ?
-                            """,
-                            (lineage_id, current_claim),
-                        ).fetchone()
-                        if (
-                            current_generation is not None
-                            and current_generation["generation"] is not None
-                        ):
+                        if current_generation_number is not None:
                             expiry_recorded = connection.execute(
                                 """
                                 SELECT 1 FROM claim_deadline_generation_incidents
@@ -464,7 +475,7 @@ def workspace_facts(
                                 (
                                     lineage_id,
                                     current_claim,
-                                    current_generation["generation"],
+                                    current_generation_number,
                                 ),
                             ).fetchone() is not None
                     if not expiry_recorded:

@@ -78,6 +78,9 @@ class TrajectorySidecarTests(unittest.TestCase):
                     lineage_id TEXT, task_id TEXT, kind TEXT, reported_at REAL,
                     short_verdict TEXT, evidence TEXT
                 );
+                CREATE TABLE claim_phase_events (
+                    lineage_id TEXT, claim_id TEXT, sequence INTEGER, phase TEXT
+                );
                 INSERT INTO lineage_binding VALUES ('project');
                 INSERT INTO closure_gaps VALUES
                     ('project', 'R-001', 2, 'G-001', 1, 'W-001', 3, 'bound production proof'),
@@ -96,6 +99,7 @@ class TrajectorySidecarTests(unittest.TestCase):
                     ('project', 'W-002', 'finding', 3,
                      'Night scheduler still needs proof',
                      'Continue darkness wait after reload');
+                INSERT INTO claim_phase_events VALUES ('project', 'R-001', 2, 'closure');
                 """
             )
             connection.commit()
@@ -145,6 +149,18 @@ class TrajectorySidecarTests(unittest.TestCase):
             encoded["churn_vector"]["product_owner"]["direction"],
             "product-surface-present",
         )
+
+    def test_reopened_claim_does_not_render_closed_gaps_as_proved(self) -> None:
+        with closing(sqlite3.connect(self.state)) as connection:
+            connection.execute(
+                "INSERT INTO claim_phase_events VALUES ('project', 'R-001', 3, 'exploration')"
+            )
+            connection.commit()
+
+        report = sidecar.build_report(self.workspace, self.state, "R-001")
+
+        self.assertEqual(report.gaps[0].status, "reopened")
+        self.assertFalse(report.gaps[0].accepted_proof)
 
     def test_missing_claim_fails_without_creating_state(self) -> None:
         with self.assertRaisesRegex(sidecar.TrajectoryError, "No closure gaps"):

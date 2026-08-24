@@ -13,7 +13,8 @@ or debug tooling when those choices stay inside the frozen outcome.
 
 Use exploration for one concrete unknown. Return a usable strategy and proof route. Use closure when
 the strategy and proof route are already known. A closure task may cover coupled gaps when splitting
-them would leave no independently valid state.
+them would leave no independently valid state. Otherwise preserve each independently provable
+outcome as its own named gap so progress and evidence stay visible.
 
 ## Use tools and harnesses
 

@@ -205,7 +205,7 @@ class PolicyKernelTests(unittest.TestCase):
                 self.assertEqual(decision.action, "receive_worker_result")
                 self.assertIn("evaluate_convergence_after_every_worker", decision.obligations)
                 self.assertIn(
-                    "transition_to_named_closure_gaps_when_finite",
+                    "transition_to_named_independently_provable_closure_gaps_when_finite",
                     decision.obligations,
                 )
                 self.assertIn(

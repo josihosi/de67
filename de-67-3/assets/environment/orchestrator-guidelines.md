@@ -83,6 +83,9 @@ exploration. If ownership, mechanism, remaining gaps, and the proof route are no
 transition the claim to closure and record the named gaps in plain English. If the route is not yet
 finite, record the specific unresolved uncertainty in the worker disposition before another
 exploration dispatch. Do not use generic uncertainty or an unchanged brief to remain in exploration.
+Give each independently provable remaining outcome its own closure gap. Keep one gap only when the
+route is genuinely indivisible; do not collapse several ledger obligations merely to reduce
+coordination.
 
 Do not repeat an unchanged failing route. Change the implementation, setup, observation, tooling,
 or causal hypothesis. After the MSW three-round fuse, replace narrower probes with the smallest

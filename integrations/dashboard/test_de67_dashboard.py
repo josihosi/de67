@@ -253,13 +253,14 @@ class DashboardTests(unittest.TestCase):
         connection = sqlite3.connect(database)
         connection.executescript("""
             CREATE TABLE claim_deadline_generation_incidents (
-              lineage_id TEXT, claim_id TEXT, generation INTEGER, recorded_at REAL
+              lineage_id TEXT, claim_id TEXT, generation INTEGER, recorded_at REAL,
+              reviewed_at REAL
             );
             CREATE TABLE deadline_generation_mutation_components (
               lineage_id TEXT, claim_id TEXT, generation INTEGER, component TEXT
             );
             INSERT INTO claim_deadline_generation_incidents
-              VALUES ('lineage','R-009',12,100);
+              VALUES ('lineage','R-009',12,100,NULL);
             INSERT INTO deadline_generation_mutation_components
               VALUES ('lineage','R-009',12,'micro');
         """)
@@ -272,6 +273,19 @@ class DashboardTests(unittest.TestCase):
                       '<strong>Running</strong>', running)
 
         connection = sqlite3.connect(database)
+        connection.execute(
+            "UPDATE claim_deadline_generation_incidents SET reviewed_at = 101"
+        )
+        connection.commit()
+        connection.close()
+        reviewed = dashboard.render("overview").decode()
+        self.assertIn('<span class="dot grey"></span><small>Mutation review</small>'
+                      '<strong>Off</strong>', reviewed)
+
+        connection = sqlite3.connect(database)
+        connection.execute(
+            "UPDATE claim_deadline_generation_incidents SET reviewed_at = NULL"
+        )
         connection.execute(
             "INSERT INTO deadline_generation_mutation_components VALUES (?,?,?,?)",
             ("lineage", "R-009", 12, "macro"),
@@ -482,25 +496,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('viewBox="0 0 794 794"', many)
 
         empty = dashboard_module.render_trajectory({"claim": "R-EXPLORE", "gaps": []})
-        self.assertIn("No active trajectory", empty)
-
-        exploration = dashboard_module.render_trajectory(
-            {"claim": "stale", "gaps": []},
-            "\n".join((
-                "## R-007 — semantic harness",
-                "- Required behavior: expose semantic state.",
-                "- Failure behavior: reject stale identity.",
-                "- Required proof: vary OCR without changing the verdict.",
-                "- Specific uncertainty: find the authoritative owner.",
-                "- Next executable route: migrate one real route.",
-            )),
-            "R-007",
-        )
-        self.assertIn("Attention spider", exploration)
-        self.assertIn("G1 r1", exploration)
-        self.assertIn("G5 r1", exploration)
-        self.assertIn("R-007", exploration)
-        self.assertIn("Next executable route", exploration)
+        self.assertIn("No closure trajectory", empty)
 
     def test_exploration_without_closure_gaps_is_a_healthy_empty_sidecar(self) -> None:
         script = self.workspace / "trajectory_sidecar.py"

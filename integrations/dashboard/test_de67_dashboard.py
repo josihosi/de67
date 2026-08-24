@@ -482,7 +482,25 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('viewBox="0 0 794 794"', many)
 
         empty = dashboard_module.render_trajectory({"claim": "R-EXPLORE", "gaps": []})
-        self.assertIn("No closure trajectory", empty)
+        self.assertIn("No active trajectory", empty)
+
+        exploration = dashboard_module.render_trajectory(
+            {"claim": "stale", "gaps": []},
+            "\n".join((
+                "## R-007 — semantic harness",
+                "- Required behavior: expose semantic state.",
+                "- Failure behavior: reject stale identity.",
+                "- Required proof: vary OCR without changing the verdict.",
+                "- Specific uncertainty: find the authoritative owner.",
+                "- Next executable route: migrate one real route.",
+            )),
+            "R-007",
+        )
+        self.assertIn("Attention spider", exploration)
+        self.assertIn("G1 r1", exploration)
+        self.assertIn("G5 r1", exploration)
+        self.assertIn("R-007", exploration)
+        self.assertIn("Next executable route", exploration)
 
     def test_exploration_without_closure_gaps_is_a_healthy_empty_sidecar(self) -> None:
         script = self.workspace / "trajectory_sidecar.py"

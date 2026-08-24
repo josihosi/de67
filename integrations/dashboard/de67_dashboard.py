@@ -157,14 +157,43 @@ def read_sidecar(script: Path, workspace: Path, state: Path, claim: str) -> dict
     return value
 
 
-def render_trajectory(report: dict[str, Any]) -> str:
+def render_trajectory(
+    report: dict[str, Any], active_ledger: str = "", active_claim: str | None = None
+) -> str:
     raw_gaps = report.get("gaps")
     gaps = [
         gap if isinstance(gap, dict) else {"summary": str(gap)}
         for gap in raw_gaps
     ] if isinstance(raw_gaps, list) else []
     if not gaps:
-        return '<section class="trajectory"><h2>Trajectory sidecar</h2><p class="subtle">No closure trajectory.</p></section>'
+        fields: list[tuple[str, str]] = []
+        for line in active_ledger.splitlines():
+            match = re.match(r"^[-*]\s+([^:]+):\s+(.+)$", line.strip())
+            if match and match.group(1).lower() in {
+                "required behavior", "failure behavior", "required proof",
+                "specific uncertainty", "next executable route",
+            }:
+                fields.append((match.group(1), match.group(2)))
+        if not fields:
+            return '<section class="trajectory"><h2>Trajectory sidecar</h2><p class="subtle">No active trajectory.</p></section>'
+        gaps = [
+            {
+                "gap_id": f"G{index}",
+                "revision": 1,
+                "summary": f"{label}: {summary}",
+                "status": "open",
+                "attempts": 0,
+            }
+            for index, (label, summary) in enumerate(fields, 1)
+        ]
+        report = dict(report)
+        report.update({
+            "claim": active_claim or report.get("claim") or "Active work",
+            "latest_task": "exploration",
+            "latest_task_gap": gaps[-1]["gap_id"],
+            "latest_task_result": "active",
+            "attention": [],
+        })
     return (
         '<section class="trajectory"><h2>Trajectory sidecar</h2>'
         f'{render_attention_spider(report, gaps)}'
@@ -1014,7 +1043,9 @@ class Dashboard:
             )
             blocked_html = render_ledger_section(ledger_data["blocked"])
             if sidecar.get("data"):
-                sidecar_html = render_trajectory(sidecar["data"])
+                sidecar_html = render_trajectory(
+                    sidecar["data"], ledger_data["active"], active_claim
+                )
             elif sidecar.get("error") == "not configured":
                 sidecar_html = ""
             else:

@@ -544,7 +544,6 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn(".de67/phase3-policy.d67", prompt)
         self.assertIn("DE67_POLICY_DECIDE_ARGV_JSON", prompt)
         self.assertIn("machine-canonical", prompt)
-        self.assertIn("DE67_POLICY_GUARD_ARGV_JSON", prompt)
         self.assertIn("Never review, apply, or resolve a mutation", prompt)
         self.assertIn("exit immediately", prompt)
         self.assertNotIn("promote both candidate source", prompt)

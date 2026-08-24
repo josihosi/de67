@@ -270,6 +270,8 @@ class DeadlineHarness:
                 started_at REAL NOT NULL,
                 deadline_at REAL NOT NULL,
                 armed_by_restart_generation INTEGER,
+                retired_at REAL,
+                retirement_reason TEXT,
                 PRIMARY KEY (lineage_id, claim_id, generation),
                 FOREIGN KEY (lineage_id, claim_id)
                     REFERENCES claim_clocks(lineage_id, claim_id)
@@ -627,6 +629,20 @@ class DeadlineHarness:
         if "deadline_generation" not in task_columns:
             self.connection.execute(
                 "ALTER TABLE tasks ADD COLUMN deadline_generation INTEGER NOT NULL DEFAULT 1"
+            )
+        generation_columns = {
+            row[1]
+            for row in self.connection.execute(
+                "PRAGMA table_info(claim_deadline_generations)"
+            ).fetchall()
+        }
+        if "retired_at" not in generation_columns:
+            self.connection.execute(
+                "ALTER TABLE claim_deadline_generations ADD COLUMN retired_at REAL"
+            )
+        if "retirement_reason" not in generation_columns:
+            self.connection.execute(
+                "ALTER TABLE claim_deadline_generations ADD COLUMN retirement_reason TEXT"
             )
         self.connection.execute(
             """
@@ -1434,6 +1450,55 @@ class DeadlineHarness:
             self.connection.rollback()
             raise
 
+    def retire_claim_clocks_for_mutation(
+        self,
+        lineage_id: str,
+        reason: str,
+        *,
+        now: float | None = None,
+    ) -> int:
+        """Retire every active claim deadline before an exclusive mutation review."""
+
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        reason = self._nonempty_text(reason, "Mutation clock retirement reason")
+        retired_at = self._now(now)
+        self._begin()
+        try:
+            self._bind_lineage(lineage_id)
+            running = self.connection.execute(
+                """
+                SELECT task_id FROM tasks
+                WHERE lineage_id = ? AND attempt_terminal_at IS NULL
+                ORDER BY started_at, task_id LIMIT 1
+                """,
+                (lineage_id,),
+            ).fetchone()
+            if running is not None:
+                raise DeadlineError(
+                    "Mutation cannot retire clocks while a worker attempt is running: "
+                    + str(running["task_id"])
+                )
+            cursor = self.connection.execute(
+                """
+                UPDATE claim_deadline_generations AS generation
+                SET retired_at = ?, retirement_reason = ?
+                WHERE generation.lineage_id = ?
+                  AND generation.retired_at IS NULL
+                  AND generation.generation = (
+                    SELECT MAX(latest.generation)
+                    FROM claim_deadline_generations AS latest
+                    WHERE latest.lineage_id = generation.lineage_id
+                      AND latest.claim_id = generation.claim_id
+                  )
+                """,
+                (retired_at, reason, lineage_id),
+            )
+            self.connection.commit()
+            return cursor.rowcount
+        except Exception:
+            self.connection.rollback()
+            raise
+
     def _task(self, lineage_id: str, task_id: str) -> sqlite3.Row:
         row = self.connection.execute(
             "SELECT * FROM tasks WHERE lineage_id = ? AND task_id = ?",
@@ -1451,7 +1516,8 @@ class DeadlineHarness:
                    generation.deadline_at, clock.phase,
                    clock.migrated_from_task_id, clock.migration_note,
                    generation.generation AS deadline_generation,
-                   generation.armed_by_restart_generation
+                   generation.armed_by_restart_generation,
+                   generation.retired_at, generation.retirement_reason
             FROM claim_clocks AS clock
             JOIN claim_deadline_generations AS generation
               ON generation.lineage_id = clock.lineage_id
@@ -1726,7 +1792,8 @@ class DeadlineHarness:
                    generation.deadline_at, clock.phase,
                    clock.migrated_from_task_id, clock.migration_note,
                    generation.generation AS deadline_generation,
-                   generation.armed_by_restart_generation
+                   generation.armed_by_restart_generation,
+                   generation.retired_at, generation.retirement_reason
             FROM claim_clocks AS clock
             JOIN claim_deadline_generations AS generation
               ON generation.lineage_id = clock.lineage_id
@@ -2809,6 +2876,8 @@ class DeadlineHarness:
         completion_invalid: bool = False,
     ) -> dict[str, Any] | None:
         claim = self._task_claim(task["lineage_id"], task["task_id"])
+        if claim["retired_at"] is not None:
+            return None
         accepted = self._latest_valid_acceptance(
             str(task["lineage_id"]), str(task["claim_id"])
         )
@@ -3243,11 +3312,51 @@ class DeadlineHarness:
                 )
             advanced_deadline_generation = False
             if existing is None and claim is not None:
-                incident = self._claim_deadline_incident(
-                    lineage_id, claim_id, int(claim["deadline_generation"])
-                )
-                if incident is not None and not self._deadline_mutation_pending(
+                if claim["retired_at"] is not None:
+                    restart = self.connection.execute(
+                        """
+                        SELECT * FROM coordinator_restart_requests
+                        WHERE lineage_id = ? AND acknowledged_at IS NOT NULL
+                          AND requested_at >= ?
+                        ORDER BY generation DESC LIMIT 1
+                        """,
+                        (lineage_id, claim["retired_at"]),
+                    ).fetchone()
+                    if restart is None:
+                        raise DeadlineError(
+                            "A retired mutation clock requires its acknowledged fresh "
+                            "coordinator before a new deadline can be armed"
+                        )
+                    next_generation = int(claim["deadline_generation"]) + 1
+                    self.connection.execute(
+                        """
+                        INSERT INTO claim_deadline_generations (
+                            lineage_id, claim_id, generation, estimate_seconds,
+                            started_at, deadline_at, armed_by_restart_generation
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            lineage_id,
+                            claim_id,
+                            next_generation,
+                            estimate,
+                            started_at,
+                            started_at + estimate,
+                            restart["generation"],
+                        ),
+                    )
+                    claim = self._claim(lineage_id, claim_id)
+                    advanced_deadline_generation = True
+                else:
+                    incident = self._claim_deadline_incident(
+                        lineage_id, claim_id, int(claim["deadline_generation"])
+                    )
+                if (
+                    not advanced_deadline_generation
+                    and incident is not None
+                    and not self._deadline_mutation_pending(
                     lineage_id, claim_id
+                    )
                 ):
                     restart_generation = incident["restart_generation"]
                     restart = (

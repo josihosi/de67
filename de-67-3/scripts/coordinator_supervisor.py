@@ -396,6 +396,12 @@ def coordinator_prompt(
             "DE67_COORDINATOR_ACK_ARGV_JSON as a subprocess without a shell; "
             "it acknowledges this exact restart generation."
         )
+        lines.append(
+            "The mutation retired every earlier claim deadline. Read the current ledger and "
+            "remaining DFS route, then set one new whole-item deadline you can honestly deliver. "
+            "Include worker startup, diagnosis, implementation, repair, build, rerun, evidence "
+            "return, coordination, known unknowns, and an uncertainty margin; inherit no prior duration."
+        )
     lines.append("Continue from the durable accepted frontier until the next required retirement or DFS completion.")
     return "\n".join(lines) + "\n"
 
@@ -488,34 +494,37 @@ def _complete_mutation_review(
     *,
     extra_env: Mapping[str, str] | None,
 ) -> RestartState:
-    result = run_mutation_reviewer(
-        runner_command,
-        workspace,
-        state_path,
-        lineage_id,
-        run_root,
-        gate,
-        extra_env=extra_env,
-    )
-    if not result.launched or result.exit_code != 0:
-        raise SupervisorError(
-            f"Mutation reviewer failed for {gate.kind} {gate.identity}; ordinary work remains stopped"
+    with DeadlineHarness(state_path) as harness:
+        harness.retire_claim_clocks_for_mutation(
+            lineage_id,
+            f"{gate.kind} {gate.identity}",
         )
-    remaining = mutation_gate(state_path, lineage_id)
-    if remaining is not None:
-        _mark_protocol_failure(
-            result,
-            f"Mutation reviewer exited without resolving {remaining.kind} {remaining.identity}",
+    while True:
+        result = run_mutation_reviewer(
+            runner_command,
+            workspace,
+            state_path,
+            lineage_id,
+            run_root,
+            gate,
+            extra_env=extra_env,
         )
-        raise SupervisorError("Mutation reviewer left a durable mutation gate unresolved")
-    restart = read_clock(state_path, lineage_id)
-    if not restart.required or restart.generation is None:
-        _mark_protocol_failure(
-            result,
-            "Mutation reviewer resolved the gate without requesting one fresh coordinator",
-        )
-        raise SupervisorError("Resolved mutation lacks its fresh-coordinator handoff")
-    return restart
+        if not result.launched or result.exit_code != 0:
+            raise SupervisorError(
+                f"Mutation reviewer failed for {gate.kind} {gate.identity}; ordinary work remains stopped"
+            )
+        remaining = mutation_gate(state_path, lineage_id)
+        if remaining is not None:
+            gate = remaining
+            continue
+        restart = read_clock(state_path, lineage_id)
+        if not restart.required or restart.generation is None:
+            _mark_protocol_failure(
+                result,
+                "Mutation reviewer resolved the gate without requesting one fresh coordinator",
+            )
+            raise SupervisorError("Resolved mutation lacks its fresh-coordinator handoff")
+        return restart
 
 
 def run_child(

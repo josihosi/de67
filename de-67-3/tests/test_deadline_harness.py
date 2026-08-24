@@ -811,6 +811,45 @@ class DeadlineHarnessTests(unittest.TestCase):
             ["miss-1"],
         )
 
+    def test_mutation_retires_old_clock_and_fresh_coordinator_sets_new_one(self) -> None:
+        self.harness.start_task("project", "before-mutation", "R-001", 10, now=0)
+        self.harness.complete_task(
+            "project", "before-mutation", "terminal before mutation", now=5
+        )
+
+        retired = self.harness.retire_claim_clocks_for_mutation(
+            "project", "random mutation", now=6
+        )
+        self.assertEqual(retired, 1)
+        self.assertEqual(
+            self.harness.list_tasks(now=100)["pending_deadline_mutations"], []
+        )
+
+        restart = self.harness.request_coordinator_restart(
+            "project", "mutation complete", now=101
+        )["coordinator_restart"]
+        self.harness.claim_coordinator_restart(
+            "project", restart["generation"], "fresh", now=102
+        )
+        self.harness.acknowledge_coordinator_restart(
+            "project", restart["generation"], "fresh", now=102
+        )
+        started = self.harness.start_task(
+            "project", "after-mutation", "R-001", 300, now=103
+        )
+
+        self.assertEqual(started["deadline_generation"], 2)
+        self.assertEqual(started["estimate_seconds"], 300)
+        self.assertEqual(started["deadline_at"], 403)
+
+    def test_mutation_clock_retirement_refuses_a_live_worker(self) -> None:
+        self.harness.start_task("project", "live", "R-001", 100, now=0)
+
+        with self.assertRaisesRegex(DeadlineError, "worker attempt is running"):
+            self.harness.retire_claim_clocks_for_mutation(
+                "project", "random mutation", now=1
+            )
+
     def test_seven_due_breaches_cannot_crowd_out_pending_incident_reviews(self) -> None:
         with patch("deadline_harness.secrets.randbelow", side_effect=[20, 0]):
             for number in range(1, 8):

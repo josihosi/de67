@@ -1208,6 +1208,36 @@ class MutationGuardTests(unittest.TestCase):
                 self.assertIn(f"ok: {kind} finding expanded R-001", output)
                 self.assertIn("added R-003", output)
 
+    def test_owner_expand_dfs_consumes_only_owner_guidance_and_preserves_frontier(self) -> None:
+        before, candidate = self.expansion_files()
+        ledger_before = self.root / "owner-ledger-before.md"
+        ledger_after = self.root / "owner-ledger-after.md"
+        ledger_before.write_text(
+            "# Ledger\n\n## Pending suggestions\n\n"
+            "- Owner-authorized same-outcome expansion\n"
+            "- Reviewer-authored candidate remains\n",
+            encoding="utf-8",
+        )
+        ledger_after.write_text(
+            "# Ledger\n\n## Pending suggestions\n\n"
+            "- Reviewer-authored candidate remains\n",
+            encoding="utf-8",
+        )
+        added, consumed = guard.validate_owner_dfs_expansion(
+            before, candidate, ledger_before, ledger_after
+        )
+        self.assertEqual(added, ("R-003",))
+        self.assertEqual(consumed, ("Owner-authorized same-outcome expansion",))
+
+        ledger_after.write_text(
+            "# Ledger\n\n## Pending suggestions\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(guard.GuardError, "only owner-authorized"):
+            guard.validate_owner_dfs_expansion(
+                before, candidate, ledger_before, ledger_after
+            )
+
     def test_expand_dfs_cli_rejects_missing_or_mismatched_finding(self) -> None:
         missing = self.finding_state("missing", report=False)
         result, output = self.run_expand_cli(missing)

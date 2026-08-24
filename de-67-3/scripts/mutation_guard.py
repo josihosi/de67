@@ -1337,6 +1337,83 @@ def validate_random_dfs_mutation(before: Path, candidate: Path) -> tuple[str, ..
     )
 
 
+def _pending_suggestion_entries(text: str) -> tuple[str, ...]:
+    """Return exact top-level entries from the mutation ledger's pending section."""
+
+    section = _exact_markdown_section(text, "## Pending suggestions")
+    entries: list[str] = []
+    current: list[str] = []
+    for line in section.splitlines(keepends=True)[1:]:
+        if line.startswith("- "):
+            if current:
+                entries.append("".join(current))
+            current = [line]
+        elif current:
+            current.append(line)
+        elif line.strip():
+            raise GuardError("Pending suggestions must be top-level Markdown entries")
+    if current:
+        entries.append("".join(current))
+    return tuple(entries)
+
+
+def validate_owner_suggestion_consumption(before: Path, candidate: Path) -> tuple[str, ...]:
+    """Require exact consumption of one or more owner-authored pending entries."""
+
+    baseline = read_markdown(before)
+    proposed = read_markdown(candidate)
+    baseline_prefix = baseline.split("## Pending suggestions", 1)[0]
+    proposed_prefix = proposed.split("## Pending suggestions", 1)[0]
+    if baseline_prefix != proposed_prefix:
+        raise GuardError("Owner suggestion consumption cannot rewrite the ledger preface")
+    baseline_entries = _pending_suggestion_entries(baseline)
+    candidate_entries = _pending_suggestion_entries(proposed)
+    remaining = list(baseline_entries)
+    for entry in candidate_entries:
+        if entry not in remaining:
+            raise GuardError("Ledger candidate added or rewrote a pending suggestion")
+        remaining.remove(entry)
+    if not remaining:
+        raise GuardError("Owner DFS expansion must consume at least one pending suggestion")
+    if any(not entry.startswith("- Owner-authorized") for entry in remaining):
+        raise GuardError("Owner DFS expansion may consume only owner-authorized suggestions")
+    return tuple(entry.splitlines()[0][2:].strip() for entry in remaining)
+
+
+def validate_owner_dfs_expansion(
+    before: Path,
+    candidate: Path,
+    ledger_before: Path,
+    ledger_candidate: Path,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Guard a same-outcome DFS expansion authorized by pending owner guidance."""
+
+    consumed = validate_owner_suggestion_consumption(ledger_before, ledger_candidate)
+    baseline = read_markdown(before)
+    proposed = read_markdown(candidate)
+    normalized = proposed
+    refreeze_pairs = (
+        ("Status: Frozen", "Status: Refrozen"),
+        ("- Status: `Frozen`", "- Status: `Refrozen`"),
+        ("After freeze, automation", "After this refreeze, automation"),
+    )
+    for frozen, refrozen in refreeze_pairs:
+        if frozen in baseline:
+            if refrozen not in normalized:
+                raise GuardError(f"Owner DFS expansion must refreeze through {refrozen!r}")
+            normalized = normalized.replace(refrozen, frozen, 1)
+    descriptor, temporary_name = tempfile.mkstemp(suffix=".owner-dfs.md")
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+            stream.write(normalized)
+        added = _validate_append_only_dfs(before, temporary, task_claim_id=None)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return added, consumed
+
+
 def _read_utf8_exact(path: Path) -> str:
     if not path.is_file():
         raise GuardError(f"Missing Markdown file: {path}")
@@ -2163,6 +2240,15 @@ def build_parser() -> argparse.ArgumentParser:
     expansion.add_argument("--task", required=True)
     expansion.add_argument("--ledger-candidate", type=Path)
 
+    owner_expansion = commands.add_parser(
+        "owner-expand-dfs",
+        help="Validate same-outcome DFS expansion from pending owner guidance",
+    )
+    owner_expansion.add_argument("--before", type=Path, required=True)
+    owner_expansion.add_argument("--candidate", type=Path, required=True)
+    owner_expansion.add_argument("--ledger-before", type=Path, required=True)
+    owner_expansion.add_argument("--ledger-candidate", type=Path, required=True)
+
     random_review = commands.add_parser(
         "random-review",
         help="Validate one due random improvement-review lane",
@@ -2320,6 +2406,18 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"ok: {finding_kind} finding expanded {task_claim}; added "
                 + ", ".join(added)
+            )
+        elif arguments.command == "owner-expand-dfs":
+            added, consumed = validate_owner_dfs_expansion(
+                arguments.before,
+                arguments.candidate,
+                arguments.ledger_before,
+                arguments.ledger_candidate,
+            )
+            print(
+                "ok: owner-guided DFS expansion added "
+                + ", ".join(added)
+                + f"; consumed {len(consumed)} owner suggestion(s)"
             )
         elif arguments.command == "random-review":
             lane = random_review_from_state(

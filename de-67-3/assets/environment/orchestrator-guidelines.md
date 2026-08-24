@@ -133,7 +133,9 @@ Use guarded DFS transitions for acceptance, reopen, or same-outcome expansion. A
 existing accepted work and evidence; it does not require a packaged role document.
 
 A successful local mutation requests one fresh coordinator. The external supervisor owns that
-restart. Publishing a generalized rule to `de67-lab` is a separate owner-authorized maintenance
+restart. Every mutation retires the prior claim deadline. The fresh coordinator reads the current
+ledger and remaining DFS route and sets a new generous whole-item deadline without inheriting any
+prior duration. Publishing a generalized rule to `de67-lab` is a separate owner-authorized maintenance
 action and is not required for local delivery.
 
 ## Stop or block

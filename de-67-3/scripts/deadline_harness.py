@@ -2552,13 +2552,13 @@ class DeadlineHarness:
     def _ensure_random_cycle(self, lineage_id: str) -> sqlite3.Row:
         cycle = self._latest_random_cycle(lineage_id)
         if cycle is not None and cycle["resolution_evidence"] is None:
+            cycle = self._mark_random_cycle_due_if_reached(cycle)
             if cycle["due_task_id"] is not None:
                 cycle = self._snapshot_universal_capability(
                     lineage_id, int(cycle["cycle_number"])
                 )
             if cycle["resolution_evidence"] is None:
                 return cycle
-        completed = self._terminal_window_count(lineage_id)
         number = 1 if cycle is None else int(cycle["cycle_number"]) + 1
         cycle_start = (
             0 if cycle is None else int(cycle["due_after_terminal_windows"])
@@ -2583,29 +2583,46 @@ class DeadlineHarness:
         cycle = self._latest_random_cycle(lineage_id)
         if cycle is None:
             raise DeadlineError("Failed to persist random mutation cycle")
-        if completed >= cycle["due_after_terminal_windows"]:
-            boundary = self.connection.execute(
-                """
-                SELECT task_id FROM tasks
-                WHERE lineage_id = ? AND attempt_terminal_at IS NOT NULL
-                ORDER BY attempt_terminal_at, task_id
-                LIMIT 1 OFFSET ?
-                """,
-                (lineage_id, cycle["due_after_terminal_windows"] - 1),
-            ).fetchone()
-            self.connection.execute(
-                """
-                UPDATE random_mutation_cycles SET due_task_id = ?
-                WHERE lineage_id = ? AND cycle_number = ?
-                """,
-                (boundary["task_id"], lineage_id, cycle["cycle_number"]),
+        cycle = self._mark_random_cycle_due_if_reached(cycle)
+        if cycle["due_task_id"] is not None:
+            cycle = self._snapshot_universal_capability(
+                lineage_id, int(cycle["cycle_number"])
             )
-            cycle = self._latest_random_cycle(lineage_id)
-            if cycle is not None:
-                cycle = self._snapshot_universal_capability(
-                    lineage_id, int(cycle["cycle_number"])
-                )
         return cycle
+
+    def _mark_random_cycle_due_if_reached(self, cycle: sqlite3.Row) -> sqlite3.Row:
+        if cycle["due_task_id"] is not None:
+            return cycle
+        boundary = self.connection.execute(
+            """
+            SELECT task_id FROM tasks
+            WHERE lineage_id = ? AND attempt_terminal_at IS NOT NULL
+            ORDER BY attempt_terminal_at, task_id
+            LIMIT 1 OFFSET ?
+            """,
+            (
+                cycle["lineage_id"],
+                cycle["due_after_terminal_windows"] - 1,
+            ),
+        ).fetchone()
+        if boundary is None:
+            return cycle
+        self.connection.execute(
+            """
+            UPDATE random_mutation_cycles SET due_task_id = ?
+            WHERE lineage_id = ? AND cycle_number = ?
+              AND due_task_id IS NULL AND resolution_evidence IS NULL
+            """,
+            (
+                boundary["task_id"],
+                cycle["lineage_id"],
+                cycle["cycle_number"],
+            ),
+        )
+        refreshed = self._latest_random_cycle(cycle["lineage_id"])
+        if refreshed is None:
+            raise DeadlineError("Failed to reconcile random mutation cycle")
+        return refreshed
 
     def _random_cycle_result(self, row: sqlite3.Row) -> dict[str, Any]:
         completed = self._terminal_window_count(row["lineage_id"])

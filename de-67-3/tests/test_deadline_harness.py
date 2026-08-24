@@ -2474,6 +2474,41 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertTrue(second["due"])
         self.assertEqual(second["due_task_id"], "window-40")
 
+    def test_status_repairs_missed_random_due_marker_while_worker_is_live(self) -> None:
+        with patch("deadline_harness.secrets.randbelow", side_effect=[0, 0]):
+            for number in range(1, 22):
+                self.harness.start_task(
+                    "project", f"window-{number}", f"R-{number:03d}", 100, now=0
+                )
+            for number in range(1, 21):
+                self.harness.complete_task(
+                    "project", f"window-{number}", "green", now=number
+                )
+
+        self.harness.connection.execute(
+            """
+            UPDATE random_mutation_cycles
+            SET due_task_id = NULL
+            WHERE lineage_id = 'project' AND cycle_number = 1
+            """
+        )
+        self.harness.connection.commit()
+
+        view = self.harness.coordinator_view(now=21)
+        cycle = self.harness.connection.execute(
+            """
+            SELECT due_task_id FROM random_mutation_cycles
+            WHERE lineage_id = 'project' AND cycle_number = 1
+            """
+        ).fetchone()
+
+        self.assertIn(
+            "window-21",
+            [task["task_id"] for task in view["tasks"] if task["state"] == "running"],
+        )
+        self.assertEqual(view["random_mutation"]["due_task_id"], "window-20")
+        self.assertEqual(cycle["due_task_id"], "window-20")
+
     def test_interval_thirty_dfs_requires_ordinary_and_universal_before_restart(self) -> None:
         self.write_sol_ultra_capability()
         with patch(

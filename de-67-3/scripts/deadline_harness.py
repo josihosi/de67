@@ -620,6 +620,33 @@ class DeadlineHarness:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN result_received_at REAL")
         if "result_receipt_evidence" not in task_columns:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN result_receipt_evidence TEXT")
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                migration_id TEXT PRIMARY KEY,
+                applied_at REAL NOT NULL
+            )
+            """
+        )
+        receipt_migration = "explicit-worker-result-receipts-v1"
+        if self.connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE migration_id = ?",
+            (receipt_migration,),
+        ).fetchone() is None:
+            self.connection.execute(
+                """
+                UPDATE tasks
+                SET result_received_at = attempt_terminal_at,
+                    result_receipt_evidence =
+                        'Terminal result predates explicit result receipts.'
+                WHERE attempt_terminal_at IS NOT NULL
+                  AND result_received_at IS NULL
+                """
+            )
+            self.connection.execute(
+                "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
+                (receipt_migration, time.time()),
+            )
         if "abandoned_at" not in task_columns:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN abandoned_at REAL")
         if "abandonment_reason" not in task_columns:

@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "policy_compare.py"
 POLICY = ROOT / "assets" / "environment" / "phase3-policy.d67"
 CONTRACTS = ROOT / "assets" / "environment" / "phase3-contracts.json"
+BASELINE_REF = "backup/pre-lab-lab-20260822"
 SPEC = importlib.util.spec_from_file_location("de67_policy_compare", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 compare_module = importlib.util.module_from_spec(SPEC)
@@ -27,7 +28,7 @@ class PolicyComparisonTests(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)))
 
     def test_main_and_lab_comparison_has_only_declared_strengthenings(self) -> None:
-        report = compare_module.compare(POLICY, CONTRACTS, "main")
+        report = compare_module.compare(POLICY, CONTRACTS, BASELINE_REF)
         self.assertTrue(report["passed"])
         self.assertLess(report["ratio"], 1)
         divergences = {
@@ -41,7 +42,7 @@ class PolicyComparisonTests(unittest.TestCase):
     def test_comparison_cli_is_reproducible(self) -> None:
         command = [
             sys.executable, str(SCRIPT), "--policy", str(POLICY),
-            "--contracts", str(CONTRACTS), "--baseline-ref", "main",
+            "--contracts", str(CONTRACTS), "--baseline-ref", BASELINE_REF,
         ]
         first = subprocess.run(command, text=True, capture_output=True)
         second = subprocess.run(command, text=True, capture_output=True)

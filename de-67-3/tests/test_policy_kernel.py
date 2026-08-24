@@ -525,9 +525,14 @@ class PolicyKernelTests(unittest.TestCase):
                 "dispatch_exploration_worker",
             )
 
-    def test_main_branch_has_no_compiled_kernel_and_remains_recoverable(self) -> None:
+    def test_preserved_baseline_has_no_compiled_kernel_and_remains_recoverable(self) -> None:
         result = subprocess.run(
-            ["git", "cat-file", "-e", "main:de-67-3/scripts/policy_kernel.py"],
+            [
+                "git",
+                "cat-file",
+                "-e",
+                "backup/pre-lab-lab-20260822:de-67-3/scripts/policy_kernel.py",
+            ],
             capture_output=True,
         )
         self.assertNotEqual(result.returncode, 0)

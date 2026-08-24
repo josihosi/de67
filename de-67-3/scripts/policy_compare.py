@@ -100,7 +100,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--contracts", type=Path, required=True)
-    parser.add_argument("--baseline-ref", default="main")
+    parser.add_argument("--baseline-ref", default="backup/pre-lab-lab-20260822")
     args = parser.parse_args(argv)
     try:
         report = compare(args.policy, args.contracts, args.baseline_ref)

@@ -35,7 +35,7 @@ CASES = (
     ({"random_mutation_due"}, "review_scheduled_mutation"),
     ({"dfs_review_due", "pending_suggestions"}, "review_scheduled_mutation"),
     ({"universal_review_due"}, "review_scheduled_mutation"),
-    ({"accepted_evidence"}, "review_dfs_acceptance"),
+    ({"accepted_evidence"}, "apply_guarded_dfs_acceptance"),
     ({"worker_completed"}, "receive_worker_result"),
     ({"worker_finding"}, "receive_worker_result"),
     ({"worker_abandoned"}, "receive_worker_result"),
@@ -619,6 +619,20 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertEqual(
                 kernel.decide(source_policy(), after_recording).action,
                 "dispatch_closure_worker",
+            )
+            connection = sqlite3.connect(state)
+            connection.execute(
+                "UPDATE closure_gaps SET closed_at = 14 WHERE lineage_id = 'project'"
+            )
+            connection.commit()
+            connection.close()
+            acceptance_ready = kernel.workspace_facts(
+                workspace, state, "project", now=15
+            )
+            self.assertIn("accepted_evidence", acceptance_ready)
+            self.assertEqual(
+                kernel.decide(source_policy(), acceptance_ready).action,
+                "apply_guarded_dfs_acceptance",
             )
 
     def test_preserved_baseline_has_no_compiled_kernel_and_remains_recoverable(self) -> None:

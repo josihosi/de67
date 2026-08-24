@@ -472,14 +472,17 @@ def workspace_facts(
                 if str(clock["phase"]) == "closure":
                     facts.add("closure_ready")
         if _table_exists(connection, "closure_gaps") and current_claim is not None:
-            if connection.execute(
+            open_gap = connection.execute(
                 """
                 SELECT 1 FROM closure_gaps
                 WHERE lineage_id = ? AND claim_id = ? AND closed_at IS NULL LIMIT 1
                 """,
                 (lineage_id, current_claim),
-            ).fetchone() is not None:
+            ).fetchone() is not None
+            if open_gap:
                 facts.add("open_gap")
+            elif "closure_ready" in facts:
+                facts.add("accepted_evidence")
         if _table_exists(connection, "random_mutation_cycles"):
             random_due = connection.execute(
                 """

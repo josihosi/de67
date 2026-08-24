@@ -2705,18 +2705,6 @@ class DeadlineHarnessTests(unittest.TestCase):
                         "reviewed": True,
                         "pending_components": ["micro", "macro"],
                         "restart_generation": None,
-                        "deadline_history": [
-                            {
-                                "generation": 1,
-                                "planned_seconds": 10,
-                                "actual_seconds": 11,
-                                "overrun_seconds": 1,
-                                "task_id": "legacy",
-                                "outcome": "deadline_miss",
-                                "short_verdict": "estimate unsound",
-                                "long_detail": "Legacy diagnosis only.",
-                            }
-                        ],
                     }
                 ],
             )
@@ -3436,44 +3424,37 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertEqual(resolved["disposition"], "no_change_required")
         self.assertIsNone(resolved["receipt_id"])
         self.assertEqual(resolved["pending_components"], [])
-        self.assertTrue(resolved["coordinator_restart"]["pending"])
+        restart = resolved["coordinator_restart"]
+        self.assertIsNotNone(restart)
+        self.assertTrue(restart["pending"])
         self.assertEqual(
             self.harness.coordinator_view(now=5)["pending_deadline_mutations"], []
         )
-        generation = resolved["coordinator_restart"]["generation"]
-        self.harness.claim_coordinator_restart("project", generation, "fresh", now=5)
+        with self.assertRaisesRegex(DeadlineError, "restart generation 1 is pending"):
+            self.harness.start_task("project", "retry", "R-LATE", 100, now=6)
+        self.harness.claim_coordinator_restart(
+            "project", restart["generation"], "fresh-coordinator", now=6
+        )
         self.harness.acknowledge_coordinator_restart(
-            "project", generation, "fresh", now=5
+            "project", restart["generation"], "fresh-coordinator", now=6
         )
         resumed = self.harness.start_task(
-            "project", "retry", "R-LATE", 100, now=6
+            "project", "retry", "R-LATE", 100, now=7
         )
         self.assertEqual(resumed["deadline_generation"], 2)
-        self.assertEqual(resumed["deadline_at"], 106)
-
-    def test_terminal_worker_result_is_consumed_once_after_projection(self) -> None:
-        self.harness.start_task("project", "done", "R-DONE", 100, now=0)
-        self.harness.complete_task("project", "done", "useful result", now=10)
-
-        received = self.harness.receive_worker_result(
-            "project", "done", "projected into ledger", now=11
-        )
-        repeated = self.harness.receive_worker_result(
-            "project", "done", "projected into ledger", now=12
-        )
-
-        self.assertEqual(received["task_id"], "done")
-        self.assertEqual(repeated["task_id"], "done")
-        row = self.harness.connection.execute(
-            "SELECT result_received_at, result_receipt_evidence FROM tasks "
-            "WHERE lineage_id = 'project' AND task_id = 'done'"
+        self.assertEqual(resumed["deadline_at"], 107)
+        generation = self.harness.connection.execute(
+            """
+            SELECT armed_by_restart_generation
+            FROM claim_deadline_generations
+            WHERE lineage_id = ? AND claim_id = ? AND generation = 2
+            """,
+            ("project", "R-LATE"),
         ).fetchone()
-        self.assertEqual(row["result_received_at"], 11)
-        self.assertEqual(row["result_receipt_evidence"], "projected into ledger")
-        with self.assertRaisesRegex(DeadlineError, "different evidence"):
-            self.harness.receive_worker_result(
-                "project", "done", "different projection", now=13
-            )
+        self.assertIsNotNone(generation)
+        self.assertEqual(
+            generation["armed_by_restart_generation"], restart["generation"]
+        )
 
     def test_no_change_required_is_macro_only_and_cannot_consume_receipt(self) -> None:
         self.harness.start_task("project", "late", "R-LATE", 1, now=0)
@@ -3490,68 +3471,6 @@ class DeadlineHarnessTests(unittest.TestCase):
                 no_change_required=True,
                 now=4,
             )
-
-    def test_repeated_deadline_review_receives_history_without_forcing_verdict(self) -> None:
-        self.harness.start_task("project", "first", "R-REPEAT", 1, now=0)
-        self.harness.expire_task("project", "first", now=2)
-        self.harness.diagnose_claim_deadline(
-            "project", "R-REPEAT", "first", "The first deadline was too short.", now=3
-        )
-        self.harness.resolve_deadline_mutation(
-            "project", "R-REPEAT", "micro", "preserve useful evidence", now=4
-        )
-        self.harness.resolve_deadline_mutation(
-            "project", "R-REPEAT", "macro", "one-off miss; no change",
-            no_change_required=True, now=5,
-        )
-        restart = self.harness.coordinator_restart_status("project")[
-            "coordinator_restart"
-        ]
-        self.harness.claim_coordinator_restart(
-            "project", restart["generation"], "fresh-one", now=5
-        )
-        self.harness.acknowledge_coordinator_restart(
-            "project", restart["generation"], "fresh-one", now=5
-        )
-
-        self.harness.start_task("project", "second", "R-REPEAT", 100, now=6)
-        self.harness.expire_task("project", "second", now=107)
-        self.harness.diagnose_claim_deadline(
-            "project", "R-REPEAT", "second",
-            "The replacement deadline repeated the same failure.", now=108,
-        )
-        self.harness.resolve_deadline_mutation(
-            "project", "R-REPEAT", "micro", "preserve the second result", now=109
-        )
-
-        pending = self.harness.coordinator_view(now=109)["pending_deadline_mutations"][0]
-        self.assertEqual(
-            [entry["generation"] for entry in pending["deadline_history"]], [1, 2]
-        )
-        self.assertEqual(
-            [entry["planned_seconds"] for entry in pending["deadline_history"]],
-            [1, 100],
-        )
-        self.assertEqual(
-            [entry["actual_seconds"] for entry in pending["deadline_history"]],
-            [2, 101],
-        )
-        self.assertEqual(
-            [entry["overrun_seconds"] for entry in pending["deadline_history"]],
-            [1, 1],
-        )
-        self.assertEqual(
-            pending["deadline_history"][1]["long_detail"],
-            "The replacement deadline repeated the same failure.",
-        )
-
-        # Rich evidence informs the trusted reviewer; it does not dictate its verdict.
-        resolved = self.harness.resolve_deadline_mutation(
-            "project", "R-REPEAT", "macro", "reviewed full history; no change",
-            no_change_required=True, now=110,
-        )
-        self.assertEqual(resolved["pending_components"], [])
-        self.assertTrue(resolved["coordinator_restart"]["pending"])
         with self.assertRaisesRegex(DeadlineError, "cannot consume"):
             self.harness.resolve_deadline_mutation(
                 "project",

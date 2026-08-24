@@ -29,13 +29,12 @@ def source_policy() -> dict:
 
 CASES = (
     ({"integrity_incident", "live_task"}, "review_integrity_incident"),
-    ({"deadline_expired", "worker_completed"}, "record_deadline_miss"),
     ({"deadline_incident", "worker_completed"}, "review_deadline_incident"),
     ({"restart_requested", "open_claim"}, "acknowledge_restart"),
     ({"random_mutation_due"}, "review_scheduled_mutation"),
     ({"dfs_review_due", "pending_suggestions"}, "review_scheduled_mutation"),
     ({"universal_review_due"}, "review_scheduled_mutation"),
-    ({"accepted_evidence"}, "apply_guarded_dfs_acceptance"),
+    ({"accepted_evidence"}, "review_dfs_acceptance"),
     ({"worker_completed"}, "receive_worker_result"),
     ({"worker_finding"}, "receive_worker_result"),
     ({"worker_abandoned"}, "receive_worker_result"),
@@ -122,7 +121,7 @@ class PolicyKernelTests(unittest.TestCase):
                     rule for rule in policy["rules"] if rule["id"] == rule_id
                 )
                 dispatch["obligations"].remove(
-                    "set_deliverable_deadline_with_problem_margin"
+                    "size_one_generous_claim_deadline_for_full_route"
                 )
                 with self.assertRaisesRegex(kernel.PolicyError, "required obligations"):
                     kernel.guard_policy_candidate(
@@ -218,17 +217,11 @@ class PolicyKernelTests(unittest.TestCase):
         self.assertIn("admit_full_downstream_route_to_clock", decision.obligations)
         self.assertIn("start_unique_worker_window", decision.obligations)
         self.assertIn(
-            "set_deliverable_deadline_with_problem_margin",
+            "size_one_generous_claim_deadline_for_full_route",
             decision.obligations,
         )
-        self.assertIn(
-            "include_known_unknown_and_unpredicted_problem_margin",
-            decision.obligations,
-        )
-        self.assertIn(
-            "never_copy_one_attempt_runtime_into_whole_item_deadline",
-            decision.obligations,
-        )
+        self.assertIn("delegate_executable_work_to_roster_worker", decision.obligations)
+        self.assertIn("include_worker_lifecycle_and_uncertainty_margin", decision.obligations)
 
     def test_exploration_dispatch_sizes_the_full_route_clock(self) -> None:
         for facts in (
@@ -239,19 +232,15 @@ class PolicyKernelTests(unittest.TestCase):
                 decision = kernel.decide(source_policy(), facts)
                 self.assertEqual(decision.action, "dispatch_exploration_worker")
                 self.assertIn(
-                    "set_deliverable_deadline_with_problem_margin",
+                    "size_one_generous_claim_deadline_for_full_route",
                     decision.obligations,
                 )
                 self.assertIn(
-                    "include_known_unknown_and_unpredicted_problem_margin",
+                    "delegate_executable_work_to_roster_worker",
                     decision.obligations,
                 )
                 self.assertIn(
-                    "never_copy_one_attempt_runtime_into_whole_item_deadline",
-                    decision.obligations,
-                )
-                self.assertIn(
-                    "forfeit_claim_window_when_next_attempt_cannot_fit",
+                    "include_worker_lifecycle_and_uncertainty_margin",
                     decision.obligations,
                 )
 
@@ -268,11 +257,6 @@ class PolicyKernelTests(unittest.TestCase):
             "cadence_is_observation_not_restart_authority",
             decision.obligations,
         )
-        self.assertIn(
-            "review_evidence_before_proposing_change",
-            decision.obligations,
-        )
-        self.assertIn("deadline_history", decision.reads)
 
     def test_live_task_prevents_second_dispatch(self) -> None:
         facts = {"live_task", "closure_ready", "open_gap", "executable_route"}
@@ -545,95 +529,6 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertEqual(
                 kernel.decide(source_policy(), facts).action,
                 "dispatch_exploration_worker",
-            )
-
-    def test_persistent_completed_result_is_consumed_then_expiry_preempts(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            de67 = workspace / ".de67"
-            de67.mkdir()
-            (de67 / "work-ledger.md").write_text(
-                "## R-004\n- Active gap\n- Next executable route: run proof.\n",
-                encoding="utf-8",
-            )
-            (de67 / "DFS.md").write_text("- [ ] 🔴 R-004\n", encoding="utf-8")
-            state = workspace / "state.sqlite3"
-            connection = sqlite3.connect(state)
-            connection.executescript(
-                """
-                CREATE TABLE tasks (
-                    lineage_id TEXT, task_id TEXT, started_at REAL,
-                    attempt_terminal_at REAL, attempt_terminal_kind TEXT,
-                    result_received_at REAL
-                );
-                CREATE TABLE claim_clocks (
-                    lineage_id TEXT, claim_id TEXT, started_at REAL,
-                    deadline_at REAL, phase TEXT
-                );
-                CREATE TABLE closure_gaps (
-                    lineage_id TEXT, claim_id TEXT, closed_at REAL
-                );
-                CREATE TABLE claim_deadline_generations (
-                    lineage_id TEXT, claim_id TEXT, generation INTEGER,
-                    deadline_at REAL
-                );
-                CREATE TABLE claim_deadline_generation_incidents (
-                    lineage_id TEXT, claim_id TEXT, generation INTEGER,
-                    reviewed_at REAL
-                );
-                INSERT INTO tasks VALUES ('project', 'M1', 0, 5, 'completed', NULL);
-                INSERT INTO claim_clocks VALUES ('project', 'R-004', 0, 1, 'closure');
-                INSERT INTO closure_gaps VALUES ('project', 'R-004', NULL);
-                INSERT INTO claim_deadline_generations VALUES ('project', 'R-004', 1, 10);
-                """
-            )
-            connection.commit()
-
-            before_receipt = kernel.workspace_facts(workspace, state, "project", now=6)
-            self.assertEqual(
-                kernel.decide(source_policy(), before_receipt).action,
-                "receive_worker_result",
-            )
-            connection.execute(
-                "UPDATE tasks SET result_received_at = 7 WHERE lineage_id = 'project'"
-            )
-            connection.commit()
-            connection.close()
-
-            after_expiry = kernel.workspace_facts(workspace, state, "project", now=11)
-            self.assertNotIn("worker_completed", after_expiry)
-            self.assertEqual(
-                kernel.decide(source_policy(), after_expiry).action,
-                "record_deadline_miss",
-            )
-            connection = sqlite3.connect(state)
-            connection.execute(
-                "INSERT INTO claim_deadline_generation_incidents VALUES "
-                "('project', 'R-004', 1, 12)"
-            )
-            connection.commit()
-            connection.close()
-            after_recording = kernel.workspace_facts(
-                workspace, state, "project", now=13
-            )
-            self.assertNotIn("deadline_expired", after_recording)
-            self.assertEqual(
-                kernel.decide(source_policy(), after_recording).action,
-                "dispatch_closure_worker",
-            )
-            connection = sqlite3.connect(state)
-            connection.execute(
-                "UPDATE closure_gaps SET closed_at = 14 WHERE lineage_id = 'project'"
-            )
-            connection.commit()
-            connection.close()
-            acceptance_ready = kernel.workspace_facts(
-                workspace, state, "project", now=15
-            )
-            self.assertIn("accepted_evidence", acceptance_ready)
-            self.assertEqual(
-                kernel.decide(source_policy(), acceptance_ready).action,
-                "apply_guarded_dfs_acceptance",
             )
 
     def test_preserved_baseline_has_no_compiled_kernel_and_remains_recoverable(self) -> None:

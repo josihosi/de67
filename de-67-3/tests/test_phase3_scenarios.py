@@ -68,13 +68,11 @@ class Phase3ScenarioTests(unittest.TestCase):
             self.assertEqual(resolved["pending_components"], [])
             self.assertTrue(resolved["coordinator_restart"]["pending"])
             self.assertIn(
-                "successor must set a fresh clock",
-                harness.coordinator_restart_status("project")[
-                    "coordinator_restart"
-                ]["reason"],
+                "successor must set a fresh clock without inheritance",
+                resolved["coordinator_restart"]["reason"],
             )
 
-    def test_attempt_that_cannot_fit_immediately_forfeits_claim_window(self) -> None:
+    def test_attempt_that_cannot_fit_waits_for_real_claim_expiry(self) -> None:
         with DeadlineHarness(self.state) as harness:
             harness.start_task("project", "first", "R-002", 100, now=0)
             harness.complete_task("project", "first", "Useful partial work.", now=20)
@@ -97,18 +95,15 @@ class Phase3ScenarioTests(unittest.TestCase):
                     "SELECT 1 FROM tasks WHERE task_id = 'cannot-fit'"
                 ).fetchone()
             )
-            incident = harness.connection.execute(
-                """
-                SELECT * FROM claim_deadline_generation_incidents
-                WHERE lineage_id = 'project' AND claim_id = 'R-002'
-                """
-            ).fetchone()
-            self.assertIsNotNone(incident)
-            self.assertEqual(incident["recorded_at"], 30)
-            self.assertIn("estimate=80s, remaining=70s", incident["long_detail"])
-            facts, routed = self.decision(30)
-            self.assertIn("deadline_incident", facts)
-            self.assertEqual(routed.action, "review_deadline_incident")
+            facts_before, routed_before = self.decision(30)
+            self.assertNotIn("deadline_incident", facts_before)
+            self.assertEqual(routed_before.action, "receive_worker_result")
+
+            expired = harness.expire_task("project", "first", now=101)
+            self.assertTrue(expired["incident"]["recorded"])
+            facts_after, routed_after = self.decision(101)
+            self.assertIn("deadline_incident", facts_after)
+            self.assertEqual(routed_after.action, "review_deadline_incident")
 
     def test_worker_twenty_three_runs_stored_mutation_once_then_restarts(self) -> None:
         with patch(

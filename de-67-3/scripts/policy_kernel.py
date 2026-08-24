@@ -403,11 +403,7 @@ def workspace_facts(
                 facts.add("live_task")
             for row in rows:
                 kind = row["attempt_terminal_kind"]
-                result_unreceived = (
-                    "result_received_at" not in row.keys()
-                    or row["result_received_at"] is None
-                )
-                if kind and result_unreceived:
+                if kind:
                     facts.add(f"worker_{kind}")
                     break
         for table, fact in (
@@ -435,65 +431,19 @@ def workspace_facts(
             if clock is not None:
                 current_claim = str(clock["claim_id"])
                 facts.add("open_claim")
-                current_deadline = float(clock["deadline_at"])
-                current_generation_number: int | None = None
-                if _table_exists(connection, "claim_deadline_generations"):
-                    generation_columns = {
-                        str(row["name"])
-                        for row in connection.execute(
-                            "PRAGMA table_info(claim_deadline_generations)"
-                        ).fetchall()
-                    }
-                    if {"generation", "deadline_at"} <= generation_columns:
-                        generation = connection.execute(
-                            """
-                            SELECT generation, deadline_at
-                            FROM claim_deadline_generations
-                            WHERE lineage_id = ? AND claim_id = ?
-                            ORDER BY generation DESC LIMIT 1
-                            """,
-                            (lineage_id, current_claim),
-                        ).fetchone()
-                        if generation is not None:
-                            current_generation_number = int(generation["generation"])
-                            current_deadline = float(generation["deadline_at"])
-                if current_deadline <= now:
-                    expiry_recorded = False
-                    if (
-                        _table_exists(connection, "claim_deadline_generations")
-                        and _table_exists(
-                            connection, "claim_deadline_generation_incidents"
-                        )
-                    ):
-                        if current_generation_number is not None:
-                            expiry_recorded = connection.execute(
-                                """
-                                SELECT 1 FROM claim_deadline_generation_incidents
-                                WHERE lineage_id = ? AND claim_id = ?
-                                  AND generation = ?
-                                """,
-                                (
-                                    lineage_id,
-                                    current_claim,
-                                    current_generation_number,
-                                ),
-                            ).fetchone() is not None
-                    if not expiry_recorded:
-                        facts.add("deadline_expired")
+                if float(clock["deadline_at"]) <= now:
+                    facts.add("deadline_expired")
                 if str(clock["phase"]) == "closure":
                     facts.add("closure_ready")
         if _table_exists(connection, "closure_gaps") and current_claim is not None:
-            open_gap = connection.execute(
+            if connection.execute(
                 """
                 SELECT 1 FROM closure_gaps
                 WHERE lineage_id = ? AND claim_id = ? AND closed_at IS NULL LIMIT 1
                 """,
                 (lineage_id, current_claim),
-            ).fetchone() is not None
-            if open_gap:
+            ).fetchone() is not None:
                 facts.add("open_gap")
-            elif "closure_ready" in facts:
-                facts.add("accepted_evidence")
         if _table_exists(connection, "random_mutation_cycles"):
             random_due = connection.execute(
                 """

@@ -150,8 +150,6 @@ class DeadlineHarness:
                 terminal_at REAL,
                 attempt_terminal_at REAL,
                 attempt_terminal_kind TEXT,
-                result_received_at REAL,
-                result_receipt_evidence TEXT,
                 abandoned_at REAL,
                 abandonment_reason TEXT,
                 closure_gap_id TEXT,
@@ -616,37 +614,6 @@ class DeadlineHarness:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN attempt_terminal_at REAL")
         if "attempt_terminal_kind" not in task_columns:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN attempt_terminal_kind TEXT")
-        if "result_received_at" not in task_columns:
-            self.connection.execute("ALTER TABLE tasks ADD COLUMN result_received_at REAL")
-        if "result_receipt_evidence" not in task_columns:
-            self.connection.execute("ALTER TABLE tasks ADD COLUMN result_receipt_evidence TEXT")
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                migration_id TEXT PRIMARY KEY,
-                applied_at REAL NOT NULL
-            )
-            """
-        )
-        receipt_migration = "explicit-worker-result-receipts-v1"
-        if self.connection.execute(
-            "SELECT 1 FROM schema_migrations WHERE migration_id = ?",
-            (receipt_migration,),
-        ).fetchone() is None:
-            self.connection.execute(
-                """
-                UPDATE tasks
-                SET result_received_at = attempt_terminal_at,
-                    result_receipt_evidence =
-                        'Terminal result predates explicit result receipts.'
-                WHERE attempt_terminal_at IS NOT NULL
-                  AND result_received_at IS NULL
-                """
-            )
-            self.connection.execute(
-                "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
-                (receipt_migration, time.time()),
-            )
         if "abandoned_at" not in task_columns:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN abandoned_at REAL")
         if "abandonment_reason" not in task_columns:
@@ -2240,27 +2207,6 @@ class DeadlineHarness:
             ]
             if not pending:
                 continue
-            history_rows = self.connection.execute(
-                """
-                SELECT generation.generation, generation.estimate_seconds,
-                       generation.started_at, generation.deadline_at,
-                       incident.source_task_id, incident.recorded_at,
-                       incident.short_verdict, incident.long_detail,
-                       task.attempt_terminal_at, task.attempt_terminal_kind
-                FROM claim_deadline_generations AS generation
-                LEFT JOIN claim_deadline_generation_incidents AS incident
-                  ON incident.lineage_id = generation.lineage_id
-                 AND incident.claim_id = generation.claim_id
-                 AND incident.generation = generation.generation
-                LEFT JOIN tasks AS task
-                  ON task.lineage_id = incident.lineage_id
-                 AND task.task_id = incident.source_task_id
-                WHERE generation.lineage_id = ? AND generation.claim_id = ?
-                  AND generation.generation <= ?
-                ORDER BY generation.generation
-                """,
-                (lineage_id, row["claim_id"], row["generation"]),
-            ).fetchall()
             result.append(
                 {
                     "claim_id": row["claim_id"],
@@ -2270,28 +2216,6 @@ class DeadlineHarness:
                     "reviewed": row["reviewed_at"] is not None,
                     "pending_components": pending,
                     "restart_generation": row["restart_generation"],
-                    "deadline_history": [
-                        {
-                            "generation": history["generation"],
-                            "planned_seconds": history["estimate_seconds"],
-                            "actual_seconds": (
-                                (history["attempt_terminal_at"] or history["recorded_at"])
-                                - history["started_at"]
-                                if (history["attempt_terminal_at"] is not None
-                                    or history["recorded_at"] is not None) else None
-                            ),
-                            "overrun_seconds": max(
-                                0.0, history["recorded_at"] - history["deadline_at"]
-                            ) if history["recorded_at"] is not None else None,
-                            "task_id": history["source_task_id"],
-                            "outcome": history["attempt_terminal_kind"] or (
-                                "deadline_miss" if history["recorded_at"] is not None else None
-                            ),
-                            "short_verdict": history["short_verdict"],
-                            "long_detail": history["long_detail"],
-                        }
-                        for history in history_rows
-                    ],
                 }
             )
         return result
@@ -2866,22 +2790,16 @@ class DeadlineHarness:
         now: float,
         *,
         completion_invalid: bool = False,
-        cannot_fit_estimate: float | None = None,
     ) -> dict[str, Any] | None:
         claim = self._task_claim(task["lineage_id"], task["task_id"])
         accepted = self._latest_valid_acceptance(
             str(task["lineage_id"]), str(task["claim_id"])
         )
-        if cannot_fit_estimate is not None and accepted is not None:
-            raise DeadlineError("An accepted claim cannot forfeit its deadline")
-        missed = cannot_fit_estimate is not None or (
-            now >= claim["deadline_at"]
-            and (
-                completion_invalid
-                or task["integrity_breached_at"] is not None
-                or accepted is None
-                or accepted["accepted_at"] >= claim["deadline_at"]
-            )
+        missed = now >= claim["deadline_at"] and (
+            completion_invalid
+            or task["integrity_breached_at"] is not None
+            or accepted is None
+            or accepted["accepted_at"] >= claim["deadline_at"]
         )
         if not missed:
             return None
@@ -2892,13 +2810,6 @@ class DeadlineHarness:
             return self._record_incident(
                 task["lineage_id"], task["task_id"], "deadline_miss", 1, now
             )
-        incident_detail = (
-            "The next evidence-derived attempt cannot fit inside the remaining "
-            f"claim window: estimate={cannot_fit_estimate:g}s, "
-            f"remaining={max(0.0, float(claim['deadline_at']) - now):g}s."
-            if cannot_fit_estimate is not None
-            else self._default_incident_detail("deadline_miss", None)
-        )
         existing = self._claim_deadline_incident(
             str(task["lineage_id"]), str(task["claim_id"]),
             int(task["deadline_generation"]),
@@ -2917,7 +2828,7 @@ class DeadlineHarness:
                     task["deadline_generation"],
                     task["task_id"],
                     now,
-                    incident_detail,
+                    self._default_incident_detail("deadline_miss", None),
                 ),
             )
             if self.connection.execute(
@@ -2936,7 +2847,7 @@ class DeadlineHarness:
                     """,
                     (
                         task["lineage_id"], task["claim_id"], task["task_id"], now,
-                        incident_detail,
+                        self._default_incident_detail("deadline_miss", None),
                     ),
                 )
             compatibility = self._record_incident(
@@ -3335,8 +3246,8 @@ class DeadlineHarness:
                     )
                     if restart is None or restart["acknowledged_at"] is None:
                         raise DeadlineError(
-                            "Every resolved deadline miss requires its acknowledged "
-                            "successor to set a fresh whole-item deadline"
+                            "Resolved deadline generation requires its acknowledged "
+                            "successor before a new work deadline can be armed"
                         )
                     next_generation = int(claim["deadline_generation"]) + 1
                     self.connection.execute(
@@ -3413,27 +3324,6 @@ class DeadlineHarness:
                     remaining_seconds = max(
                         0.0, float(claim["deadline_at"]) - started_at
                     )
-                    anchor = self.connection.execute(
-                        """
-                        SELECT * FROM tasks
-                        WHERE lineage_id = ? AND claim_id = ?
-                          AND deadline_generation = ?
-                        ORDER BY started_at DESC, task_id DESC LIMIT 1
-                        """,
-                        (lineage_id, claim_id, claim["deadline_generation"]),
-                    ).fetchone()
-                    if anchor is None:
-                        raise DeadlineError(
-                            "Claim has no current-generation worker attempt to anchor its miss"
-                        )
-                    self._record_miss_if_due(
-                        anchor,
-                        started_at,
-                        cannot_fit_estimate=attempt_estimate,
-                    )
-                    # The forfeited claim window is durable even though the new
-                    # attempt is rejected and therefore gets no task row.
-                    self.connection.commit()
                     raise DeadlineError(
                         "Attempt estimate exceeds the remaining claim deadline: "
                         f"estimate={attempt_estimate:g}s "
@@ -3883,44 +3773,6 @@ class DeadlineHarness:
                 raise DeadlineError("Attempt already has another terminal outcome")
             result = self._status(lineage_id, task_id, completed_at)
             result["random_mutation"] = self._random_mutation_status(lineage_id)
-            self.connection.commit()
-            return result
-        except Exception:
-            self.connection.rollback()
-            raise
-
-    def receive_worker_result(
-        self,
-        lineage_id: str,
-        task_id: str,
-        evidence: str,
-        *,
-        now: float | None = None,
-    ) -> dict[str, Any]:
-        """Consume one terminal worker event after its durable projection."""
-
-        lineage_id = self._identity(lineage_id, "Lineage id")
-        task_id = self._identity(task_id, "Task id")
-        evidence = self._nonempty_text(evidence, "Result receipt evidence")
-        received_at = self._now(now)
-        self._begin()
-        try:
-            task = self._task(lineage_id, task_id)
-            if task["attempt_terminal_at"] is None:
-                raise DeadlineError("Cannot receive a non-terminal worker result")
-            if task["result_received_at"] is None:
-                self.connection.execute(
-                    """
-                    UPDATE tasks
-                    SET result_received_at = ?, result_receipt_evidence = ?
-                    WHERE lineage_id = ? AND task_id = ?
-                      AND result_received_at IS NULL
-                    """,
-                    (received_at, evidence, lineage_id, task_id),
-                )
-            elif task["result_receipt_evidence"] != evidence:
-                raise DeadlineError("Worker result was already received with different evidence")
-            result = self._status(lineage_id, task_id, received_at)
             self.connection.commit()
             return result
         except Exception:
@@ -5253,7 +5105,8 @@ class DeadlineHarness:
                 if refreshed["restart_generation"] is None:
                     restart, _ = self._request_coordinator_restart(
                         lineage_id,
-                        f"deadline miss reviewed for {claim_id}; successor must set a fresh clock",
+                        f"deadline mutation resolved for {claim_id}; "
+                        "successor must set a fresh clock without inheritance",
                         resolved_at,
                     )
                     self.connection.execute(
@@ -6286,13 +6139,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_task_identity_flags(complete)
     complete.add_argument("--evidence", required=True)
 
-    receive_result = commands.add_parser(
-        "receive-result",
-        help="Consume one terminal worker event after durable ledger projection",
-    )
-    add_task_identity_flags(receive_result)
-    receive_result.add_argument("--evidence", required=True)
-
     finding = commands.add_parser(
         "finding", help="Record one terminal worker blocker or unexpected result"
     )
@@ -6571,10 +6417,6 @@ def main(argv: list[str] | None = None) -> int:
                     result = harness.coordinator_view(include_recent_verdicts=True)
                 elif arguments.command == "complete":
                     result = harness.complete_task(
-                        arguments.lineage, arguments.task, arguments.evidence
-                    )
-                elif arguments.command == "receive-result":
-                    result = harness.receive_worker_result(
                         arguments.lineage, arguments.task, arguments.evidence
                     )
                 elif arguments.command == "transition-closure":

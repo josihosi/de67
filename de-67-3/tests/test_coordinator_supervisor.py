@@ -526,10 +526,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(result, 0)
         command = self.read_events()[0]["policy_argv"]
         self.assertEqual(command[2], "decide")
-        self.assertEqual(
-            command[3:5],
-            ["--policy", str(self.workspace.resolve() / ".de67" / "phase3-policy.d67")],
-        )
+        self.assertEqual(command[3:5], ["--policy", str(self.workspace / ".de67" / "phase3-policy.d67")])
         self.assertIn("--workspace", command)
         self.assertIn("--state", command)
         guard = self.read_events()[0]["policy_guard_argv"]

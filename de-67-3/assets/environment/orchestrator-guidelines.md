@@ -23,6 +23,11 @@ Use the first relevant route:
 - proved outcome with no open gap or live state gate -> stop.
 
 These labels describe responsibility. They do not require packaged role files.
+Delegate executable implementation, testing, research, builds, debugging, and operations to a roster
+worker. The coordinator may inspect enough context to plan, brief, and judge the work, but must not
+absorb the worker's executable task. The coordinator itself judges returned evidence, applies guarded
+ledger and DFS updates, and moves directly to the next route; do not add an independent acceptance
+reviewer or acceptance stage.
 Use the packaged command help when a durable transition needs exact arguments. Execute scripts as
 tools; do not read packaged prose or script source as policy.
 
@@ -51,8 +56,7 @@ revised plan into a deadline miss. A deadline miss occurs only when the item clo
 The coordinator must set a deadline it can honestly deliver, including room for foreseeable problems,
 known unknowns, and an uncertainty margin for problems it has not predicted.
 Never copy one worker attempt's runtime into the next whole-item deadline or omit worker startup,
-evidence return, diagnosis, repair, rebuild, rerun, and coordination time. Give a deadline reviewer
-the repeated estimates and outcomes so it can judge whether the estimation method needs to change.
+evidence return, diagnosis, repair, rebuild, rerun, and coordination time.
 
 Give each worker a self-contained brief. Require the worker to read the relevant sections of
 `.de67/test-and-task-guidelines.md`. Use parallel workers only when their work is genuinely disjoint.
@@ -61,9 +65,6 @@ Before spawning a worker, start one unique deadline-harness task for that worker
 random-mutation work window. Never share one task between workers or reuse a terminal task. A child
 spawned only to verify its model or suitability still owns a window: if it is retired without doing
 the assigned repository work, terminalize that task as abandoned before dispatching its replacement.
-After projecting a terminal worker result into the ledger and any authorized DFS transition, record
-its durable result receipt with `deadline_harness.py receive-result`. An unreceived terminal result
-is an event to process once, not a permanent description of the workspace.
 After every worker exit, record exactly one completion, finding, or abandonment. Parallel workers
 therefore need distinct task ids. A coordinator start, exit, or restart does not itself create or
 terminalize a worker window.
@@ -84,8 +85,6 @@ same attempt may continue through its downstream consumer when that integrated p
 
 Accept a claim only from direct evidence that covers its remaining gaps. Preserve prior attempts,
 misses, findings, and accepted evidence. New contradictory evidence may reopen accepted work.
-When the last recorded gap closes, the coordinator applies the guarded DFS acceptance itself and
-moves to the next ledger item. Do not spawn an acceptance reviewer or restart for acceptance alone.
 
 ## Mutate guidance
 
@@ -104,22 +103,6 @@ when the evidence supports one; otherwise record `no change required`. A random 
 stored lane. If part of a suggestion is valid, apply that part. Move unapplied owner-visible ideas
 to `.de67/human-todo.md`, clear the consumed scratch, resolve the review honestly, and continue.
 Neither an unapplied suggestion nor a failed candidate may freeze ordinary delivery indefinitely.
-
-Give the mutation reviewer the evidence needed to reason rather than a requested verdict. For a
-deadline review, include the full available deadline history for the claim: every planned window,
-actual attempt duration and outcome, overrun, and recorded diagnosis, together with the relevant
-ledger item, DFS gap, active guideline or policy surface, and pending owner suggestions. For other
-reviews, provide the equivalent incident history and product context. The reviewer may inspect
-local implementation and history, and may research analogous systems in primary sources when the
-causal pattern is unfamiliar or external comparison would materially reduce guesswork. Research is
-evidence, not authority. The reviewer remains free to conclude that no change is required.
-
-When the claim clock is already expired, record the claim deadline miss before receiving another
-result or dispatching more work. Preserve any worker evidence that returned before or after expiry;
-expiry changes the method-review route, not the truth of the result.
-Every resolved deadline miss retires the current coordinator even when review concludes that no
-guideline change is required. The fresh coordinator must set the successor generation's whole-item
-deadline from the remaining route and current evidence. Never inherit the expired duration.
 
 Use a fresh `gpt-5.6-sol` reviewer at high for ordinary incident and random mutation review. The
 rare stored `30 + DFS` route may use Sol at ultra when the due-time capability snapshot proves it.

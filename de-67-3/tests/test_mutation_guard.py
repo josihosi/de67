@@ -93,7 +93,7 @@ class MutationGuardTests(unittest.TestCase):
     def test_guideline_heading_change_is_allowed(self) -> None:
         path = self.candidate / guard.TASK_GUIDELINES
         path.write_text(
-            TASK_GUIDANCE.replace("## Prepare the task", "## Prepare work"),
+            TASK_GUIDANCE.replace("## Own the assigned outcome", "## Own useful work"),
             encoding="utf-8",
         )
         self.assertEqual(
@@ -104,7 +104,7 @@ class MutationGuardTests(unittest.TestCase):
         )
 
     def test_changed_baseline_heading_does_not_block_a_real_mutation(self) -> None:
-        corrupt = TASK_GUIDANCE.replace("## Prepare the task", "## Prepare work")
+        corrupt = TASK_GUIDANCE.replace("## Own the assigned outcome", "## Own useful work")
         baseline_corrupt = corrupt
         candidate_corrupt = corrupt + "\nPreserve the useful local context.\n"
         (self.baseline / guard.TASK_GUIDELINES).write_text(
@@ -137,7 +137,7 @@ class MutationGuardTests(unittest.TestCase):
     def test_incident_mutations_reject_whitespace_only_ledger_consumption(self) -> None:
         task_path = self.candidate / guard.TASK_GUIDELINES
         task_path.write_text(
-            TASK_GUIDANCE.replace("Read the current", "Read  the current"),
+            TASK_GUIDANCE.replace("Start from the assigned", "Start  from the assigned"),
             encoding="utf-8",
         )
         with self.assertRaisesRegex(guard.GuardError, "whitespace-only"):
@@ -460,7 +460,7 @@ class MutationGuardTests(unittest.TestCase):
         items = guard.validate_work_ledger(ledger, dfs)
         self.assertEqual(items, ("R-001 — Implement the red claim",))
 
-    def test_work_ledger_rejects_two_items_for_one_claim(self) -> None:
+    def test_work_ledger_accepts_independent_items_for_one_claim(self) -> None:
         dfs = self.write_dfs("# DFS\n\n- [ ] 🔴 R-001 — Still open\n")
         ledger = self.write_ledger(
             "# Work ledger\n\n## Active work\n\n"
@@ -468,8 +468,10 @@ class MutationGuardTests(unittest.TestCase):
             "- [ ] R-001 — Second route\n"
         )
 
-        with self.assertRaisesRegex(guard.GuardError, "more than one active item"):
-            guard.validate_work_ledger(ledger, dfs)
+        self.assertEqual(
+            guard.validate_work_ledger(ledger, dfs),
+            ("R-001 — First route", "R-001 — Second route"),
+        )
 
     def test_work_ledger_rejects_multiple_stored_task_identities(self) -> None:
         dfs = self.write_dfs("# DFS\n\n- [ ] 🔴 R-001 — Still open\n")
@@ -1435,7 +1437,7 @@ class MutationGuardTests(unittest.TestCase):
         state, cycle = self.random_review_state(0)
         path = self.candidate / guard.TASK_GUIDELINES
         path.write_text(
-            TASK_GUIDANCE.replace("Read the current", "Read  the current"),
+            TASK_GUIDANCE.replace("Start from the assigned", "Start  from the assigned"),
             encoding="utf-8",
         )
         result, output = self.run_random_review_cli(state, cycle)
@@ -1552,8 +1554,8 @@ class MutationGuardTests(unittest.TestCase):
         )
         original = guideline.read_text(encoding="utf-8")
         mutations = (
-            ("rename", "## Prepare the task", "## Prepare tasks"),
-            ("delete", "## Prepare the task\n", ""),
+            ("rename", "## Own the assigned outcome", "## Own useful outcomes"),
+            ("delete", "## Own the assigned outcome\n", ""),
         )
         for name, old, new in mutations:
             with self.subTest(name=name):
@@ -1895,12 +1897,15 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_worker_model_guidance_isolates_new_workers_and_reserves_sol(self) -> None:
         self.assertIn("Sol is not an ordinary worker", TASK_GUIDANCE)
-        self.assertIn("Choose Luna by default", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("Use Terra for ambiguous ownership", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("Luna for clear execution", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("Terra for debugging/discovery", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("lowest sufficient", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("complexity/research", ORCHESTRATOR_GUIDANCE)
         self.assertIn("reviewer at high", ORCHESTRATOR_GUIDANCE)
         self.assertIn('`fork_turns="none"`', ORCHESTRATOR_GUIDANCE)
         self.assertIn("explicitly selects Luna or Terra", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("never receives the coordinator or predecessor transcript", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("new worker never", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("receives the coordinator or predecessor transcript", ORCHESTRATOR_GUIDANCE)
 
 
 if __name__ == "__main__":

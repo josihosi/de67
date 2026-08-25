@@ -139,7 +139,7 @@ def _command(codex: str, workspace: Path, environment: dict[str, str]) -> list[s
     if sandbox not in {"read-only", "workspace-write", "danger-full-access"}:
         raise RunnerError(f"Unsupported Codex sandbox: {sandbox}")
     resume_session = environment.get("DE67_COORDINATOR_RESUME_SESSION", "").strip()
-    command = [codex, "exec"]
+    command = [codex, "exec", "--sandbox", sandbox]
     if resume_session:
         command.append("resume")
     command.extend(["--json"])
@@ -147,8 +147,6 @@ def _command(codex: str, workspace: Path, environment: dict[str, str]) -> list[s
         command.extend(
             [
                 "--skip-git-repo-check",
-                "--sandbox",
-                sandbox,
                 "-C",
                 str(workspace),
             ]

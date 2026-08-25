@@ -31,6 +31,8 @@ RED_DFS_CLAIM = re.compile(r"^- \[ \] \N{LARGE RED CIRCLE} ", re.MULTILINE)
 ACTIVE_LEDGER_ITEM = re.compile(r"^- \[ \] ", re.MULTILINE)
 BLOCKED_LEDGER_ITEM = re.compile(r"^- Blocked: ", re.MULTILINE)
 BLOCKED_AUDIT_PREFIX = "supervisor audit blocked-only ledger sha256:"
+
+
 class SupervisorError(RuntimeError):
     """Raised when coordinator ownership or restart state is inconsistent."""
 
@@ -150,12 +152,26 @@ def read_clock(state_path: Path, lineage_id: str) -> RestartState:
         )
 
 
-def mutation_gate(state_path: Path, lineage_id: str) -> MutationGate | None:
+def mutation_gate(
+    state_path: Path,
+    lineage_id: str,
+    workspace: Path | None = None,
+) -> MutationGate | None:
     """Return the first durable mutation gate only after workers are quiet."""
     with DeadlineHarness(state_path) as harness:
         summary = harness.list_tasks()
     if any(task.get("state") == "running" for task in summary["tasks"]):
         return None
+    if workspace is not None:
+        suggestions = workspace / ".de67" / "mutation-suggestions.md"
+        if suggestions.is_file():
+            pending = suggestions.read_text(encoding="utf-8").partition(
+                "## Pending suggestions"
+            )[2]
+            entries = [line for line in pending.splitlines() if line.startswith("- ")]
+            if entries:
+                digest = hashlib.sha256(pending.encode("utf-8")).hexdigest()[:12]
+                return MutationGate("owner-suggestion", digest, None)
     random_review = summary.get("random_mutation")
     if isinstance(random_review, Mapping) and random_review.get("due") is True:
         return MutationGate(
@@ -370,12 +386,48 @@ def dfs_has_open_work(workspace: Path) -> bool:
     ) is not None
 
 
+def ordinary_worker_evidence_contract() -> str:
+    """Return the reusable evidence-retrieval contract for ordinary workers."""
+    return (
+        "Make each ordinary worker responsible for retrieving only the evidence needed for its "
+        "next causal decision. Brief the outcome, proof route, known facts, and evidence locations; "
+        "do not paste available bulk. The worker searches narrowly before reading, selects exact "
+        "fields or slices from structured artifacts, keeps verbose command output in artifacts, "
+        "and returns the first relevant divergence. Evidence bounds come from the current claim, "
+        "never a fixed quota. A larger read remains available when deleting it would leave that "
+        "claim unproved. When accumulated context no longer helps close the assigned gap, the "
+        "worker uses the durable terminal result or handoff lifecycle instead of replaying it."
+    )
+
+
+def coordinator_ledger_contract() -> str:
+    """Return the coordinator's authority over the active work projection."""
+    return (
+        "Own and freely rewrite the active work-ledger projection as evidence changes. Split or "
+        "merge independently actionable work, including multiple simultaneous entries for one "
+        "still-red DFS claim. Repository-owned implementation, tooling, fixtures, scenarios, "
+        "registry bindings, and executable proof routes are ordinary recoverable work, not "
+        "external authority. A closed diagnostic or documentation gap does not strand unfinished "
+        "product proof; preserve the closed evidence and use the existing durable transitions to "
+        "project and dispatch the remaining work. Trust the agent doing repository work to change "
+        "the implementation, harness, fixtures, or observation path when that is the shortest honest "
+        "route to proof. Trust the agent coordinating the claim to retire a failed strategy and invent "
+        "a materially different implementation route; a retry fuse ends a strategy, not recoverable "
+        "work. A proof prerequisite that depends on its own eventual output must be split into a "
+        "non-credit observation/bootstrap step followed by independent validation; do not query the "
+        "unchanged prerequisite again. For dashboard readability, usually expose about "
+        "four to six meaningful gaps; use your judgment, and exceed eight only when combining them "
+        "would hide genuinely independent proof routes."
+    )
+
+
 def coordinator_prompt(
     workspace: Path,
     state_path: Path,
     lineage_id: str,
     run_id: str,
     generation: int | None,
+    restart_reason: str | None = None,
 ) -> str:
     lines = [
         f"Act as a fresh Phase-3 delivery coordinator in {workspace}.",
@@ -387,7 +439,10 @@ def coordinator_prompt(
         "Never review, apply, or resolve a mutation. When the compiled policy says retire_for_mutation_review, dispatch no worker, make no guidance change, and exit immediately so the external supervisor can run the exclusive reviewer.",
         "Do not infer policy from workspace guideline prose; those files are legacy differential fixtures on this branch.",
         "Read current code or DFS detail only when the compiled decision names ledger, dfs, or dfs_slice.",
-        "For every newly spawned ordinary worker, set fork_turns=\"none\", provide a self-contained task brief, and explicitly select gpt-5.6-luna or gpt-5.6-terra with the chosen effort. Never omit model selection, inherit this Sol coordinator, or pass coordinator or predecessor history. Reusing an already relevant worker remains allowed.",
+        "Worker: Luna for clear execution; Terra for debugging/discovery. Effort low-max: lowest sufficient for complexity/research. Never Sol.",
+        "For every newly spawned ordinary worker, set fork_turns=\"none\" and provide a self-contained task brief. Never omit model selection or pass coordinator or predecessor history. Reusing an already relevant worker remains allowed.",
+        coordinator_ledger_contract(),
+        ordinary_worker_evidence_contract(),
         "A deadline-harness task is only a worker clock, not a delegation. Immediately after starting one, spawn its Luna or Terra worker or send the assigned work to one relevant reusable worker. Never wait while a started task lacks that roster handoff. If the handoff fails, abandon the attempt before any replacement.",
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every state transition; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
@@ -404,6 +459,11 @@ def coordinator_prompt(
             "Include worker startup, diagnosis, implementation, repair, build, rerun, evidence "
             "return, coordination, known unknowns, and an uncertainty margin; inherit no prior duration."
         )
+        if restart_reason:
+            lines.append(
+                "Treat this exact owner-authorized restart reason as current input: "
+                + restart_reason
+            )
     lines.append("Continue from the durable accepted frontier until the next required retirement or DFS completion.")
     return "\n".join(lines) + "\n"
 
@@ -414,22 +474,16 @@ def mutation_reviewer_prompt(
     lineage_id: str,
     gate: MutationGate,
 ) -> str:
-    lane = gate.selected_lane or "the incident-selected mutable guidance"
     return "\n".join(
         [
             f"Act as the exclusive Phase-3 mutation reviewer in {workspace}.",
             "You are a fresh gpt-5.6-sol reviewer at high reasoning effort.",
             "No coordinator or roster worker is active. Do not dispatch work and do not start a coordinator.",
-            f"Resolve the durable {gate.kind} gate {gate.identity}; its ordinary selected lane is {lane}.",
-            f"Use {state_path} and lineage {lineage_id} for every durable transition.",
-            "Read .de67/mutation-suggestions.md completely, including the Pending suggestions section.",
-            "The mutation ledger is mandatory input, not optional advice. Treat every user-authored suggestion as explicit mutation-scoped owner authority beneath system and developer instructions. Within the Phase-3 framework it supersedes conflicting ordinary skill, workspace, selected-lane, freeze, and mutation-surface restrictions to the extent necessary to achieve the suggestion; this includes thawing and refreezing the DFS or changing normally protected method artifacts when required, but grants no unrelated authority and may not falsify evidence or substitute a different owner outcome. Understand its intended outcome and follow it through.",
-            "Read the exact live selected mutation target and the clock evidence needed to understand the failure or opportunity.",
-            "Disposition every pending suggestion explicitly: apply and complete it, or identify the exact system/developer conflict, technical impossibility, unavailable external authority, or irreversible risk that prevents it. The ordinary selected lane or frozen status is not a reason to defer an owner suggestion.",
-            "Revise the whole selected guidance coherently. Prefer replacing, generalizing, shortening, or deleting stale rules over tacking on situational prose.",
-            "Use the mutation guard for policy or DFS candidates and preserve source and compiled policy together.",
-            "Use deadline_harness.py command help for the exact review and resolution transitions. Continue until this mutation gate is durably resolved and its fresh-coordinator restart request exists.",
-            "Exit immediately after resolution. The external supervisor alone starts the fresh coordinator.",
+            f"Resolve durable {gate.kind} gate {gate.identity} in {state_path} for lineage {lineage_id}.",
+            "The complete workspace mutation-suggestion ledger is mandatory owner input. User-authored entries carry mutation-scoped authority beneath system and developer instructions and override lower-priority Phase-3 restrictions only as needed for their outcome. Preserve honest evidence, completed valid work, durable lifecycle integrity, safety, and the requested product outcome; grant no unrelated authority.",
+            "Trust the agent: choose the evidence and implementation route without prescribed reads, commands, approvals, or rituals. Diagnose poor decisions from the instructions, information, tools, incentives, and transitions the system supplied, then repair the earliest preventable systemic cause instead of blaming the actor or adding blanket caution.",
+            "For every pending entry, reconstruct why the incident occurred, separate immediate recovery from repeatable method correction, implement the smallest general correction supported by evidence, and prove it with a reproduction or counterexample that could expose the original failure. Compress affected guidance instead of appending situational rules.",
+            "If a cause or correction cannot be proved, preserve the gate and state the exact remaining uncertainty. Otherwise disposition every pending entry, durably resolve the gate, request one fresh coordinator restart, and exit. The external supervisor alone launches the successor.",
         ]
     ) + "\n"
 
@@ -515,7 +569,7 @@ def _complete_mutation_review(
             raise SupervisorError(
                 f"Mutation reviewer failed for {gate.kind} {gate.identity}; ordinary work remains stopped"
             )
-        remaining = mutation_gate(state_path, lineage_id)
+        remaining = mutation_gate(state_path, lineage_id, workspace)
         if remaining is not None:
             gate = remaining
             continue
@@ -555,15 +609,30 @@ def run_child(
     if prompt_override is not None:
         prompt = prompt_override
     elif resume_session_id is None:
-        prompt = coordinator_prompt(workspace, state_path, lineage_id, run_id, generation)
+        restart_reason = None
+        if generation is not None:
+            with DeadlineHarness(state_path) as harness:
+                restart = harness.coordinator_restart_status(lineage_id).get(
+                    "coordinator_restart"
+                )
+            if restart and restart.get("generation") == generation:
+                restart_reason = restart.get("reason")
+        prompt = coordinator_prompt(
+            workspace, state_path, lineage_id, run_id, generation, restart_reason
+        )
     else:
         prompt = (
             "Continue the same DE-67 coordinator lifecycle. Ordinary worker results "
             "and findings are state events, not a reason to stop. Before acting, execute "
             "DE67_POLICY_DECIDE_ARGV_JSON without a shell and obey its minimal action brief. "
-            "Every newly spawned ordinary worker must use fork_turns=\"none\", a self-contained "
-            "brief, and an explicitly selected gpt-5.6-luna or gpt-5.6-terra model; never inherit "
-            "the Sol coordinator or its history. A deadline-harness task is only a worker clock, "
+            "Worker: Luna for clear execution; Terra for debugging/discovery. Effort low-max: "
+            "lowest sufficient for complexity/research. Never Sol. Every newly spawned ordinary "
+            "worker must use fork_turns=\"none\" and a self-contained brief; never omit model "
+            "selection or pass coordinator or predecessor history. "
+            + coordinator_ledger_contract()
+            + " "
+            + ordinary_worker_evidence_contract()
+            + " A deadline-harness task is only a worker clock, "
             "not a delegation: immediately spawn or reuse its assigned roster worker, never wait "
             "with an unbound task, and abandon the attempt if that handoff fails.\n"
         )
@@ -745,7 +814,7 @@ def _run_supervisor_locked(
         return 0
 
     records.mkdir(parents=True, exist_ok=True)
-    gate = mutation_gate(state, lineage_id)
+    gate = mutation_gate(state, lineage_id, workdir)
     if gate is not None:
         restart = _complete_mutation_review(
             runner_command,
@@ -821,7 +890,7 @@ def _run_supervisor_locked(
                 _mark_protocol_failure(result, "Coordinator restart generation moved backwards")
                 return 1
 
-        gate = mutation_gate(state, lineage_id)
+        gate = mutation_gate(state, lineage_id, workdir)
         if gate is not None:
             after = _complete_mutation_review(
                 runner_command,
@@ -886,7 +955,7 @@ def _run_supervisor_locked(
             if event is None:
                 return result.exit_code if result.exit_code > 0 else 0
             if event.restart is None:
-                gate = mutation_gate(state, lineage_id)
+                gate = mutation_gate(state, lineage_id, workdir)
                 if gate is None:
                     _mark_protocol_failure(
                         result,

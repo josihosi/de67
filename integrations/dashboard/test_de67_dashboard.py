@@ -221,6 +221,25 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(clock["deadline"]["claim_id"], "R-009")
         self.assertEqual(clock["deadline"]["deadline_at"], 9999999999)
 
+    def test_deadline_without_active_worker_uses_newest_unretired_claim_clock(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript("""
+            CREATE TABLE claim_deadline_generations (
+              lineage_id TEXT, claim_id TEXT, generation INTEGER,
+              started_at REAL, deadline_at REAL, retired_at REAL
+            );
+            INSERT INTO claim_deadline_generations VALUES
+              ('lineage','R-008',1,200,9999999999,300),
+              ('lineage','R-009',1,100,8888888888,NULL);
+        """)
+
+        deadline = dashboard_module._active_deadline(connection, None)
+
+        self.assertEqual(deadline["claim_id"], "R-009")
+        self.assertEqual(deadline["deadline_at"], 8888888888)
+        connection.close()
+
     def test_overview_uses_alternate_configured_clock_for_clock_and_sidecar(self) -> None:
         alternate = self.workspace / ".de67/state/alternate.sqlite3"
         connection = sqlite3.connect(alternate)

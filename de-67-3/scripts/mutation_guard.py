@@ -1976,7 +1976,7 @@ def validate_work_ledger(
     state: Path | None = None,
     lineage_id: str | None = None,
 ) -> tuple[str, ...]:
-    """Require one current entry per red claim and reject stored attempt history."""
+    """Require current entries to bind red DFS slices and reject stored attempt history."""
 
     ledger_text = read_markdown(ledger)
     blocks = _active_work_blocks(ledger_text)
@@ -2007,10 +2007,6 @@ def validate_work_ledger(
                     f"{item.claim_id}"
                 )
         selected_claims.append(claim)
-
-    stable_claims = [_stable_key(claim) for claim in selected_claims]
-    if len(stable_claims) != len(set(stable_claims)):
-        raise GuardError("Work ledger has more than one active item for the same DFS claim")
 
     if (state is None) != (lineage_id is None):
         raise GuardError("Work-ledger clock validation needs both state and lineage")

@@ -457,7 +457,15 @@ def _active_deadline(
             tuple(value for _column, value in filters),
         ).fetchone()
         return dict(row) if row else None
-    return _latest(connection, "claim_deadline_generations", "generation")
+    order_column = "started_at" if "started_at" in columns else "generation"
+    if "retired_at" in columns:
+        row = connection.execute(
+            f'SELECT * FROM "claim_deadline_generations" '
+            f'WHERE "retired_at" IS NULL ORDER BY "{order_column}" DESC LIMIT 1'
+        ).fetchone()
+        if row:
+            return dict(row)
+    return _latest(connection, "claim_deadline_generations", order_column)
 
 
 def _completed_mutation_counts(connection: sqlite3.Connection) -> tuple[int, int, dict[str, Any] | None]:

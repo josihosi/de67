@@ -238,6 +238,7 @@ class PolicyKernelTests(unittest.TestCase):
         )
         self.assertIn("delegate_executable_work_to_roster_worker", decision.obligations)
         self.assertIn("include_worker_lifecycle_and_uncertainty_margin", decision.obligations)
+        self.assertIn("delegate_evidence_sized_worker_retrieval", decision.obligations)
 
     def test_exploration_dispatch_sizes_the_full_route_clock(self) -> None:
         for facts in (
@@ -257,6 +258,10 @@ class PolicyKernelTests(unittest.TestCase):
                 )
                 self.assertIn(
                     "include_worker_lifecycle_and_uncertainty_margin",
+                    decision.obligations,
+                )
+                self.assertIn(
+                    "delegate_evidence_sized_worker_retrieval",
                     decision.obligations,
                 )
 

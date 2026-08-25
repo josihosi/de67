@@ -33,22 +33,21 @@ tools; do not read packaged prose or script source as policy.
 
 ## Plan and dispatch
 
-Put the currently actionable red claims in `.de67/work-ledger.md`. Keep each entry short and point it
-to the DFS context needed for the work. Do not impose a batch-size limit. A missing or imperfect
-slice can be repaired, but it must not prevent necessary read-only context gathering.
+Project currently actionable work into `.de67/work-ledger.md`. One red claim may have several
+entries when its independently provable outcomes can proceed separately. Freely split, merge,
+replace, or reorder that projection as evidence changes. Keep each entry short and point it to the
+DFS context needed for the work. Do not impose a batch-size limit. A missing or imperfect slice can
+be repaired, but it must not prevent necessary read-only context gathering.
 
 Use exploration when ownership, mechanism, strategy, or proof is unknown. Use closure immediately
 when the strategy, finite gaps, and proof route are already known. A task may cover more than one
 gap when the work and proof form one inseparable authority boundary.
 
-Choose Luna by default for ordinary implementation, builds, harness execution, focused tests, and
-bounded debugging. Use Terra for ambiguous ownership, difficult diagnosis, risky cross-cutting
-work, or demanding exploration. Choose effort from uncertainty: low for a known mechanical route,
-medium for ordinary work, high for substantial research, and max for genuinely open-ended research.
-Do not use Terra at max or Sol for ordinary work. Every new ordinary worker uses
-`fork_turns="none"`, receives a self-contained brief, and explicitly selects Luna or Terra; omitting
-the model would inherit the Sol coordinator and is invalid. Reusing an already relevant worker is
-allowed, but a new worker never receives the coordinator or predecessor transcript.
+Worker: Luna for clear execution; Terra for debugging/discovery. Effort low-max: lowest sufficient
+for complexity/research. Never Sol. Every new ordinary worker uses `fork_turns="none"`, receives a
+self-contained brief, and explicitly selects Luna or Terra; omitting the model would inherit the Sol
+coordinator and is invalid. Reusing an already relevant worker is allowed, but a new worker never
+receives the coordinator or predecessor transcript.
 
 Set one generous deadline for the whole ledger item. Include setup, implementation, builds, repeated
 test runs, repairs between runs, review, disposition, and the uncertainty of the route. Unknown work
@@ -89,10 +88,12 @@ Give each independently provable remaining outcome its own closure gap. Keep one
 route is genuinely indivisible; do not collapse several ledger obligations merely to reduce
 coordination.
 
-Do not repeat an unchanged failing route. Change the implementation, setup, observation, tooling,
-or causal hypothesis. After the MSW three-round fuse, replace narrower probes with the smallest
-implementation or observation that crosses the first still-unproved authoritative transition. The
-same attempt may continue through its downstream consumer when that integrated proof is sensible.
+Do not repeat an unchanged failing route. Trust the agent doing repository work to change the
+implementation, harness, fixture, or observation path when that is the shortest honest route to
+proof. Trust the agent coordinating the claim to replace a failed strategy with materially different
+work. The MSW three-round fuse retires that strategy, not an unfinished claim with repository-owned
+recovery. If a proof prerequisite depends on its own eventual output, split it into a non-credit
+observation/bootstrap step and independent validation instead of querying the prerequisite again.
 
 Accept a claim only from direct evidence that covers its remaining gaps. Preserve prior attempts,
 misses, findings, and accepted evidence. New contradictory evidence may reopen accepted work.

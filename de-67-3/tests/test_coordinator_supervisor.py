@@ -14,14 +14,19 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from coordinator_supervisor import (  # noqa: E402
+    MutationGate,
     SupervisionEvent,
     SupervisorError,
     _supervisor_lock,
     build_parser,
+    coordinator_ledger_contract,
     coordinator_prompt,
     blocked_ledger_audit_reason,
     ledger_has_only_blocked_work,
     main,
+    mutation_gate,
+    mutation_reviewer_prompt,
+    ordinary_worker_evidence_contract,
     read_clock,
     run_supervisor,
     wait_for_supervision_event,
@@ -558,8 +563,127 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("explicitly select gpt-5.6-luna or gpt-5.6-terra", prompt)
         self.assertIn("Never omit model selection", prompt)
         self.assertIn("pass coordinator or predecessor history", prompt)
+        self.assertIn("freely rewrite the active work-ledger projection", prompt)
+        self.assertIn("multiple simultaneous entries for one", prompt)
+        self.assertIn("ordinary recoverable work, not external authority", prompt)
+        self.assertIn("closed diagnostic or documentation gap", prompt)
+        self.assertIn("four to six meaningful gaps", prompt)
+        self.assertIn("exceed eight only", prompt)
+        self.assertIn(ordinary_worker_evidence_contract(), prompt)
         self.assertNotIn("Read .de67/orchestrator-guidelines.md", prompt)
         self.assertNotIn("test-and-task-guidelines.md", prompt)
+
+    def test_pending_owner_suggestion_becomes_gate_only_after_workers_are_quiet(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        self.assertIsNone(mutation_gate(self.state_path, "project", self.workspace))
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "done", now=time.time())
+        gate = mutation_gate(self.state_path, "project", self.workspace)
+        self.assertIsNotNone(gate)
+        assert gate is not None
+        self.assertEqual(gate.kind, "owner-suggestion")
+
+    def test_coordinator_contract_trusts_worker_and_coordinator_agents(self) -> None:
+        contract = coordinator_ledger_contract()
+        self.assertEqual(contract.count("Trust the agent"), 2)
+        self.assertIn("retry fuse ends a strategy, not recoverable work", contract)
+        self.assertIn("non-credit observation/bootstrap step", contract)
+
+    def test_fresh_restart_prompt_includes_exact_owner_reason(self) -> None:
+        prompt = coordinator_prompt(
+            self.workspace.resolve(),
+            self.state_path.resolve(),
+            "project",
+            "owner-restart",
+            3,
+            "Return to the still-red R-008 tooling route.",
+        )
+
+        self.assertIn("exact owner-authorized restart reason", prompt)
+        self.assertIn("Return to the still-red R-008 tooling route.", prompt)
+
+    def test_ordinary_worker_route_retrieves_successive_evidence_slices(self) -> None:
+        prompt = coordinator_prompt(
+            self.workspace.resolve(),
+            self.state_path.resolve(),
+            "project",
+            "evidence-route",
+            None,
+        )
+        report = {
+            "irrelevant_history": [f"old-event-{number}" for number in range(2_000)],
+            "proof": {
+                "first_divergence": "owner stayed local after dematerialization",
+                "expected_owner": "overmap",
+                "observed_owner": "local",
+            },
+        }
+        search_results = [
+            {"path": f"archive/noise-{number}.cpp", "symbol": "unrelated"}
+            for number in range(2_000)
+        ] + [{"path": "src/owner.cpp", "symbol": "commit_owner_transfer"}]
+        verbose_output = [f"trace: repeated step {number}" for number in range(2_000)] + [
+            "error: owner acknowledgement was not persisted",
+            "trace: cleanup",
+        ]
+
+        retrieved = [
+            next(
+                item["path"]
+                for item in search_results
+                if item["symbol"] == "commit_owner_transfer"
+            ),
+            report["proof"]["first_divergence"],
+            next(line for line in verbose_output if line.startswith("error:")),
+            {
+                "expected": report["proof"]["expected_owner"],
+                "observed": report["proof"]["observed_owner"],
+            },
+        ]
+        evidence_grounded_result = (
+            f"{retrieved[0]} failed because {retrieved[2]}; "
+            f"expected {retrieved[3]['expected']}, observed {retrieved[3]['observed']}."
+        )
+        bulk_result = (
+            f"src/owner.cpp failed because "
+            f"{next(line for line in verbose_output if line.startswith('error:'))}; "
+            f"expected {report['proof']['expected_owner']}, "
+            f"observed {report['proof']['observed_owner']}."
+        )
+
+        self.assertIn(ordinary_worker_evidence_contract(), prompt)
+        self.assertEqual(evidence_grounded_result, bulk_result)
+        self.assertEqual(
+            retrieved,
+            [
+                "src/owner.cpp",
+                "owner stayed local after dematerialization",
+                "error: owner acknowledgement was not persisted",
+                {"expected": "overmap", "observed": "local"},
+            ],
+        )
+        self.assertNotIn(report["irrelevant_history"][0], json.dumps(retrieved))
+        self.assertNotIn(verbose_output[0], json.dumps(retrieved))
+
+    def test_mutation_reviewer_prompt_is_outcome_led_and_autonomy_first(self) -> None:
+        prompt = mutation_reviewer_prompt(
+            self.workspace.resolve(),
+            self.state_path.resolve(),
+            "project",
+            MutationGate("random mutation", "cycle 2", "test-and-task-guidelines.md"),
+        )
+
+        self.assertIn("complete workspace mutation-suggestion ledger is mandatory owner input", prompt)
+        self.assertIn("repair the earliest preventable systemic cause", prompt)
+        self.assertIn("separate immediate recovery from repeatable method correction", prompt)
+        self.assertIn("reproduction or counterexample that could expose the original failure", prompt)
+        self.assertIn("preserve the gate and state the exact remaining uncertainty", prompt)
+        self.assertIn("external supervisor alone launches the successor", prompt)
+        self.assertNotIn("test-and-task-guidelines.md", prompt)
+        self.assertNotIn("Read the exact live selected mutation target", prompt)
+        self.assertNotIn("deadline_harness.py", prompt)
+        self.assertNotIn("mutation guard", prompt)
+        self.assertNotIn("DFS candidates", prompt)
 
     def test_supervisor_exports_exact_compiled_policy_decision_command(self) -> None:
         self.write_work_documents(red=True, active=True)
@@ -647,15 +771,14 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             path for path in self.run_root.iterdir() if path.name.startswith("mutation-")
         )
         reviewer_prompt = (reviewer_run / "prompt.txt").read_text(encoding="utf-8")
-        self.assertIn("mutation-suggestions.md completely", reviewer_prompt)
-        self.assertIn("mandatory input, not optional advice", reviewer_prompt)
-        self.assertIn("explicit mutation-scoped owner authority beneath system and developer instructions", reviewer_prompt)
-        self.assertIn("supersedes conflicting ordinary skill, workspace, selected-lane, freeze", reviewer_prompt)
-        self.assertIn("thawing and refreezing the DFS", reviewer_prompt)
-        self.assertIn("ordinary selected lane or frozen status is not a reason", reviewer_prompt)
-        self.assertIn("Understand its intended outcome and follow it through", reviewer_prompt)
-        self.assertIn("Disposition every pending suggestion explicitly", reviewer_prompt)
-        self.assertIn("supervisor alone starts the fresh coordinator", reviewer_prompt)
+        self.assertIn("complete workspace mutation-suggestion ledger is mandatory owner input", reviewer_prompt)
+        self.assertIn("repair the earliest preventable systemic cause", reviewer_prompt)
+        self.assertIn("reproduction or counterexample", reviewer_prompt)
+        self.assertIn("durably resolve the gate", reviewer_prompt)
+        self.assertIn("external supervisor alone launches the successor", reviewer_prompt)
+        self.assertNotIn("orchestrator-guidelines.md", reviewer_prompt)
+        self.assertNotIn("test-and-task-guidelines.md", reviewer_prompt)
+        self.assertNotIn("deadline_harness.py", reviewer_prompt)
 
     def test_mutation_becoming_due_retires_coordinator_before_reviewer(self) -> None:
         self.write_work_documents(red=True, active=True)
@@ -1211,6 +1334,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertNotIn("orchestrator-guidelines.md", continuation_prompt)
         self.assertIn("findings are state events", continuation_prompt)
         self.assertIn("minimal action brief", continuation_prompt)
+        self.assertIn("freely rewrite the active work-ledger projection", continuation_prompt)
+        self.assertIn("ordinary recoverable work, not external authority", continuation_prompt)
 
     def test_active_clock_prevents_completion(self) -> None:
         self.write_work_documents()

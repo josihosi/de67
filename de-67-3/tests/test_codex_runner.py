@@ -109,9 +109,24 @@ class CodexRunnerTests(unittest.TestCase):
             )
 
         command = captured["command"]
-        self.assertEqual(command[0:3], ["/tools/codex", "exec", "resume"])
+        self.assertEqual(
+            command[0:5],
+            ["/tools/codex", "exec", "--sandbox", "danger-full-access", "resume"],
+        )
         self.assertIn("session-1", command)
         self.assertNotIn("--skip-git-repo-check", command)
+
+    def test_resume_reasserts_selected_sandbox_instead_of_using_global_default(self) -> None:
+        environment = self.environment()
+        environment["DE67_COORDINATOR_RESUME_SESSION"] = "session-1"
+        environment["DE67_COORDINATOR_SANDBOX"] = "workspace-write"
+
+        command = codex_runner._command("/tools/codex", self.workspace, environment)
+
+        self.assertEqual(
+            command[0:5],
+            ["/tools/codex", "exec", "--sandbox", "workspace-write", "resume"],
+        )
 
     def test_runner_propagates_codex_failure(self) -> None:
         with patch("codex_runner.shutil.which", return_value="codex"), patch(

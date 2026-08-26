@@ -381,17 +381,14 @@ def _roster_resolver(
                         payload = event.get("payload")
                         if not isinstance(payload, dict):
                             continue
-                        if payload.get("type") == "sub_agent_activity":
-                            item = payload
-                            event_ms = payload.get("occurred_at_ms")
-                        elif payload.get("type") == "item_completed":
+                        if payload.get("type") == "item_completed":
                             item = payload.get("item")
                             event_ms = payload.get("started_at_ms")
                         else:
                             continue
                         if (
                             isinstance(item, dict)
-                            and item.get("type") in {"SubAgentActivity", "sub_agent_activity"}
+                            and item.get("type") == "SubAgentActivity"
                             and item.get("kind") == "started"
                             and item.get("agent_path") == expected_path
                             and isinstance(item.get("agent_thread_id"), str)

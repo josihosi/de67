@@ -230,22 +230,12 @@ class CodexRunnerTests(unittest.TestCase):
         task_id: str = "route",
         agent_path: str | None = None,
         created_at: float | None = None,
-        flat_spawn_event: bool = False,
     ) -> Path:
         state = self.root / "codex-state.sqlite3"
         rollout = self.root / "coordinator-rollout.jsonl"
         expected_path = agent_path or f"/root/{codex_runner.worker_task_name(task_id)}"
         created = created_at if created_at is not None else time.time() + 60
-        spawn_payload = (
-            {
-                "type": "sub_agent_activity",
-                "kind": "started",
-                "agent_thread_id": "worker",
-                "agent_path": expected_path,
-                "occurred_at_ms": int(created * 1000),
-            }
-            if flat_spawn_event
-            else {
+        spawn_payload = {
                 "type": "item_completed",
                 "item": {
                     "type": "SubAgentActivity",
@@ -254,8 +244,7 @@ class CodexRunnerTests(unittest.TestCase):
                     "agent_path": expected_path,
                 },
                 "started_at_ms": int(created * 1000),
-            }
-        )
+        }
         rollout.write_text(
             json.dumps(
                 {
@@ -364,19 +353,6 @@ class CodexRunnerTests(unittest.TestCase):
         environment = self.environment()
         environment["DE67_CODEX_STATE"] = str(
             self.write_roster_state("gpt-5.6-terra")
-        )
-        trace = [line for line in self.handoff_trace() if '"spawn_agent"' not in line]
-        with patch("codex_runner.shutil.which", return_value="codex"), patch(
-            "codex_runner.subprocess.Popen", return_value=FakeProcess(trace, 0)
-        ):
-            self.assertEqual(
-                codex_runner.run(self.workspace, "coordinate", environment=environment), 0
-            )
-
-    def test_runner_recovers_flat_persisted_spawn_event(self) -> None:
-        environment = self.environment()
-        environment["DE67_CODEX_STATE"] = str(
-            self.write_roster_state("gpt-5.6-terra", flat_spawn_event=True)
         )
         trace = [line for line in self.handoff_trace() if '"spawn_agent"' not in line]
         with patch("codex_runner.shutil.which", return_value="codex"), patch(

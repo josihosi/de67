@@ -278,6 +278,18 @@ class CodexRunnerTests(unittest.TestCase):
         return [
             json.dumps({"type": "thread.started", "thread_id": "coordinator"}) + "\n",
             json.dumps(started) + "\n",
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "collab_tool_call",
+                        "tool": "spawn_agent",
+                        "status": "completed",
+                        "receiver_thread_ids": [],
+                    },
+                }
+            )
+            + "\n",
             json.dumps(waited) + "\n",
         ]
 
@@ -299,7 +311,9 @@ class CodexRunnerTests(unittest.TestCase):
             "codex_runner.subprocess.Popen",
             return_value=FakeProcess(self.handoff_trace(), 0),
         ), patch("codex_runner._abandon_unbound_tasks"):
-            with self.assertRaisesRegex(codex_runner.RunnerError, "no roster worker"):
+            with self.assertRaisesRegex(
+                codex_runner.RunnerError, "still lacked a verified roster worker"
+            ):
                 codex_runner.run(self.workspace, "coordinate", environment=environment)
 
     def test_loop_guard_rejects_symbolic_task_name_as_worker_identity(self) -> None:
@@ -318,13 +332,13 @@ class CodexRunnerTests(unittest.TestCase):
             }
         )
 
-        with self.assertRaisesRegex(codex_runner.RunnerError, "no roster worker"):
-            guard.observe(
-                {
-                    "type": "item.started",
-                    "item": {"type": "collab_tool_call", "tool": "wait"},
-                }
-            )
+        guard.observe(
+            {
+                "type": "item.started",
+                "item": {"type": "collab_tool_call", "tool": "wait"},
+            }
+        )
+        self.assertEqual(guard.unbound_tasks, ("R-008-closure-088",))
 
     def test_loop_guard_requires_runtime_roster_proof_for_receiver_id(self) -> None:
         claims: list[tuple[str, str, str | None]] = []
@@ -349,13 +363,76 @@ class CodexRunnerTests(unittest.TestCase):
         )
 
         self.assertEqual(claims, [])
-        with self.assertRaisesRegex(codex_runner.RunnerError, "no roster worker"):
-            guard.observe(
-                {
-                    "type": "item.started",
-                    "item": {"type": "collab_tool_call", "tool": "wait"},
-                }
-            )
+        guard.observe(
+            {
+                "type": "item.started",
+                "item": {"type": "collab_tool_call", "tool": "wait"},
+            }
+        )
+        self.assertEqual(guard.unbound_tasks, ("route",))
+
+    def test_loop_guard_allows_runtime_roster_visibility_to_arrive_during_wait(self) -> None:
+        visible = False
+        claims: list[tuple[str, str, str | None]] = []
+
+        def resolve(
+            _task: str,
+            _started: float,
+            _parent: str | None,
+            _used: frozenset[str],
+        ) -> str | None:
+            return "terra-worker" if visible else None
+
+        guard = codex_runner.CoordinatorLoopGuard(
+            initial_unbound_tasks=("route",),
+            roster_resolver=resolve,
+            claim_recorder=lambda task, worker, parent: claims.append(
+                (task, worker, parent)
+            ),
+        )
+        guard.observe({"type": "thread.started", "thread_id": "coordinator"})
+        guard.observe(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "collab_tool_call",
+                    "tool": "spawn_agent",
+                    "status": "completed",
+                    "receiver_thread_ids": [],
+                },
+            }
+        )
+        wait = {
+            "type": "item.started",
+            "item": {"type": "collab_tool_call", "tool": "wait"},
+        }
+
+        guard.observe(wait)
+        self.assertEqual(guard.unbound_tasks, ("route",))
+        visible = True
+        guard.observe({"type": "turn.completed"})
+
+        self.assertEqual(guard.unbound_tasks, ())
+        self.assertEqual(claims, [("route", "terra-worker", "coordinator")])
+
+    def test_resumed_runner_binds_durable_worker_without_new_spawn_timestamp(self) -> None:
+        claims: list[tuple[str, str, str | None]] = []
+        guard = codex_runner.CoordinatorLoopGuard(
+            initial_unbound_tasks=("route",),
+            initial_pending_delegations=("route",),
+            recovered_workers={"route": "old-worker"},
+            roster_validator=lambda worker, parent: (
+                worker == "old-worker" and parent == "coordinator"
+            ),
+            claim_recorder=lambda task, worker, parent: claims.append(
+                (task, worker, parent)
+            ),
+        )
+
+        guard.observe({"type": "thread.started", "thread_id": "coordinator"})
+
+        self.assertEqual(guard.unbound_tasks, ())
+        self.assertEqual(claims, [])
 
     def test_loop_guard_reuses_worker_after_authoritative_prior_terminal(self) -> None:
         terminal_tasks: set[str] = set()
@@ -368,6 +445,7 @@ class CodexRunnerTests(unittest.TestCase):
 
         guard = codex_runner.CoordinatorLoopGuard(
             initial_unbound_tasks=("route-1",),
+            initial_pending_delegations=("route-1",),
             roster_resolver=resolve,
             task_terminal=lambda task_id: task_id in terminal_tasks,
         )
@@ -385,6 +463,17 @@ class CodexRunnerTests(unittest.TestCase):
                 "status": "completed",
             },
         })
+        guard.observe(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "collab_tool_call",
+                    "tool": "followup_task",
+                    "status": "completed",
+                    "receiver_thread_ids": [],
+                },
+            }
+        )
         guard.observe(wait)
 
         self.assertEqual(resolved_used_workers, [frozenset(), frozenset()])

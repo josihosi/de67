@@ -263,19 +263,34 @@ def read_clock(state_path: Path, lineage_id: str) -> RestartState:
 def terminalize_unowned_worker_windows(
     state_path: Path,
     lineage_id: str,
+    recoverable_workers: Mapping[str, str] | None = None,
+    *,
+    include_unclaimed: bool = True,
 ) -> tuple[str, ...]:
-    """Fail closed when a coordinator exits without terminalizing its workers."""
+    """Fail closed only for clocks that never acquired a verified worker."""
+    recoverable = recoverable_workers or {}
     with DeadlineHarness(state_path) as harness:
-        task_ids = tuple(
-            str(row["task_id"])
-            for row in harness.connection.execute(
+        rows = harness.connection.execute(
                 """
-                SELECT task_id FROM tasks
-                WHERE lineage_id = ? AND attempt_terminal_at IS NULL
-                ORDER BY started_at
+                SELECT task.task_id, claim.worker_id, claim.coordinator_session_id
+                FROM tasks AS task
+                LEFT JOIN worker_claims AS claim
+                  ON claim.lineage_id = task.lineage_id
+                 AND claim.task_id = task.task_id
+                 AND claim.released_at IS NULL
+                WHERE task.lineage_id = ? AND task.attempt_terminal_at IS NULL
+                ORDER BY task.started_at
                 """,
                 (lineage_id,),
             ).fetchall()
+        task_ids = tuple(
+            str(row["task_id"])
+            for row in rows
+            if (
+                (row["worker_id"] is not None or include_unclaimed)
+                and recoverable.get(str(row["worker_id"] or ""))
+                != str(row["coordinator_session_id"] or "")
+            )
         )
         for task_id in task_ids:
             harness.abandon_attempt(
@@ -284,6 +299,65 @@ def terminalize_unowned_worker_windows(
                 WORKER_OWNER_LOST_REASON,
             )
     return task_ids
+
+
+def active_worker_coordinator_session(
+    state_path: Path,
+    lineage_id: str,
+) -> str | None:
+    """Return the one coordinator session that owns all active worker claims."""
+    with DeadlineHarness(state_path) as harness:
+        sessions = tuple(
+            str(row["coordinator_session_id"])
+            for row in harness.connection.execute(
+                """
+                SELECT DISTINCT claim.coordinator_session_id
+                FROM worker_claims AS claim
+                JOIN tasks AS task
+                  ON task.lineage_id = claim.lineage_id
+                 AND task.task_id = claim.task_id
+                WHERE claim.lineage_id = ?
+                  AND claim.released_at IS NULL
+                  AND task.attempt_terminal_at IS NULL
+                ORDER BY claim.coordinator_session_id
+                """,
+                (lineage_id,),
+            ).fetchall()
+        )
+    if len(sessions) > 1:
+        raise SupervisorError(
+            "Active worker claims belong to multiple coordinator sessions"
+        )
+    return sessions[0] if sessions else None
+
+
+def runtime_worker_owners(
+    workspace: Path,
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Return runtime-verifiable Luna/Terra worker-to-parent ownership."""
+    selected = os.environ.copy()
+    if environment is not None:
+        selected.update(environment)
+    value = selected.get("DE67_CODEX_STATE", "").strip()
+    state = Path(value).expanduser().resolve() if value else Path.home() / ".codex/state_5.sqlite"
+    if not state.is_file():
+        return {}
+    with sqlite3.connect(f"file:{state}?mode=ro", uri=True) as connection:
+        rows = connection.execute(
+            """
+            SELECT edge.child_thread_id, edge.parent_thread_id, child.model
+            FROM thread_spawn_edges AS edge
+            JOIN threads AS child ON child.id = edge.child_thread_id
+            WHERE child.cwd = ?
+            """,
+            (str(workspace),),
+        ).fetchall()
+    return {
+        str(worker): str(parent)
+        for worker, parent, model in rows
+        if any(name in str(model or "").lower() for name in ("luna", "terra"))
+    }
 
 
 def supervision_fingerprint(
@@ -651,14 +725,19 @@ def coordinator_ledger_contract() -> str:
 def worker_handoff_contract() -> str:
     return (
         "A deadline-harness task is only a worker clock, not a delegation. Immediately "
-        "spawn its Luna or Terra worker or message one relevant reusable worker. A successful "
-        "spawn or follow-up tool call is sufficient coordinator-side evidence to continue; do "
+        "spawn its Luna or Terra worker. Reuse only a worker already spawned and durably bound "
+        "by this same coordinator session; never adopt a worker from another coordinator. A successful "
+        "spawn or eligible follow-up tool call is sufficient coordinator-side evidence to continue; do "
         "not require receiver_thread_ids in the coordinator-visible response and do not abandon "
         "solely because that field is absent there. The runner independently validates the actual "
         "runtime thread UUID against the coordinator parent, workspace, and Luna/Terra model, then "
-        "records the durable claim automatically. Never invoke claim-worker and never use "
+        "records the durable claim automatically when the runtime spawn edge becomes visible. "
+        "That visibility may arrive after the first wait begins; this is not a delegation failure. "
+        "Never invoke claim-worker and never use "
         "/root/<task-name> as a worker identity. Proceed to the normal wait; if no verified roster "
-        "handoff exists, the runner terminates the coordinator and abandons the attempt."
+        "handoff exists when the coordinator process exits, the runner abandons the attempt. "
+        "After a verified handoff, remain in the worker-result lifecycle: an empty or timed wait "
+        "is not completion, so wait again; record the returned terminal result before routing or exiting."
     )
 
 
@@ -1064,9 +1143,15 @@ def _run_supervisor_locked(
 
     # Existing run records prove this is a supervisor recovery, not the first
     # bootstrap that may legitimately begin with a seeded task clock.
-    if records.is_dir() and any(records.iterdir()):
+    recovering_existing_runs = records.is_dir() and any(records.iterdir())
+    if recovering_existing_runs:
         reconcile_dead_run_records(records)
-        terminalize_unowned_worker_windows(state, lineage_id)
+    terminalize_unowned_worker_windows(
+        state,
+        lineage_id,
+        runtime_worker_owners(workdir, extra_env),
+        include_unclaimed=recovering_existing_runs,
+    )
 
     restart = read_clock(state, lineage_id)
     blocked_audit = blocked_ledger_audit_reason(workdir)
@@ -1125,7 +1210,10 @@ def _run_supervisor_locked(
         )
 
     generation = restart.generation if restart.required else None
-    resume_session_id: str | None = None
+    # A restarted supervisor resumes the durable owner of any still-live
+    # workers. It never launches a fresh coordinator that would have to adopt
+    # another session's children or dispatch duplicates.
+    resume_session_id = active_worker_coordinator_session(state, lineage_id)
     attempted_generations: set[int] = set()
     automatic_process_recoveries = 0
     while True:
@@ -1167,11 +1255,13 @@ def _run_supervisor_locked(
         if not result.launched:
             return result.exit_code if result.exit_code > 0 else 1
 
-        # Ordinary workers belong to the coordinator process that spawned them.
-        # Once that process exits, a nonterminal clock cannot prove a worker is
-        # alive. Terminalize it before routing so the kernel cannot mistake an
-        # orphaned database row for live work and enter W1 resume churn.
-        terminalize_unowned_worker_windows(state, lineage_id)
+        # Unclaimed clocks are phantom work and must fail closed. A verified
+        # worker claim belongs to this supervised coordinator session, however,
+        # and survives a transient CLI process exit so the same session can
+        # resume its structured worker-result lifecycle.
+        terminalize_unowned_worker_windows(
+            state, lineage_id, runtime_worker_owners(workdir, extra_env)
+        )
         progressed = supervision_fingerprint(state, lineage_id, workdir)
         journal.finish(
             run_id,
@@ -1342,7 +1432,7 @@ def _run_supervisor_locked(
             return 1
         restart = after
         generation = after.generation
-        resume_session_id = None
+        resume_session_id = active_worker_coordinator_session(state, lineage_id)
 
 
 def run_supervisor(

@@ -29,6 +29,8 @@ class CoordinatorLoopGuard:
         self,
         *,
         initial_unbound_tasks: Sequence[str] = (),
+        initial_pending_delegations: Sequence[str] = (),
+        recovered_workers: dict[str, str] | None = None,
         roster_resolver: Callable[[str, float, str | None, frozenset[str]], str | None]
         | None = None,
         roster_validator: Callable[[str, str | None], bool] | None = None,
@@ -41,6 +43,9 @@ class CoordinatorLoopGuard:
             task_id: clock() for task_id in dict.fromkeys(initial_unbound_tasks)
         }
         self._task_workers: dict[str, str] = {}
+        self._pending_delegations: set[str] = set()
+        self._pending_delegations.update(initial_pending_delegations)
+        self._recovered_workers = recovered_workers or {}
         self._parent_thread_id: str | None = None
         self._roster_resolver = roster_resolver
         self._roster_validator = roster_validator
@@ -53,13 +58,32 @@ class CoordinatorLoopGuard:
         for task_id in tuple(self._task_workers):
             if self._task_terminal(task_id):
                 self._task_workers.pop(task_id, None)
+                self._pending_delegations.discard(task_id)
 
-    def _bind(self, task_id: str, worker_id: str) -> None:
+    def reconcile_handoffs(self) -> None:
+        """Bind workers once the runtime roster has observed their spawn edge."""
+        self._reconcile_terminal_tasks()
+        if self._roster_resolver is None:
+            return
+        for task_id, started_at in tuple(self._unbound.items()):
+            if task_id not in self._pending_delegations:
+                continue
+            worker_id = self._roster_resolver(
+                task_id,
+                started_at,
+                self._parent_thread_id,
+                frozenset(self._task_workers.values()),
+            )
+            if worker_id:
+                self._bind(task_id, worker_id)
+
+    def _bind(self, task_id: str, worker_id: str, *, record_claim: bool = True) -> None:
         if worker_id.startswith("/") or any(character.isspace() for character in worker_id):
             return
-        if self._claim_recorder is not None:
+        if record_claim and self._claim_recorder is not None:
             self._claim_recorder(task_id, worker_id, self._parent_thread_id)
         del self._unbound[task_id]
+        self._pending_delegations.discard(task_id)
         self._task_workers[task_id] = worker_id
 
     @property
@@ -87,8 +111,19 @@ class CoordinatorLoopGuard:
             thread_id = event.get("thread_id")
             if isinstance(thread_id, str) and thread_id:
                 self._parent_thread_id = thread_id
+                for task_id, worker_id in tuple(self._recovered_workers.items()):
+                    if (
+                        task_id in self._unbound
+                        and (
+                            self._roster_validator is None
+                            or self._roster_validator(worker_id, thread_id)
+                        )
+                    ):
+                        self._bind(task_id, worker_id, record_claim=False)
+                    self._recovered_workers.pop(task_id, None)
             return
         if not isinstance(item, dict):
+            self.reconcile_handoffs()
             return
 
         result = self._command_result(item)
@@ -103,43 +138,55 @@ class CoordinatorLoopGuard:
                 }:
                     if task_id in self._unbound:
                         del self._unbound[task_id]
+                    self._pending_delegations.discard(task_id)
                     self._task_workers.pop(task_id, None)
 
         if item.get("type") != "collab_tool_call":
+            self.reconcile_handoffs()
             return
         tool = item.get("tool")
         receivers = item.get("receiver_thread_ids")
         worker_ids = [value for value in receivers or [] if isinstance(value, str) and value]
-        if (
+        successful_delegation = (
             tool in {"spawn_agent", "followup_task"}
             and event.get("type") == "item.completed"
             and item.get("status") == "completed"
-            and worker_ids
             and self._unbound
-        ):
+        )
+        if successful_delegation:
+            task_id = next(
+                (
+                    candidate
+                    for candidate in self._unbound
+                    if candidate not in self._pending_delegations
+                ),
+                next(iter(self._unbound)),
+            )
+            self._pending_delegations.add(task_id)
+        if successful_delegation and worker_ids:
             if self._roster_validator is not None and not self._roster_validator(
                 worker_ids[0], self._parent_thread_id
             ):
                 return
-            task_id = next(iter(self._unbound))
             self._bind(task_id, worker_ids[0])
             return
         if tool == "wait" and event.get("type") == "item.started":
-            self._reconcile_terminal_tasks()
-            if self._roster_resolver is not None:
-                for task_id, started_at in tuple(self._unbound.items()):
-                    worker_id = self._roster_resolver(
-                        task_id,
-                        started_at,
-                        self._parent_thread_id,
-                        frozenset(self._task_workers.values()),
-                    )
-                    if worker_id:
-                        self._bind(task_id, worker_id)
-            if not self._unbound:
-                return
-            tasks = ", ".join(self._unbound)
-            raise RunnerError(f"Running task {tasks} has no roster worker before wait")
+            # Codex persists the spawn edge independently from the tool event.
+            # A successful delegation can therefore become visible after the
+            # first wait begins. Keep reconciling subsequent events and make
+            # the process-exit boundary, not this visibility race, fail closed.
+            self.reconcile_handoffs()
+            missing = [
+                task_id
+                for task_id in self._unbound
+                if task_id not in self._pending_delegations
+            ]
+            if missing:
+                raise RunnerError(
+                    f"Running task {', '.join(missing)} has no roster worker before wait"
+                )
+            return
+        self.reconcile_handoffs()
 
 
 def _timestamp() -> str:
@@ -241,6 +288,34 @@ def _initial_unbound_tasks(environment: dict[str, str]) -> tuple[str, ...]:
     finally:
         connection.close()
     return tuple(str(row[0]) for row in rows)
+
+
+def _initial_recovered_workers(environment: dict[str, str]) -> dict[str, str]:
+    """Recover durable worker identities owned by the resumed coordinator session."""
+    session = environment.get("DE67_COORDINATOR_RESUME_SESSION", "").strip()
+    state_value = environment.get("DE67_DEADLINE_STATE", "").strip()
+    lineage = environment.get("DE67_LINEAGE", "").strip()
+    if not session or not state_value or not lineage:
+        return {}
+    state = Path(state_value).expanduser().resolve()
+    if not state.is_file():
+        return {}
+    with sqlite3.connect(f"file:{state}?mode=ro", uri=True) as connection:
+        rows = connection.execute(
+            """
+            SELECT task.task_id, claim.worker_id
+            FROM tasks AS task
+            JOIN worker_claims AS claim
+              ON claim.lineage_id = task.lineage_id
+             AND claim.task_id = task.task_id
+            WHERE task.lineage_id = ? AND task.attempt_terminal_at IS NULL
+              AND claim.released_at IS NULL
+              AND claim.coordinator_session_id = ?
+            ORDER BY task.started_at
+            """,
+            (lineage, session),
+        ).fetchall()
+    return {str(task_id): str(worker_id) for task_id, worker_id in rows}
 
 
 def _task_terminal_resolver(environment: dict[str, str]) -> Callable[[str], bool]:
@@ -444,8 +519,11 @@ def run(
     print(f"DE67_RUN_DIR={run_directory}", flush=True)
 
     command = _command(codex, workspace, selected_environment)
+    recovered_workers = _initial_recovered_workers(selected_environment)
     loop_guard = CoordinatorLoopGuard(
         initial_unbound_tasks=_initial_unbound_tasks(selected_environment),
+        initial_pending_delegations=tuple(recovered_workers),
+        recovered_workers=recovered_workers,
         roster_resolver=_roster_resolver(workspace, selected_environment),
         roster_validator=_roster_validator(workspace, selected_environment),
         claim_recorder=_claim_recorder(selected_environment),
@@ -489,6 +567,7 @@ def run(
                     raise
             exit_code = _reap(process)
             process = None
+            loop_guard.reconcile_handoffs()
             if loop_guard.unbound_tasks:
                 _abandon_unbound_tasks(
                     loop_guard.unbound_tasks, selected_environment

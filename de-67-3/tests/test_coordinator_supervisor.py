@@ -36,6 +36,7 @@ from coordinator_supervisor import (  # noqa: E402
     run_supervisor,
     supervision_fingerprint,
     terminalize_unowned_worker_windows,
+    active_worker_coordinator_session,
     wait_for_supervision_event,
     work_is_complete,
     worker_handoff_contract,
@@ -288,6 +289,27 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             "# Work ledger\n\n## Active work\n",
             encoding="utf-8",
         )
+    elif mode == "claimed-worker-crash-then-complete":
+        if event_count == 1:
+            harness.claim_worker(
+                os.environ["DE67_LINEAGE"], "seed", "worker-a",
+                "fake-session", os.environ["DE67_SUPERVISOR_PID"],
+            )
+            raise SystemExit(9)
+        if generation is not None:
+            raise AssertionError("worker recovery must keep the coordinator generation")
+        harness.complete_task(
+            os.environ["DE67_LINEAGE"], "seed", "worker result ingested"
+        )
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        (root / "DFS.md").write_text(
+            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 N{EM DASH} Done\n",
+            encoding="utf-8",
+        )
+        (root / "work-ledger.md").write_text(
+            "# Work ledger\n\n## Active work\n",
+            encoding="utf-8",
+        )
     elif mode == "crash-without-session-then-complete":
         if event_count == 1:
             raise SystemExit(9)
@@ -468,7 +490,24 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.waiter.stop()
         self.temporary.cleanup()
 
-    def test_coordinator_exit_terminalizes_unowned_worker_window(self) -> None:
+    def test_coordinator_exit_preserves_claimed_worker_window(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            harness.claim_worker(
+                "project", "seed", "worker-a", "coordinator-a", "supervisor-a", now=1
+            )
+        terminalized = terminalize_unowned_worker_windows(
+            self.state_path,
+            "project",
+            {"worker-a": "coordinator-a"},
+        )
+
+        self.assertEqual(terminalized, ())
+        with DeadlineHarness(self.state_path) as harness:
+            status = harness.status_task("project", "seed")
+        self.assertEqual(status["state"], "running")
+        self.assertIsNone(status["attempt_terminal_kind"])
+
+    def test_coordinator_exit_terminalizes_only_unclaimed_worker_window(self) -> None:
         terminalized = terminalize_unowned_worker_windows(
             self.state_path,
             "project",
@@ -477,12 +516,48 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(terminalized, ("seed",))
         with DeadlineHarness(self.state_path) as harness:
             status = harness.status_task("project", "seed")
-            reason = harness.connection.execute(
-                "SELECT abandonment_reason FROM tasks WHERE task_id = 'seed'"
-            ).fetchone()["abandonment_reason"]
         self.assertEqual(status["state"], "abandoned")
-        self.assertEqual(status["attempt_terminal_kind"], "abandoned")
-        self.assertIn("worker_owner_lost", reason)
+
+    def test_coordinator_exit_terminalizes_stale_worker_claim(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            harness.claim_worker(
+                "project", "seed", "worker-a", "coordinator-a", "supervisor-a", now=1
+            )
+
+        terminalized = terminalize_unowned_worker_windows(
+            self.state_path,
+            "project",
+            {},
+        )
+
+        self.assertEqual(terminalized, ("seed",))
+        with DeadlineHarness(self.state_path) as harness:
+            status = harness.status_task("project", "seed")
+        self.assertEqual(status["state"], "abandoned")
+
+    def test_supervisor_restart_recovers_the_active_worker_owner_session(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            harness.claim_worker(
+                "project", "seed", "worker-a", "coordinator-a", "supervisor-old", now=1
+            )
+
+        self.assertEqual(
+            active_worker_coordinator_session(self.state_path, "project"),
+            "coordinator-a",
+        )
+
+    def test_supervisor_restart_rejects_multiple_active_worker_owners(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            harness.claim_worker(
+                "project", "seed", "worker-a", "coordinator-a", "supervisor-old", now=1
+            )
+            harness.start_task("project", "other", "R-001", 3600, now=2)
+            harness.claim_worker(
+                "project", "other", "worker-b", "coordinator-b", "supervisor-old", now=3
+            )
+
+        with self.assertRaisesRegex(SupervisorError, "multiple coordinator sessions"):
+            active_worker_coordinator_session(self.state_path, "project")
 
     def test_worker_checkpoint_changes_the_durable_progress_fingerprint(self) -> None:
         before = supervision_fingerprint(
@@ -1562,6 +1637,36 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(
             self.statuses(),
             {"crashed-run": "FAILED", "recovery-run": "DONE"},
+        )
+
+    def test_crashed_coordinator_preserves_claimed_worker_and_resumes_once(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        run_ids = iter(("worker-owner-crashed", "worker-result-ingress"))
+
+        with patch(
+            "coordinator_supervisor.runtime_worker_owners",
+            return_value={"worker-a": "fake-session"},
+        ):
+            result = run_supervisor(
+                self.state_path,
+                "project",
+                self.workspace,
+                self.runner_command(),
+                self.run_root,
+                extra_env=self.environment("claimed-worker-crash-then-complete"),
+                run_id_factory=lambda _generation: next(run_ids),
+            )
+
+        self.assertEqual(result, 0)
+        events = self.read_events()
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1]["resume_session"], "fake-session")
+        with DeadlineHarness(self.state_path) as harness:
+            task = harness.status_task("project", "seed")
+        self.assertEqual(task["state"], "completed")
+        self.assertEqual(
+            self.statuses(),
+            {"worker-owner-crashed": "FAILED", "worker-result-ingress": "DONE"},
         )
 
     def test_nonresumable_crash_with_active_work_gets_a_fresh_coordinator(self) -> None:

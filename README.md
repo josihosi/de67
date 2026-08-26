@@ -90,8 +90,10 @@ attempts, evidence, misses, and restart generations without consuming model toke
 Mutation is gated and receipt-backed so a failed approach can change without rewriting the user's
 goal or erasing accepted work. An ordinary test failure remains worker input; it is not a formal
 finding, mutation trigger, or coordinator-restart trigger.
-Add an owner instruction to `.de67/mutation-suggestions.md` when the next mutation review must apply
-a behavior correction. The instruction may expand the ordinary mutation lane when necessary; the
+Add `Owner-authorized [trigger]: ...` to `.de67/mutation-suggestions.md` when the correction should
+start a mutation review as soon as workers are quiet. Use `Owner-authorized [defer]: ...` to queue
+the same mandatory reviewer input without disturbing ordinary work; the next regularly due mutation
+review consumes it. The instruction may expand the ordinary mutation lane when necessary; the
 reviewer still preserves honest evidence and the owner's requested outcome.
 
 For non-gating provenance, run `python de-67-3/scripts/method_provenance.py --workspace <repo>`.

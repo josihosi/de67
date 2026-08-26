@@ -31,6 +31,7 @@ class CoordinatorLoopGuard:
         initial_unbound_tasks: Sequence[str] = (),
         roster_resolver: Callable[[str, float, str | None, frozenset[str]], str | None]
         | None = None,
+        roster_validator: Callable[[str, str | None], bool] | None = None,
         claim_recorder: Callable[[str, str, str | None], None] | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
@@ -41,9 +42,12 @@ class CoordinatorLoopGuard:
         self._task_workers: dict[str, str] = {}
         self._parent_thread_id: str | None = None
         self._roster_resolver = roster_resolver
+        self._roster_validator = roster_validator
         self._claim_recorder = claim_recorder
 
     def _bind(self, task_id: str, worker_id: str) -> None:
+        if worker_id.startswith("/") or any(character.isspace() for character in worker_id):
+            return
         if self._claim_recorder is not None:
             self._claim_recorder(task_id, worker_id, self._parent_thread_id)
         del self._unbound[task_id]
@@ -104,6 +108,10 @@ class CoordinatorLoopGuard:
             and worker_ids
             and self._unbound
         ):
+            if self._roster_validator is not None and not self._roster_validator(
+                worker_ids[0], self._parent_thread_id
+            ):
+                return
             task_id = next(iter(self._unbound))
             self._bind(task_id, worker_ids[0])
             return
@@ -126,6 +134,16 @@ class CoordinatorLoopGuard:
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _reap(process: subprocess.Popen[str]) -> int:
+    while True:
+        try:
+            return process.wait()
+        except InterruptedError:
+            continue
+        except ChildProcessError:
+            return process.returncode if process.returncode is not None else 1
 
 
 def _run_id() -> str:
@@ -264,6 +282,40 @@ def _roster_resolver(
     return resolve
 
 
+def _roster_validator(
+    workspace: Path, environment: dict[str, str]
+) -> Callable[[str, str | None], bool]:
+    state_value = environment.get("DE67_CODEX_STATE", "").strip()
+    state = (
+        Path(state_value).expanduser().resolve()
+        if state_value
+        else Path.home() / ".codex" / "state_5.sqlite"
+    )
+
+    def validate(worker_id: str, parent_thread_id: str | None) -> bool:
+        if parent_thread_id is None or not state.is_file():
+            return False
+        connection = sqlite3.connect(f"file:{state}?mode=ro", uri=True)
+        try:
+            row = connection.execute(
+                """
+                SELECT child.model
+                FROM thread_spawn_edges AS edge
+                JOIN threads AS child ON child.id = edge.child_thread_id
+                WHERE edge.parent_thread_id = ? AND edge.child_thread_id = ?
+                  AND child.cwd = ?
+                """,
+                (parent_thread_id, worker_id, str(workspace)),
+            ).fetchone()
+        finally:
+            connection.close()
+        return row is not None and any(
+            name in str(row[0] or "").lower() for name in ("luna", "terra")
+        )
+
+    return validate
+
+
 def _abandon_unbound_tasks(
     task_ids: Sequence[str], environment: dict[str, str]
 ) -> None:
@@ -364,9 +416,13 @@ def run(
     loop_guard = CoordinatorLoopGuard(
         initial_unbound_tasks=_initial_unbound_tasks(selected_environment),
         roster_resolver=_roster_resolver(workspace, selected_environment),
+        roster_validator=_roster_validator(workspace, selected_environment),
         claim_recorder=_claim_recorder(selected_environment),
     )
     started = time.monotonic()
+    session_id: str | None = None
+    process: subprocess.Popen[str] | None = None
+    tasks_to_abandon: tuple[str, ...] = ()
     try:
         with prompt_path.open("r", encoding="utf-8") as prompt_stream, output_path.open(
             "w", encoding="utf-8", newline="\n"
@@ -385,7 +441,6 @@ def run(
             if process.stdout is None:
                 process.kill()
                 raise RunnerError("Codex output pipe was not created")
-            session_id: str | None = None
             for line in process.stdout:
                 output_stream.write(line)
                 output_stream.flush()
@@ -398,14 +453,55 @@ def run(
                 try:
                     loop_guard.observe(event)
                 except RunnerError:
-                    process.terminate()
-                    _abandon_unbound_tasks(
-                        loop_guard.unbound_tasks, selected_environment
-                    )
+                    tasks_to_abandon = loop_guard.unbound_tasks
                     raise
-            exit_code = process.wait()
-    except OSError as error:
-        raise RunnerError(f"Failed to launch Codex: {error}") from error
+            exit_code = _reap(process)
+            process = None
+            if loop_guard.unbound_tasks:
+                _abandon_unbound_tasks(
+                    loop_guard.unbound_tasks, selected_environment
+                )
+                raise RunnerError(
+                    "Coordinator exited while a running task still lacked a verified roster worker"
+                )
+    except Exception as error:
+        cleanup_errors: list[str] = []
+        if process is not None:
+            tasks_to_abandon = loop_guard.unbound_tasks
+            try:
+                process.kill()
+            except OSError:
+                pass
+            _reap(process)
+        if tasks_to_abandon:
+            try:
+                _abandon_unbound_tasks(tasks_to_abandon, selected_environment)
+            except Exception as cleanup_error:
+                cleanup_errors.append(str(cleanup_error))
+        failure = error if isinstance(error, RunnerError) else RunnerError(str(error))
+        status = {
+            "status": "failed",
+            "exit_code": 2,
+            "error": str(failure),
+            "started_at": started_at,
+            "finished_at": _timestamp(),
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "model": selected_environment.get("DE67_COORDINATOR_MODEL"),
+            "reasoning_effort": selected_environment.get(
+                "DE67_COORDINATOR_REASONING_EFFORT"
+            ),
+            "session_id": session_id,
+        }
+        if cleanup_errors:
+            status["cleanup_error"] = "; ".join(cleanup_errors)
+        status_path.write_text(
+            json.dumps(status, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        if failure is error:
+            raise
+        raise failure from error
 
     finished_at = _timestamp()
     status_path.write_text(

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import time
@@ -35,6 +36,7 @@ WORKER_OWNER_LOST_REASON = (
     "worker_owner_lost: coordinator process exited while this worker window "
     "remained nonterminal"
 )
+AUTOMATIC_PROCESS_RECOVERY_ATTEMPTS = 1
 
 
 class SupervisorError(RuntimeError):
@@ -71,10 +73,112 @@ class MutationGate:
     selected_lane: str | None
 
 
+@dataclass(frozen=True)
+class MutationSuggestion:
+    mode: str
+    entry: str
+
+
+class SupervisorJournal:
+    """Persist the one-shot authorization for each semantic supervisor frontier."""
+
+    def __init__(self, state_path: Path, lineage_id: str, owner_id: str) -> None:
+        self.state_path = state_path
+        self.lineage_id = lineage_id
+        self.owner_id = owner_id
+        with sqlite3.connect(state_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS supervisor_attempts (
+                    lineage_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    frontier TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    started_at REAL NOT NULL,
+                    finished_at REAL,
+                    outcome TEXT,
+                    detail TEXT,
+                    PRIMARY KEY (lineage_id, role, frontier),
+                    UNIQUE (lineage_id, run_id)
+                )
+                """
+            )
+
+    def begin(self, role: str, frontier: str, run_id: str) -> None:
+        try:
+            with sqlite3.connect(self.state_path) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO supervisor_attempts (
+                        lineage_id, role, frontier, run_id, owner_id, started_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (self.lineage_id, role, frontier, run_id, self.owner_id, time.time()),
+                )
+        except sqlite3.IntegrityError as error:
+            raise SupervisorError(
+                f"Supervisor {role} frontier was already attempted: {frontier}"
+            ) from error
+
+    def finish(self, run_id: str, outcome: str, detail: str | None = None) -> None:
+        with sqlite3.connect(self.state_path) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE supervisor_attempts
+                SET finished_at = ?, outcome = ?, detail = ?
+                WHERE lineage_id = ? AND run_id = ? AND outcome IS NULL
+                """,
+                (time.time(), outcome, detail, self.lineage_id, run_id),
+            )
+            if cursor.rowcount != 1:
+                raise SupervisorError(
+                    f"Supervisor run is missing or already terminal: {run_id}"
+                )
+
+
 def _write(path: Path, value: str) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(value, encoding="utf-8")
     temporary.replace(path)
+
+
+def _process_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def reconcile_dead_run_records(run_root: Path) -> tuple[str, ...]:
+    """Close stale run records only when their recorded process is absent."""
+    if not run_root.is_dir():
+        return ()
+    interrupted: list[str] = []
+    for status_path in sorted(run_root.glob("*/status.txt")):
+        if status_path.read_text(encoding="utf-8").strip() not in {
+            "STARTING", "RUNNING",
+        }:
+            continue
+        pid_path = status_path.parent / "pid.txt"
+        try:
+            pid = int(pid_path.read_text(encoding="utf-8").strip())
+        except (FileNotFoundError, ValueError):
+            pid = 0
+        if _process_exists(pid):
+            continue
+        _write(status_path.parent / "supervisor_error.txt", (
+            "Explicit supervisor startup interrupted this stale run because "
+            "its recorded coordinator process is absent.\n"
+        ))
+        _write(status_path, "INTERRUPTED\n")
+        interrupted.append(status_path.parent.name)
+    return tuple(interrupted)
 
 
 @contextmanager
@@ -189,6 +293,8 @@ def supervision_fingerprint(
 ) -> str:
     """Hash durable state that can justify another automatic child launch."""
     with DeadlineHarness(state_path) as harness:
+        # DeadlineHarness binds one database to one lineage, so list_tasks is
+        # lineage-scoped by the database invariant rather than a query filter.
         summary = harness.list_tasks(now=0.0)
         worker_claims = [
             dict(row)
@@ -236,6 +342,33 @@ def supervision_fingerprint(
     ).hexdigest()
 
 
+def pending_mutation_suggestions(workspace: Path) -> tuple[MutationSuggestion, ...]:
+    """Read owner entries, preserving legacy immediate-trigger semantics."""
+    ledger = workspace / ".de67" / "mutation-suggestions.md"
+    if not ledger.is_file():
+        return ()
+    pending = ledger.read_text(encoding="utf-8").partition(
+        "## Pending suggestions"
+    )[2]
+    suggestions: list[MutationSuggestion] = []
+    for line in pending.splitlines():
+        if not line.startswith("- "):
+            continue
+        entry = line[2:].strip()
+        if entry.lower() == "none.":
+            continue
+        match = re.match(
+            r"^(?:Owner-authorized\s+)?\[(trigger|defer)\]:?\s+(.+)$",
+            entry,
+            re.IGNORECASE,
+        )
+        if match is None:
+            suggestions.append(MutationSuggestion("trigger", entry))
+        else:
+            suggestions.append(MutationSuggestion(match.group(1).lower(), entry))
+    return tuple(suggestions)
+
+
 def mutation_gate(
     state_path: Path,
     lineage_id: str,
@@ -247,15 +380,15 @@ def mutation_gate(
     if any(task.get("state") == "running" for task in summary["tasks"]):
         return None
     if workspace is not None:
-        suggestions = workspace / ".de67" / "mutation-suggestions.md"
-        if suggestions.is_file():
-            pending = suggestions.read_text(encoding="utf-8").partition(
-                "## Pending suggestions"
-            )[2]
-            entries = [line for line in pending.splitlines() if line.startswith("- ")]
-            if entries:
-                digest = hashlib.sha256(pending.encode("utf-8")).hexdigest()[:12]
-                return MutationGate("owner-suggestion", digest, None)
+        immediate = [
+            suggestion.entry
+            for suggestion in pending_mutation_suggestions(workspace)
+            if suggestion.mode == "trigger"
+        ]
+        if immediate:
+            encoded = json.dumps(immediate, ensure_ascii=False, separators=(",", ":"))
+            digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:12]
+            return MutationGate("owner-suggestion", digest, None)
     random_review = summary.get("random_mutation")
     if isinstance(random_review, Mapping) and random_review.get("due") is True:
         return MutationGate(
@@ -515,6 +648,20 @@ def coordinator_ledger_contract() -> str:
     )
 
 
+def worker_handoff_contract() -> str:
+    return (
+        "A deadline-harness task is only a worker clock, not a delegation. Immediately "
+        "spawn its Luna or Terra worker or message one relevant reusable worker. A successful "
+        "spawn or follow-up tool call is sufficient coordinator-side evidence to continue; do "
+        "not require receiver_thread_ids in the coordinator-visible response and do not abandon "
+        "solely because that field is absent there. The runner independently validates the actual "
+        "runtime thread UUID against the coordinator parent, workspace, and Luna/Terra model, then "
+        "records the durable claim automatically. Never invoke claim-worker and never use "
+        "/root/<task-name> as a worker identity. Proceed to the normal wait; if no verified roster "
+        "handoff exists, the runner terminates the coordinator and abandons the attempt."
+    )
+
+
 def coordinator_prompt(
     workspace: Path,
     state_path: Path,
@@ -537,7 +684,7 @@ def coordinator_prompt(
         "For every newly spawned ordinary worker, set fork_turns=\"none\" and provide a self-contained task brief. Never omit model selection or pass coordinator or predecessor history. Reusing an already relevant worker remains allowed.",
         coordinator_ledger_contract(),
         ordinary_worker_evidence_contract(),
-        "A deadline-harness task is only a worker clock, not a delegation. Immediately after starting one, spawn its Luna or Terra worker or send the assigned work to one relevant reusable worker. Never wait while a started task lacks that roster handoff. If the handoff fails, abandon the attempt before any replacement.",
+        worker_handoff_contract(),
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every state transition; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
     ]
@@ -610,6 +757,7 @@ def run_mutation_reviewer(
     gate: MutationGate,
     *,
     extra_env: Mapping[str, str] | None = None,
+    run_id: str | None = None,
 ) -> ChildResult:
     reviewer_env = dict(extra_env or {})
     reviewer_env.update(
@@ -624,7 +772,7 @@ def run_mutation_reviewer(
         state_path,
         lineage_id,
         run_root,
-        f"mutation-{uuid.uuid4().hex}",
+        run_id or f"mutation-{uuid.uuid4().hex}",
         None,
         extra_env=reviewer_env,
         prompt_override=mutation_reviewer_prompt(
@@ -644,6 +792,7 @@ def _complete_mutation_review(
     *,
     extra_env: Mapping[str, str] | None,
     reviewed_gates: set[tuple[str, str]] | None = None,
+    journal: SupervisorJournal | None = None,
 ) -> RestartState:
     consumed = reviewed_gates if reviewed_gates is not None else set()
     with DeadlineHarness(state_path) as harness:
@@ -658,6 +807,13 @@ def _complete_mutation_review(
                 f"Mutation gate repeated without resolution: {gate.kind} {gate.identity}"
             )
         consumed.add(gate_key)
+        run_id = f"mutation-{uuid.uuid4().hex}"
+        if journal is not None:
+            journal.begin(
+                "mutation-reviewer",
+                f"{gate.kind}:{gate.identity}",
+                run_id,
+            )
         result = run_mutation_reviewer(
             runner_command,
             workspace,
@@ -666,7 +822,14 @@ def _complete_mutation_review(
             run_root,
             gate,
             extra_env=extra_env,
+            run_id=run_id,
         )
+        if journal is not None:
+            journal.finish(
+                run_id,
+                "succeeded" if result.launched and result.exit_code == 0 else "failed",
+                None if result.exit_code == 0 else f"exit code {result.exit_code}",
+            )
         if not result.launched or result.exit_code != 0:
             raise SupervisorError(
                 f"Mutation reviewer failed for {gate.kind} {gate.identity}; ordinary work remains stopped"
@@ -734,9 +897,9 @@ def run_child(
             + coordinator_ledger_contract()
             + " "
             + ordinary_worker_evidence_contract()
-            + " A deadline-harness task is only a worker clock, "
-            "not a delegation: immediately spawn or reuse its assigned roster worker, never wait "
-            "with an unbound task, and abandon the attempt if that handoff fails.\n"
+            + " "
+            + worker_handoff_contract()
+            + "\n"
         )
     _write(run_dir / "prompt.txt", prompt)
     _write(run_dir / "status.txt", "STARTING\n")
@@ -884,6 +1047,7 @@ def _run_supervisor_locked(
     # Existing run records prove this is a supervisor recovery, not the first
     # bootstrap that may legitimately begin with a seeded task clock.
     if records.is_dir() and any(records.iterdir()):
+        reconcile_dead_run_records(records)
         terminalize_unowned_worker_windows(state, lineage_id)
 
     restart = read_clock(state, lineage_id)
@@ -921,6 +1085,11 @@ def _run_supervisor_locked(
         return 0
 
     records.mkdir(parents=True, exist_ok=True)
+    journal = SupervisorJournal(
+        state,
+        lineage_id,
+        f"supervisor-{os.getpid()}-{uuid.uuid4().hex}",
+    )
     reviewed_gates: set[tuple[str, str]] = set()
     consumed_events: set[str] = set()
     gate = mutation_gate(state, lineage_id, workdir)
@@ -934,11 +1103,13 @@ def _run_supervisor_locked(
             gate,
             extra_env=extra_env,
             reviewed_gates=reviewed_gates,
+            journal=journal,
         )
 
     generation = restart.generation if restart.required else None
     resume_session_id: str | None = None
     attempted_generations: set[int] = set()
+    automatic_process_recoveries = 0
     while True:
         if generation is not None:
             if generation in attempted_generations:
@@ -960,6 +1131,7 @@ def _run_supervisor_locked(
                 )
 
         launch_fingerprint = supervision_fingerprint(state, lineage_id, workdir)
+        journal.begin("coordinator", launch_fingerprint, run_id)
         result = run_child(
             runner_command,
             workdir,
@@ -983,6 +1155,13 @@ def _run_supervisor_locked(
         # orphaned database row for live work and enter W1 resume churn.
         terminalize_unowned_worker_windows(state, lineage_id)
         progressed = supervision_fingerprint(state, lineage_id, workdir)
+        journal.finish(
+            run_id,
+            "progressed" if launch_fingerprint != progressed else (
+                "succeeded" if result.exit_code == 0 else "failed"
+            ),
+            None if result.exit_code == 0 else f"exit code {result.exit_code}",
+        )
 
         # This is the only clock read after this child exits. There is no polling loop.
         after = read_clock(state, lineage_id)
@@ -1019,6 +1198,7 @@ def _run_supervisor_locked(
                 gate,
                 extra_env=extra_env,
                 reviewed_gates=reviewed_gates,
+                journal=journal,
             )
 
         blocked_audit = blocked_ledger_audit_reason(workdir)
@@ -1061,6 +1241,15 @@ def _run_supervisor_locked(
                         failure,
                     )
                     return result.exit_code if result.exit_code > 0 else 1
+                if result.exit_code != 0:
+                    if automatic_process_recoveries >= AUTOMATIC_PROCESS_RECOVERY_ATTEMPTS:
+                        _mark_protocol_failure(
+                            result,
+                            "Automatic process recovery already attempted; "
+                            "explicit supervisor startup is required",
+                        )
+                        return result.exit_code
+                    automatic_process_recoveries += 1
                 resume_session_id = session_id
                 generation = None
                 continue
@@ -1080,6 +1269,14 @@ def _run_supervisor_locked(
                     "Coordinator crashed with executable work but made no durable progress",
                 )
                 return result.exit_code if result.exit_code > 0 else 1
+            if automatic_process_recoveries >= AUTOMATIC_PROCESS_RECOVERY_ATTEMPTS:
+                _mark_protocol_failure(
+                    result,
+                    "Automatic process recovery already attempted; "
+                    "explicit supervisor startup is required",
+                )
+                return result.exit_code
+            automatic_process_recoveries += 1
             resume_session_id = None
             generation = None
             continue
@@ -1112,6 +1309,7 @@ def _run_supervisor_locked(
                     gate,
                     extra_env=extra_env,
                     reviewed_gates=reviewed_gates,
+                    journal=journal,
                 )
             else:
                 after = event.restart

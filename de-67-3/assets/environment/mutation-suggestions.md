@@ -7,6 +7,17 @@ blocked entry in place with its exact system/developer conflict, technical impos
 external authority, or irreversible risk. A failed review removes nothing. Ledger cleanup never
 blocks unrelated ordinary work.
 
+Prefix every new user entry with one of these modes:
+
+- `Owner-authorized [trigger]:` requests an exclusive mutation review as soon as workers are quiet.
+- `Owner-authorized [defer]:` stays queued without waking or retiring the coordinator. The next
+  deadline, integrity, random, or otherwise regularly due mutation review consumes it as mandatory
+  input.
+
+An older unlabelled entry keeps the legacy `trigger` behavior. Changing modes does not change the
+entry's mutation-scoped owner authority. A reviewer removes an entry only after applying or exactly
+dispositioning it; supervisor recovery cannot consume it a second time.
+
 Every deadline miss records both:
 
 - a micro recovery for the same item: contradicted premise, changed strategy or observation route,

@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 from coordinator_supervisor import (  # noqa: E402
     ChildResult,
     MutationGate,
+    SupervisorJournal,
     SupervisionEvent,
     SupervisorError,
     _complete_mutation_review,
@@ -28,6 +29,7 @@ from coordinator_supervisor import (  # noqa: E402
     ledger_has_only_blocked_work,
     main,
     mutation_gate,
+    pending_mutation_suggestions,
     mutation_reviewer_prompt,
     ordinary_worker_evidence_contract,
     read_clock,
@@ -36,6 +38,7 @@ from coordinator_supervisor import (  # noqa: E402
     terminalize_unowned_worker_windows,
     wait_for_supervision_event,
     work_is_complete,
+    worker_handoff_contract,
 )
 from blocker_adapter import BlockerReply  # noqa: E402
 from deadline_harness import DeadlineHarness  # noqa: E402
@@ -369,6 +372,77 @@ def restart_required(restart: dict[str, object]) -> bool:
 
 
 class CoordinatorSupervisorTests(unittest.TestCase):
+    def test_packaged_ledger_refills_until_dfs_is_green_without_batch_cap(self) -> None:
+        template = (
+            SCRIPTS.parent / "assets" / "environment" / "work-ledger.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Refill this projection", template)
+        self.assertIn("empty batch is not completion", template)
+        self.assertIn("Do not impose a batch-size limit", template)
+        self.assertNotIn("at most ten", template)
+
+    def test_mutation_suggestion_modes_separate_wakeup_from_consumption(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "terminal proof")
+        (self.workspace / ".de67").mkdir()
+        ledger = self.workspace / ".de67" / "mutation-suggestions.md"
+        ledger.write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n\n"
+            "- Owner-authorized [defer]: Improve the worker proof handoff.\n",
+            encoding="utf-8",
+        )
+
+        suggestions = pending_mutation_suggestions(self.workspace)
+
+        self.assertEqual([item.mode for item in suggestions], ["defer"])
+        self.assertIsNone(mutation_gate(self.state_path, "project", self.workspace))
+
+        ledger.write_text(
+            ledger.read_text(encoding="utf-8")
+            + "- Owner-authorized [trigger]: Repair the supervisor immediately.\n",
+            encoding="utf-8",
+        )
+        gate = mutation_gate(self.state_path, "project", self.workspace)
+        self.assertIsNotNone(gate)
+        assert gate is not None
+        self.assertEqual(gate.kind, "owner-suggestion")
+
+    def test_legacy_unlabelled_owner_suggestion_still_triggers(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "terminal proof")
+        (self.workspace / ".de67").mkdir()
+        (self.workspace / ".de67" / "mutation-suggestions.md").write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n\n- Keep legacy behavior.\n",
+            encoding="utf-8",
+        )
+
+        gate = mutation_gate(self.state_path, "project", self.workspace)
+
+        self.assertIsNotNone(gate)
+        assert gate is not None
+        self.assertEqual(gate.kind, "owner-suggestion")
+
+    def test_supervisor_journal_persists_frontier_replay_fuse(self) -> None:
+        first = SupervisorJournal(self.state_path, "project", "owner-one")
+        first.begin("coordinator", "frontier-a", "run-one")
+        first.finish("run-one", "failed", "runner died")
+
+        recovered = SupervisorJournal(self.state_path, "project", "owner-two")
+        with self.assertRaisesRegex(SupervisorError, "frontier was already attempted"):
+            recovered.begin("coordinator", "frontier-a", "run-two")
+
+        recovered.begin("coordinator", "frontier-b", "run-three")
+
+    def test_worker_handoff_contract_explains_runtime_owned_claim(self) -> None:
+        contract = worker_handoff_contract()
+        self.assertIn("do not require receiver_thread_ids", contract)
+        self.assertIn("do not abandon solely because that field is absent", contract)
+        self.assertIn("records the durable claim automatically", contract)
+        self.assertIn("Never invoke claim-worker", contract)
+        self.assertIn("never use /root/<task-name>", contract)
+        self.assertIn("Proceed to the normal wait", contract)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)

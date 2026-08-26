@@ -6553,14 +6553,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_task_identity_flags(abandon)
     abandon.add_argument("--reason", required=True)
 
-    claim_worker = commands.add_parser(
-        "claim-worker", help="Bind one durable worker identity to a live attempt"
-    )
-    add_task_identity_flags(claim_worker)
-    claim_worker.add_argument("--worker", required=True)
-    claim_worker.add_argument("--coordinator-session", required=True)
-    claim_worker.add_argument("--supervisor", required=True)
-
     checkpoint_worker = commands.add_parser(
         "checkpoint-worker", help="Record durable progress for the owning worker"
     )
@@ -6821,11 +6813,6 @@ def main(argv: list[str] | None = None) -> int:
                 elif arguments.command == "abandon-attempt":
                     result = harness.abandon_attempt(
                         arguments.lineage, arguments.task, arguments.reason
-                    )
-                elif arguments.command == "claim-worker":
-                    result = harness.claim_worker(
-                        arguments.lineage, arguments.task, arguments.worker,
-                        arguments.coordinator_session, arguments.supervisor,
                     )
                 elif arguments.command == "checkpoint-worker":
                     result = harness.checkpoint_worker(

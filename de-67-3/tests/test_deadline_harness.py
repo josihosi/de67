@@ -3806,6 +3806,18 @@ class DeadlineHarnessTests(unittest.TestCase):
         )
         self.assertEqual(named.named_gaps, ["G-001::first", "G-002::second"])
 
+    def test_worker_claim_is_not_a_coordinator_callable_cli_command(self) -> None:
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(
+                [
+                    "claim-worker", "--state", "state.sqlite",
+                    "--lineage", "project", "--task", "W-001",
+                    "--worker", "/root/r008_closure_088",
+                    "--coordinator-session", "coordinator",
+                    "--supervisor", "123",
+                ]
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

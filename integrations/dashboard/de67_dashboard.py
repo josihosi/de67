@@ -301,6 +301,7 @@ def parse_ledger(text: str) -> dict[str, Any]:
         heading = re.match(r"^#{1,6}\s+(.+?)\s*$", line, re.I)
         if heading:
             name = heading.group(1).lower()
+            owning_claim = OWNING_CLAIM.match(heading.group(1))
             target = None
             if "active" in name:
                 target = "active"
@@ -308,10 +309,12 @@ def parse_ledger(text: str) -> dict[str, Any]:
                 target = "waiting"
             elif "blocked" in name:
                 target = "blocked"
-            if target:
-                current = target
-            elif current:
+            if owning_claim and current:
                 sections[current].append(line)
+            elif target:
+                current = target
+            else:
+                current = None
         elif current and line.strip():
             sections[current].append(line)
     if not any(sections.values()) and text.strip():
@@ -431,6 +434,10 @@ def _active_task(connection: sqlite3.Connection) -> dict[str, Any] | None:
         f'SELECT * FROM "tasks" WHERE {where} ORDER BY "started_at" DESC LIMIT 1'
     ).fetchone()
     return dict(row) if row else None
+
+
+def _latest_task(connection: sqlite3.Connection) -> dict[str, Any] | None:
+    return _latest(connection, "tasks", "started_at")
 
 
 def _active_deadline(
@@ -598,18 +605,30 @@ def read_clock(path: Path) -> dict[str, Any]:
         connection.execute("PRAGMA query_only=ON")
         connection.execute("BEGIN")
         task = _active_task(connection)
+        latest_task = _latest_task(connection)
         deadline = _active_deadline(connection, task)
         restart = _latest(connection, "coordinator_restart_requests", "generation")
         finding = _latest(connection, "worker_findings", "reported_at")
         mutations, random_mutations, next_random = _completed_mutation_counts(connection)
         mutation_review = _mutation_review_state(connection)
         connection.execute("COMMIT")
-        return {"task": task, "deadline": deadline, "restart": restart,
+        return {"task": task, "latest_task": latest_task,
+                "deadline": deadline, "restart": restart,
                 "finding": finding,
                 "mutations": mutations, "random_mutations": random_mutations,
                 "next_random_mutation": next_random, "mutation_review": mutation_review}
     finally:
         connection.close()
+
+
+def _command_owns_workspace(command: str, workspace: Path) -> bool:
+    """Compare process workspace arguments by filesystem identity, not spelling."""
+    try:
+        arguments = shlex.split(command, posix=os.name != "nt")
+        value = arguments[arguments.index("--workspace") + 1]
+        return Path(value.strip('"')).expanduser().resolve() == workspace.resolve()
+    except (OSError, RuntimeError, ValueError, IndexError):
+        return False
 
 
 def process_state(workspace: Path) -> dict[str, Any]:
@@ -627,20 +646,43 @@ def process_state(workspace: Path) -> dict[str, Any]:
             timeout=1, check=False,
         ).stdout
         if pid is None:
-            workspace_marker = f"--workspace {workspace}"
             for line in output.splitlines():
                 match = re.match(r"\s*(\d+)\s+\d+\s+(.*)", line)
-                if match and "coordinator_supervisor.py" in match.group(2) and workspace_marker in match.group(2):
+                if (match and "coordinator_supervisor.py" in match.group(2)
+                        and _command_owns_workspace(match.group(2), workspace)):
                     pid = int(match.group(1))
                     break
         if pid is None:
-            return {"supervisor": "absent", "coordinator": "absent", "pid": None}
+            return {"supervisor": "absent", "coordinator": "absent",
+                    "role": None, "pid": None}
         children = [line for line in output.splitlines() if re.match(rf"\s*\d+\s+{pid}\s+", line)]
         coordinator = "running" if any("codex-remote-run" in line or "codex" in line for line in children) else "waiting"
     except (OSError, subprocess.SubprocessError):
         if pid is None:
-            return {"supervisor": "unknown", "coordinator": "unknown", "pid": None}
-    return {"supervisor": "running", "coordinator": coordinator, "pid": pid}
+            return {"supervisor": "unknown", "coordinator": "unknown",
+                    "role": None, "pid": None}
+    role = "coordinator"
+    run_root = workspace / ".de67/state/coordinator-runs"
+    for status_path in sorted(
+        run_root.glob("*/status.txt"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    ):
+        try:
+            if status_path.read_text(encoding="ascii").strip() != "RUNNING":
+                continue
+            if _recorded_run_pid_is_alive(status_path) is False:
+                continue
+            role = (
+                "mutation-reviewer"
+                if status_path.parent.name.startswith("mutation-")
+                else "coordinator"
+            )
+            break
+        except (OSError, UnicodeError):
+            continue
+    return {"supervisor": "running", "coordinator": coordinator,
+            "role": role, "pid": pid}
 
 
 def _session_header(path: Path) -> dict[str, Any]:
@@ -709,10 +751,10 @@ def _active_coordinator_id(workspace: Path) -> str | None:
             ["ps", "axww", "-o", "pid=,command="], capture_output=True,
             text=True, timeout=1, check=False,
         ).stdout
-        workspace_marker = f"--workspace {workspace}"
         commands = [
             line.split(None, 1)[1] for line in output.splitlines()
-            if "coordinator_supervisor.py" in line and workspace_marker in line
+            if "coordinator_supervisor.py" in line
+            and _command_owns_workspace(line.split(None, 1)[1], workspace)
         ]
         if len(commands) != 1:
             raise ValueError("active coordinator supervisor is ambiguous")
@@ -905,9 +947,12 @@ class Dashboard:
             clock = self._clock_source()
             clock_data = clock.get("data", {})
             task = clock_data.get("task") or {}
-            claim = _claim_id(task.get("claim_id")) or parse_ledger(
+            latest_task = clock_data.get("latest_task") or {}
+            claim = (_claim_id(task.get("claim_id"))
+                     or _claim_id(latest_task.get("claim_id"))
+                     or parse_ledger(
                 ledger.get("text", "")
-            ).get("claim")
+            ).get("claim"))
             clock_path = clock.get("path")
             if isinstance(clock_path, Path):
                 sidecar = self._sidecar_source(clock_path, claim)
@@ -937,7 +982,10 @@ class Dashboard:
         ledger_data = parse_ledger(ledger.get("text", ""))
         clock_data = clock.get("data", {})
         task = clock_data.get("task") or {}
-        active_claim = _claim_id(task.get("claim_id")) or ledger_data["claim"]
+        latest_task = clock_data.get("latest_task") or {}
+        active_claim = (_claim_id(task.get("claim_id"))
+                        or _claim_id(latest_task.get("claim_id"))
+                        or ledger_data["claim"])
         upcoming = upcoming_dfs_work(dfs.get("text", ""), ledger_data, active_claim)
         deadline = clock_data.get("deadline") or {}
         restart = clock_data.get("restart") or {}
@@ -977,7 +1025,13 @@ class Dashboard:
 
         supervisor = process.get("supervisor", "unknown")
         coordinator = process.get("coordinator", "unknown")
-        work_value = "Blocked" if ledger_data["blocked"] else (task.get("task_id") or ledger_data["claim"] or "Idle")
+        process_role = process.get("role")
+        mutation_running = bool(
+            mutation_review.get("running") or process_role == "mutation-reviewer"
+        )
+        work_value = "Blocked" if ledger_data["blocked"] else (
+            task.get("task_id") or active_claim or "Idle"
+        )
         work_tone = (
             "red" if ledger_data["blocked"] else
             "green" if ledger_data["active"] and supervisor == "running" else
@@ -996,10 +1050,13 @@ class Dashboard:
         else:
             cards = "".join([
                 lamp("Supervisor", supervisor.title(), "green" if supervisor == "running" else "grey"),
-                lamp("Coordinator", coordinator.title(), "green" if coordinator == "running" else "yellow" if coordinator == "waiting" else "grey"),
+                lamp("Coordinator", (
+                    "Mutation reviewer" if process_role == "mutation-reviewer"
+                    else coordinator.title()
+                ), "yellow" if process_role == "mutation-reviewer" else "green" if coordinator == "running" else "yellow" if coordinator == "waiting" else "grey"),
                 lamp("Work", work_value, work_tone),
-                lamp("Mutation review", "Running" if mutation_review.get("running") else "Off",
-                     "yellow" if mutation_review.get("running") else "grey"),
+                lamp("Mutation review", "Running" if mutation_running else "Off",
+                     "yellow" if mutation_running else "grey"),
                 f'<div class="metric"><small>Deadline</small><strong>{remaining}</strong></div>',
                 f'<div class="metric"><small>Mutations</small><strong>{_escape((clock_data.get("mutations", 0) + clock_data.get("random_mutations", 0)) if clock_data else "—")}</strong><span class="metric-note">{_escape(random_note)}</span></div>',
             ])
@@ -1033,7 +1090,7 @@ class Dashboard:
                     f'<p class="subtle">Unavailable · {_escape(sidecar.get("error", "no report"))}</p></section>'
                 )
             details = " · ".join(filter(None, [
-                f'claim {_escape(task.get("claim_id"))}' if task.get("claim_id") else "",
+                f'claim {_escape(active_claim)}' if active_claim else "",
                 f'gap {_escape(task.get("closure_gap_id"))} r{_escape(task.get("closure_gap_revision"))}' if task.get("closure_gap_id") else "",
                 f'deadline generation {_escape(deadline.get("generation"))}' if deadline.get("generation") else "",
                 f'restart {_escape(restart.get("generation"))}' if restart.get("generation") else "",

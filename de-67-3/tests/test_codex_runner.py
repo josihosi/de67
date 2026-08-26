@@ -21,12 +21,15 @@ class FakeProcess:
         self.stdout = iter(lines)
         self.exit_code = exit_code
         self.terminated = False
+        self.killed = False
+        self.wait_calls = 0
 
     def wait(self) -> int:
+        self.wait_calls += 1
         return self.exit_code
 
     def kill(self) -> None:
-        pass
+        self.killed = True
 
     def terminate(self) -> None:
         self.terminated = True
@@ -179,17 +182,46 @@ class CodexRunnerTests(unittest.TestCase):
         }
         process = FakeProcess([json.dumps(started) + "\n", json.dumps(waited) + "\n"], 0)
 
+        def abandon_after_reap(*_arguments: object) -> None:
+            self.assertTrue(process.killed)
+            self.assertEqual(process.wait_calls, 1)
+
         with patch("codex_runner.shutil.which", return_value="codex"), patch(
             "codex_runner.subprocess.Popen", return_value=process
-        ), patch("codex_runner._abandon_unbound_tasks") as abandon:
+        ), patch(
+            "codex_runner._abandon_unbound_tasks", side_effect=abandon_after_reap
+        ) as abandon:
             with self.assertRaisesRegex(codex_runner.RunnerError, "no roster worker"):
                 codex_runner.run(
                     self.workspace, "coordinate this", environment=self.environment()
                 )
 
-        self.assertTrue(process.terminated)
+        self.assertTrue(process.killed)
         abandon.assert_called_once()
         self.assertEqual(abandon.call_args.args[0], ("R-008-closure-003",))
+        run_directory = next((self.root / "runs").iterdir())
+        status = json.loads((run_directory / "status.json").read_text())
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["exit_code"], 2)
+        self.assertIn("no roster worker", status["error"])
+
+    def test_runner_reaps_launched_child_before_publishing_io_failure(self) -> None:
+        process = FakeProcess(
+            ['{"type":"thread.started","thread_id":"session-1"}\n'], 0
+        )
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=process
+        ), patch("codex_runner._record_session", side_effect=OSError("write failed")):
+            with self.assertRaisesRegex(codex_runner.RunnerError, "write failed"):
+                codex_runner.run(
+                    self.workspace, "coordinate this", environment=self.environment()
+                )
+
+        self.assertTrue(process.killed)
+        self.assertEqual(process.wait_calls, 1)
+        run_directory = next((self.root / "runs").iterdir())
+        status = json.loads((run_directory / "status.json").read_text())
+        self.assertEqual(status["status"], "failed")
 
     def write_roster_state(self, model: str) -> Path:
         state = self.root / "codex-state.sqlite3"
@@ -269,6 +301,153 @@ class CodexRunnerTests(unittest.TestCase):
         ), patch("codex_runner._abandon_unbound_tasks"):
             with self.assertRaisesRegex(codex_runner.RunnerError, "no roster worker"):
                 codex_runner.run(self.workspace, "coordinate", environment=environment)
+
+    def test_loop_guard_rejects_symbolic_task_name_as_worker_identity(self) -> None:
+        guard = codex_runner.CoordinatorLoopGuard(
+            initial_unbound_tasks=("R-008-closure-088",)
+        )
+        guard.observe(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "collab_tool_call",
+                    "tool": "spawn_agent",
+                    "status": "completed",
+                    "receiver_thread_ids": ["/root/r008_closure_088"],
+                },
+            }
+        )
+
+        with self.assertRaisesRegex(codex_runner.RunnerError, "no roster worker"):
+            guard.observe(
+                {
+                    "type": "item.started",
+                    "item": {"type": "collab_tool_call", "tool": "wait"},
+                }
+            )
+
+    def test_loop_guard_requires_runtime_roster_proof_for_receiver_id(self) -> None:
+        claims: list[tuple[str, str, str | None]] = []
+        guard = codex_runner.CoordinatorLoopGuard(
+            initial_unbound_tasks=("route",),
+            roster_validator=lambda _worker, _parent: False,
+            claim_recorder=lambda task, worker, parent: claims.append(
+                (task, worker, parent)
+            ),
+        )
+        guard.observe({"type": "thread.started", "thread_id": "coordinator"})
+        guard.observe(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "collab_tool_call",
+                    "tool": "spawn_agent",
+                    "status": "completed",
+                    "receiver_thread_ids": ["fake-worker"],
+                },
+            }
+        )
+
+        self.assertEqual(claims, [])
+        with self.assertRaisesRegex(codex_runner.RunnerError, "no roster worker"):
+            guard.observe(
+                {
+                    "type": "item.started",
+                    "item": {"type": "collab_tool_call", "tool": "wait"},
+                }
+            )
+
+    def test_runner_reaps_child_when_claim_recording_raises_sqlite_error(self) -> None:
+        process = FakeProcess(['{"type":"turn.started"}\n'], 0)
+        environment = self.environment()
+        environment["DE67_DEADLINE_STATE"] = str(self.root / "deadlines.sqlite3")
+        environment["DE67_LINEAGE"] = "project"
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=process
+        ), patch(
+            "codex_runner._initial_unbound_tasks", return_value=("route",)
+        ), patch(
+            "codex_runner.CoordinatorLoopGuard.observe",
+            side_effect=sqlite3.OperationalError("database is locked"),
+        ), patch("codex_runner._abandon_unbound_tasks") as abandon:
+            with self.assertRaisesRegex(codex_runner.RunnerError, "database is locked"):
+                codex_runner.run(
+                    self.workspace, "coordinate this", environment=environment
+                )
+
+        self.assertTrue(process.killed)
+        self.assertEqual(process.wait_calls, 1)
+        abandon.assert_called_once_with(("route",), environment)
+        run_directory = next((self.root / "runs").iterdir())
+        status = json.loads((run_directory / "status.json").read_text())
+        self.assertEqual(status["status"], "failed")
+
+    def test_claim_and_abandonment_failures_still_publish_primary_failure(self) -> None:
+        process = FakeProcess(['{"type":"turn.started"}\n'], 0)
+        environment = self.environment()
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=process
+        ), patch(
+            "codex_runner._initial_unbound_tasks", return_value=("route",)
+        ), patch(
+            "codex_runner.CoordinatorLoopGuard.observe",
+            side_effect=sqlite3.OperationalError("claim database is locked"),
+        ), patch(
+            "codex_runner._abandon_unbound_tasks",
+            side_effect=sqlite3.OperationalError("abandon database is locked"),
+        ):
+            with self.assertRaisesRegex(
+                codex_runner.RunnerError, "claim database is locked"
+            ):
+                codex_runner.run(
+                    self.workspace, "coordinate this", environment=environment
+                )
+
+        self.assertTrue(process.killed)
+        self.assertEqual(process.wait_calls, 1)
+        run_directory = next((self.root / "runs").iterdir())
+        status = json.loads((run_directory / "status.json").read_text())
+        self.assertEqual(status["status"], "failed")
+        self.assertIn("claim database is locked", status["error"])
+        self.assertIn("abandon database is locked", status["cleanup_error"])
+
+    def test_runner_cannot_publish_success_with_an_unbound_attempt(self) -> None:
+        process = FakeProcess([], 0)
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=process
+        ), patch(
+            "codex_runner._initial_unbound_tasks", return_value=("route",)
+        ), patch("codex_runner._abandon_unbound_tasks") as abandon:
+            with self.assertRaisesRegex(
+                codex_runner.RunnerError, "still lacked a verified roster worker"
+            ):
+                codex_runner.run(
+                    self.workspace, "coordinate this", environment=self.environment()
+                )
+
+        abandon.assert_called_once()
+        run_directory = next((self.root / "runs").iterdir())
+        status = json.loads((run_directory / "status.json").read_text())
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["exit_code"], 2)
+
+    def test_abandonment_failure_after_child_exit_does_not_kill_reaped_process(self) -> None:
+        process = FakeProcess([], 0)
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=process
+        ), patch(
+            "codex_runner._initial_unbound_tasks", return_value=("route",)
+        ), patch(
+            "codex_runner._abandon_unbound_tasks",
+            side_effect=sqlite3.OperationalError("database is locked"),
+        ):
+            with self.assertRaisesRegex(codex_runner.RunnerError, "database is locked"):
+                codex_runner.run(
+                    self.workspace, "coordinate this", environment=self.environment()
+                )
+
+        self.assertFalse(process.killed)
+        self.assertEqual(process.wait_calls, 1)
 
 
 if __name__ == "__main__":

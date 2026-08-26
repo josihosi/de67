@@ -419,6 +419,43 @@ class DashboardTests(unittest.TestCase):
 
         self.assertEqual(parsed["claim"], "R-light.response")
 
+    def test_completed_section_cannot_become_active_projection_focus(self) -> None:
+        parsed = dashboard_module.parse_ledger(
+            "# Active Phase-3 projection\n\n"
+            "## Completed cockpit foundation\n\n"
+            "### R-010 — completed\n\n- [x] Done.\n\n"
+            "## Active cockpit items\n\n"
+            "### R-012 — active\n\n- [ ] Current route.\n"
+        )
+
+        self.assertEqual(parsed["claim"], "R-012")
+        self.assertNotIn("R-010", parsed["active"])
+
+    def test_between_workers_focuses_latest_durable_task_not_ledger_order(self) -> None:
+        database = self.workspace / ".de67/state/deadlines.sqlite3"
+        connection = sqlite3.connect(database)
+        connection.execute("ALTER TABLE tasks ADD COLUMN attempt_terminal_at REAL")
+        connection.execute("UPDATE tasks SET attempt_terminal_at = 2")
+        connection.execute(
+            "INSERT INTO tasks VALUES (?,?,?,?,?,?,?)",
+            ("R008-M1", "R-008", 3, 9999999999, "G-008", 1, 4),
+        )
+        connection.commit()
+        connection.close()
+        (self.workspace / ".de67/work-ledger.md").write_text(
+            "# Active Phase-3 projection\n\n"
+            "## Completed work\n\n### R-010 — completed\n\n"
+            "## Active work\n\n### R-012 — queued\n",
+            encoding="utf-8",
+        )
+
+        page = dashboard_module.Dashboard(
+            self.workspace, sessions_root=self.sessions
+        ).render("overview").decode()
+
+        self.assertIn("<small>Work</small><strong>R-008</strong>", page)
+        self.assertNotIn("<small>Work</small><strong>R-010</strong>", page)
+
     def test_sidecar_is_cached_by_clock_state_and_rendered_without_artifacts(self) -> None:
         script = self.workspace / "trajectory_sidecar.py"
         script.write_text("# test sidecar\n", encoding="utf-8")
@@ -741,6 +778,42 @@ class DashboardTests(unittest.TestCase):
             state = dashboard_module.process_state(self.workspace)
         self.assertEqual(state["pid"], 42)
         self.assertEqual(state["supervisor"], "running")
+        self.assertEqual(state["coordinator"], "running")
+
+    def test_process_discovery_accepts_equivalent_workspace_symlink(self) -> None:
+        alias = self.workspace.parent / f"{self.workspace.name}-alias"
+        alias.symlink_to(self.workspace, target_is_directory=True)
+        (self.workspace / ".de67/state/coordinator-supervisor.pid").write_text(
+            "999999999", encoding="ascii"
+        )
+        process_output = type("Result", (), {"stdout": (
+            f" 42 1 python coordinator_supervisor.py --workspace {alias}\n"
+            " 43 42 python codex_runner.py\n"
+        )})()
+        with patch.object(dashboard_module.subprocess, "run", return_value=process_output):
+            state = dashboard_module.process_state(self.workspace.resolve())
+
+        self.assertEqual(state["supervisor"], "running")
+        self.assertEqual(state["coordinator"], "running")
+
+    def test_process_state_separates_mutation_reviewer_from_coordinator(self) -> None:
+        runs = self.workspace / ".de67/state/coordinator-runs"
+        reviewer = runs / "mutation-owner-review"
+        reviewer.mkdir(parents=True)
+        (reviewer / "status.txt").write_text("RUNNING\n", encoding="ascii")
+        (reviewer / "pid.txt").write_text("43\n", encoding="ascii")
+        (self.workspace / ".de67/state/coordinator-supervisor.pid").write_text(
+            "42\n", encoding="ascii"
+        )
+        process_output = type("Result", (), {"stdout": (
+            f" 42 1 python coordinator_supervisor.py --workspace {self.workspace}\n"
+            " 43 42 python codex_runner.py\n"
+        )})()
+        with patch.object(dashboard_module.os, "kill"), \
+                patch.object(dashboard_module.subprocess, "run", return_value=process_output):
+            state = dashboard_module.process_state(self.workspace)
+
+        self.assertEqual(state["role"], "mutation-reviewer")
         self.assertEqual(state["coordinator"], "running")
 
 

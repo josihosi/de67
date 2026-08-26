@@ -54,6 +54,10 @@ example, thaw and refreeze the DFS or change a normally protected method artifac
 suggestion requires that change. It does not authorize unrelated work, dishonest evidence, or a
 different owner outcome. The reviewer follows every suggestion through, dispositions every entry,
 resolves the durable mutation gate, and exits.
+An `Owner-authorized [trigger]:` entry creates that exclusive gate as soon as workers are quiet. An
+`Owner-authorized [defer]:` entry remains mandatory queued reviewer input but does not wake, retire,
+or replace the ordinary coordinator; the next regularly due mutation review consumes it. Legacy
+unlabelled entries retain trigger behavior.
 Only then does the supervisor launch one fresh low coordinator. Product strategy and evidence
 judgment remain model work inside the selected route.
 

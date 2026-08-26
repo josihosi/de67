@@ -22,6 +22,11 @@ class RunnerError(RuntimeError):
     """Raised when the local Codex runner cannot start safely."""
 
 
+def worker_task_name(task_id: str) -> str:
+    """Return the deterministic spawn label for one deadline task."""
+    return f"task_{task_id.encode('utf-8').hex()}"
+
+
 class CoordinatorLoopGuard:
     """Reject a coordinator wait while a durable task has no roster handoff."""
 
@@ -66,8 +71,6 @@ class CoordinatorLoopGuard:
         if self._roster_resolver is None:
             return
         for task_id, started_at in tuple(self._unbound.items()):
-            if task_id not in self._pending_delegations:
-                continue
             worker_id = self._roster_resolver(
                 task_id,
                 started_at,
@@ -359,27 +362,69 @@ def _roster_resolver(
             return None
         connection = sqlite3.connect(f"file:{state}?mode=ro", uri=True)
         try:
+            parent = connection.execute(
+                "SELECT rollout_path FROM threads WHERE id = ?",
+                (parent_thread_id,),
+            ).fetchone()
+            if parent is None or not parent[0]:
+                return None
+            rollout_path = Path(str(parent[0]))
+            expected_path = f"/root/{worker_task_name(_task_id)}"
+            spawned_ids: set[str] = set()
+            try:
+                with rollout_path.open("r", encoding="utf-8") as rollout:
+                    for line in rollout:
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        payload = event.get("payload")
+                        if not isinstance(payload, dict):
+                            continue
+                        if payload.get("type") == "sub_agent_activity":
+                            item = payload
+                            event_ms = payload.get("occurred_at_ms")
+                        elif payload.get("type") == "item_completed":
+                            item = payload.get("item")
+                            event_ms = payload.get("started_at_ms")
+                        else:
+                            continue
+                        if (
+                            isinstance(item, dict)
+                            and item.get("type") in {"SubAgentActivity", "sub_agent_activity"}
+                            and item.get("kind") == "started"
+                            and item.get("agent_path") == expected_path
+                            and isinstance(item.get("agent_thread_id"), str)
+                            and isinstance(event_ms, (int, float))
+                            and float(event_ms) / 1000.0 >= started_at
+                        ):
+                            spawned_ids.add(str(item["agent_thread_id"]))
+            except OSError:
+                return None
             rows = connection.execute(
                 """
-                SELECT child.id, child.model, child.updated_at_ms, child.updated_at
+                SELECT child.id, child.model, child.agent_path,
+                       child.created_at_ms, child.created_at
                 FROM thread_spawn_edges AS edge
                 JOIN threads AS child ON child.id = edge.child_thread_id
                 WHERE edge.parent_thread_id = ? AND child.cwd = ?
-                ORDER BY COALESCE(child.updated_at_ms, child.updated_at * 1000) DESC
+                ORDER BY COALESCE(child.created_at_ms, child.created_at * 1000) DESC
                 """,
                 (parent_thread_id, str(workspace)),
             ).fetchall()
         finally:
             connection.close()
-        for worker_id, model, updated_at_ms, updated_at in rows:
-            updated = (
-                float(updated_at_ms) / 1000.0
-                if updated_at_ms is not None
-                else float(updated_at)
+        for worker_id, model, agent_path, created_at_ms, created_at in rows:
+            created = (
+                float(created_at_ms) / 1000.0
+                if created_at_ms is not None
+                else float(created_at)
             )
             if (
-                str(worker_id) not in used_workers
-                and updated >= started_at
+                str(worker_id) in spawned_ids
+                and str(worker_id) not in used_workers
+                and agent_path == expected_path
+                and created >= started_at
                 and any(name in str(model or "").lower() for name in ("luna", "terra"))
             ):
                 return str(worker_id)

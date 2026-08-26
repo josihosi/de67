@@ -223,8 +223,50 @@ class CodexRunnerTests(unittest.TestCase):
         status = json.loads((run_directory / "status.json").read_text())
         self.assertEqual(status["status"], "failed")
 
-    def write_roster_state(self, model: str) -> Path:
+    def write_roster_state(
+        self,
+        model: str,
+        *,
+        task_id: str = "route",
+        agent_path: str | None = None,
+        created_at: float | None = None,
+        flat_spawn_event: bool = False,
+    ) -> Path:
         state = self.root / "codex-state.sqlite3"
+        rollout = self.root / "coordinator-rollout.jsonl"
+        expected_path = agent_path or f"/root/{codex_runner.worker_task_name(task_id)}"
+        created = created_at if created_at is not None else time.time() + 60
+        spawn_payload = (
+            {
+                "type": "sub_agent_activity",
+                "kind": "started",
+                "agent_thread_id": "worker",
+                "agent_path": expected_path,
+                "occurred_at_ms": int(created * 1000),
+            }
+            if flat_spawn_event
+            else {
+                "type": "item_completed",
+                "item": {
+                    "type": "SubAgentActivity",
+                    "kind": "started",
+                    "agent_thread_id": "worker",
+                    "agent_path": expected_path,
+                },
+                "started_at_ms": int(created * 1000),
+            }
+        )
+        rollout.write_text(
+            json.dumps(
+                {
+                    "timestamp": "2099-01-01T00:00:00Z",
+                    "type": "event_msg",
+                    "payload": spawn_payload,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         connection = sqlite3.connect(state)
         connection.executescript(
             """
@@ -232,7 +274,9 @@ class CodexRunnerTests(unittest.TestCase):
                 parent_thread_id TEXT, child_thread_id TEXT, status TEXT
             );
             CREATE TABLE threads (
-                id TEXT, model TEXT, cwd TEXT, updated_at_ms INTEGER, updated_at INTEGER
+                id TEXT, model TEXT, cwd TEXT, rollout_path TEXT, agent_path TEXT,
+                created_at_ms INTEGER, created_at INTEGER,
+                updated_at_ms INTEGER, updated_at INTEGER
             );
             """
         )
@@ -240,13 +284,25 @@ class CodexRunnerTests(unittest.TestCase):
             "INSERT INTO thread_spawn_edges VALUES ('coordinator', 'worker', 'open')"
         )
         connection.execute(
-            "INSERT INTO threads VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 "worker",
                 model,
                 str(self.workspace.resolve()),
-                int((time.time() + 60) * 1000),
-                int(time.time() + 60),
+                "",
+                expected_path,
+                int(created * 1000),
+                int(created),
+                int((created + 60) * 1000),
+                int(created + 60),
+            ),
+        )
+        connection.execute(
+            "INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "coordinator", "gpt-5.6-sol", str(self.workspace.resolve()),
+                str(rollout), "/root", int((created - 60) * 1000), int(created - 60),
+                int(created * 1000), int(created),
             ),
         )
         connection.commit()
@@ -303,6 +359,60 @@ class CodexRunnerTests(unittest.TestCase):
             self.assertEqual(
                 codex_runner.run(self.workspace, "coordinate", environment=environment), 0
             )
+
+    def test_runner_recovers_spawn_omitted_from_public_event_stream(self) -> None:
+        environment = self.environment()
+        environment["DE67_CODEX_STATE"] = str(
+            self.write_roster_state("gpt-5.6-terra")
+        )
+        trace = [line for line in self.handoff_trace() if '"spawn_agent"' not in line]
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=FakeProcess(trace, 0)
+        ):
+            self.assertEqual(
+                codex_runner.run(self.workspace, "coordinate", environment=environment), 0
+            )
+
+    def test_runner_recovers_flat_persisted_spawn_event(self) -> None:
+        environment = self.environment()
+        environment["DE67_CODEX_STATE"] = str(
+            self.write_roster_state("gpt-5.6-terra", flat_spawn_event=True)
+        )
+        trace = [line for line in self.handoff_trace() if '"spawn_agent"' not in line]
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=FakeProcess(trace, 0)
+        ):
+            self.assertEqual(
+                codex_runner.run(self.workspace, "coordinate", environment=environment), 0
+            )
+
+    def test_roster_recovery_rejects_worker_for_different_task_name(self) -> None:
+        environment = self.environment()
+        environment["DE67_CODEX_STATE"] = str(
+            self.write_roster_state(
+                "gpt-5.6-terra", task_id="other-route", agent_path="/root/other_route"
+            )
+        )
+        resolver = codex_runner._roster_resolver(self.workspace, environment)
+        self.assertIsNone(resolver("route", time.time(), "coordinator", frozenset()))
+
+    def test_worker_task_names_do_not_collapse_distinct_valid_ids(self) -> None:
+        self.assertNotEqual(
+            codex_runner.worker_task_name("a-b"),
+            codex_runner.worker_task_name("a_b"),
+        )
+        self.assertEqual(codex_runner.worker_task_name("!!!"), "task_212121")
+
+    def test_roster_recovery_rejects_stale_worker_even_if_recently_updated(self) -> None:
+        environment = self.environment()
+        started_at = time.time()
+        environment["DE67_CODEX_STATE"] = str(
+            self.write_roster_state(
+                "gpt-5.6-terra", created_at=started_at - 60
+            )
+        )
+        resolver = codex_runner._roster_resolver(self.workspace, environment)
+        self.assertIsNone(resolver("route", started_at, "coordinator", frozenset()))
 
     def test_runner_rejects_inherited_sol_child_as_ordinary_handoff(self) -> None:
         environment = self.environment()

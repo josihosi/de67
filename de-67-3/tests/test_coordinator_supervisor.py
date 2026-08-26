@@ -549,6 +549,11 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("do not require receiver_thread_ids", contract)
         self.assertIn("do not abandon solely because that field is absent", contract)
         self.assertIn("records the durable claim automatically", contract)
+        self.assertIn(
+            "R-008-closure-108 becomes task_522d3030382d636c6f737572652d313038",
+            contract,
+        )
+        self.assertIn("correlation metadata", contract)
         self.assertIn("Never invoke claim-worker", contract)
         self.assertIn("never use /root/<task-name>", contract)
         self.assertIn("Proceed to the normal wait", contract)

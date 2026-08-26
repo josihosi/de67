@@ -76,6 +76,11 @@ relevant worker may be reused for a new unique task after its prior task is dura
 
 ## Receive results
 
+Treat a verified worker return as durable-state ingress before the next route decision. Judge its
+evidence and record exactly one matching completion, finding, or abandonment first; only then ask
+the compiled policy for the next action. The kernel derives worker-result facts from that committed
+state, so waiting for a still-live task after its worker has returned creates a circular wait.
+
 Judge the actual diff and direct evidence. A focused test proves only the route it exercised. An
 ordinary failed test is not a finding. Keep it inside the worker route: inspect, repair, and rerun.
 Record a terminal finding only when the assigned strategy is disproved, a materially different route

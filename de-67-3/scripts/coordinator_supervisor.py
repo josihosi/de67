@@ -662,6 +662,21 @@ def worker_handoff_contract() -> str:
     )
 
 
+def worker_result_ingress_contract() -> str:
+    """Order a verified worker return before ledger-derived route selection."""
+    return (
+        "A verified ordinary-worker return is durable-state ingress, not a route decision. "
+        "When a worker message returns completion evidence, a formal finding, or abandonment, "
+        "judge it and record exactly one matching deadline-harness terminal transition before "
+        "executing DE67_POLICY_DECIDE_ARGV_JSON again. This is the only pre-decision transition: "
+        "the policy kernel derives worker result facts from that committed state. Do not wait for "
+        "the live task to terminalize itself, do not ask the worker to mutate DE67 state, and do "
+        "not record a second terminal transition when the task is already terminal. Ordinary test "
+        "failure remains inside the worker task unless the returned evidence meets the formal "
+        "finding boundary."
+    )
+
+
 def coordinator_prompt(
     workspace: Path,
     state_path: Path,
@@ -672,6 +687,7 @@ def coordinator_prompt(
 ) -> str:
     lines = [
         f"Act as a fresh Phase-3 delivery coordinator in {workspace}.",
+        worker_result_ingress_contract(),
         "Do not read packaged DE-67 SKILL.md, kernel, role, reference, or guideline prose during delivery.",
         "The hash-bound .de67/phase3-policy.d67 file is the machine-canonical routing policy.",
         "Before every route decision, execute the argument array in DE67_POLICY_DECIDE_ARGV_JSON as a subprocess without a shell.",
@@ -888,7 +904,9 @@ def run_child(
     else:
         prompt = (
             "Continue the same DE-67 coordinator lifecycle. Ordinary worker results "
-            "and findings are state events, not a reason to stop. Before acting, execute "
+            "and findings are state events, not a reason to stop. "
+            + worker_result_ingress_contract()
+            + " Before any other action, execute "
             "DE67_POLICY_DECIDE_ARGV_JSON without a shell and obey its minimal action brief. "
             "Worker: Luna for clear execution; Terra for debugging/discovery. Effort low-max: "
             "lowest sufficient for complexity/research. Never Sol. Every newly spawned ordinary "

@@ -39,6 +39,7 @@ from coordinator_supervisor import (  # noqa: E402
     wait_for_supervision_event,
     work_is_complete,
     worker_handoff_contract,
+    worker_result_ingress_contract,
 )
 from blocker_adapter import BlockerReply  # noqa: E402
 from deadline_harness import DeadlineHarness  # noqa: E402
@@ -864,6 +865,11 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("four to six meaningful gaps", prompt)
         self.assertIn("exceed eight only", prompt)
         self.assertIn(ordinary_worker_evidence_contract(), prompt)
+        ingress = worker_result_ingress_contract()
+        self.assertIn(ingress, prompt)
+        self.assertLess(prompt.index(ingress), prompt.index("Before every route decision"))
+        self.assertIn("before executing DE67_POLICY_DECIDE_ARGV_JSON", ingress)
+        self.assertIn("exactly one", ingress)
         self.assertNotIn("Read .de67/orchestrator-guidelines.md", prompt)
         self.assertNotIn("test-and-task-guidelines.md", prompt)
 

@@ -1430,6 +1430,10 @@ def _run_supervisor_locked(
                 f"Restart generation {after.generation} remains pending after its only attempt",
             )
             return 1
+        # A durable semantic restart (mutation, incident retirement, or owner
+        # reply) starts a new coordinator lifecycle. Process-recovery attempts
+        # from an earlier lifecycle must not consume this one's single retry.
+        automatic_process_recoveries = 0
         restart = after
         generation = after.generation
         resume_session_id = active_worker_coordinator_session(state, lineage_id)

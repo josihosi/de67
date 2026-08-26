@@ -91,12 +91,21 @@ if not (mode == "crash-without-session-then-complete" and event_count == 1):
     )
 
 with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
-    if mode in {"mutation-lifecycle", "mutation-after-coordinator", "deadline-mutation-lifecycle"}:
+    if mode in {
+        "mutation-lifecycle",
+        "mutation-after-coordinator",
+        "deadline-mutation-lifecycle",
+        "recovery-before-and-after-mutation",
+    }:
         if os.environ.get("DE67_PROCESS_ROLE") == "mutation-reviewer":
             suggestions = Path(os.environ["DE67_WORKSPACE"]) / ".de67" / "mutation-suggestions.md"
             if not suggestions.is_file():
                 raise AssertionError("mutation reviewer must receive the suggestion ledger")
-            if mode in {"mutation-lifecycle", "mutation-after-coordinator"}:
+            if mode in {
+                "mutation-lifecycle",
+                "mutation-after-coordinator",
+                "recovery-before-and-after-mutation",
+            }:
                 cycle = harness.list_tasks()["random_mutation"]
                 harness.resolve_random_mutation(
                     os.environ["DE67_LINEAGE"],
@@ -120,6 +129,72 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                     "macro", "Keep the existing general deadline guidance."
                 )
         else:
+            if mode == "recovery-before-and-after-mutation":
+                root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+                if event_count == 1:
+                    harness.claim_worker(
+                        os.environ["DE67_LINEAGE"], "seed", "worker-one",
+                        "fake-session", os.environ["DE67_SUPERVISOR_PID"],
+                    )
+                    harness.complete_task(
+                        os.environ["DE67_LINEAGE"], "seed", "worker one proof"
+                    )
+                    raise SystemExit(9)
+                if event_count == 2:
+                    harness.start_task(
+                        os.environ["DE67_LINEAGE"], "worker-two-task", "R-001", 3600
+                    )
+                    harness.claim_worker(
+                        os.environ["DE67_LINEAGE"], "worker-two-task", "worker-two",
+                        "fake-session", os.environ["DE67_SUPERVISOR_PID"],
+                    )
+                    harness.complete_task(
+                        os.environ["DE67_LINEAGE"], "worker-two-task", "worker two proof"
+                    )
+                    raise SystemExit(0)
+                if event_count == 3:
+                    harness.start_task(
+                        os.environ["DE67_LINEAGE"], "worker-three-task", "R-001", 3600
+                    )
+                    harness.claim_worker(
+                        os.environ["DE67_LINEAGE"], "worker-three-task", "worker-three",
+                        "fake-session", os.environ["DE67_SUPERVISOR_PID"],
+                    )
+                    harness.complete_task(
+                        os.environ["DE67_LINEAGE"], "worker-three-task",
+                        "worker three proof triggers mutation",
+                    )
+                    raise SystemExit(0)
+                if event_count == 5:
+                    harness.acknowledge_coordinator_restart(
+                        os.environ["DE67_LINEAGE"],
+                        generation,
+                        os.environ["DE67_COORDINATOR_RUN_ID"],
+                    )
+                    harness.start_task(
+                        os.environ["DE67_LINEAGE"], "post-mutation", "R-001", 3600
+                    )
+                    harness.claim_worker(
+                        os.environ["DE67_LINEAGE"], "post-mutation", "worker-four",
+                        "fake-session", os.environ["DE67_SUPERVISOR_PID"],
+                    )
+                    raise SystemExit(9)
+                if event_count == 6:
+                    harness.complete_task(
+                        os.environ["DE67_LINEAGE"],
+                        "post-mutation",
+                        "post-mutation recovery proof",
+                    )
+                    (root / "DFS.md").write_text(
+                        "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+                        encoding="utf-8",
+                    )
+                    (root / "work-ledger.md").write_text(
+                        "# Work ledger\n\n## Active work\n",
+                        encoding="utf-8",
+                    )
+                    raise SystemExit(0)
+                raise AssertionError(f"unexpected event count: {event_count}")
             if mode == "mutation-after-coordinator" and generation is None:
                 harness.complete_task(
                     os.environ["DE67_LINEAGE"], "seed", "trigger mutation boundary"
@@ -289,6 +364,18 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             "# Work ledger\n\n## Active work\n",
             encoding="utf-8",
         )
+    elif mode == "crash-twice":
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        if event_count == 1:
+            with (root / "work-ledger.md").open("a", encoding="utf-8") as output:
+                output.write("\nFirst crash made durable progress.\n")
+            raise SystemExit(9)
+        if event_count == 2:
+            harness.start_task(
+                os.environ["DE67_LINEAGE"], "second-crash", "R-001", 3600
+            )
+            raise SystemExit(9)
+        raise AssertionError("the process-recovery fuse allowed a third launch")
     elif mode == "claimed-worker-crash-then-complete":
         if event_count == 1:
             harness.claim_worker(
@@ -1200,6 +1287,121 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         )
         self.assertEqual([event["generation"] for event in events], [None, None, 1])
 
+    def test_mutation_starts_a_fresh_process_recovery_episode(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.connection.execute(
+                """
+                UPDATE random_mutation_cycles
+                SET interval_windows = 10, due_after_terminal_windows = 10,
+                    selected_lane = 'test-and-task-guidelines.md'
+                WHERE lineage_id = 'project' AND cycle_number = 1
+                """
+            )
+            harness.connection.commit()
+            for number in range(2, 9):
+                task_id = f"pre-mutation-terminal-{number}"
+                harness.start_task("project", task_id, "R-001", 3600)
+                harness.complete_task("project", task_id, f"terminal {number}")
+
+        run_ids = iter(
+            (
+                "pre-mutation-crash",
+                "pre-mutation-recovery",
+                "pre-mutation-third-wave",
+                "post-mutation-crash",
+                "post-mutation-recovery",
+            )
+        )
+        with patch(
+            "coordinator_supervisor.runtime_worker_owners",
+            return_value={"worker-four": "fake-session"},
+        ):
+            result = run_supervisor(
+                self.state_path,
+                "project",
+                self.workspace,
+                self.runner_command(),
+                self.run_root,
+                extra_env=self.environment("recovery-before-and-after-mutation"),
+                run_id_factory=lambda _generation: next(run_ids),
+            )
+
+        events = self.read_events()
+        self.assertEqual(
+            result,
+            0,
+            {"statuses": self.statuses(), "events": events},
+        )
+        self.assertEqual(
+            [event["role"] for event in events],
+            [
+                "coordinator",
+                "coordinator",
+                "coordinator",
+                "mutation-reviewer",
+                "coordinator",
+                "coordinator",
+            ],
+        )
+        self.assertEqual(
+            [event["run_id"] for event in events if event["role"] == "coordinator"],
+            [
+                "pre-mutation-crash",
+                "pre-mutation-recovery",
+                "pre-mutation-third-wave",
+                "post-mutation-crash",
+                "post-mutation-recovery",
+            ],
+        )
+        self.assertEqual(
+            [event["resume_session"] for event in events],
+            [None, "fake-session", "fake-session", None, None, "fake-session"],
+        )
+        self.assertEqual(
+            self.statuses(),
+            {
+                "pre-mutation-crash": "FAILED",
+                "pre-mutation-recovery": "DONE",
+                "pre-mutation-third-wave": "DONE",
+                next(
+                    path.name
+                    for path in self.run_root.iterdir()
+                    if path.name.startswith("mutation-")
+                ): "DONE",
+                "post-mutation-crash": "FAILED",
+                "post-mutation-recovery": "DONE",
+            },
+        )
+        with DeadlineHarness(self.state_path) as harness:
+            tasks = {
+                task["task_id"]: task
+                for task in harness.list_tasks()["tasks"]
+            }
+            restart = harness.coordinator_restart_status("project")[
+                "coordinator_restart"
+            ]
+            claims = harness.connection.execute(
+                "SELECT task_id, worker_id, released_at FROM worker_claims "
+                "WHERE lineage_id = 'project' ORDER BY claimed_at"
+            ).fetchall()
+        self.assertEqual(
+            [
+                (claim["task_id"], claim["worker_id"], claim["released_at"] is not None)
+                for claim in claims
+            ],
+            [
+                ("seed", "worker-one", True),
+                ("worker-two-task", "worker-two", True),
+                ("worker-three-task", "worker-three", True),
+                ("post-mutation", "worker-four", True),
+            ],
+        )
+        self.assertTrue(all(task["state"] == "completed" for task in tasks.values()))
+        self.assertEqual(restart["generation"], 1)
+        self.assertFalse(restart_required(restart))
+        self.assertEqual(restart["run_id"], "post-mutation-crash")
+
     def test_optional_adapter_argument_stays_outside_runner_arguments(self) -> None:
         arguments = build_parser().parse_args(
             [
@@ -1638,6 +1840,30 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.statuses(),
             {"crashed-run": "FAILED", "recovery-run": "DONE"},
         )
+
+    def test_two_crashes_in_one_process_recovery_episode_stop_without_looping(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        run_ids = iter(("first-crash", "single-reconnect", "forbidden-third-run"))
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("crash-twice"),
+            run_id_factory=lambda _generation: next(run_ids),
+        )
+
+        self.assertEqual(result, 9)
+        self.assertEqual(
+            [event["run_id"] for event in self.read_events()],
+            ["first-crash", "single-reconnect"],
+        )
+        error = (
+            self.run_root / "single-reconnect" / "supervisor_error.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Automatic process recovery already attempted", error)
 
     def test_crashed_coordinator_preserves_claimed_worker_and_resumes_once(self) -> None:
         self.write_work_documents(red=True, active=True)

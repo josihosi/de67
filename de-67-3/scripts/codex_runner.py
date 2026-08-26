@@ -33,6 +33,7 @@ class CoordinatorLoopGuard:
         | None = None,
         roster_validator: Callable[[str, str | None], bool] | None = None,
         claim_recorder: Callable[[str, str, str | None], None] | None = None,
+        task_terminal: Callable[[str], bool] | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._clock = clock
@@ -44,6 +45,14 @@ class CoordinatorLoopGuard:
         self._roster_resolver = roster_resolver
         self._roster_validator = roster_validator
         self._claim_recorder = claim_recorder
+        self._task_terminal = task_terminal
+
+    def _reconcile_terminal_tasks(self) -> None:
+        if self._task_terminal is None:
+            return
+        for task_id in tuple(self._task_workers):
+            if self._task_terminal(task_id):
+                self._task_workers.pop(task_id, None)
 
     def _bind(self, task_id: str, worker_id: str) -> None:
         if worker_id.startswith("/") or any(character.isspace() for character in worker_id):
@@ -116,6 +125,7 @@ class CoordinatorLoopGuard:
             self._bind(task_id, worker_ids[0])
             return
         if tool == "wait" and event.get("type") == "item.started":
+            self._reconcile_terminal_tasks()
             if self._roster_resolver is not None:
                 for task_id, started_at in tuple(self._unbound.items()):
                     worker_id = self._roster_resolver(
@@ -231,6 +241,27 @@ def _initial_unbound_tasks(environment: dict[str, str]) -> tuple[str, ...]:
     finally:
         connection.close()
     return tuple(str(row[0]) for row in rows)
+
+
+def _task_terminal_resolver(environment: dict[str, str]) -> Callable[[str], bool]:
+    state_value = environment.get("DE67_DEADLINE_STATE", "").strip()
+    lineage = environment.get("DE67_LINEAGE", "").strip()
+    state = Path(state_value).expanduser().resolve() if state_value else None
+
+    def resolve(task_id: str) -> bool:
+        if state is None or not lineage or not state.is_file():
+            return False
+        connection = sqlite3.connect(f"file:{state}?mode=ro", uri=True)
+        try:
+            row = connection.execute(
+                "SELECT attempt_terminal_at FROM tasks WHERE lineage_id = ? AND task_id = ?",
+                (lineage, task_id),
+            ).fetchone()
+        finally:
+            connection.close()
+        return row is not None and row[0] is not None
+
+    return resolve
 
 
 def _roster_resolver(
@@ -418,6 +449,7 @@ def run(
         roster_resolver=_roster_resolver(workspace, selected_environment),
         roster_validator=_roster_validator(workspace, selected_environment),
         claim_recorder=_claim_recorder(selected_environment),
+        task_terminal=_task_terminal_resolver(selected_environment),
     )
     started = time.monotonic()
     session_id: str | None = None

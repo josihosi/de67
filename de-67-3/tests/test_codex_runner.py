@@ -357,6 +357,59 @@ class CodexRunnerTests(unittest.TestCase):
                 }
             )
 
+    def test_loop_guard_reuses_worker_after_authoritative_prior_terminal(self) -> None:
+        terminal_tasks: set[str] = set()
+        resolved_used_workers: list[frozenset[str]] = []
+
+        def resolve(_task: str, _started: float, _parent: str | None,
+                    used_workers: frozenset[str]) -> str:
+            resolved_used_workers.append(used_workers)
+            return "terra-worker"
+
+        guard = codex_runner.CoordinatorLoopGuard(
+            initial_unbound_tasks=("route-1",),
+            roster_resolver=resolve,
+            task_terminal=lambda task_id: task_id in terminal_tasks,
+        )
+        wait = {"type": "item.started", "item": {"type": "collab_tool_call", "tool": "wait"}}
+        guard.observe(wait)
+        terminal_tasks.add("route-1")
+        guard.observe({
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "aggregated_output": json.dumps(
+                    {"attempt_created": True, "state": "running", "task_id": "route-2"}
+                ),
+                "exit_code": 0,
+                "status": "completed",
+            },
+        })
+        guard.observe(wait)
+
+        self.assertEqual(resolved_used_workers, [frozenset(), frozenset()])
+        self.assertEqual(guard.unbound_tasks, ())
+
+    def test_task_terminal_resolver_reads_authoritative_deadline_state(self) -> None:
+        state = self.root / "deadlines.sqlite3"
+        connection = sqlite3.connect(state)
+        connection.execute(
+            "CREATE TABLE tasks (lineage_id TEXT, task_id TEXT, attempt_terminal_at REAL)"
+        )
+        connection.executemany(
+            "INSERT INTO tasks VALUES (?, ?, ?)",
+            [("project", "done", 12.0), ("project", "running", None)],
+        )
+        connection.commit()
+        connection.close()
+        resolve = codex_runner._task_terminal_resolver({
+            "DE67_DEADLINE_STATE": str(state), "DE67_LINEAGE": "project"
+        })
+
+        self.assertTrue(resolve("done"))
+        self.assertFalse(resolve("running"))
+        self.assertFalse(resolve("missing"))
+
     def test_runner_reaps_child_when_claim_recording_raises_sqlite_error(self) -> None:
         process = FakeProcess(['{"type":"turn.started"}\n'], 0)
         environment = self.environment()

@@ -153,6 +153,7 @@
       ],
       "obligations": [
         "terminalize_attempt_exactly_once",
+        "coordinator_exclusively_commits_terminal_worker_result",
         "preserve_evidence_class",
         "continue_same_coordinator",
         "evaluate_convergence_after_every_worker",

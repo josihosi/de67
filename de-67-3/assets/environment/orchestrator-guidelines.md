@@ -69,6 +69,10 @@ the assigned repository work, terminalize that task as abandoned before dispatch
 After every worker exit, record exactly one completion, finding, or abandonment. Parallel workers
 therefore need distinct task ids. A coordinator start, exit, or restart does not itself create or
 terminalize a worker window.
+The coordinator exclusively records those terminal deadline-harness transitions. Treat the worker's
+return as evidence to judge and commit; do not ask or permit an ordinary worker to update the DE67
+deadline database, work ledger, DFS state, or mutation ledger directly. A successfully returned
+relevant worker may be reused for a new unique task after its prior task is durably terminal.
 
 ## Receive results
 

@@ -398,9 +398,28 @@ def workspace_facts(
                 "SELECT * FROM tasks WHERE lineage_id = ? ORDER BY started_at DESC",
                 (lineage_id,),
             ).fetchall()
-            live = [row for row in rows if row["attempt_terminal_at"] is None]
+            nonterminal = [row for row in rows if row["attempt_terminal_at"] is None]
+            worker_claims_exist = _table_exists(connection, "worker_claims")
+            claimed_ids: set[str] = set()
+            if worker_claims_exist:
+                claimed_ids = {
+                    str(row[0])
+                    for row in connection.execute(
+                        """
+                        SELECT task_id FROM worker_claims
+                        WHERE lineage_id = ? AND released_at IS NULL
+                        """,
+                        (lineage_id,),
+                    ).fetchall()
+                }
+            live = [
+                row for row in nonterminal
+                if not worker_claims_exist or str(row["task_id"]) in claimed_ids
+            ]
             if live:
                 facts.add("live_task")
+            elif nonterminal:
+                facts.add("unbound_task")
             else:
                 for row in rows:
                     kind = row["attempt_terminal_kind"]
@@ -466,7 +485,10 @@ def workspace_facts(
     ledger_text = ledger.read_text(encoding="utf-8") if ledger.is_file() else ""
     if "## " in ledger_text:
         facts.add("ledger_work")
-    if "blocked" in ledger_text.lower():
+    if any(
+        line.lstrip().lower().startswith("- blocked:")
+        for line in ledger_text.splitlines()
+    ):
         facts.add("blocked_ledger")
     if any(word in ledger_text.lower() for word in ("next executable", "required mechanism", "active gap")):
         facts.add("executable_route")

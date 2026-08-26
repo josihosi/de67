@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
 
+from deadline_harness import DeadlineError, DeadlineHarness
+
 
 class RunnerError(RuntimeError):
     """Raised when the local Codex runner cannot start safely."""
@@ -29,6 +31,7 @@ class CoordinatorLoopGuard:
         initial_unbound_tasks: Sequence[str] = (),
         roster_resolver: Callable[[str, float, str | None, frozenset[str]], str | None]
         | None = None,
+        claim_recorder: Callable[[str, str, str | None], None] | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._clock = clock
@@ -38,6 +41,13 @@ class CoordinatorLoopGuard:
         self._task_workers: dict[str, str] = {}
         self._parent_thread_id: str | None = None
         self._roster_resolver = roster_resolver
+        self._claim_recorder = claim_recorder
+
+    def _bind(self, task_id: str, worker_id: str) -> None:
+        if self._claim_recorder is not None:
+            self._claim_recorder(task_id, worker_id, self._parent_thread_id)
+        del self._unbound[task_id]
+        self._task_workers[task_id] = worker_id
 
     @property
     def unbound_tasks(self) -> tuple[str, ...]:
@@ -95,8 +105,7 @@ class CoordinatorLoopGuard:
             and self._unbound
         ):
             task_id = next(iter(self._unbound))
-            del self._unbound[task_id]
-            self._task_workers[task_id] = worker_ids[0]
+            self._bind(task_id, worker_ids[0])
             return
         if tool == "wait" and event.get("type") == "item.started":
             if self._roster_resolver is not None:
@@ -108,8 +117,7 @@ class CoordinatorLoopGuard:
                         frozenset(self._task_workers.values()),
                     )
                     if worker_id:
-                        del self._unbound[task_id]
-                        self._task_workers[task_id] = worker_id
+                        self._bind(task_id, worker_id)
             if not self._unbound:
                 return
             tasks = ", ".join(self._unbound)
@@ -286,6 +294,38 @@ def _abandon_unbound_tasks(
         )
 
 
+def _claim_recorder(environment: dict[str, str]) -> Callable[[str, str, str | None], None]:
+    state = environment.get("DE67_DEADLINE_STATE", "").strip()
+    lineage = environment.get("DE67_LINEAGE", "").strip()
+    supervisor = environment.get("DE67_SUPERVISOR_PID", "").strip()
+
+    def record(task_id: str, worker_id: str, coordinator_session: str | None) -> None:
+        if not state and not lineage and not supervisor:
+            return
+        if not state or not lineage or not supervisor or not coordinator_session:
+            raise RunnerError("Durable worker claim lacks supervisor or coordinator identity")
+        try:
+            with DeadlineHarness(state) as harness:
+                harness.claim_worker(
+                    lineage,
+                    task_id,
+                    worker_id,
+                    coordinator_session,
+                    supervisor,
+                )
+                harness.checkpoint_worker(
+                    lineage,
+                    task_id,
+                    worker_id,
+                    "delegated",
+                    "runner observed successful roster handoff",
+                )
+        except DeadlineError as error:
+            raise RunnerError(f"Durable worker claim failed: {error}") from error
+
+    return record
+
+
 def run(
     workspace_path: str | Path,
     prompt: str,
@@ -324,6 +364,7 @@ def run(
     loop_guard = CoordinatorLoopGuard(
         initial_unbound_tasks=_initial_unbound_tasks(selected_environment),
         roster_resolver=_roster_resolver(workspace, selected_environment),
+        claim_recorder=_claim_recorder(selected_environment),
     )
     started = time.monotonic()
     try:

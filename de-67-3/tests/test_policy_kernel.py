@@ -493,8 +493,12 @@ class PolicyKernelTests(unittest.TestCase):
                 CREATE TABLE closure_gaps (
                     lineage_id TEXT, claim_id TEXT, closed_at REAL
                 );
+                CREATE TABLE worker_claims (
+                    lineage_id TEXT, task_id TEXT, released_at REAL
+                );
                 INSERT INTO tasks VALUES ('project', 'M1', 1, NULL, NULL);
                 INSERT INTO tasks VALUES ('foreign', 'M2', 2, 2, 'failed');
+                INSERT INTO worker_claims VALUES ('project', 'M1', NULL);
                 INSERT INTO claim_clocks VALUES ('project', 'C1', 1, 5, 'closure');
                 INSERT INTO claim_clocks VALUES ('foreign', 'C2', 2, 50, 'exploration');
                 INSERT INTO closure_gaps VALUES ('project', 'C1', NULL);
@@ -574,8 +578,12 @@ class PolicyKernelTests(unittest.TestCase):
                 CREATE TABLE closure_gaps (
                     lineage_id TEXT, claim_id TEXT, closed_at REAL
                 );
+                CREATE TABLE worker_claims (
+                    lineage_id TEXT, task_id TEXT, released_at REAL
+                );
                 INSERT INTO tasks VALUES ('project', 'R-008-closure-002', 10, 20, 'finding');
                 INSERT INTO tasks VALUES ('project', 'R-008-closure-003', 30, NULL, NULL);
+                INSERT INTO worker_claims VALUES ('project', 'R-008-closure-003', NULL);
                 INSERT INTO claim_clocks VALUES ('project', 'R-008', 1, 1000, 'closure');
                 INSERT INTO closure_gaps VALUES ('project', 'R-008', NULL);
                 """
@@ -590,6 +598,30 @@ class PolicyKernelTests(unittest.TestCase):
                 kernel.decide(source_policy(), facts).action,
                 "wait_for_worker_event",
             )
+
+    def test_bare_task_is_unbound_until_a_worker_claim_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            state = workspace / "state.sqlite3"
+            connection = sqlite3.connect(state)
+            connection.executescript(
+                """
+                CREATE TABLE tasks (
+                    lineage_id TEXT, task_id TEXT, started_at REAL,
+                    attempt_terminal_at REAL, attempt_terminal_kind TEXT
+                );
+                CREATE TABLE worker_claims (
+                    lineage_id TEXT, task_id TEXT, released_at REAL
+                );
+                INSERT INTO tasks VALUES ('project', 'route-a', 1, NULL, NULL);
+                """
+            )
+            connection.close()
+
+            facts = kernel.workspace_facts(workspace, state, "project", now=2)
+
+            self.assertIn("unbound_task", facts)
+            self.assertNotIn("live_task", facts)
 
     def test_preserved_baseline_has_no_compiled_kernel_and_remains_recoverable(self) -> None:
         result = subprocess.run(

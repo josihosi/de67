@@ -31,6 +31,10 @@ RED_DFS_CLAIM = re.compile(r"^- \[ \] \N{LARGE RED CIRCLE} ", re.MULTILINE)
 ACTIVE_LEDGER_ITEM = re.compile(r"^- \[ \] ", re.MULTILINE)
 BLOCKED_LEDGER_ITEM = re.compile(r"^- Blocked: ", re.MULTILINE)
 BLOCKED_AUDIT_PREFIX = "supervisor audit blocked-only ledger sha256:"
+WORKER_OWNER_LOST_REASON = (
+    "worker_owner_lost: coordinator process exited while this worker window "
+    "remained nonterminal"
+)
 
 
 class SupervisorError(RuntimeError):
@@ -152,6 +156,86 @@ def read_clock(state_path: Path, lineage_id: str) -> RestartState:
         )
 
 
+def terminalize_unowned_worker_windows(
+    state_path: Path,
+    lineage_id: str,
+) -> tuple[str, ...]:
+    """Fail closed when a coordinator exits without terminalizing its workers."""
+    with DeadlineHarness(state_path) as harness:
+        task_ids = tuple(
+            str(row["task_id"])
+            for row in harness.connection.execute(
+                """
+                SELECT task_id FROM tasks
+                WHERE lineage_id = ? AND attempt_terminal_at IS NULL
+                ORDER BY started_at
+                """,
+                (lineage_id,),
+            ).fetchall()
+        )
+        for task_id in task_ids:
+            harness.abandon_attempt(
+                lineage_id,
+                task_id,
+                WORKER_OWNER_LOST_REASON,
+            )
+    return task_ids
+
+
+def supervision_fingerprint(
+    state_path: Path,
+    lineage_id: str,
+    workspace: Path,
+) -> str:
+    """Hash durable state that can justify another automatic child launch."""
+    with DeadlineHarness(state_path) as harness:
+        summary = harness.list_tasks(now=0.0)
+        worker_claims = [
+            dict(row)
+            for row in harness.connection.execute(
+                """
+                SELECT task_id, worker_id, coordinator_session_id, supervisor_id,
+                       claimed_at, last_checkpoint_at, released_at, release_reason
+                FROM worker_claims WHERE lineage_id = ?
+                ORDER BY task_id
+                """,
+                (lineage_id,),
+            ).fetchall()
+        ]
+        worker_checkpoints = [
+            dict(row)
+            for row in harness.connection.execute(
+                """
+                SELECT task_id, sequence, worker_id, kind, evidence, recorded_at
+                FROM worker_checkpoints WHERE lineage_id = ?
+                ORDER BY task_id, sequence
+                """,
+                (lineage_id,),
+            ).fetchall()
+        ]
+    documents: dict[str, str | None] = {}
+    for relative in (
+        ".de67/DFS.md",
+        ".de67/work-ledger.md",
+        ".de67/mutation-suggestions.md",
+        ".de67/phase3-policy.d67",
+    ):
+        path = workspace / relative
+        documents[relative] = (
+            hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+        )
+    payload = {
+        "lineage_id": lineage_id,
+        "clock": summary,
+        "worker_claims": worker_claims,
+        "worker_checkpoints": worker_checkpoints,
+        "documents": documents,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def mutation_gate(
     state_path: Path,
     lineage_id: str,
@@ -271,6 +355,16 @@ def wait_for_supervision_event(
             return None
         signature = _gate_signature(pending_reviews, pending_mutations)
     return SupervisionEvent(None, signature)
+
+
+def consume_supervision_event(
+    consumed: set[str],
+    event: SupervisionEvent,
+) -> None:
+    """Reject replay before a durable event can launch another child."""
+    if event.signature in consumed:
+        raise SupervisorError(f"Supervision event replayed: {event.signature}")
+    consumed.add(event.signature)
 
 
 def work_is_complete(
@@ -439,7 +533,7 @@ def coordinator_prompt(
         "Never review, apply, or resolve a mutation. When the compiled policy says retire_for_mutation_review, dispatch no worker, make no guidance change, and exit immediately so the external supervisor can run the exclusive reviewer.",
         "Do not infer policy from workspace guideline prose; those files are legacy differential fixtures on this branch.",
         "Read current code or DFS detail only when the compiled decision names ledger, dfs, or dfs_slice.",
-        "Worker: Luna for clear execution; Terra for debugging/discovery. Effort low-max: lowest sufficient for complexity/research. Never Sol.",
+        "For every worker, explicitly select gpt-5.6-luna or gpt-5.6-terra: Luna for clear execution and Terra for debugging/discovery. Effort low-max: lowest sufficient for complexity/research. Never Sol.",
         "For every newly spawned ordinary worker, set fork_turns=\"none\" and provide a self-contained task brief. Never omit model selection or pass coordinator or predecessor history. Reusing an already relevant worker remains allowed.",
         coordinator_ledger_contract(),
         ordinary_worker_evidence_contract(),
@@ -549,13 +643,21 @@ def _complete_mutation_review(
     gate: MutationGate,
     *,
     extra_env: Mapping[str, str] | None,
+    reviewed_gates: set[tuple[str, str]] | None = None,
 ) -> RestartState:
+    consumed = reviewed_gates if reviewed_gates is not None else set()
     with DeadlineHarness(state_path) as harness:
         harness.retire_claim_clocks_for_mutation(
             lineage_id,
             f"{gate.kind} {gate.identity}",
         )
     while True:
+        gate_key = (gate.kind, gate.identity)
+        if gate_key in consumed:
+            raise SupervisorError(
+                f"Mutation gate repeated without resolution: {gate.kind} {gate.identity}"
+            )
+        consumed.add(gate_key)
         result = run_mutation_reviewer(
             runner_command,
             workspace,
@@ -779,6 +881,11 @@ def _run_supervisor_locked(
         raise SupervisorError("Runner command must not be empty")
     wait_for_event = event_waiter or wait_for_supervision_event
 
+    # Existing run records prove this is a supervisor recovery, not the first
+    # bootstrap that may legitimately begin with a seeded task clock.
+    if records.is_dir() and any(records.iterdir()):
+        terminalize_unowned_worker_windows(state, lineage_id)
+
     restart = read_clock(state, lineage_id)
     blocked_audit = blocked_ledger_audit_reason(workdir)
     if blocked_audit is not None:
@@ -814,6 +921,8 @@ def _run_supervisor_locked(
         return 0
 
     records.mkdir(parents=True, exist_ok=True)
+    reviewed_gates: set[tuple[str, str]] = set()
+    consumed_events: set[str] = set()
     gate = mutation_gate(state, lineage_id, workdir)
     if gate is not None:
         restart = _complete_mutation_review(
@@ -824,6 +933,7 @@ def _run_supervisor_locked(
             records,
             gate,
             extra_env=extra_env,
+            reviewed_gates=reviewed_gates,
         )
 
     generation = restart.generation if restart.required else None
@@ -849,6 +959,7 @@ def _run_supervisor_locked(
                     lineage_id, generation, run_id
                 )
 
+        launch_fingerprint = supervision_fingerprint(state, lineage_id, workdir)
         result = run_child(
             runner_command,
             workdir,
@@ -865,6 +976,13 @@ def _run_supervisor_locked(
         # not a coordinator result that another coordinator can repair.
         if not result.launched:
             return result.exit_code if result.exit_code > 0 else 1
+
+        # Ordinary workers belong to the coordinator process that spawned them.
+        # Once that process exits, a nonterminal clock cannot prove a worker is
+        # alive. Terminalize it before routing so the kernel cannot mistake an
+        # orphaned database row for live work and enter W1 resume churn.
+        terminalize_unowned_worker_windows(state, lineage_id)
+        progressed = supervision_fingerprint(state, lineage_id, workdir)
 
         # This is the only clock read after this child exits. There is no polling loop.
         after = read_clock(state, lineage_id)
@@ -900,6 +1018,7 @@ def _run_supervisor_locked(
                 records,
                 gate,
                 extra_env=extra_env,
+                reviewed_gates=reviewed_gates,
             )
 
         blocked_audit = blocked_ledger_audit_reason(workdir)
@@ -931,6 +1050,17 @@ def _run_supervisor_locked(
                 else ""
             )
             if session_id:
+                if launch_fingerprint == progressed:
+                    failure = (
+                        "Coordinator returned with executable work but made no durable progress"
+                        if result.exit_code == 0
+                        else "Coordinator crashed with executable work but made no durable progress"
+                    )
+                    _mark_protocol_failure(
+                        result,
+                        failure,
+                    )
+                    return result.exit_code if result.exit_code > 0 else 1
                 resume_session_id = session_id
                 generation = None
                 continue
@@ -944,6 +1074,12 @@ def _run_supervisor_locked(
             # Process recovery is not a semantic coordinator restart. Start a
             # clean low coordinator against the same durable frontier without
             # manufacturing a mutation generation.
+            if launch_fingerprint == progressed:
+                _mark_protocol_failure(
+                    result,
+                    "Coordinator crashed with executable work but made no durable progress",
+                )
+                return result.exit_code if result.exit_code > 0 else 1
             resume_session_id = None
             generation = None
             continue
@@ -954,6 +1090,11 @@ def _run_supervisor_locked(
                 event = wait_for_event(state, lineage_id)
             if event is None:
                 return result.exit_code if result.exit_code > 0 else 0
+            try:
+                consume_supervision_event(consumed_events, event)
+            except SupervisorError as error:
+                _mark_protocol_failure(result, str(error))
+                return 1
             if event.restart is None:
                 gate = mutation_gate(state, lineage_id, workdir)
                 if gate is None:
@@ -970,6 +1111,7 @@ def _run_supervisor_locked(
                     records,
                     gate,
                     extra_env=extra_env,
+                    reviewed_gates=reviewed_gates,
                 )
             else:
                 after = event.restart

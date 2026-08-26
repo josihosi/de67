@@ -36,6 +36,72 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.harness.close()
         self.temporary.cleanup()
 
+    def test_worker_claim_is_durable_idempotent_and_exclusive(self) -> None:
+        self.harness.start_task("project", "route-a", "R-1", 60, now=0)
+
+        first = self.harness.claim_worker(
+            "project", "route-a", "worker-a", "coordinator-a", "supervisor-a", now=1
+        )
+        duplicate = self.harness.claim_worker(
+            "project", "route-a", "worker-a", "coordinator-a", "supervisor-a", now=2
+        )
+
+        self.assertTrue(first["recorded"])
+        self.assertFalse(duplicate["recorded"])
+        self.assertEqual(duplicate["claimed_at"], 1)
+        with self.assertRaisesRegex(DeadlineError, "another ownership claim"):
+            self.harness.claim_worker(
+                "project", "route-a", "worker-b", "coordinator-a", "supervisor-a", now=3
+            )
+
+    def test_worker_checkpoints_are_ordered_and_require_the_owner(self) -> None:
+        self.harness.start_task("project", "route-a", "R-1", 60, now=0)
+        self.harness.claim_worker(
+            "project", "route-a", "worker-a", "coordinator-a", "supervisor-a", now=1
+        )
+
+        first = self.harness.checkpoint_worker(
+            "project", "route-a", "worker-a", "delegated", "handoff", now=2
+        )
+        second = self.harness.checkpoint_worker(
+            "project", "route-a", "worker-a", "tested", "focused test", now=3
+        )
+
+        self.assertEqual((first["sequence"], second["sequence"]), (1, 2))
+        with self.assertRaisesRegex(DeadlineError, "does not own"):
+            self.harness.checkpoint_worker(
+                "project", "route-a", "worker-b", "tested", "not mine", now=4
+            )
+
+    def test_terminal_task_releases_its_worker_claim(self) -> None:
+        self.harness.start_task("project", "route-a", "R-1", 60, now=0)
+        self.harness.claim_worker(
+            "project", "route-a", "worker-a", "coordinator-a", "supervisor-a", now=1
+        )
+
+        self.harness.abandon_attempt("project", "route-a", "owner lost", now=2)
+
+        claim = self.harness.connection.execute(
+            "SELECT * FROM worker_claims WHERE lineage_id = 'project' AND task_id = 'route-a'"
+        ).fetchone()
+        self.assertEqual(claim["released_at"], 2)
+        self.assertEqual(claim["release_reason"], "task_abandoned")
+
+    def test_parallel_tasks_keep_independent_worker_claims(self) -> None:
+        for task, worker in (("route-a", "worker-a"), ("route-b", "worker-b")):
+            self.harness.start_task("project", task, "R-1", 60, now=0)
+            self.harness.claim_worker(
+                "project", task, worker, "coordinator-a", "supervisor-a", now=1
+            )
+
+        rows = self.harness.connection.execute(
+            "SELECT task_id, worker_id FROM worker_claims ORDER BY task_id"
+        ).fetchall()
+        self.assertEqual(
+            [(row["task_id"], row["worker_id"]) for row in rows],
+            [("route-a", "worker-a"), ("route-b", "worker-b")],
+        )
+
     def resolve_claim_miss(self, claim_id: str, *, diagnose: bool = True) -> None:
         if diagnose:
             self.harness.diagnose_claim_deadline(

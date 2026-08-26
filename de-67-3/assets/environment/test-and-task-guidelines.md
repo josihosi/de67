@@ -20,9 +20,9 @@ the frozen outcome instead of sending them to the owner.
 
 You own evidence retrieval. For each causal decision, identify the fact that would settle it, search
 narrowly, then read only the matching fields, ranges, records, or files. Query structured reports for
-the exact fields needed. Keep verbose build, test, run, diff, and search output in artifacts and
-extract the first relevant divergence instead of replaying the whole output into later turns. Do not
-combine unrelated broad reads.
+the exact fields needed. Keep verbose build, test, run, diff, and search output in artifacts. Use the
+first relevant divergence as the next observation inside the assigned outcome, not as a terminal
+return. Do not combine unrelated broad reads.
 
 Derive every output bound from the current claim and evidence shape; never invent a fixed token,
 line, file, or command quota. Larger evidence remains available when you can explain why deleting
@@ -50,7 +50,10 @@ whose removal still leaves the outcome honestly proved.
 ## Return the terminal result
 
 Return what changed, the real command or natural route, direct evidence, result, and remaining
-uncertainty in controlled English with exact identifiers. An ordinary test failure stays inside the
-goal-bound task. Return a finding only when the strategy is disproved, a materially different route
-is required, or a real blocker ends the window. State the expected behavior, observed behavior,
-contradicted premise, and direct evidence. A finding never weakens acceptance or causes mutation.
+uncertainty in controlled English with exact identifiers. Keep a new divergence, failed tactic, and
+reversible route change inside the goal-bound task while its outcome, authority, deadline, and risk
+boundary remain valid. A proved prerequisite is not terminal completion of a broader assigned
+outcome; preserve it and continue. Return a finding only when progress requires a different owner
+outcome, unavailable authority, frozen-scope change, material risk, or external-state change. State
+the expected behavior, observed behavior, contradicted premise, and direct evidence. A finding never
+weakens acceptance or causes mutation.

@@ -35,6 +35,9 @@ class Phase3ScenarioTests(unittest.TestCase):
     def test_expired_claim_routes_to_review_without_cadence_restart(self) -> None:
         with DeadlineHarness(self.state) as harness:
             harness.start_task("project", "late", "R-001", 10, now=0)
+            harness.claim_worker(
+                "project", "late", "worker-a", "coordinator-a", "supervisor-a", now=1
+            )
             expired = harness.expire_task("project", "late", now=11)
 
             self.assertTrue(expired["incident"]["recorded"])

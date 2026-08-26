@@ -14,13 +14,16 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from coordinator_supervisor import (  # noqa: E402
+    ChildResult,
     MutationGate,
     SupervisionEvent,
     SupervisorError,
+    _complete_mutation_review,
     _supervisor_lock,
     build_parser,
     coordinator_ledger_contract,
     coordinator_prompt,
+    consume_supervision_event,
     blocked_ledger_audit_reason,
     ledger_has_only_blocked_work,
     main,
@@ -29,6 +32,8 @@ from coordinator_supervisor import (  # noqa: E402
     ordinary_worker_evidence_contract,
     read_clock,
     run_supervisor,
+    supervision_fingerprint,
+    terminalize_unowned_worker_windows,
     wait_for_supervision_event,
     work_is_complete,
 )
@@ -204,8 +209,22 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             "# Work ledger\n\n## Active work\n",
             encoding="utf-8",
         )
+    elif mode == "leave-task-and-close-work":
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        (root / "DFS.md").write_text(
+            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+            encoding="utf-8",
+        )
+        (root / "work-ledger.md").write_text(
+            "# Work ledger\n\n## Active work\n",
+            encoding="utf-8",
+        )
     elif mode == "handover-then-complete":
-        if event_count > 1:
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        if event_count == 1:
+            with (root / "work-ledger.md").open("a", encoding="utf-8") as output:
+                output.write("\nDurable coordinator handoff recorded.\n")
+        else:
             if generation is not None:
                 harness.acknowledge_coordinator_restart(
                     os.environ["DE67_LINEAGE"],
@@ -254,9 +273,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             raise SystemExit(9)
         if generation is not None:
             raise AssertionError("resumable crash must keep the same coordinator generation")
-        harness.complete_task(
-            os.environ["DE67_LINEAGE"], "seed", "successor proof"
-        )
+        harness.start_task(os.environ["DE67_LINEAGE"], "recovery", "R-001", 3600)
+        harness.complete_task(os.environ["DE67_LINEAGE"], "recovery", "successor proof")
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
         (root / "DFS.md").write_text(
             "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
@@ -271,9 +289,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             raise SystemExit(9)
         if generation is not None:
             raise AssertionError("crash recovery must not manufacture a mutation generation")
-        harness.complete_task(
-            os.environ["DE67_LINEAGE"], "seed", "successor proof"
-        )
+        harness.start_task(os.environ["DE67_LINEAGE"], "recovery", "R-001", 3600)
+        harness.complete_task(os.environ["DE67_LINEAGE"], "recovery", "successor proof")
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
         (root / "DFS.md").write_text(
             "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
@@ -326,9 +343,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
         event_count = len(Path(os.environ["FAKE_EVENTS"]).read_text(encoding="utf-8").splitlines())
         if event_count == 1:
             raise SystemExit(int(os.environ["FAKE_FIRST_EXIT"]))
-        harness.complete_task(
-            os.environ["DE67_LINEAGE"], "seed", "matrix recovery proof"
-        )
+        harness.start_task(os.environ["DE67_LINEAGE"], "recovery", "R-001", 3600)
+        harness.complete_task(os.environ["DE67_LINEAGE"], "recovery", "matrix recovery proof")
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
         (root / "DFS.md").write_text(
             "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
@@ -376,6 +392,210 @@ class CoordinatorSupervisorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.waiter.stop()
         self.temporary.cleanup()
+
+    def test_coordinator_exit_terminalizes_unowned_worker_window(self) -> None:
+        terminalized = terminalize_unowned_worker_windows(
+            self.state_path,
+            "project",
+        )
+
+        self.assertEqual(terminalized, ("seed",))
+        with DeadlineHarness(self.state_path) as harness:
+            status = harness.status_task("project", "seed")
+            reason = harness.connection.execute(
+                "SELECT abandonment_reason FROM tasks WHERE task_id = 'seed'"
+            ).fetchone()["abandonment_reason"]
+        self.assertEqual(status["state"], "abandoned")
+        self.assertEqual(status["attempt_terminal_kind"], "abandoned")
+        self.assertIn("worker_owner_lost", reason)
+
+    def test_worker_checkpoint_changes_the_durable_progress_fingerprint(self) -> None:
+        before = supervision_fingerprint(
+            self.state_path, "project", self.workspace
+        )
+        with DeadlineHarness(self.state_path) as harness:
+            harness.claim_worker(
+                "project", "seed", "worker-a", "coordinator-a", "supervisor-a", now=1
+            )
+            claimed = supervision_fingerprint(
+                self.state_path, "project", self.workspace
+            )
+            harness.checkpoint_worker(
+                "project", "seed", "worker-a", "tested", "focused test passed", now=2
+            )
+        checkpointed = supervision_fingerprint(
+            self.state_path, "project", self.workspace
+        )
+
+        self.assertNotEqual(before, claimed)
+        self.assertNotEqual(claimed, checkpointed)
+
+    def test_supervisor_does_not_resume_after_child_leaves_orphan_clock(self) -> None:
+        self.write_work_documents(red=True, active=True)
+
+        with patch("coordinator_supervisor.mutation_gate", return_value=None):
+            result = run_supervisor(
+                self.state_path,
+                "project",
+                self.workspace,
+                self.runner_command(),
+                self.run_root,
+                extra_env=self.environment("leave-task-and-close-work"),
+                run_id_factory=lambda _generation: "orphan-clock",
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.read_events()), 1)
+        with DeadlineHarness(self.state_path) as harness:
+            row = harness.connection.execute(
+                "SELECT attempt_terminal_kind, abandonment_reason "
+                "FROM tasks WHERE task_id = 'seed'"
+            ).fetchone()
+        self.assertEqual(row["attempt_terminal_kind"], "abandoned")
+        self.assertIn("worker_owner_lost", row["abandonment_reason"])
+
+    def test_unchanged_success_with_executable_work_is_not_resumed(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        (self.workspace / ".de67" / "mutation-suggestions.md").write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n",
+            encoding="utf-8",
+        )
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "prior proof")
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("unacknowledged"),
+            run_id_factory=lambda _generation: "unchanged-success",
+        )
+
+        self.assertEqual(result, 1)
+        self.assertEqual(len(self.read_events()), 1)
+        error = (self.run_root / "unchanged-success" / "supervisor_error.txt").read_text()
+        self.assertIn("made no durable progress", error)
+
+    def test_persistent_crash_without_durable_progress_is_not_retried(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        (self.workspace / ".de67" / "mutation-suggestions.md").write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n",
+            encoding="utf-8",
+        )
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "prior proof")
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("fail-before-ack"),
+            run_id_factory=lambda _generation: "unchanged-crash",
+        )
+
+        self.assertEqual(result, 7)
+        self.assertEqual(len(self.read_events()), 1)
+        error = (self.run_root / "unchanged-crash" / "supervisor_error.txt").read_text()
+        self.assertIn("crashed", error)
+        self.assertIn("made no durable progress", error)
+
+    def test_unresolved_mutation_gate_is_not_reviewed_twice(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "terminal proof")
+        gate = MutationGate("owner-suggestion", "same-gate", None)
+        result_dir = self.run_root / "mutation-one"
+        result_dir.mkdir(parents=True)
+        result = ChildResult("mutation-one", result_dir, 0, True)
+
+        with patch(
+            "coordinator_supervisor.run_mutation_reviewer", return_value=result
+        ) as reviewer, patch(
+            "coordinator_supervisor.mutation_gate", return_value=gate
+        ):
+            with self.assertRaisesRegex(SupervisorError, "repeated without resolution"):
+                _complete_mutation_review(
+                    self.runner_command(),
+                    self.workspace,
+                    self.state_path,
+                    "project",
+                    self.run_root,
+                    gate,
+                    extra_env=self.environment("unacknowledged"),
+                )
+
+        self.assertEqual(reviewer.call_count, 1)
+
+    def test_supervision_event_signature_is_consumed_once(self) -> None:
+        consumed: set[str] = set()
+        event = SupervisionEvent(None, "gate:stable")
+
+        consume_supervision_event(consumed, event)
+        with self.assertRaisesRegex(SupervisorError, "event replayed"):
+            consume_supervision_event(consumed, event)
+
+    def test_alternating_mutation_gates_cannot_cycle_back(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "terminal proof")
+        gate_a = MutationGate("owner-suggestion", "gate-a", None)
+        gate_b = MutationGate("incident-review", "gate-b", None)
+        results = []
+        for name in ("mutation-a", "mutation-b"):
+            run_dir = self.run_root / name
+            run_dir.mkdir(parents=True)
+            results.append(ChildResult(name, run_dir, 0, True))
+
+        with patch(
+            "coordinator_supervisor.run_mutation_reviewer", side_effect=results
+        ) as reviewer, patch(
+            "coordinator_supervisor.mutation_gate", side_effect=(gate_b, gate_a)
+        ):
+            with self.assertRaisesRegex(SupervisorError, "repeated without resolution"):
+                _complete_mutation_review(
+                    self.runner_command(),
+                    self.workspace,
+                    self.state_path,
+                    "project",
+                    self.run_root,
+                    gate_a,
+                    extra_env=self.environment("unacknowledged"),
+                )
+
+        self.assertEqual(reviewer.call_count, 2)
+
+    def test_recovery_start_terminalizes_preexisting_orphan_before_child(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        (self.workspace / ".de67" / "mutation-suggestions.md").write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n",
+            encoding="utf-8",
+        )
+        self.run_root.mkdir()
+        (self.run_root / "prior-run").mkdir()
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("complete-program"),
+            run_id_factory=lambda _generation: "recovered-run",
+        )
+
+        self.assertEqual(result, 1)
+        self.assertEqual(len(self.read_events()), 1)
+        with DeadlineHarness(self.state_path) as harness:
+            row = harness.connection.execute(
+                "SELECT attempt_terminal_kind, abandonment_reason "
+                "FROM tasks WHERE task_id = 'seed'"
+            ).fetchone()
+        self.assertEqual(row["attempt_terminal_kind"], "abandoned")
+        self.assertIn("worker_owner_lost", row["abandonment_reason"])
 
     def test_clock_event_waits_once_and_signals_mutation_without_restart(self) -> None:
         base = time.time()
@@ -514,7 +734,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             encoding="utf-8",
         )
         (state_root / "mutation-suggestions.md").write_text(
-            "# Mutation suggestions\n\n## Pending suggestions\n\n- Review this.\n",
+            "# Mutation suggestions\n\n## Pending suggestions\n",
             encoding="utf-8",
         )
 
@@ -575,6 +795,10 @@ class CoordinatorSupervisorTests(unittest.TestCase):
 
     def test_pending_owner_suggestion_becomes_gate_only_after_workers_are_quiet(self) -> None:
         self.write_work_documents(red=True, active=True)
+        (self.workspace / ".de67" / "mutation-suggestions.md").write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n\n- Review this.\n",
+            encoding="utf-8",
+        )
         self.assertIsNone(mutation_gate(self.state_path, "project", self.workspace))
         with DeadlineHarness(self.state_path) as harness:
             harness.complete_task("project", "seed", "done", now=time.time())

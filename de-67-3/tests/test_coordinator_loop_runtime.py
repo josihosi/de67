@@ -102,6 +102,27 @@ class CoordinatorLoopRuntimeTests(unittest.TestCase):
             wait_for("worker-luna"),
         )
 
+    def test_successful_handoff_records_the_exact_task_worker_binding(self) -> None:
+        claims: list[tuple[str, str, str | None]] = []
+        guard = CoordinatorLoopGuard(claim_recorder=lambda *claim: claims.append(claim))
+
+        guard.observe({"type": "thread.started", "thread_id": "coordinator-a"})
+        guard.observe(task_start("route-a"))
+        guard.observe(handoff("spawn_agent", "worker-a"))
+
+        self.assertEqual(claims, [("route-a", "worker-a", "coordinator-a")])
+
+    def test_failed_durable_claim_keeps_the_task_unbound(self) -> None:
+        def reject(*_claim: object) -> None:
+            raise RunnerError("durable claim rejected")
+
+        guard = CoordinatorLoopGuard(claim_recorder=reject)
+        guard.observe(task_start("route-a"))
+
+        with self.assertRaisesRegex(RunnerError, "durable claim rejected"):
+            guard.observe(handoff("spawn_agent", "worker-a"))
+        self.assertEqual(guard.unbound_tasks, ("route-a",))
+
     def test_reused_worker_handoff_makes_wait_legal(self) -> None:
         self.replay(
             task_start("R-008-closure-004"),

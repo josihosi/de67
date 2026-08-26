@@ -189,6 +189,34 @@ class DeadlineHarness:
                     REFERENCES tasks(lineage_id, task_id)
             );
 
+            CREATE TABLE IF NOT EXISTS worker_claims (
+                lineage_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                worker_id TEXT NOT NULL,
+                coordinator_session_id TEXT NOT NULL,
+                supervisor_id TEXT NOT NULL,
+                claimed_at REAL NOT NULL,
+                last_checkpoint_at REAL NOT NULL,
+                released_at REAL,
+                release_reason TEXT,
+                PRIMARY KEY (lineage_id, task_id),
+                FOREIGN KEY (lineage_id, task_id)
+                    REFERENCES tasks(lineage_id, task_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS worker_checkpoints (
+                lineage_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL CHECK (sequence > 0),
+                worker_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                evidence TEXT NOT NULL,
+                recorded_at REAL NOT NULL,
+                PRIMARY KEY (lineage_id, task_id, sequence),
+                FOREIGN KEY (lineage_id, task_id)
+                    REFERENCES tasks(lineage_id, task_id)
+            );
+
             CREATE TABLE IF NOT EXISTS lineage_binding (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                 lineage_id TEXT NOT NULL
@@ -2757,6 +2785,19 @@ class DeadlineHarness:
                 task["task_id"],
             ),
         )
+        self.connection.execute(
+            """
+            UPDATE worker_claims
+            SET released_at = ?, release_reason = ?
+            WHERE lineage_id = ? AND task_id = ? AND released_at IS NULL
+            """,
+            (
+                terminal_at,
+                f"task_{terminal_kind}",
+                task["lineage_id"],
+                task["task_id"],
+            ),
+        )
         completed = self._terminal_window_count(task["lineage_id"])
         if (
             cycle["due_task_id"] is None
@@ -3216,6 +3257,162 @@ class DeadlineHarness:
             }
             for row in rows
         ]
+
+    def claim_worker(
+        self,
+        lineage_id: str,
+        task_id: str,
+        worker_id: str,
+        coordinator_session_id: str,
+        supervisor_id: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        task_id = self._identity(task_id, "Task id")
+        worker_id = self._identity(worker_id, "Worker id")
+        coordinator_session_id = self._identity(
+            coordinator_session_id, "Coordinator session id"
+        )
+        supervisor_id = self._identity(supervisor_id, "Supervisor id")
+        claimed_at = self._now(now)
+        self._begin()
+        try:
+            task = self._task(lineage_id, task_id)
+            if task["attempt_terminal_at"] is not None:
+                raise DeadlineError("Cannot claim a terminal worker attempt")
+            existing = self.connection.execute(
+                "SELECT * FROM worker_claims WHERE lineage_id = ? AND task_id = ?",
+                (lineage_id, task_id),
+            ).fetchone()
+            identity = (worker_id, coordinator_session_id, supervisor_id)
+            if existing is None:
+                self.connection.execute(
+                    """
+                    INSERT INTO worker_claims (
+                        lineage_id, task_id, worker_id, coordinator_session_id,
+                        supervisor_id, claimed_at, last_checkpoint_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (lineage_id, task_id, *identity, claimed_at, claimed_at),
+                )
+                recorded = True
+            elif existing["released_at"] is None and identity == (
+                existing["worker_id"],
+                existing["coordinator_session_id"],
+                existing["supervisor_id"],
+            ):
+                recorded = False
+            else:
+                raise DeadlineError("Worker attempt already has another ownership claim")
+            self.connection.commit()
+            return {
+                "task_id": task_id,
+                "worker_id": worker_id,
+                "coordinator_session_id": coordinator_session_id,
+                "supervisor_id": supervisor_id,
+                "claimed_at": claimed_at if existing is None else existing["claimed_at"],
+                "recorded": recorded,
+                "state": "claimed",
+            }
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def checkpoint_worker(
+        self,
+        lineage_id: str,
+        task_id: str,
+        worker_id: str,
+        kind: str,
+        evidence: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        task_id = self._identity(task_id, "Task id")
+        worker_id = self._identity(worker_id, "Worker id")
+        kind = self._identity(kind, "Checkpoint kind")
+        evidence = self._nonempty_text(evidence, "Checkpoint evidence")
+        recorded_at = self._now(now)
+        self._begin()
+        try:
+            claim = self.connection.execute(
+                "SELECT * FROM worker_claims WHERE lineage_id = ? AND task_id = ?",
+                (lineage_id, task_id),
+            ).fetchone()
+            if claim is None or claim["released_at"] is not None:
+                raise DeadlineError("Worker attempt has no active ownership claim")
+            if claim["worker_id"] != worker_id:
+                raise DeadlineError("Checkpoint worker does not own this attempt")
+            sequence = int(
+                self.connection.execute(
+                    "SELECT COUNT(*) FROM worker_checkpoints WHERE lineage_id = ? AND task_id = ?",
+                    (lineage_id, task_id),
+                ).fetchone()[0]
+            ) + 1
+            self.connection.execute(
+                """
+                INSERT INTO worker_checkpoints
+                (lineage_id, task_id, sequence, worker_id, kind, evidence, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (lineage_id, task_id, sequence, worker_id, kind, evidence, recorded_at),
+            )
+            self.connection.execute(
+                """
+                UPDATE worker_claims SET last_checkpoint_at = ?
+                WHERE lineage_id = ? AND task_id = ?
+                """,
+                (recorded_at, lineage_id, task_id),
+            )
+            self.connection.commit()
+            return {"task_id": task_id, "worker_id": worker_id, "sequence": sequence,
+                    "kind": kind, "state": "checkpointed"}
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def release_worker_claim(
+        self,
+        lineage_id: str,
+        task_id: str,
+        worker_id: str,
+        reason: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        task_id = self._identity(task_id, "Task id")
+        worker_id = self._identity(worker_id, "Worker id")
+        reason = self._nonempty_text(reason, "Release reason")
+        released_at = self._now(now)
+        self._begin()
+        try:
+            claim = self.connection.execute(
+                "SELECT * FROM worker_claims WHERE lineage_id = ? AND task_id = ?",
+                (lineage_id, task_id),
+            ).fetchone()
+            if claim is None:
+                raise DeadlineError("Worker attempt has no ownership claim")
+            if claim["worker_id"] != worker_id:
+                raise DeadlineError("Release worker does not own this attempt")
+            if claim["released_at"] is None:
+                self.connection.execute(
+                    """UPDATE worker_claims SET released_at = ?, release_reason = ?
+                       WHERE lineage_id = ? AND task_id = ?""",
+                    (released_at, reason, lineage_id, task_id),
+                )
+                recorded = True
+            else:
+                recorded = False
+            self.connection.commit()
+            return {"task_id": task_id, "worker_id": worker_id,
+                    "released_at": claim["released_at"] or released_at,
+                    "recorded": recorded, "state": "released"}
+        except Exception:
+            self.connection.rollback()
+            raise
 
     def start_task(
         self,
@@ -6356,6 +6553,29 @@ def build_parser() -> argparse.ArgumentParser:
     add_task_identity_flags(abandon)
     abandon.add_argument("--reason", required=True)
 
+    claim_worker = commands.add_parser(
+        "claim-worker", help="Bind one durable worker identity to a live attempt"
+    )
+    add_task_identity_flags(claim_worker)
+    claim_worker.add_argument("--worker", required=True)
+    claim_worker.add_argument("--coordinator-session", required=True)
+    claim_worker.add_argument("--supervisor", required=True)
+
+    checkpoint_worker = commands.add_parser(
+        "checkpoint-worker", help="Record durable progress for the owning worker"
+    )
+    add_task_identity_flags(checkpoint_worker)
+    checkpoint_worker.add_argument("--worker", required=True)
+    checkpoint_worker.add_argument("--kind", required=True)
+    checkpoint_worker.add_argument("--evidence", required=True)
+
+    release_worker = commands.add_parser(
+        "release-worker", help="Release one durable worker ownership claim"
+    )
+    add_task_identity_flags(release_worker)
+    release_worker.add_argument("--worker", required=True)
+    release_worker.add_argument("--reason", required=True)
+
     diagnose_claim = commands.add_parser(
         "diagnose-claim-deadline", help="Diagnose one exact claim deadline miss"
     )
@@ -6601,6 +6821,21 @@ def main(argv: list[str] | None = None) -> int:
                 elif arguments.command == "abandon-attempt":
                     result = harness.abandon_attempt(
                         arguments.lineage, arguments.task, arguments.reason
+                    )
+                elif arguments.command == "claim-worker":
+                    result = harness.claim_worker(
+                        arguments.lineage, arguments.task, arguments.worker,
+                        arguments.coordinator_session, arguments.supervisor,
+                    )
+                elif arguments.command == "checkpoint-worker":
+                    result = harness.checkpoint_worker(
+                        arguments.lineage, arguments.task, arguments.worker,
+                        arguments.kind, arguments.evidence,
+                    )
+                elif arguments.command == "release-worker":
+                    result = harness.release_worker_claim(
+                        arguments.lineage, arguments.task, arguments.worker,
+                        arguments.reason,
                     )
                 elif arguments.command == "finding":
                     result = harness.report_worker_finding(

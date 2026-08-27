@@ -364,7 +364,7 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             "# Work ledger\n\n## Active work\n",
             encoding="utf-8",
         )
-    elif mode == "crash-twice":
+    elif mode == "crash-three-times":
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
         if event_count == 1:
             with (root / "work-ledger.md").open("a", encoding="utf-8") as output:
@@ -375,7 +375,29 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                 os.environ["DE67_LINEAGE"], "second-crash", "R-001", 3600
             )
             raise SystemExit(9)
-        raise AssertionError("the process-recovery fuse allowed a third launch")
+        if event_count == 3:
+            harness.start_task(
+                os.environ["DE67_LINEAGE"], "third-crash", "R-001", 3600
+            )
+            raise SystemExit(9)
+        raise AssertionError("the decision-opportunity fuse allowed a fourth launch")
+    elif mode == "successful-pass-resets-decision-fuse":
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        if event_count == 1:
+            with (root / "work-ledger.md").open("a", encoding="utf-8") as output:
+                output.write("\nInitial failed decision.\n")
+            raise SystemExit(9)
+        harness.start_task(
+            os.environ["DE67_LINEAGE"], f"reset-{event_count}", "R-001", 3600
+        )
+        if event_count == 2:
+            harness.complete_task(
+                os.environ["DE67_LINEAGE"], "reset-2", "successful recovery pass"
+            )
+            raise SystemExit(0)
+        if event_count <= 5:
+            raise SystemExit(9)
+        raise AssertionError("the reset decision fuse allowed a sixth launch")
     elif mode == "claimed-worker-crash-then-complete":
         if event_count == 1:
             harness.claim_worker(
@@ -1863,9 +1885,14 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             {"crashed-run": "FAILED", "recovery-run": "DONE"},
         )
 
-    def test_two_crashes_in_one_process_recovery_episode_stop_without_looping(self) -> None:
+    def test_three_failed_decisions_stop_without_a_fourth_launch(self) -> None:
         self.write_work_documents(red=True, active=True)
-        run_ids = iter(("first-crash", "single-reconnect", "forbidden-third-run"))
+        run_ids = iter((
+            "normal-decision",
+            "corrective-decision",
+            "fresh-final-decision",
+            "forbidden-fourth-run",
+        ))
 
         result = run_supervisor(
             self.state_path,
@@ -1873,19 +1900,62 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.workspace,
             self.runner_command(),
             self.run_root,
-            extra_env=self.environment("crash-twice"),
+            extra_env=self.environment("crash-three-times"),
+            run_id_factory=lambda _generation: next(run_ids),
+        )
+
+        self.assertEqual(result, 9)
+        events = self.read_events()
+        self.assertEqual(
+            [event["run_id"] for event in events],
+            ["normal-decision", "corrective-decision", "fresh-final-decision"],
+        )
+        self.assertEqual(events[1]["resume_session"], "fake-session")
+        self.assertIsNone(events[2]["resume_session"])
+        error = (
+            self.run_root / "fresh-final-decision" / "supervisor_error.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Three coordinator decision opportunities were exhausted", error)
+
+        corrective_prompt = (
+            self.run_root / "corrective-decision" / "prompt.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("decision opportunity 2 of 3", corrective_prompt)
+        self.assertIn("Do not open a replacement task", corrective_prompt)
+        self.assertIn("spawn_agent", corrective_prompt)
+        self.assertIn("durably close or block", corrective_prompt)
+        self.assertIn("SQL schemas, queries, migrations", corrective_prompt)
+        self.assertIn("SQLite-backed harness transitions", corrective_prompt)
+
+        final_prompt = (
+            self.run_root / "fresh-final-decision" / "prompt.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("decision opportunity 3 of 3", final_prompt)
+        self.assertIn("final automatic opportunity", final_prompt)
+
+    def test_successful_pass_resets_the_consecutive_decision_fuse(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        run_ids = iter(("failed", "successful", "new-1", "new-2", "new-3", "forbidden"))
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("successful-pass-resets-decision-fuse"),
             run_id_factory=lambda _generation: next(run_ids),
         )
 
         self.assertEqual(result, 9)
         self.assertEqual(
             [event["run_id"] for event in self.read_events()],
-            ["first-crash", "single-reconnect"],
+            ["failed", "successful", "new-1", "new-2", "new-3"],
         )
-        error = (
-            self.run_root / "single-reconnect" / "supervisor_error.txt"
-        ).read_text(encoding="utf-8")
-        self.assertIn("Automatic process recovery already attempted", error)
+        normal_prompt = (self.run_root / "new-1" / "prompt.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("decision opportunity 2 of 3", normal_prompt)
 
     def test_crashed_coordinator_preserves_claimed_worker_and_resumes_once(self) -> None:
         self.write_work_documents(red=True, active=True)

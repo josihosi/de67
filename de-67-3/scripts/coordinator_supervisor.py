@@ -36,7 +36,7 @@ WORKER_OWNER_LOST_REASON = (
     "worker_owner_lost: coordinator process exited while this worker window "
     "remained nonterminal"
 )
-AUTOMATIC_PROCESS_RECOVERY_ATTEMPTS = 1
+COORDINATOR_DECISION_OPPORTUNITIES = 3
 
 
 class SupervisorError(RuntimeError):
@@ -777,6 +777,33 @@ def worker_result_ingress_contract() -> str:
     )
 
 
+def coordinator_recovery_contract(opportunity: int) -> str:
+    """Return bounded corrective context after a failed coordinator decision."""
+    if opportunity <= 1 or opportunity > COORDINATOR_DECISION_OPPORTUNITIES:
+        raise SupervisorError(f"Invalid coordinator decision opportunity: {opportunity}")
+    final = (
+        " This is the final automatic opportunity; another failed decision stops the supervisor "
+        "for attended diagnosis."
+        if opportunity == COORDINATOR_DECISION_OPPORTUNITIES
+        else ""
+    )
+    return (
+        f"Recovery: this is coordinator decision opportunity {opportunity} of "
+        f"{COORDINATOR_DECISION_OPPORTUNITIES}. The preceding coordinator exited with "
+        "executable work still present. Re-read the current durable ledger and execute "
+        "DE67_POLICY_DECIDE_ARGV_JSON before choosing the next action. Do not open a "
+        "replacement task merely because an earlier attempt was abandoned. If policy returns "
+        "spawn_worker, use the exact injected task_name and concrete spawn_agent call, adapting "
+        "only the self-contained brief, model, and effort. Otherwise durably close or block the "
+        "existing work with evidence, or complete the DFS when its proof is already sufficient. "
+        "This recovery guard is not a read-only restriction: retain normal repository editing "
+        "authority, including SQL schemas, queries, migrations, and SQLite-backed harness "
+        "transitions; mutate DE67 clock state through the deadline harness rather than ad hoc SQL. "
+        "Waiting or exiting without one of those durable outcomes is another failed decision."
+        + final
+    )
+
+
 def coordinator_prompt(
     workspace: Path,
     state_path: Path,
@@ -975,6 +1002,7 @@ def run_child(
     *,
     extra_env: Mapping[str, str] | None = None,
     resume_session_id: str | None = None,
+    decision_opportunity: int = 1,
     prompt_override: str | None = None,
     role: str = "coordinator",
 ) -> ChildResult:
@@ -1019,6 +1047,10 @@ def run_child(
             + worker_handoff_contract()
             + "\n"
         )
+    if decision_opportunity > 1:
+        prompt = prompt.rstrip() + "\n" + coordinator_recovery_contract(
+            decision_opportunity
+        ) + "\n"
     _write(run_dir / "prompt.txt", prompt)
     _write(run_dir / "status.txt", "STARTING\n")
 
@@ -1237,7 +1269,7 @@ def _run_supervisor_locked(
     # another session's children or dispatch duplicates.
     resume_session_id = active_worker_coordinator_session(state, lineage_id)
     attempted_generations: set[int] = set()
-    automatic_process_recoveries = 0
+    failed_decision_opportunities = 0
     while True:
         if generation is not None:
             if generation in attempted_generations:
@@ -1270,6 +1302,7 @@ def _run_supervisor_locked(
             generation,
             extra_env=extra_env,
             resume_session_id=resume_session_id,
+            decision_opportunity=failed_decision_opportunities + 1,
         )
 
         # A runner that could not be launched is a concrete environment blocker,
@@ -1372,15 +1405,26 @@ def _run_supervisor_locked(
                     )
                     return result.exit_code if result.exit_code > 0 else 1
                 if result.exit_code != 0:
-                    if automatic_process_recoveries >= AUTOMATIC_PROCESS_RECOVERY_ATTEMPTS:
+                    if (
+                        failed_decision_opportunities + 1
+                        >= COORDINATOR_DECISION_OPPORTUNITIES
+                    ):
                         _mark_protocol_failure(
                             result,
-                            "Automatic process recovery already attempted; "
+                            "Three coordinator decision opportunities were exhausted; "
                             "explicit supervisor startup is required",
                         )
                         return result.exit_code
-                    automatic_process_recoveries += 1
-                resume_session_id = session_id
+                    failed_decision_opportunities += 1
+                else:
+                    failed_decision_opportunities = 0
+                active_owner = active_worker_coordinator_session(state, lineage_id)
+                resume_session_id = active_owner or (
+                    None
+                    if failed_decision_opportunities + 1
+                    == COORDINATOR_DECISION_OPPORTUNITIES
+                    else session_id
+                )
                 generation = None
                 continue
             if result.exit_code == 0:
@@ -1399,14 +1443,17 @@ def _run_supervisor_locked(
                     "Coordinator crashed with executable work but made no durable progress",
                 )
                 return result.exit_code if result.exit_code > 0 else 1
-            if automatic_process_recoveries >= AUTOMATIC_PROCESS_RECOVERY_ATTEMPTS:
+            if (
+                failed_decision_opportunities + 1
+                >= COORDINATOR_DECISION_OPPORTUNITIES
+            ):
                 _mark_protocol_failure(
                     result,
-                    "Automatic process recovery already attempted; "
+                    "Three coordinator decision opportunities were exhausted; "
                     "explicit supervisor startup is required",
                 )
                 return result.exit_code
-            automatic_process_recoveries += 1
+            failed_decision_opportunities += 1
             resume_session_id = None
             generation = None
             continue
@@ -1453,9 +1500,9 @@ def _run_supervisor_locked(
             )
             return 1
         # A durable semantic restart (mutation, incident retirement, or owner
-        # reply) starts a new coordinator lifecycle. Process-recovery attempts
-        # from an earlier lifecycle must not consume this one's single retry.
-        automatic_process_recoveries = 0
+        # reply) starts a new coordinator lifecycle. Failed decisions from an
+        # earlier lifecycle must not consume this one's bounded opportunities.
+        failed_decision_opportunities = 0
         restart = after
         generation = after.generation
         resume_session_id = active_worker_coordinator_session(state, lineage_id)

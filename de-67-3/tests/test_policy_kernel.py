@@ -572,6 +572,61 @@ class PolicyKernelTests(unittest.TestCase):
                 "dispatch_exploration_worker",
             )
 
+    def test_normalized_restart_recovers_named_closure_gap_without_live_clock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            de67 = workspace / ".de67"
+            de67.mkdir()
+            (de67 / "work-ledger.md").write_text(
+                "## Current delivery frontier\n\n"
+                "- Active work: `R-008-natural-bandit` needs observation.\n"
+                "- Proof boundary: record the natural return boundary.\n\n"
+                "## Other work\n\n"
+                "- Active work: `R-014-other-gap` is unrelated.\n",
+                encoding="utf-8",
+            )
+            (de67 / "DFS.md").write_text("- [ ] 🔴 R-008\n", encoding="utf-8")
+            state = workspace / "state.sqlite3"
+            connection = sqlite3.connect(state)
+            connection.executescript(
+                """
+                CREATE TABLE tasks (
+                    lineage_id TEXT, task_id TEXT, started_at REAL,
+                    attempt_terminal_at REAL, attempt_terminal_kind TEXT
+                );
+                CREATE TABLE claim_clocks (
+                    lineage_id TEXT, claim_id TEXT, started_at REAL,
+                    deadline_at REAL, phase TEXT
+                );
+                CREATE TABLE claim_deadline_generations (
+                    lineage_id TEXT, claim_id TEXT, generation INTEGER,
+                    started_at REAL, deadline_at REAL, retired_at REAL
+                );
+                CREATE TABLE closure_gaps (
+                    lineage_id TEXT, claim_id TEXT, gap_id TEXT, closed_at REAL
+                );
+                INSERT INTO claim_clocks VALUES ('project', 'R-008', 1, 100, 'closure');
+                INSERT INTO claim_deadline_generations
+                    VALUES ('project', 'R-008', 1, 1, 100, 50);
+                INSERT INTO closure_gaps
+                    VALUES ('project', 'R-008', 'R-008-natural-bandit', NULL);
+                INSERT INTO closure_gaps
+                    VALUES ('project', 'R-014', 'R-014-other-gap', NULL);
+                """
+            )
+            connection.close()
+
+            facts = kernel.workspace_facts(workspace, state, "project", now=60)
+
+            self.assertNotIn("open_claim", facts)
+            self.assertIn("closure_ready", facts)
+            self.assertIn("open_gap", facts)
+            self.assertIn("executable_route", facts)
+            self.assertEqual(
+                kernel.decide(source_policy(), facts).action,
+                "dispatch_closure_worker",
+            )
+
     def test_new_live_handoff_supersedes_the_previous_terminal_result(self) -> None:
         """Replay the R-008 loop: an old finding must not mask a new live worker."""
         with tempfile.TemporaryDirectory() as directory:

@@ -653,12 +653,48 @@ def workspace_facts(
     ledger_text = ledger.read_text(encoding="utf-8") if ledger.is_file() else ""
     if "## " in ledger_text:
         facts.add("ledger_work")
+    if current_claim is None and ledger_text:
+        frontier_match = re.search(
+            r"(?ms)^## Current delivery frontier\s*$\n(?P<body>.*?)(?=^## |\Z)",
+            ledger_text,
+        )
+        frontier_text = frontier_match.group("body") if frontier_match else ledger_text
+        connection = sqlite3.connect(f"file:{state.resolve()}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        try:
+            closure_columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(closure_gaps)")
+            }
+            if _table_exists(connection, "closure_gaps") and "gap_id" in closure_columns:
+                mentioned = []
+                for row in connection.execute(
+                    """SELECT claim_id, gap_id FROM closure_gaps
+                       WHERE lineage_id = ? AND closed_at IS NULL""",
+                    (lineage_id,),
+                ).fetchall():
+                    gap_id = str(row["gap_id"])
+                    if re.search(
+                        r"(?<![A-Za-z0-9_-])" + re.escape(gap_id)
+                        + r"(?![A-Za-z0-9_-])",
+                        frontier_text,
+                    ):
+                        mentioned.append(str(row["claim_id"]))
+                if len(set(mentioned)) == 1:
+                    facts.update(("closure_ready", "open_gap"))
+        finally:
+            connection.close()
     if any(
         line.lstrip().lower().startswith("- blocked:")
         for line in ledger_text.splitlines()
     ):
         facts.add("blocked_ledger")
-    if any(word in ledger_text.lower() for word in ("next executable", "required mechanism", "active gap")):
+    if any(
+        word in ledger_text.lower()
+        for word in (
+            "next executable", "required mechanism", "active gap", "active work",
+            "proof boundary",
+        )
+    ):
         facts.add("executable_route")
     suggestions = workspace / ".de67" / "mutation-suggestions.md"
     if suggestions.is_file():

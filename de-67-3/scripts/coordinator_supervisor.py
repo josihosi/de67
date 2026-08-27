@@ -816,6 +816,8 @@ def coordinator_recovery_contract(opportunity: int, workspace: Path) -> str:
         f"Recovery: this is coordinator decision opportunity {opportunity} of "
         f"{COORDINATOR_DECISION_OPPORTUNITIES}.\n{snapshot}\n"
         "If either list is nonempty, Phase 3 is unfinished. Execute the exact policy decision. "
+        "If DE67_COORDINATOR_ACK_ARGV_JSON is present, execute that exact array before any "
+        "dispatch or other state transition. "
         "If the returned action cannot advance, untangle and repair the edge case instead of "
         "repeating the failed surface action. Trust your own causal judgment: you may change the "
         "implementation, harness, fixtures, SQL schemas, queries, migrations, SQLite-backed "
@@ -1359,11 +1361,36 @@ def _run_supervisor_locked(
 
         if generation is not None:
             if after.required and after.generation == generation:
+                opportunity = failed_decision_opportunities + 1
                 _mark_protocol_failure(
                     result,
-                    f"Coordinator did not acknowledge restart generation {generation}",
+                    f"Coordinator did not acknowledge restart generation {generation} "
+                    f"on decision opportunity {opportunity} of "
+                    f"{COORDINATOR_DECISION_OPPORTUNITIES}",
                 )
-                return result.exit_code if result.exit_code != 0 else 1
+                if opportunity >= COORDINATOR_DECISION_OPPORTUNITIES:
+                    return result.exit_code if result.exit_code != 0 else 1
+                with DeadlineHarness(state) as harness:
+                    harness.release_coordinator_restart_claim(
+                        lineage_id, generation, result.run_id
+                    )
+                failed_decision_opportunities += 1
+                attempted_generations.remove(generation)
+                session_path = result.run_dir / "session_id.txt"
+                session_id = (
+                    session_path.read_text(encoding="utf-8").strip()
+                    if session_path.is_file()
+                    else ""
+                )
+                active_owner = active_worker_coordinator_session(state, lineage_id)
+                resume_session_id = active_owner or (
+                    None
+                    if failed_decision_opportunities + 1
+                    == COORDINATOR_DECISION_OPPORTUNITIES
+                    else session_id or None
+                )
+                restart = read_clock(state, lineage_id)
+                continue
             if (
                 not after.required
                 and after.generation == generation

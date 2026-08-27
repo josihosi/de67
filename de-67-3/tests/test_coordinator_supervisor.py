@@ -276,6 +276,23 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
         completed.check_returncode()
     elif mode == "unacknowledged":
         pass
+    elif mode == "ack-on-second-opportunity":
+        if event_count == 1:
+            pass
+        else:
+            harness.acknowledge_coordinator_restart(
+                os.environ["DE67_LINEAGE"],
+                generation,
+                os.environ["DE67_COORDINATOR_RUN_ID"],
+            )
+            root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+            (root / "DFS.md").write_text(
+                "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+                encoding="utf-8",
+            )
+            (root / "work-ledger.md").write_text(
+                "# Work ledger\n\n## Active work\n", encoding="utf-8"
+            )
     elif mode == "complete-program":
         harness.complete_task(
             os.environ["DE67_LINEAGE"], "seed", "final proof"
@@ -2305,8 +2322,9 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             ],
         )
 
-    def test_unacknowledged_successor_is_not_retried_and_stays_pending(self) -> None:
+    def test_unacknowledged_successor_gets_three_opportunities_then_stops(self) -> None:
         generation = self.request_restart()
+        run_ids = iter(("ack-1", "ack-2", "ack-3", "forbidden-4"))
 
         result = run_supervisor(
             self.state_path,
@@ -2315,25 +2333,55 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.runner_command(),
             self.run_root,
             extra_env=self.environment("unacknowledged"),
-            run_id_factory=lambda _generation: "unacknowledged-run",
+            run_id_factory=lambda _generation: next(run_ids),
         )
 
         self.assertEqual(result, 1)
         events = self.read_events()
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["generation"], generation)
+        self.assertEqual(len(events), 3)
+        self.assertEqual([event["generation"] for event in events], [generation] * 3)
+        self.assertEqual(events[1]["resume_session"], "fake-session")
+        self.assertIsNone(events[2]["resume_session"])
         self.assertEqual(events[0]["ppid"], os.getpid())
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.list_tasks()["coordinator_restart"]
         self.assertTrue(restart_required(restart))
         self.assertEqual(restart["generation"], generation)
         self.assertIsNone(restart["run_id"])
-        self.assertEqual(restart["expected_run_id"], "unacknowledged-run")
-        self.assertEqual(self.statuses(), {"unacknowledged-run": "FAILED"})
+        self.assertEqual(restart["expected_run_id"], "ack-3")
+        self.assertEqual(
+            self.statuses(), {"ack-1": "FAILED", "ack-2": "FAILED", "ack-3": "FAILED"}
+        )
         self.assertNotIn("RUNNING", self.statuses().values())
 
-    def test_failed_successor_is_not_retried_and_stays_pending(self) -> None:
+    def test_unacknowledged_successor_can_acknowledge_on_second_opportunity(self) -> None:
+        self.write_work_documents(red=True, active=True)
         generation = self.request_restart()
+        run_ids = iter(("missed-ack", "recovered-ack", "forbidden-third"))
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("ack-on-second-opportunity"),
+            run_id_factory=lambda _generation: next(run_ids),
+        )
+
+        self.assertEqual(result, 0)
+        events = self.read_events()
+        self.assertEqual([event["run_id"] for event in events], ["missed-ack", "recovered-ack"])
+        self.assertEqual([event["generation"] for event in events], [generation, generation])
+        prompt = (self.run_root / "recovered-ack" / "prompt.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("decision opportunity 2 of 3", prompt)
+        self.assertIn("DE67_COORDINATOR_ACK_ARGV_JSON", prompt)
+
+    def test_failed_successor_gets_three_opportunities_and_stays_pending(self) -> None:
+        generation = self.request_restart()
+        run_ids = iter(("failed-1", "failed-2", "failed-3", "forbidden-4"))
 
         result = run_supervisor(
             self.state_path,
@@ -2342,21 +2390,24 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.runner_command(),
             self.run_root,
             extra_env=self.environment("fail-before-ack"),
-            run_id_factory=lambda _generation: "failed-run",
+            run_id_factory=lambda _generation: next(run_ids),
         )
 
         self.assertEqual(result, 7)
         events = self.read_events()
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["generation"], generation)
+        self.assertEqual(len(events), 3)
+        self.assertEqual([event["generation"] for event in events], [generation] * 3)
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.list_tasks()["coordinator_restart"]
         self.assertTrue(restart_required(restart))
         self.assertEqual(restart["generation"], generation)
-        self.assertEqual(restart["expected_run_id"], "failed-run")
-        self.assertEqual(self.statuses(), {"failed-run": "FAILED"})
+        self.assertEqual(restart["expected_run_id"], "failed-3")
         self.assertEqual(
-            (self.run_root / "failed-run" / "exit_code.txt")
+            self.statuses(),
+            {"failed-1": "FAILED", "failed-2": "FAILED", "failed-3": "FAILED"},
+        )
+        self.assertEqual(
+            (self.run_root / "failed-3" / "exit_code.txt")
             .read_text(encoding="utf-8")
             .strip(),
             "7",

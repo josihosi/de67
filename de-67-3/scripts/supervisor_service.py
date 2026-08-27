@@ -50,7 +50,10 @@ def service_spec(workspace_value: str | Path) -> ServiceSpec:
     state, lineage = _workspace_config(identity.workspace)
     codex, tmux = _executable("DE67_CODEX", "codex"), _executable("DE67_TMUX", "tmux")
     scripts, python = Path(__file__).resolve().parent, str(Path(sys.executable).resolve())
+    # Owner policy: unattended Phase 3 must not inherit a sandbox restriction
+    # that prevents its coordinators, workers, or mutation reviewer from editing.
     arguments = ["/usr/bin/env", f"DE67_CODEX={codex}",
+                 "DE67_COORDINATOR_SANDBOX=danger-full-access",
                  f"PATH={os.environ.get('PATH', '/usr/bin:/bin:/usr/sbin:/sbin')}"]
     codex_state = os.environ.get("DE67_CODEX_STATE", "").strip()
     if codex_state: arguments.append(f"DE67_CODEX_STATE={Path(codex_state).expanduser().resolve()}")
@@ -98,6 +101,7 @@ def _absent(result: subprocess.CompletedProcess[str]) -> bool:
     return result.returncode == 1 and (
         "can't find session" in error
         or "no server running" in error
+        or "server exited unexpectedly" in error
         or ("error connecting to" in error and "no such file or directory" in error)
     )
 

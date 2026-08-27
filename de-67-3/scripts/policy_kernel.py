@@ -507,6 +507,39 @@ def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
     ).fetchone() is not None
 
 
+def _terminal_result_was_consumed(
+    connection: sqlite3.Connection, lineage_id: str, task: sqlite3.Row
+) -> bool:
+    """Return whether a newer durable route transition consumed this result."""
+    task_id = str(task["task_id"])
+    terminal_at = task["attempt_terminal_at"]
+    if terminal_at is None:
+        return False
+    if _table_exists(connection, "closure_gap_revisions"):
+        consumed = connection.execute(
+            """
+            SELECT 1 FROM closure_gap_revisions
+            WHERE lineage_id = ? AND basis_task_id = ? AND recorded_at >= ?
+            LIMIT 1
+            """,
+            (lineage_id, task_id, float(terminal_at)),
+        ).fetchone()
+        if consumed is not None:
+            return True
+    if _table_exists(connection, "claim_phase_events"):
+        consumed = connection.execute(
+            """
+            SELECT 1 FROM claim_phase_events
+            WHERE lineage_id = ? AND basis_task_id = ? AND recorded_at >= ?
+            LIMIT 1
+            """,
+            (lineage_id, task_id, float(terminal_at)),
+        ).fetchone()
+        if consumed is not None:
+            return True
+    return False
+
+
 def workspace_facts(
     workspace: Path, state: Path, lineage_id: str, *, now: float
 ) -> frozenset[str]:
@@ -568,7 +601,10 @@ def workspace_facts(
                     if kind == "restart_normalized":
                         break
                     if kind:
-                        facts.add(f"worker_{kind}")
+                        if not _terminal_result_was_consumed(
+                            connection, lineage_id, row
+                        ):
+                            facts.add(f"worker_{kind}")
                         break
         for table, fact in (
             ("claim_deadline_generation_incidents", "deadline_incident"),
@@ -624,14 +660,45 @@ def workspace_facts(
                 if str(clock["phase"]) == "closure":
                     facts.add("closure_ready")
         if _table_exists(connection, "closure_gaps") and current_claim is not None:
-            if connection.execute(
-                """
-                SELECT 1 FROM closure_gaps
-                WHERE lineage_id = ? AND claim_id = ? AND closed_at IS NULL LIMIT 1
-                """,
-                (lineage_id, current_claim),
-            ).fetchone() is not None:
+            if _table_exists(connection, "closure_gap_revisions"):
+                open_gap = connection.execute(
+                    """
+                SELECT gap.lineage_id, gap.claim_id, gap.closure_sequence, gap.gap_id,
+                       revision.proof_route
+                FROM closure_gaps AS gap
+                JOIN closure_gap_revisions AS revision
+                  ON revision.lineage_id = gap.lineage_id
+                 AND revision.claim_id = gap.claim_id
+                 AND revision.closure_sequence = gap.closure_sequence
+                 AND revision.gap_id = gap.gap_id
+                 AND revision.revision = (
+                    SELECT MAX(latest.revision)
+                    FROM closure_gap_revisions AS latest
+                    WHERE latest.lineage_id = gap.lineage_id
+                      AND latest.claim_id = gap.claim_id
+                      AND latest.closure_sequence = gap.closure_sequence
+                      AND latest.gap_id = gap.gap_id
+                 )
+                WHERE gap.lineage_id = ? AND gap.claim_id = ?
+                  AND gap.closed_at IS NULL
+                ORDER BY gap.gap_id LIMIT 1
+                    """,
+                    (lineage_id, current_claim),
+                ).fetchone()
+            else:
+                open_gap = connection.execute(
+                    """
+                    SELECT *, NULL AS proof_route
+                    FROM closure_gaps
+                    WHERE lineage_id = ? AND claim_id = ? AND closed_at IS NULL
+                    LIMIT 1
+                    """,
+                    (lineage_id, current_claim),
+                ).fetchone()
+            if open_gap is not None:
                 facts.add("open_gap")
+                if str(open_gap["proof_route"]).strip():
+                    facts.add("executable_route")
         if _table_exists(connection, "random_mutation_cycles"):
             random_due = connection.execute(
                 """
@@ -667,6 +734,7 @@ def workspace_facts(
             }
             if _table_exists(connection, "closure_gaps") and "gap_id" in closure_columns:
                 mentioned = []
+                mentioned_executable = False
                 for row in connection.execute(
                     """SELECT claim_id, gap_id FROM closure_gaps
                        WHERE lineage_id = ? AND closed_at IS NULL""",
@@ -679,8 +747,23 @@ def workspace_facts(
                         frontier_text,
                     ):
                         mentioned.append(str(row["claim_id"]))
+                        if _table_exists(connection, "closure_gap_revisions"):
+                            revision = connection.execute(
+                                """
+                                SELECT proof_route FROM closure_gap_revisions
+                                WHERE lineage_id = ? AND claim_id = ? AND gap_id = ?
+                                ORDER BY closure_sequence DESC, revision DESC LIMIT 1
+                                """,
+                                (lineage_id, str(row["claim_id"]), gap_id),
+                            ).fetchone()
+                            mentioned_executable = mentioned_executable or (
+                                revision is not None
+                                and bool(str(revision["proof_route"]).strip())
+                            )
                 if len(set(mentioned)) == 1:
                     facts.update(("closure_ready", "open_gap"))
+                    if mentioned_executable:
+                        facts.add("executable_route")
         finally:
             connection.close()
     if any(

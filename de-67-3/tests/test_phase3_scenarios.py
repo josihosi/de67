@@ -105,6 +105,53 @@ class Phase3ScenarioTests(unittest.TestCase):
             self.assertIn("deadline_incident", facts_after)
             self.assertEqual(routed_after.action, "retire_for_mutation_review")
 
+    def test_revised_gap_consumes_terminal_finding_before_successor_dispatch(self) -> None:
+        de67 = self.workspace / ".de67"
+        de67.mkdir(exist_ok=True)
+        (de67 / "work-ledger.md").write_text(
+            "## Current delivery frontier\n\n- Waiting work: execute the revised route.\n",
+            encoding="utf-8",
+        )
+        (de67 / "DFS.md").write_text("🔴 R-008 remains open.\n", encoding="utf-8")
+        with DeadlineHarness(self.state) as harness:
+            harness.start_task("project", "explore", "R-008", 100, now=0)
+            harness.complete_task("project", "explore", "Strategy known.", now=1)
+            harness.transition_claim_to_closure(
+                "project", "R-008", "explore", "Prove the route.",
+                "Run the original route.", "One proof remains.", now=2,
+            )
+            harness.start_task(
+                "project", "older-abandonment", "R-008", 100,
+                phase="closure", now=2.5,
+            )
+            harness.abandon_attempt(
+                "project", "older-abandonment", "A newer route was selected.", now=2.75,
+            )
+            harness.start_task(
+                "project", "finding", "R-008", 100,
+                phase="closure", now=3,
+            )
+            harness.report_worker_finding(
+                "project", "finding", "unexpected", "The fixed route ended early.", now=4,
+            )
+
+            pending_facts, pending = self.decision(4.5)
+            self.assertIn("worker_finding", pending_facts)
+            self.assertEqual(pending.action, "receive_worker_result")
+
+            harness.revise_closure_gap(
+                "project", "R-008", "G-001", "finding",
+                "Prove the worker-owned continuation.",
+                "Use the executable live-session proof boundary.", now=5,
+            )
+
+            consumed_facts, routed = self.decision(6)
+            self.assertNotIn("worker_finding", consumed_facts)
+            self.assertNotIn("worker_abandoned", consumed_facts)
+            self.assertIn("closure_ready", consumed_facts)
+            self.assertIn("open_gap", consumed_facts)
+            self.assertEqual(routed.action, "dispatch_closure_worker")
+
     def test_worker_twenty_three_runs_stored_mutation_once_then_restarts(self) -> None:
         with patch(
             "deadline_harness.secrets.randbelow", side_effect=[3, 1, 7, 0]

@@ -57,6 +57,12 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertEqual(command[3:7], ["new-session","-d","-s",spec.label])
         normalize.assert_called_once_with(self.state.resolve(), "lineage")
         self.assertIn("wait-for", command[-1])
+        environment = SCRIPTS.parent / "assets/environment"
+        for name in ("phase3-policy.json", "phase3-contracts.json", "phase3-policy.d67"):
+            self.assertEqual(
+                (self.workspace / ".de67" / name).read_bytes(),
+                (environment / name).read_bytes(),
+            )
 
     @patch("supervisor_service.shutil.which")
     @patch("supervisor_service.subprocess.run")

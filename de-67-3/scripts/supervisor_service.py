@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from deadline_harness import DeadlineHarness
+from policy_kernel import compile_policy, guard_policy_candidate, load_contracts
 
 class ServiceError(RuntimeError): pass
 
@@ -120,6 +121,26 @@ def _normalize_explicit_start(
     with DeadlineHarness(state) as harness:
         return harness.normalize_external_supervisor_start(lineage, now=now)
 
+def _sync_installed_policy(workspace: Path) -> None:
+    """Deploy one internally consistent installed policy set before restart."""
+    source = Path(__file__).resolve().parents[1] / "assets/environment"
+    candidate = json.loads((source / "phase3-policy.json").read_text(encoding="utf-8"))
+    contracts = load_contracts(source / "phase3-contracts.json")
+    compiled = compile_policy(guard_policy_candidate(candidate, contracts))
+    packaged = (source / "phase3-policy.d67").read_bytes()
+    if compiled != packaged:
+        raise ServiceError("Installed Phase-3 policy source, contracts, and bytecode disagree")
+    destination = workspace / ".de67"
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in ("phase3-policy.json", "phase3-contracts.json", "phase3-policy.d67"):
+        target = destination / name
+        temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            shutil.copy2(source / name, temporary)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+
 @contextmanager
 def _lock(spec: ServiceSpec):
     spec.log_directory.mkdir(parents=True, exist_ok=True)
@@ -153,6 +174,7 @@ def start_service(workspace: str | Path) -> ServiceSpec:
             raise ServiceError(f"DE67 supervisor exited during startup; inspect {spec.log_directory / 'stderr.log'}")
         try:
             state, lineage = _workspace_config(spec.workspace)
+            _sync_installed_policy(spec.workspace)
             _normalize_explicit_start(state, lineage)
         except Exception as error:
             _tmux(spec, "kill-session", "-t", f"={spec.label}")

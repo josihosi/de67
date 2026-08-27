@@ -3,7 +3,10 @@
 Use this reference only for explicit external supervisor start, restart, stop, or diagnosis.
 
 An explicit `supervisor_service.py start` begins a new runtime-ownership epoch. Before launching
-the coordinator, the launcher atomically normalizes the preceding epoch: it abandons every
+the coordinator, the launcher first verifies that the installed policy source, contracts, and
+compiled bytecode agree, then atomically deploys that exact set into the workspace. This policy
+deployment is part of restart cleanup; do not copy only the skill scripts or only the bytecode.
+After deployment, the launcher atomically normalizes the preceding epoch: it abandons every
 nonterminal task attempt, releases its worker claim and active attempt ownership, and releases any
 unacknowledged coordinator-restart claim held by the dead run while preserving the semantic restart
 request. This cleanup is automatic; do not reproduce it with ad hoc SQLite edits.

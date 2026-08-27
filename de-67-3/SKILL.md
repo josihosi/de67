@@ -41,6 +41,14 @@ source exactly; lossy or noncanonical artifacts fail closed.
 
 ## Route locally
 
+On macOS, start the external supervisor only through
+`scripts/supervisor_service.py start --workspace <workspace>`. This installs one workspace-keyed
+LaunchAgent whose lifetime is independent of the invoking terminal. Use its `status` and `stop`
+commands for observation and shutdown. The service deliberately has `KeepAlive` disabled: a crash
+stays visible and requires an explicit start instead of becoming an automatic restart loop. Direct
+foreground execution of `coordinator_supervisor.py` is reserved for tests and attended diagnosis,
+not an ordinary Phase-3 launch.
+
 The supervisor launches an ordinary `gpt-5.6-sol` coordinator at low against the compiled workspace
 policy. The coordinator asks the kernel for the next transition and routes only the returned minimal
 brief. A due mutation blocks new dispatch. Once all already-live worker windows are terminal, the

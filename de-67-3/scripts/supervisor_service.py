@@ -198,6 +198,10 @@ def _kill_surviving_process_groups(groups: tuple[int, ...]) -> None:
             os.killpg(group, 0)
         except ProcessLookupError:
             continue
+        except PermissionError:
+            # The exact tmux-owned group is gone. A now-inaccessible group with
+            # the same numeric id is not ours to signal.
+            continue
         try:
             os.killpg(group, signal.SIGKILL)
         except ProcessLookupError:

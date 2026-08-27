@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sqlite3
 import struct
 import subprocess
@@ -260,6 +261,127 @@ def decision_json(decision: Decision, facts: Iterable[str]) -> dict[str, Any]:
     }
 
 
+def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[str, str]:
+    ledger_path = workspace / ".de67/work-ledger.md"
+    dfs_path = workspace / ".de67/DFS.md"
+    ledger = ledger_path.read_text(encoding="utf-8")
+    blocks = [block.strip() for block in re.split(r"\n\s*\n", ledger) if block.strip()]
+    def mentions_exact_identifier(block: str, identifier: str) -> bool:
+        return re.search(
+            r"(?<![A-Za-z0-9_-])" + re.escape(identifier) + r"(?![A-Za-z0-9_-])",
+            block,
+        ) is not None
+
+    matching = [
+        block for block in blocks
+        if mentions_exact_identifier(block, claim_id)
+        or mentions_exact_identifier(block, task_id)
+    ]
+    if not matching:
+        raise PolicyError(
+            f"Unbound exploration task {task_id} has no matching ledger route for {claim_id}"
+        )
+    dfs = dfs_path.read_text(encoding="utf-8")
+    marker = re.compile(
+        r"<!-- DE67:DFS-SLICE:BEGIN[^>]*claim=" + re.escape(claim_id)
+        + r"(?=\s|-->)[^>]*-->\n(?P<body>.*?)\n"
+        r"<!-- DE67:DFS-SLICE:END[^>]*-->",
+        re.DOTALL,
+    )
+    match = marker.search(dfs)
+    if match is None:
+        raise PolicyError(
+            f"Unbound exploration task {task_id} has no named DFS slice for {claim_id}"
+        )
+    return "\n\n".join(matching), match.group("body").strip()
+
+
+def unbound_worker_spawns(
+    workspace: Path, state: Path, lineage_id: str
+) -> list[dict[str, Any]]:
+    """Render the exact post-task-open spawn calls for every unbound task."""
+    connection = sqlite3.connect(f"file:{state.resolve()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            """
+            SELECT task.task_id, task.claim_id, task.phase_at_dispatch,
+                   task.closure_gap_id, task.closure_gap_revision
+            FROM tasks AS task
+            LEFT JOIN worker_claims AS worker
+              ON worker.lineage_id = task.lineage_id
+             AND worker.task_id = task.task_id
+            WHERE task.lineage_id = ? AND task.attempt_terminal_at IS NULL
+              AND worker.task_id IS NULL
+            ORDER BY task.started_at, task.task_id
+            """,
+            (lineage_id,),
+        ).fetchall()
+        spawns: list[dict[str, Any]] = []
+        for row in rows:
+            task_id = str(row["task_id"])
+            claim_id = str(row["claim_id"])
+            phase = str(row["phase_at_dispatch"])
+            gap_id = row["closure_gap_id"]
+            revision = row["closure_gap_revision"]
+            gap = None
+            if gap_id is not None and revision is not None:
+                gap = connection.execute(
+                    """
+                    SELECT description, proof_route
+                    FROM closure_gap_revisions
+                    WHERE lineage_id = ? AND claim_id = ? AND gap_id = ?
+                      AND revision = ?
+                    ORDER BY closure_sequence DESC LIMIT 1
+                    """,
+                    (lineage_id, claim_id, gap_id, revision),
+                ).fetchone()
+                if gap is None:
+                    raise PolicyError(
+                        f"Unbound closure task {task_id} references missing gap revision"
+                    )
+                outcome, proof_route = str(gap["description"]), str(gap["proof_route"])
+            elif phase == "exploration":
+                outcome, proof_route = _exploration_route(workspace, claim_id, task_id)
+            else:
+                # Legacy closure attempts predate named gap bindings. Preserve
+                # their exact claim route without pretending they are exploration.
+                outcome, proof_route = _exploration_route(workspace, claim_id, task_id)
+            message = (
+                f"Own existing {phase} deadline task {task_id} for claim {claim_id}"
+                + (f", closure gap {gap_id} revision {revision}. " if gap_id else ". ")
+                + f"Outcome: {outcome} Proof route: {proof_route} "
+                + "Retrieve only the evidence needed for the next causal decision. You may repair "
+                + "repository-owned implementation, harness, fixture, or observation paths when "
+                + "necessary. Return completion evidence, a formal finding, or abandonment to the "
+                + "coordinator; do not mutate DE67 deadline state yourself."
+            )
+            task_name = "task_" + task_id.encode("utf-8").hex()
+            spawns.append(
+                {
+                    "task_id": task_id,
+                    "task_name": task_name,
+                    "instruction": (
+                        "Actually call spawn_agent with these arguments before wait. "
+                        "Announcing an assignment is not delegation."
+                    ),
+                    "example_call": {
+                        "tool": "spawn_agent",
+                        "arguments": {
+                            "task_name": task_name,
+                            "fork_turns": "none",
+                            "model": "gpt-5.6-terra",
+                            "reasoning_effort": "medium",
+                            "message": message,
+                        },
+                    },
+                }
+            )
+        return spawns
+    finally:
+        connection.close()
+
+
 def policy_digest(policy: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical_bytes(validate_policy(policy))).hexdigest()
 
@@ -409,7 +531,15 @@ def workspace_facts(
             nonterminal = [row for row in rows if row["attempt_terminal_at"] is None]
             worker_claims_exist = _table_exists(connection, "worker_claims")
             claimed_ids: set[str] = set()
+            ever_claimed_ids: set[str] = set()
             if worker_claims_exist:
+                ever_claimed_ids = {
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT task_id FROM worker_claims WHERE lineage_id = ?",
+                        (lineage_id,),
+                    ).fetchall()
+                }
                 claimed_ids = {
                     str(row[0])
                     for row in connection.execute(
@@ -426,9 +556,9 @@ def workspace_facts(
             ]
             if live:
                 facts.add("live_task")
-            elif nonterminal:
+            if any(str(row["task_id"]) not in ever_claimed_ids for row in nonterminal):
                 facts.add("unbound_task")
-            else:
+            if not nonterminal:
                 for row in rows:
                     if epoch_generation is not None and int(
                         row["supervisor_epoch_generation"]
@@ -620,7 +750,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         else:
             raise PolicyError("decide requires --facts or workspace, state, and lineage")
-        print(json.dumps(decision_json(decide(policy, facts), facts), sort_keys=True))
+        decision = decide(policy, facts)
+        payload = decision_json(decision, facts)
+        if decision.action == "spawn_worker" and args.facts is None:
+            if not (args.state and args.lineage and args.workspace):
+                raise PolicyError("spawn_worker requires workspace, state, and lineage")
+            payload["worker_spawns"] = unbound_worker_spawns(
+                args.workspace.resolve(), args.state.resolve(), args.lineage
+            )
+            payload["parallel_dispatch"] = (
+                "Spawn one distinct worker for each listed independent task before waiting."
+            )
+        print(json.dumps(payload, sort_keys=True))
         return 0
     except (OSError, ValueError, json.JSONDecodeError, sqlite3.Error, PolicyError) as error:
         print(f"error: {error}", file=sys.stderr)

@@ -106,6 +106,11 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertEqual(command[0:2], ["/opt/bin/tmux", "-S"])
         self.assertEqual(command[3:], ["kill-session","-t",f"={spec.label}"])
 
+    @patch("supervisor_service.os.killpg", side_effect=PermissionError)
+    def test_reused_inaccessible_group_is_not_signaled(self, killpg):
+        supervisor_service._kill_surviving_process_groups((4312,))
+        killpg.assert_called_once_with(4312, 0)
+
     @patch("supervisor_service.shutil.which", return_value="/opt/bin/tmux")
     @patch("supervisor_service.subprocess.run")
     def test_missing_tmux_server_is_normal_absence(self, run, _which):

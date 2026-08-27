@@ -21,6 +21,7 @@ assert SPEC is not None and SPEC.loader is not None
 kernel = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = kernel
 SPEC.loader.exec_module(kernel)
+from deadline_harness import DeadlineHarness  # noqa: E402
 
 
 def source_policy() -> dict:
@@ -42,6 +43,7 @@ CASES = (
     ({"worker_abandoned"}, "receive_worker_result"),
     ({"owner_reply", "blocked_ledger"}, "consume_owner_reply"),
     ({"blocked_ledger"}, "audit_blocker"),
+    ({"unbound_task"}, "spawn_worker"),
     ({"live_task"}, "wait_for_worker_event"),
     ({"closure_ready", "open_gap", "executable_route"}, "dispatch_closure_worker"),
     ({"open_claim", "executable_route"}, "dispatch_exploration_worker"),
@@ -197,6 +199,20 @@ class PolicyKernelTests(unittest.TestCase):
         decision = kernel.decide(source_policy(), {"live_task"})
         self.assertEqual(decision.action, "wait_for_worker_event")
         self.assertIn("wake_no_later_than_item_deadline", decision.obligations)
+
+    def test_fact_only_unbound_decision_does_not_require_workspace_injection(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable, str(SCRIPT), "decide", "--policy",
+                str(ROOT / "assets/environment/phase3-policy.d67"),
+                "--facts", '["unbound_task"]',
+            ],
+            text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["action"], "spawn_worker")
+        self.assertNotIn("worker_spawns", payload)
 
     def test_every_worker_result_requires_a_convergence_disposition(self) -> None:
         for fact in ("worker_completed", "worker_finding", "worker_abandoned"):
@@ -400,7 +416,10 @@ class PolicyKernelTests(unittest.TestCase):
         contracts = kernel.load_contracts(CONTRACTS)
         wait = next(rule for rule in policy["rules"] if rule["id"] == "W1")
         wait["obligations"].remove("wake_no_later_than_item_deadline")
-        case = next(case for case in contracts["decision_cases"] if case["name"] == "wait")
+        case = next(
+            case for case in contracts["decision_cases"]
+            if case["name"] == "wait"
+        )
         case["required_obligations"] = []
         guarded = kernel.guard_policy_candidate(policy, contracts)
         self.assertNotIn(
@@ -622,6 +641,139 @@ class PolicyKernelTests(unittest.TestCase):
 
             self.assertIn("unbound_task", facts)
             self.assertNotIn("live_task", facts)
+
+
+    def test_opened_tasks_inject_exact_parallel_spawn_calls_before_wait(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            state = workspace / "state.sqlite3"
+            with DeadlineHarness(state) as harness:
+                harness.start_task("project", "explore", "R-008", 100, now=0)
+                harness.complete_task("project", "explore", "exploration proof", now=1)
+                harness.transition_claim_to_closure(
+                    "project", "R-008", "explore", "Natural routes remain.",
+                    "Use independent production evidence.",
+                    gaps=[
+                        ("G-BANDIT", "Observe the actual bandit return boundary.",
+                         "Trace native scheduler inputs and stop at the first source-bound boundary."),
+                        ("G-CANNIBAL", "Observe the actual cannibal contact boundary.",
+                         "Trace native contact inputs without manufacturing lifecycle state."),
+                    ],
+                    now=2,
+                )
+                harness.start_task(
+                    "project", "R-008-closure-119", "R-008", 100,
+                    phase="closure", gap_id="G-BANDIT", now=3,
+                )
+                harness.start_task(
+                    "project", "R-008-closure-120", "R-008", 100,
+                    phase="closure", gap_id="G-CANNIBAL", now=4,
+                )
+
+            facts = kernel.workspace_facts(workspace, state, "project", now=5)
+            decision = kernel.decide(source_policy(), facts)
+            calls = kernel.unbound_worker_spawns(workspace, state, "project")
+
+            self.assertEqual(decision.action, "spawn_worker")
+            self.assertEqual([call["task_id"] for call in calls], [
+                "R-008-closure-119", "R-008-closure-120",
+            ])
+            self.assertEqual(
+                calls[0]["task_name"],
+                "task_522d3030382d636c6f737572652d313139",
+            )
+            arguments = calls[0]["example_call"]["arguments"]
+            self.assertEqual(arguments["fork_turns"], "none")
+            self.assertEqual(arguments["model"], "gpt-5.6-terra")
+            self.assertIn("Observe the actual bandit return boundary", arguments["message"])
+            self.assertIn("Trace native scheduler inputs", arguments["message"])
+            self.assertIn("do not mutate DE67 deadline state", arguments["message"])
+            self.assertIn("Announcing an assignment is not delegation", calls[0]["instruction"])
+            self.assertNotEqual(calls[0]["task_name"], calls[1]["task_name"])
+            result = subprocess.run(
+                [
+                    sys.executable, str(SCRIPT), "decide", "--policy",
+                    str(ROOT / "assets/environment/phase3-policy.d67"),
+                    "--workspace", str(workspace), "--state", str(state),
+                    "--lineage", "project", "--now", "5",
+                ],
+                text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            injected = json.loads(result.stdout)
+            self.assertEqual(injected["action"], "spawn_worker")
+            self.assertEqual(len(injected["worker_spawns"]), 2)
+            self.assertIn("one distinct worker", injected["parallel_dispatch"])
+            with DeadlineHarness(state) as harness:
+                harness.claim_worker(
+                    "project", "R-008-closure-119", "worker-one",
+                    "coordinator-one", "supervisor-one", now=6,
+                )
+            mixed_facts = kernel.workspace_facts(workspace, state, "project", now=7)
+            mixed_calls = kernel.unbound_worker_spawns(workspace, state, "project")
+            self.assertIn("live_task", mixed_facts)
+            self.assertIn("unbound_task", mixed_facts)
+            self.assertEqual(kernel.decide(source_policy(), mixed_facts).action, "spawn_worker")
+            self.assertEqual([call["task_id"] for call in mixed_calls], [
+                "R-008-closure-120",
+            ])
+
+    def test_opened_exploration_task_injects_matching_ledger_and_dfs_route(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            de67 = workspace / ".de67"
+            de67.mkdir()
+            (de67 / "work-ledger.md").write_text(
+                "# Work ledger\n\n- [ ] R-NEW — Repair the native launch boundary and "
+                "prove one fresh gameplay frame.\n\n- [ ] R-OTHER — Unrelated work.\n",
+                encoding="utf-8",
+            )
+            (de67 / "DFS.md").write_text(
+                "<!-- DE67:DFS-SLICE:BEGIN id=R-NEW-S001 claim=R-NEW -->\n"
+                "- [ ] 🔴 R-NEW — Native launch must reach gameplay without injected state.\n"
+                "<!-- DE67:DFS-SLICE:END id=R-NEW-S001 claim=R-NEW -->\n",
+                encoding="utf-8",
+            )
+            state = workspace / "state.sqlite3"
+            with DeadlineHarness(state) as harness:
+                harness.start_task("project", "R-NEW-exploration-001", "R-NEW", 100, now=1)
+
+            calls = kernel.unbound_worker_spawns(workspace, state, "project")
+
+            self.assertEqual(len(calls), 1)
+            message = calls[0]["example_call"]["arguments"]["message"]
+            self.assertIn("Repair the native launch boundary", message)
+            self.assertIn("Native launch must reach gameplay", message)
+            self.assertNotIn("Unrelated work", message)
+
+    def test_exploration_route_does_not_match_longer_claim_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            de67 = workspace / ".de67"
+            de67.mkdir()
+            (de67 / "work-ledger.md").write_text(
+                "- [ ] R-10 — Wrong longer-prefix route.\n\n"
+                "- [ ] R-1 — Exact short route.\n",
+                encoding="utf-8",
+            )
+            (de67 / "DFS.md").write_text(
+                "<!-- DE67:DFS-SLICE:BEGIN id=R-10-S001 claim=R-10 -->\n"
+                "- [ ] 🔴 R-10 — Wrong longer-prefix slice.\n"
+                "<!-- DE67:DFS-SLICE:END id=R-10-S001 claim=R-10 -->\n"
+                "<!-- DE67:DFS-SLICE:BEGIN id=R-1-S001 claim=R-1 -->\n"
+                "- [ ] 🔴 R-1 — Exact short slice.\n"
+                "<!-- DE67:DFS-SLICE:END id=R-1-S001 claim=R-1 -->\n",
+                encoding="utf-8",
+            )
+
+            ledger, dfs = kernel._exploration_route(
+                workspace, "R-1", "R-1-exploration-001"
+            )
+
+            self.assertIn("Exact short route", ledger)
+            self.assertNotIn("Wrong longer-prefix route", ledger)
+            self.assertIn("Exact short slice", dfs)
+            self.assertNotIn("Wrong longer-prefix slice", dfs)
 
     def test_preserved_baseline_has_no_compiled_kernel_and_remains_recoverable(self) -> None:
         result = subprocess.run(

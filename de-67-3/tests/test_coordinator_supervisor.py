@@ -566,6 +566,11 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             contract,
         )
         self.assertIn("correlation metadata", contract)
+        self.assertIn("spawn_worker response injects the exact task_name", contract)
+        self.assertIn("concrete self-contained spawn_agent call", contract)
+        self.assertIn("announcing that you are assigning a worker is not delegation", contract)
+        self.assertIn("spawn one distinct worker for each task before waiting", contract)
+        self.assertIn("do not serialize independent work", contract)
         self.assertIn("Never invoke claim-worker", contract)
         self.assertIn("never use /root/<task-name>", contract)
         self.assertIn("Proceed to the normal wait", contract)

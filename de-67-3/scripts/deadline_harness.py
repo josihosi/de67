@@ -3427,6 +3427,15 @@ class DeadlineHarness:
             if claim["worker_id"] != worker_id:
                 raise DeadlineError("Release worker does not own this attempt")
             if claim["released_at"] is None:
+                task = self._task(lineage_id, task_id)
+                if task["attempt_terminal_at"] is None:
+                    self._record_miss_if_due(task, released_at)
+                    self.connection.execute(
+                        """UPDATE tasks SET abandoned_at = ?, abandonment_reason = ?
+                           WHERE lineage_id = ? AND task_id = ?""",
+                        (released_at, reason, lineage_id, task_id),
+                    )
+                    self._record_terminal_window(task, released_at, "abandoned")
                 self.connection.execute(
                     """UPDATE worker_claims SET released_at = ?, release_reason = ?
                        WHERE lineage_id = ? AND task_id = ?""",
@@ -3442,7 +3451,6 @@ class DeadlineHarness:
         except Exception:
             self.connection.rollback()
             raise
-
     def start_task(
         self,
         lineage_id: str,
@@ -6695,7 +6703,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_task_identity_flags(release_worker)
     release_worker.add_argument("--worker", required=True)
     release_worker.add_argument("--reason", required=True)
-
     diagnose_claim = commands.add_parser(
         "diagnose-claim-deadline", help="Diagnose one exact claim deadline miss"
     )

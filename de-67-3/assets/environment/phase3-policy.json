@@ -196,6 +196,29 @@
       ]
     },
     {
+      "id": "U1",
+      "priority": 71,
+      "all": [
+        "unbound_task"
+      ],
+      "none": [
+        "deadline_incident",
+        "integrity_incident"
+      ],
+      "action": "spawn_worker",
+      "reads": [
+        "clock",
+        "ledger",
+        "dfs_slice"
+      ],
+      "obligations": [
+        "use_existing_deadline_task",
+        "call_spawn_agent_before_wait",
+        "do_not_merely_announce_assignment",
+        "preserve_parallel_independent_dispatch"
+      ]
+    },
+    {
       "id": "W1",
       "priority": 70,
       "all": [

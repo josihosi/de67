@@ -7,6 +7,9 @@ the coordinator, the launcher atomically normalizes the preceding epoch: it aban
 nonterminal task attempt, releases its worker claim and active attempt ownership, and releases any
 unacknowledged coordinator-restart claim held by the dead run while preserving the semantic restart
 request. This cleanup is automatic; do not reproduce it with ad hoc SQLite edits.
+The normalization epoch also consumes all prior worker-result routing events. Administrative
+`restart_normalized` attempts are terminal history, not fresh completion, finding, or abandonment
+events for the new coordinator to ingest.
 
 Normalization preserves project truth and durable evidence: `.de67/DFS.md`, the work ledger, the
 mutation-suggestion ledger, completed attempts, findings, incidents, mutation state, and semantic

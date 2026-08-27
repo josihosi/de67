@@ -398,6 +398,14 @@ def workspace_facts(
                 "SELECT * FROM tasks WHERE lineage_id = ? ORDER BY started_at DESC",
                 (lineage_id,),
             ).fetchall()
+            epoch_generation = None
+            if _table_exists(connection, "external_supervisor_epochs"):
+                epoch = connection.execute(
+                    "SELECT generation FROM external_supervisor_epochs "
+                    "WHERE lineage_id = ? ORDER BY generation DESC LIMIT 1",
+                    (lineage_id,),
+                ).fetchone()
+                epoch_generation = int(epoch[0]) if epoch is not None else None
             nonterminal = [row for row in rows if row["attempt_terminal_at"] is None]
             worker_claims_exist = _table_exists(connection, "worker_claims")
             claimed_ids: set[str] = set()
@@ -422,7 +430,13 @@ def workspace_facts(
                 facts.add("unbound_task")
             else:
                 for row in rows:
+                    if epoch_generation is not None and int(
+                        row["supervisor_epoch_generation"]
+                    ) < epoch_generation:
+                        continue
                     kind = row["attempt_terminal_kind"]
+                    if kind == "restart_normalized":
+                        break
                     if kind:
                         facts.add(f"worker_{kind}")
                         break
@@ -444,10 +458,34 @@ def workspace_facts(
                 if connection.execute(query, (lineage_id,)).fetchone() is not None:
                     facts.add(fact)
         if _table_exists(connection, "claim_clocks"):
-            clock = connection.execute(
-                "SELECT * FROM claim_clocks WHERE lineage_id = ? ORDER BY started_at DESC LIMIT 1",
-                (lineage_id,),
-            ).fetchone()
+            if _table_exists(connection, "claim_deadline_generations"):
+                clock = connection.execute(
+                    """
+                SELECT clock.claim_id, clock.phase,
+                       generation.started_at, generation.deadline_at
+                FROM claim_clocks AS clock
+                JOIN claim_deadline_generations AS generation
+                  ON generation.lineage_id = clock.lineage_id
+                 AND generation.claim_id = clock.claim_id
+                WHERE clock.lineage_id = ?
+                  AND generation.retired_at IS NULL
+                  AND generation.generation = (
+                    SELECT MAX(latest.generation)
+                    FROM claim_deadline_generations AS latest
+                    WHERE latest.lineage_id = generation.lineage_id
+                      AND latest.claim_id = generation.claim_id
+                  )
+                ORDER BY generation.started_at DESC, clock.claim_id
+                LIMIT 1
+                    """,
+                    (lineage_id,),
+                ).fetchone()
+            else:
+                clock = connection.execute(
+                    "SELECT * FROM claim_clocks WHERE lineage_id = ? "
+                    "ORDER BY started_at DESC LIMIT 1",
+                    (lineage_id,),
+                ).fetchone()
             if clock is not None:
                 current_claim = str(clock["claim_id"])
                 facts.add("open_claim")

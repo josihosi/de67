@@ -154,6 +154,7 @@ class DeadlineHarness:
                 abandonment_reason TEXT,
                 closure_gap_id TEXT,
                 closure_gap_revision INTEGER,
+                supervisor_epoch_generation INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (lineage_id, task_id)
             );
 
@@ -276,6 +277,13 @@ class DeadlineHarness:
                     (acknowledged_at IS NULL AND run_id IS NULL) OR
                     (acknowledged_at IS NOT NULL AND run_id IS NOT NULL)
                 )
+            );
+
+            CREATE TABLE IF NOT EXISTS external_supervisor_epochs (
+                lineage_id TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK (generation > 0),
+                normalized_at REAL NOT NULL,
+                PRIMARY KEY (lineage_id, generation)
             );
 
             CREATE TABLE IF NOT EXISTS claim_clocks (
@@ -653,6 +661,11 @@ class DeadlineHarness:
         if "closure_gap_revision" not in task_columns:
             self.connection.execute(
                 "ALTER TABLE tasks ADD COLUMN closure_gap_revision INTEGER"
+            )
+        if "supervisor_epoch_generation" not in task_columns:
+            self.connection.execute(
+                "ALTER TABLE tasks ADD COLUMN supervisor_epoch_generation "
+                "INTEGER NOT NULL DEFAULT 0"
             )
         if "deadline_generation" not in task_columns:
             self.connection.execute(
@@ -2417,8 +2430,11 @@ class DeadlineHarness:
             SELECT COUNT(*) AS total FROM tasks
             WHERE lineage_id = ? AND attempt_terminal_at IS NOT NULL
               AND NOT (
-                attempt_terminal_kind = 'abandoned'
-                AND abandonment_reason = 'external_supervisor_restart_normalization'
+                attempt_terminal_kind = 'restart_normalized'
+                OR (
+                    attempt_terminal_kind = 'abandoned'
+                    AND abandonment_reason = 'external_supervisor_restart_normalization'
+                )
               )
             """,
             (lineage_id,),
@@ -2697,8 +2713,11 @@ class DeadlineHarness:
             SELECT task_id FROM tasks
             WHERE lineage_id = ? AND attempt_terminal_at IS NOT NULL
               AND NOT (
-                attempt_terminal_kind = 'abandoned'
-                AND abandonment_reason = 'external_supervisor_restart_normalization'
+                attempt_terminal_kind = 'restart_normalized'
+                OR (
+                    attempt_terminal_kind = 'abandoned'
+                    AND abandonment_reason = 'external_supervisor_restart_normalization'
+                )
               )
             ORDER BY attempt_terminal_at, task_id
             LIMIT 1 OFFSET ?
@@ -3060,6 +3079,8 @@ class DeadlineHarness:
         )
         if task["integrity_breached_at"] is not None:
             state = "integrity_breach"
+        elif task["attempt_terminal_kind"] == "restart_normalized":
+            state = "restart_normalized"
         elif task["attempt_terminal_kind"] == "abandoned":
             state = "abandoned"
         elif attempt_completed:
@@ -3756,6 +3777,11 @@ class DeadlineHarness:
                                 "Closure gap revision already has a live attempt; "
                                 "abandon it before dispatching a replacement"
                             )
+            supervisor_epoch = self.connection.execute(
+                "SELECT COALESCE(MAX(generation), 0) FROM external_supervisor_epochs "
+                "WHERE lineage_id = ?",
+                (lineage_id,),
+            ).fetchone()[0]
             cursor = self.connection.execute(
                 """
                 INSERT OR IGNORE INTO tasks (
@@ -3763,8 +3789,9 @@ class DeadlineHarness:
                     estimate_seconds, started_at, deadline_at,
                     deadline_generation,
                     phase_at_dispatch, phase_sequence_at_dispatch,
-                    closure_gap_id, closure_gap_revision
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    closure_gap_id, closure_gap_revision,
+                    supervisor_epoch_generation
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     lineage_id,
@@ -3778,6 +3805,7 @@ class DeadlineHarness:
                     phase_sequence,
                     selected_gap_id,
                     selected_gap_revision,
+                    supervisor_epoch,
                 ),
             )
             created = cursor.rowcount == 1
@@ -4564,6 +4592,16 @@ class DeadlineHarness:
         self._begin()
         try:
             self._bind_lineage(lineage_id)
+            epoch = self.connection.execute(
+                "SELECT COALESCE(MAX(generation), 0) + 1 FROM external_supervisor_epochs "
+                "WHERE lineage_id = ?",
+                (lineage_id,),
+            ).fetchone()[0]
+            self.connection.execute(
+                "INSERT INTO external_supervisor_epochs "
+                "(lineage_id, generation, normalized_at) VALUES (?, ?, ?)",
+                (lineage_id, epoch, normalized_at),
+            )
             active = self.connection.execute(
                 """
                 SELECT * FROM tasks
@@ -4577,7 +4615,7 @@ class DeadlineHarness:
                     """
                     UPDATE tasks
                     SET terminal_at = ?, attempt_terminal_at = ?,
-                        attempt_terminal_kind = 'abandoned',
+                        attempt_terminal_kind = 'restart_normalized',
                         abandoned_at = ?, abandonment_reason = ?
                     WHERE lineage_id = ? AND task_id = ?
                     """,
@@ -4589,7 +4627,7 @@ class DeadlineHarness:
                 self.connection.execute(
                     """
                     UPDATE worker_claims
-                    SET released_at = ?, release_reason = 'task_abandoned'
+                    SET released_at = ?, release_reason = 'restart_normalized'
                     WHERE lineage_id = ? AND task_id = ? AND released_at IS NULL
                     """,
                     (normalized_at, lineage_id, task["task_id"]),

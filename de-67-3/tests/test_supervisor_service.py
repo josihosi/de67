@@ -5,6 +5,7 @@ from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"; sys.path.insert(0, str(SCRIPTS))
 import supervisor_service  # noqa: E402
 from deadline_harness import DeadlineHarness  # noqa: E402
+from policy_kernel import workspace_facts  # noqa: E402
 
 class SupervisorServiceTests(unittest.TestCase):
     def setUp(self):
@@ -151,6 +152,16 @@ class SupervisorServiceTests(unittest.TestCase):
             harness.complete_task(
                 "lineage", "idle-claim", "idle claim proof", now=19.5,
             )
+            harness.start_task(
+                "lineage", "legacy-normalized", "R-LEGACY", 9999, now=0,
+            )
+            harness.connection.execute(
+                "UPDATE tasks SET terminal_at = 1, attempt_terminal_at = 1, "
+                "attempt_terminal_kind = 'abandoned', abandoned_at = 1, "
+                "abandonment_reason = 'external_supervisor_restart_normalization' "
+                "WHERE lineage_id = 'lineage' AND task_id = 'legacy-normalized'"
+            )
+            harness.connection.commit()
             harness.start_task("lineage", "stale", "R-001", 3600, now=20)
             harness.claim_worker(
                 "lineage", "stale", "worker-old", "coordinator-old",
@@ -187,7 +198,7 @@ class SupervisorServiceTests(unittest.TestCase):
                 "SELECT attempt_terminal_kind, abandonment_reason FROM tasks "
                 "WHERE lineage_id = 'lineage' AND task_id = 'stale'"
             ).fetchone()
-            self.assertEqual(stale["attempt_terminal_kind"], "abandoned")
+            self.assertEqual(stale["attempt_terminal_kind"], "restart_normalized")
             self.assertEqual(
                 stale["abandonment_reason"],
                 "external_supervisor_restart_normalization",
@@ -197,7 +208,7 @@ class SupervisorServiceTests(unittest.TestCase):
                 "WHERE lineage_id = 'lineage' AND task_id = 'stale'"
             ).fetchone()
             self.assertEqual(claim["released_at"], 4000)
-            self.assertEqual(claim["release_reason"], "task_abandoned")
+            self.assertEqual(claim["release_reason"], "restart_normalized")
             preserved = harness.coordinator_restart_status("lineage")["coordinator_restart"]
             self.assertTrue(preserved.get("required", preserved.get("pending")))
             self.assertEqual(preserved["generation"], generation)
@@ -225,6 +236,14 @@ class SupervisorServiceTests(unittest.TestCase):
                 ).fetchone()[0],
                 0,
             )
+            facts = workspace_facts(
+                self.workspace, self.state, "lineage", now=4000,
+            )
+            self.assertNotIn("worker_abandoned", facts)
+            self.assertNotIn("worker_completed", facts)
+            self.assertNotIn("worker_restart_normalized", facts)
+            self.assertNotIn("open_claim", facts)
+            self.assertNotIn("deadline_expired", facts)
             harness.claim_coordinator_restart(
                 "lineage", generation, "fresh-run", now=4000,
             )
@@ -236,6 +255,18 @@ class SupervisorServiceTests(unittest.TestCase):
             )
             self.assertEqual(replacement["deadline_generation"], 2)
             self.assertEqual(replacement["deadline_at"], 7601)
+            self.assertEqual(
+                harness.connection.execute(
+                    "SELECT supervisor_epoch_generation FROM tasks "
+                    "WHERE lineage_id = 'lineage' AND task_id = 'replacement'"
+                ).fetchone()[0],
+                1,
+            )
+            fresh_facts = workspace_facts(
+                self.workspace, self.state, "lineage", now=4001,
+            )
+            self.assertIn("open_claim", fresh_facts)
+            self.assertNotIn("deadline_expired", fresh_facts)
             idle_replacement = harness.start_task(
                 "lineage", "idle-replacement", "R-002", 3600, now=4002,
             )

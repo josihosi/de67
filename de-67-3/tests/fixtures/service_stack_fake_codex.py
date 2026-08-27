@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -27,6 +28,15 @@ events_path = state_root / "stack-events.jsonl"
 events = events_path.read_text().splitlines() if events_path.exists() else []
 role = os.environ["DE67_PROCESS_ROLE"]
 coordinator_round = sum(json.loads(line)["role"] == "coordinator" for line in events) + 1
+if (
+    role == "coordinator"
+    and coordinator_round == 2
+    and os.environ.get("DE67_STACK_RESTART_AFTER_ROUND_ONE") == "1"
+):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    continuation = state_root / "service-test-continue-after-restart"
+    while not continuation.exists():
+        time.sleep(0.01)
 event = {
     "role": role,
     "sandbox": sandbox,

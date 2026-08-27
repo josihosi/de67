@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Control one terminal-independent DE67 supervisor session on macOS."""
 from __future__ import annotations
-import argparse, fcntl, hashlib, json, os, shlex, shutil, subprocess, sys, uuid
+import argparse, fcntl, hashlib, json, os, shlex, shutil, signal, subprocess, sys, uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -170,14 +170,52 @@ def _control_spec(workspace: str | Path) -> ServiceSpec:
     return ServiceSpec(identity.label, identity.workspace, identity.log_directory,
                        _executable("DE67_TMUX", "tmux"), "")
 
+def _terminate_session_process_groups(spec: ServiceSpec) -> tuple[int, ...]:
+    result = _tmux(spec, "list-panes", "-t", f"={spec.label}", "-F", "#{pane_pid}")
+    if result.returncode:
+        raise ServiceError(result.stderr.strip() or "tmux could not enumerate supervisor panes")
+    own_group = os.getpgrp()
+    groups: list[int] = []
+    for value in result.stdout.splitlines():
+        try:
+            group = int(value.strip())
+        except ValueError as error:
+            raise ServiceError(f"tmux returned an invalid supervisor process id: {value!r}") from error
+        if group <= 0 or group == own_group:
+            raise ServiceError(f"Refusing to signal unsafe supervisor process group: {group}")
+        groups.append(group)
+        try:
+            os.killpg(group, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except PermissionError as error:
+            raise ServiceError(f"Cannot terminate supervisor process group: {group}") from error
+    return tuple(groups)
+
+def _kill_surviving_process_groups(groups: tuple[int, ...]) -> None:
+    for group in groups:
+        try:
+            os.killpg(group, 0)
+        except ProcessLookupError:
+            continue
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        except PermissionError as error:
+            raise ServiceError(f"Cannot kill supervisor process group: {group}") from error
+
 def stop_service(workspace: str | Path) -> ServiceSpec:
     identity = service_identity(workspace)
     with _lock(identity):
         _remove_legacy(identity)
         spec = _control_spec(workspace)
         if _running(spec):
+            groups = _terminate_session_process_groups(spec)
             result = _tmux(spec, "kill-session", "-t", f"={spec.label}")
-            if result.returncode: raise ServiceError(result.stderr.strip() or "tmux kill-session failed")
+            _kill_surviving_process_groups(groups)
+            if result.returncode and not _absent(result):
+                raise ServiceError(result.stderr.strip() or "tmux kill-session failed")
     return spec
 
 def status_service(workspace: str | Path) -> tuple[ServiceSpec, str]:

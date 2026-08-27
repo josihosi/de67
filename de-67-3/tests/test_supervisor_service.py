@@ -83,11 +83,26 @@ class SupervisorServiceTests(unittest.TestCase):
         normalize.assert_not_called()
 
     @patch("supervisor_service.shutil.which", return_value="/opt/bin/tmux")
+    @patch("supervisor_service.os.killpg")
     @patch("supervisor_service.subprocess.run")
-    def test_stop_kills_exact_session(self, run, _which):
-        run.side_effect = [subprocess.CompletedProcess([],0,"",""), subprocess.CompletedProcess([],0,"","")]
+    def test_stop_kills_exact_session_and_its_process_group(self, run, killpg, _which):
+        killpg.side_effect = [None, None, None]
+        run.side_effect = [
+            subprocess.CompletedProcess([],0,"",""),
+            subprocess.CompletedProcess([],0,"4312\n",""),
+            subprocess.CompletedProcess([],0,"",""),
+        ]
         spec = supervisor_service.stop_service(self.workspace)
-        command = run.call_args_list[1].args[0]
+        pane_command = run.call_args_list[1].args[0]
+        self.assertEqual(pane_command[3:], [
+            "list-panes", "-t", f"={spec.label}", "-F", "#{pane_pid}",
+        ])
+        self.assertEqual(killpg.call_args_list, [
+            unittest.mock.call(4312, supervisor_service.signal.SIGTERM),
+            unittest.mock.call(4312, 0),
+            unittest.mock.call(4312, supervisor_service.signal.SIGKILL),
+        ])
+        command = run.call_args_list[2].args[0]
         self.assertEqual(command[0:2], ["/opt/bin/tmux", "-S"])
         self.assertEqual(command[3:], ["kill-session","-t",f"={spec.label}"])
 
@@ -333,7 +348,7 @@ class SupervisorServiceTests(unittest.TestCase):
         os.environ.get("DE67_RUN_SERVICE_STACK_INTEGRATION") == "1",
         "real multi-round tmux stack integration is opt-in",
     )
-    def test_real_tmux_service_runs_multiple_rounds_mutation_and_fresh_coordinator(self):
+    def test_real_tmux_service_restarts_mid_stack_then_completes_mutation_chain(self):
         root = os.environ.get("DE67_SERVICE_TEST_ROOT")
         fixture_root = Path(__file__).parent / "fixtures"
         environment_root = fixture_root / "service_stack_environment"
@@ -385,6 +400,7 @@ class SupervisorServiceTests(unittest.TestCase):
             environment.update({
                 "DE67_CODEX": str(fake_codex),
                 "DE67_TMUX": shutil.which("tmux") or "",
+                "DE67_STACK_RESTART_AFTER_ROUND_ONE": "1",
             })
             command = [sys.executable, str(scripts / "supervisor_service.py")]
             try:
@@ -401,10 +417,38 @@ class SupervisorServiceTests(unittest.TestCase):
                 self.assertIn("pid=", json.loads(status.stdout)["service"])
 
                 (state_root / "service-test-release").touch()
-                # Four local Python process boundaries complete well inside the
-                # bootstrap clock; use that clock as the integration failure bound.
                 with DeadlineHarness(state) as harness:
                     deadline = float(harness.status_task("stack-test", "bootstrap")["deadline_at"])
+                while time.time() < deadline:
+                    events_path = state_root / "stack-events.jsonl"
+                    if events_path.exists() and len(events_path.read_text().splitlines()) == 1:
+                        break
+                    time.sleep(0.05)
+                else:
+                    self.fail("first coordinator round did not finish before restart")
+
+                stopped_for_restart = subprocess.run(
+                    [*command, "stop", "--workspace", str(workspace)],
+                    env=environment, text=True, capture_output=True,
+                )
+                self.assertEqual(stopped_for_restart.returncode, 0, stopped_for_restart.stderr)
+                stale_log = state_root / "supervisor-service/stderr.log"
+                with stale_log.open("a", encoding="utf-8") as output:
+                    output.write("stale prior-epoch error retained for audit\n")
+                restarted = subprocess.run(
+                    [*command, "start", "--workspace", str(workspace)],
+                    env=environment, text=True, capture_output=True,
+                )
+                self.assertEqual(restarted.returncode, 0, restarted.stderr)
+                restarted_status = subprocess.run(
+                    [*command, "status", "--workspace", str(workspace)],
+                    env=environment, text=True, capture_output=True,
+                )
+                self.assertIn("pid=", json.loads(restarted_status.stdout)["service"])
+                self.assertIn("stale prior-epoch error", stale_log.read_text())
+                (state_root / "service-test-continue-after-restart").touch()
+
+                # The durable bootstrap deadline is the authoritative integration bound.
                 while time.time() < deadline:
                     current = subprocess.run(
                         [*command, "status", "--workspace", str(workspace)],
@@ -429,9 +473,23 @@ class SupervisorServiceTests(unittest.TestCase):
                 "coordinator", "coordinator", "mutation-reviewer", "coordinator",
             ])
             self.assertTrue(all(event["sandbox"] == "danger-full-access" for event in events))
-            self.assertEqual(len({event["start_token"] for event in events}), 1)
+            self.assertEqual(len({event["start_token"] for event in events}), 2)
             self.assertTrue(events[0]["start_token"])
+            self.assertNotEqual(events[0]["start_token"], events[1]["start_token"])
+            self.assertEqual(len({event["start_token"] for event in events[1:]}), 1)
             self.assertEqual(events[-1]["generation"], "1")
+            with DeadlineHarness(state) as harness:
+                epochs = {
+                    row["task_id"]: row["supervisor_epoch_generation"]
+                    for row in harness.connection.execute(
+                        "SELECT task_id, supervisor_epoch_generation FROM tasks "
+                        "WHERE lineage_id = 'stack-test' AND task_id IN "
+                        "('round-one', 'round-two', 'post-mutation')"
+                    )
+                }
+            self.assertEqual(epochs, {
+                "round-one": 1, "round-two": 2, "post-mutation": 2,
+            })
             self.assertEqual((workspace / "product.txt").read_text().splitlines(), [
                 "Editable stack-test product state.",
                 "round one worker result",

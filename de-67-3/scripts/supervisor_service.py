@@ -6,6 +6,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from deadline_harness import DeadlineHarness
+
 class ServiceError(RuntimeError): pass
 
 @dataclass(frozen=True)
@@ -70,11 +72,14 @@ def service_spec(workspace_value: str | Path) -> ServiceSpec:
     return ServiceSpec(identity.label, identity.workspace, identity.log_directory, tmux, command)
 
 def _tmux(spec: ServiceSpec, *args: str) -> subprocess.CompletedProcess[str]:
-    socket = Path.home() / ".codex/state/de67-tmux" / f"{spec.label}.sock"
+    socket = _socket_path(spec)
     socket.parent.mkdir(parents=True, exist_ok=True)
     return subprocess.run([spec.tmux or _executable("DE67_TMUX", "tmux"),
                            "-S", str(socket), *args],
                           text=True, capture_output=True, check=False)
+
+def _socket_path(spec: ServiceSpec) -> Path:
+    return Path.home() / ".codex/state/de67-tmux" / f"{spec.label}.sock"
 
 def _legacy_details(spec: ServiceSpec) -> tuple[str, str, Path]:
     digest = spec.label.removeprefix("de67-")
@@ -106,6 +111,15 @@ def _absent(result: subprocess.CompletedProcess[str]) -> bool:
         or ("error connecting to" in error and "no such file or directory" in error)
     )
 
+def _normalize_explicit_start(
+    state: Path,
+    lineage: str,
+    *,
+    now: float | None = None,
+) -> dict[str, object]:
+    with DeadlineHarness(state) as harness:
+        return harness.normalize_external_supervisor_start(lineage, now=now)
+
 @contextmanager
 def _lock(spec: ServiceSpec):
     spec.log_directory.mkdir(parents=True, exist_ok=True)
@@ -127,9 +141,26 @@ def start_service(workspace: str | Path) -> ServiceSpec:
             raise ServiceError("A legacy DE67 supervisor is still loaded; run stop, then start")
         _remove_legacy(spec)
         if _running(spec): raise ServiceError(f"DE67 supervisor is already running: {spec.label}")
+        gate = f"{spec.label}-start-{uuid.uuid4().hex}"
+        gated_command = (
+            shlex.join([spec.tmux, "-S", str(_socket_path(spec)), "wait-for", gate])
+            + " && " + spec.shell_command
+        )
         result = _tmux(spec, "new-session", "-d", "-s", spec.label,
-                       "-c", str(spec.workspace), spec.shell_command)
+                       "-c", str(spec.workspace), gated_command)
         if result.returncode: raise ServiceError(result.stderr.strip() or "tmux new-session failed")
+        if not _running(spec):
+            raise ServiceError(f"DE67 supervisor exited during startup; inspect {spec.log_directory / 'stderr.log'}")
+        try:
+            state, lineage = _workspace_config(spec.workspace)
+            _normalize_explicit_start(state, lineage)
+        except Exception as error:
+            _tmux(spec, "kill-session", "-t", f"={spec.label}")
+            raise ServiceError(f"DE67 restart normalization failed: {error}") from error
+        released = _tmux(spec, "wait-for", "-S", gate)
+        if released.returncode:
+            _tmux(spec, "kill-session", "-t", f"={spec.label}")
+            raise ServiceError(released.stderr.strip() or "tmux start gate failed")
         if not _running(spec):
             raise ServiceError(f"DE67 supervisor exited during startup; inspect {spec.log_directory / 'stderr.log'}")
     return spec

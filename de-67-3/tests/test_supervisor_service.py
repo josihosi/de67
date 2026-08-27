@@ -4,12 +4,15 @@ from pathlib import Path
 from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"; sys.path.insert(0, str(SCRIPTS))
 import supervisor_service  # noqa: E402
+from deadline_harness import DeadlineHarness  # noqa: E402
 
 class SupervisorServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
         self.workspace = (self.root / "workspace").resolve(); (self.workspace / ".de67/state").mkdir(parents=True)
-        self.state = self.workspace / ".de67/state/deadlines.sqlite3"; self.state.touch()
+        self.state = self.workspace / ".de67/state/deadlines.sqlite3"
+        with DeadlineHarness(self.state):
+            pass
         (self.workspace / ".de67/state/workspace.json").write_text(json.dumps(
             {"workspace": str(self.workspace), "clock": {"state": str(self.state), "lineage": "lineage"}}))
         self.platform = patch("supervisor_service.sys.platform", "darwin"); self.platform.start()
@@ -39,23 +42,44 @@ class SupervisorServiceTests(unittest.TestCase):
 
     @patch("supervisor_service.shutil.which")
     @patch("supervisor_service.subprocess.run")
-    def test_start_creates_and_verifies_session(self, run, which):
+    @patch("supervisor_service._normalize_explicit_start")
+    def test_start_creates_and_verifies_session(self, normalize, run, which):
         which.side_effect = lambda value: "/opt/bin/tmux" if value == "tmux" else "/opt/bin/codex"
         run.side_effect = [subprocess.CompletedProcess([],1,"","can't find session"),
-                           subprocess.CompletedProcess([],0,"",""), subprocess.CompletedProcess([],0,"","")]
+                           subprocess.CompletedProcess([],0,"",""),
+                           subprocess.CompletedProcess([],0,"",""),
+                           subprocess.CompletedProcess([],0,"",""),
+                           subprocess.CompletedProcess([],0,"","")]
         spec = supervisor_service.start_service(self.workspace)
         command = run.call_args_list[1].args[0]
         self.assertEqual(command[0:2], ["/opt/bin/tmux", "-S"])
         self.assertEqual(command[3:7], ["new-session","-d","-s",spec.label])
+        normalize.assert_called_once_with(self.state.resolve(), "lineage")
+        self.assertIn("wait-for", command[-1])
 
     @patch("supervisor_service.shutil.which")
     @patch("supervisor_service.subprocess.run")
-    def test_start_rejects_immediate_exit(self, run, which):
+    @patch("supervisor_service._normalize_explicit_start")
+    def test_start_rejects_immediate_exit_without_normalizing(self, normalize, run, which):
         which.side_effect = lambda value: "/opt/bin/tmux" if value == "tmux" else "/opt/bin/codex"
         run.side_effect = [subprocess.CompletedProcess([],1,"","can't find session"),
                            subprocess.CompletedProcess([],0,"",""), subprocess.CompletedProcess([],1,"","can't find session")]
         with self.assertRaisesRegex(supervisor_service.ServiceError, "exited during"):
             supervisor_service.start_service(self.workspace)
+        normalize.assert_not_called()
+
+    @patch("supervisor_service.shutil.which")
+    @patch("supervisor_service.subprocess.run")
+    @patch("supervisor_service._normalize_explicit_start")
+    def test_start_rejects_tmux_creation_failure_without_normalizing(self, normalize, run, which):
+        which.side_effect = lambda value: "/opt/bin/tmux" if value == "tmux" else "/opt/bin/codex"
+        run.side_effect = [
+            subprocess.CompletedProcess([], 1, "", "can't find session"),
+            subprocess.CompletedProcess([], 1, "", "tmux refused session"),
+        ]
+        with self.assertRaisesRegex(supervisor_service.ServiceError, "tmux refused session"):
+            supervisor_service.start_service(self.workspace)
+        normalize.assert_not_called()
 
     @patch("supervisor_service.shutil.which", return_value="/opt/bin/tmux")
     @patch("supervisor_service.subprocess.run")
@@ -104,6 +128,123 @@ class SupervisorServiceTests(unittest.TestCase):
                 supervisor_service.start_service(self.workspace)
         remove.assert_not_called()
 
+    def test_explicit_start_normalizes_runtime_ownership_but_preserves_project_truth(self):
+        dfs = self.workspace / ".de67/DFS.md"
+        ledger = self.workspace / ".de67/work-ledger.md"
+        mutations = self.workspace / ".de67/mutation-suggestions.md"
+        dfs.write_text("frozen product truth\n")
+        ledger.write_text("unfinished work projection\n")
+        mutations.write_text("queued mutation truth\n")
+        with DeadlineHarness(self.state) as harness:
+            harness.start_task("lineage", "complete", "R-001", 3600, now=1)
+            harness.complete_task("lineage", "complete", "terminal proof", now=2)
+            for number in range(2, 10):
+                harness.start_task(
+                    "lineage", f"complete-{number}", "R-001", 3600,
+                    now=number * 2,
+                )
+                harness.complete_task(
+                    "lineage", f"complete-{number}", f"terminal proof {number}",
+                    now=number * 2 + 1,
+                )
+            harness.start_task("lineage", "idle-claim", "R-002", 3600, now=18.5)
+            harness.complete_task(
+                "lineage", "idle-claim", "idle claim proof", now=19.5,
+            )
+            harness.start_task("lineage", "stale", "R-001", 3600, now=20)
+            harness.claim_worker(
+                "lineage", "stale", "worker-old", "coordinator-old",
+                "supervisor-old", now=21,
+            )
+            restart = harness.request_coordinator_restart(
+                "lineage", "preserve semantic restart", now=22,
+            )["coordinator_restart"]
+            generation = restart["generation"]
+            harness.claim_coordinator_restart(
+                "lineage", generation, "dead-run", now=23,
+            )
+            harness.connection.execute(
+                "UPDATE random_mutation_cycles SET interval_windows = 11, "
+                "due_after_terminal_windows = 11 WHERE lineage_id = 'lineage'"
+            )
+            harness.connection.commit()
+            mutation_before = harness.list_tasks(now=23)["random_mutation"]
+            self.assertFalse(mutation_before["due"])
+
+        result = supervisor_service._normalize_explicit_start(
+            self.state, "lineage", now=4000,
+        )
+
+        self.assertEqual(result, {"abandoned_attempts": 1, "released_restart_claim": True})
+        with DeadlineHarness(self.state) as harness:
+            completed = harness.connection.execute(
+                "SELECT attempt_terminal_kind, completion_evidence FROM tasks "
+                "WHERE lineage_id = 'lineage' AND task_id = 'complete'"
+            ).fetchone()
+            self.assertEqual(completed["attempt_terminal_kind"], "completed")
+            self.assertEqual(completed["completion_evidence"], "terminal proof")
+            stale = harness.connection.execute(
+                "SELECT attempt_terminal_kind, abandonment_reason FROM tasks "
+                "WHERE lineage_id = 'lineage' AND task_id = 'stale'"
+            ).fetchone()
+            self.assertEqual(stale["attempt_terminal_kind"], "abandoned")
+            self.assertEqual(
+                stale["abandonment_reason"],
+                "external_supervisor_restart_normalization",
+            )
+            claim = harness.connection.execute(
+                "SELECT released_at, release_reason FROM worker_claims "
+                "WHERE lineage_id = 'lineage' AND task_id = 'stale'"
+            ).fetchone()
+            self.assertEqual(claim["released_at"], 4000)
+            self.assertEqual(claim["release_reason"], "task_abandoned")
+            preserved = harness.coordinator_restart_status("lineage")["coordinator_restart"]
+            self.assertTrue(preserved.get("required", preserved.get("pending")))
+            self.assertEqual(preserved["generation"], generation)
+            self.assertIsNone(preserved["expected_run_id"])
+            retired = harness.connection.execute(
+                "SELECT retired_at, retirement_reason FROM claim_deadline_generations "
+                "WHERE lineage_id = 'lineage' AND claim_id = 'R-001' AND generation = 1"
+            ).fetchone()
+            self.assertEqual(retired["retired_at"], 4000)
+            self.assertEqual(
+                retired["retirement_reason"],
+                "external_supervisor_restart_normalization",
+            )
+            idle_retired = harness.connection.execute(
+                "SELECT retired_at, retirement_reason FROM claim_deadline_generations "
+                "WHERE lineage_id = 'lineage' AND claim_id = 'R-002' AND generation = 1"
+            ).fetchone()
+            self.assertEqual(idle_retired["retired_at"], 4000)
+            self.assertEqual(
+                harness.list_tasks(now=23)["random_mutation"], mutation_before
+            )
+            self.assertEqual(
+                harness.connection.execute(
+                    "SELECT COUNT(*) FROM incidents WHERE lineage_id = 'lineage'"
+                ).fetchone()[0],
+                0,
+            )
+            harness.claim_coordinator_restart(
+                "lineage", generation, "fresh-run", now=4000,
+            )
+            harness.acknowledge_coordinator_restart(
+                "lineage", generation, "fresh-run", now=4000,
+            )
+            replacement = harness.start_task(
+                "lineage", "replacement", "R-001", 3600, now=4001,
+            )
+            self.assertEqual(replacement["deadline_generation"], 2)
+            self.assertEqual(replacement["deadline_at"], 7601)
+            idle_replacement = harness.start_task(
+                "lineage", "idle-replacement", "R-002", 3600, now=4002,
+            )
+            self.assertEqual(idle_replacement["deadline_generation"], 2)
+            self.assertEqual(idle_replacement["deadline_at"], 7602)
+        self.assertEqual(dfs.read_text(), "frozen product truth\n")
+        self.assertEqual(ledger.read_text(), "unfinished work projection\n")
+        self.assertEqual(mutations.read_text(), "queued mutation truth\n")
+
     @unittest.skipUnless(
         os.environ.get("DE67_RUN_SERVICE_INTEGRATION") == "1",
         "real tmux service integration is opt-in",
@@ -124,6 +265,7 @@ class SupervisorServiceTests(unittest.TestCase):
             scripts.mkdir()
             launcher = scripts / "supervisor_service.py"
             shutil.copy2(SCRIPTS / "supervisor_service.py", launcher)
+            shutil.copy2(SCRIPTS / "deadline_harness.py", scripts / "deadline_harness.py")
             shutil.copy2(
                 Path(__file__).parent / "fixtures/service_fake_supervisor.py",
                 scripts / "coordinator_supervisor.py",

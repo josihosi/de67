@@ -41,6 +41,10 @@ source exactly; lossy or noncanonical artifacts fail closed.
 
 ## Route locally
 
+If you are explicitly starting, restarting, stopping, or diagnosing the external Phase-3
+supervisor, first read [references/external-supervisor.md](references/external-supervisor.md).
+Ordinary coordination, worker execution, and internal mutation handoff do not read that reference.
+
 On macOS, start the external supervisor only through
 `scripts/supervisor_service.py start --workspace <workspace>`. This creates one detached,
 workspace-keyed tmux session whose lifetime is independent of the invoking terminal and which

@@ -2416,6 +2416,10 @@ class DeadlineHarness:
             """
             SELECT COUNT(*) AS total FROM tasks
             WHERE lineage_id = ? AND attempt_terminal_at IS NOT NULL
+              AND NOT (
+                attempt_terminal_kind = 'abandoned'
+                AND abandonment_reason = 'external_supervisor_restart_normalization'
+              )
             """,
             (lineage_id,),
         ).fetchone()
@@ -2692,6 +2696,10 @@ class DeadlineHarness:
             """
             SELECT task_id FROM tasks
             WHERE lineage_id = ? AND attempt_terminal_at IS NOT NULL
+              AND NOT (
+                attempt_terminal_kind = 'abandoned'
+                AND abandonment_reason = 'external_supervisor_restart_normalization'
+              )
             ORDER BY attempt_terminal_at, task_id
             LIMIT 1 OFFSET ?
             """,
@@ -3510,20 +3518,26 @@ class DeadlineHarness:
             advanced_deadline_generation = False
             if existing is None and claim is not None:
                 if claim["retired_at"] is not None:
-                    restart = self.connection.execute(
-                        """
-                        SELECT * FROM coordinator_restart_requests
-                        WHERE lineage_id = ? AND acknowledged_at IS NOT NULL
-                          AND requested_at >= ?
-                        ORDER BY generation DESC LIMIT 1
-                        """,
-                        (lineage_id, claim["retired_at"]),
-                    ).fetchone()
-                    if restart is None:
-                        raise DeadlineError(
-                            "A retired mutation clock requires its acknowledged fresh "
-                            "coordinator before a new deadline can be armed"
-                        )
+                    administrative_restart = (
+                        claim["retirement_reason"]
+                        == "external_supervisor_restart_normalization"
+                    )
+                    restart = None
+                    if not administrative_restart:
+                        restart = self.connection.execute(
+                            """
+                            SELECT * FROM coordinator_restart_requests
+                            WHERE lineage_id = ? AND acknowledged_at IS NOT NULL
+                              AND requested_at >= ?
+                            ORDER BY generation DESC LIMIT 1
+                            """,
+                            (lineage_id, claim["retired_at"]),
+                        ).fetchone()
+                        if restart is None:
+                            raise DeadlineError(
+                                "A retired mutation clock requires its acknowledged fresh "
+                                "coordinator before a new deadline can be armed"
+                            )
                     next_generation = int(claim["deadline_generation"]) + 1
                     self.connection.execute(
                         """
@@ -3539,7 +3553,7 @@ class DeadlineHarness:
                             estimate,
                             started_at,
                             started_at + estimate,
-                            restart["generation"],
+                            restart["generation"] if restart is not None else None,
                         ),
                     )
                     claim = self._claim(lineage_id, claim_id)
@@ -4532,6 +4546,82 @@ class DeadlineHarness:
             result["random_mutation"] = self._random_mutation_status(lineage_id)
             self.connection.commit()
             return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def normalize_external_supervisor_start(
+        self,
+        lineage_id: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Remove prior-epoch runtime ownership before one explicit start."""
+
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        normalized_at = self._now(now)
+        reason = "external_supervisor_restart_normalization"
+        self._begin()
+        try:
+            self._bind_lineage(lineage_id)
+            active = self.connection.execute(
+                """
+                SELECT * FROM tasks
+                WHERE lineage_id = ? AND attempt_terminal_at IS NULL
+                ORDER BY started_at, task_id
+                """,
+                (lineage_id,),
+            ).fetchall()
+            for task in active:
+                self.connection.execute(
+                    """
+                    UPDATE tasks
+                    SET terminal_at = ?, attempt_terminal_at = ?,
+                        attempt_terminal_kind = 'abandoned',
+                        abandoned_at = ?, abandonment_reason = ?
+                    WHERE lineage_id = ? AND task_id = ?
+                    """,
+                    (
+                        normalized_at, normalized_at, normalized_at, reason,
+                        lineage_id, task["task_id"],
+                    ),
+                )
+                self.connection.execute(
+                    """
+                    UPDATE worker_claims
+                    SET released_at = ?, release_reason = 'task_abandoned'
+                    WHERE lineage_id = ? AND task_id = ? AND released_at IS NULL
+                    """,
+                    (normalized_at, lineage_id, task["task_id"]),
+                )
+            self.connection.execute(
+                """
+                UPDATE claim_deadline_generations
+                SET retired_at = ?, retirement_reason = ?
+                WHERE lineage_id = ? AND retired_at IS NULL
+                  AND generation = (
+                    SELECT MAX(latest.generation)
+                    FROM claim_deadline_generations AS latest
+                    WHERE latest.lineage_id = claim_deadline_generations.lineage_id
+                      AND latest.claim_id = claim_deadline_generations.claim_id
+                  )
+                """,
+                (normalized_at, reason, lineage_id),
+            )
+            released = self.connection.execute(
+                """
+                UPDATE coordinator_restart_requests
+                SET claimed_at = NULL, expected_run_id = NULL
+                WHERE lineage_id = ? AND acknowledged_at IS NULL
+                  AND expected_run_id IS NOT NULL
+                """,
+                (lineage_id,),
+            ).rowcount
+            self.connection.commit()
+            return {
+                "abandoned_attempts": len(active),
+                "released_restart_claim": released > 0,
+            }
         except Exception:
             self.connection.rollback()
             raise

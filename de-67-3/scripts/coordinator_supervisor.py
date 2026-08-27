@@ -82,10 +82,17 @@ class MutationSuggestion:
 class SupervisorJournal:
     """Persist the one-shot authorization for each semantic supervisor frontier."""
 
-    def __init__(self, state_path: Path, lineage_id: str, owner_id: str) -> None:
+    def __init__(
+        self,
+        state_path: Path,
+        lineage_id: str,
+        owner_id: str,
+        frontier_namespace: str | None = None,
+    ) -> None:
         self.state_path = state_path
         self.lineage_id = lineage_id
         self.owner_id = owner_id
+        self.frontier_namespace = frontier_namespace
         with sqlite3.connect(state_path) as connection:
             connection.execute(
                 """
@@ -106,6 +113,8 @@ class SupervisorJournal:
             )
 
     def begin(self, role: str, frontier: str, run_id: str) -> None:
+        if self.frontier_namespace:
+            frontier = f"{self.frontier_namespace}:{frontier}"
         try:
             with sqlite3.connect(self.state_path) as connection:
                 connection.execute(
@@ -1197,6 +1206,7 @@ def _run_supervisor_locked(
         state,
         lineage_id,
         f"supervisor-{os.getpid()}-{uuid.uuid4().hex}",
+        os.environ.get("DE67_SUPERVISOR_START_TOKEN"),
     )
     reviewed_gates: set[tuple[str, str]] = set()
     consumed_events: set[str] = set()

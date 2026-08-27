@@ -544,6 +544,18 @@ class CoordinatorSupervisorTests(unittest.TestCase):
 
         recovered.begin("coordinator", "frontier-b", "run-three")
 
+    def test_supervisor_journal_scopes_replay_fuse_to_explicit_start_epoch(self) -> None:
+        first = SupervisorJournal(self.state_path, "project", "owner-one", "start-one")
+        first.begin("coordinator", "frontier-a", "run-one")
+        first.finish("run-one", "failed", "service died")
+
+        restarted = SupervisorJournal(
+            self.state_path, "project", "owner-two", "start-two"
+        )
+        restarted.begin("coordinator", "frontier-a", "run-two")
+        with self.assertRaisesRegex(SupervisorError, "frontier was already attempted"):
+            restarted.begin("coordinator", "frontier-a", "run-three")
+
     def test_worker_handoff_contract_explains_runtime_owned_claim(self) -> None:
         contract = worker_handoff_contract()
         self.assertIn("do not require receiver_thread_ids", contract)

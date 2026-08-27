@@ -24,6 +24,10 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertEqual(spec.tmux, "/opt/bin/tmux"); self.assertEqual(words[0], "exec")
         self.assertIn("DE67_CODEX=/opt/bin/codex", words); self.assertIn(f"PATH={os.environ['PATH']}", words)
         self.assertIn("DE67_COORDINATOR_SANDBOX=danger-full-access", words)
+        self.assertEqual(
+            len([word for word in words if word.startswith("DE67_SUPERVISOR_START_TOKEN=")]),
+            1,
+        )
         self.assertIn(str(self.state), words); self.assertIn("--runner", words); self.assertNotIn("launchctl", words)
 
     @patch("supervisor_service.shutil.which", return_value="/opt/bin/tmux")
@@ -178,6 +182,16 @@ class SupervisorServiceTests(unittest.TestCase):
             with DeadlineHarness(state) as harness:
                 harness.start_task("stack-test", "bootstrap", "R-STACK", 60, now=time.time())
                 harness.complete_task("stack-test", "bootstrap", "stack fixture ready")
+            # A prior external supervisor may have attempted this exact durable
+            # frontier. The explicit new service start must get one fresh epoch.
+            from coordinator_supervisor import SupervisorJournal, supervision_fingerprint
+            prior = SupervisorJournal(state, "stack-test", "prior-service")
+            prior.begin(
+                "coordinator",
+                supervision_fingerprint(state, "stack-test", workspace),
+                "prior-run",
+            )
+            prior.finish("prior-run", "failed", "simulated prior service death")
             (state_root / "workspace.json").write_text(json.dumps(
                 {"workspace": str(workspace),
                  "clock": {"state": str(state), "lineage": "stack-test"}}
@@ -242,6 +256,8 @@ class SupervisorServiceTests(unittest.TestCase):
                 "coordinator", "coordinator", "mutation-reviewer", "coordinator",
             ])
             self.assertTrue(all(event["sandbox"] == "danger-full-access" for event in events))
+            self.assertEqual(len({event["start_token"] for event in events}), 1)
+            self.assertTrue(events[0]["start_token"])
             self.assertEqual(events[-1]["generation"], "1")
             self.assertEqual((workspace / "product.txt").read_text().splitlines(), [
                 "Editable stack-test product state.",

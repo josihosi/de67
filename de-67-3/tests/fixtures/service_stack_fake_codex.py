@@ -30,6 +30,7 @@ coordinator_round = sum(json.loads(line)["role"] == "coordinator" for line in ev
 event = {
     "role": role,
     "sandbox": sandbox,
+    "start_token": os.environ.get("DE67_SUPERVISOR_START_TOKEN"),
     "generation": os.environ.get("DE67_COORDINATOR_RESTART_GENERATION"),
     "resumed": "resume" in arguments,
 }

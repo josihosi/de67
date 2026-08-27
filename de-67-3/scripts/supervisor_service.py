@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Control one terminal-independent DE67 supervisor session on macOS."""
 from __future__ import annotations
-import argparse, fcntl, hashlib, json, os, shlex, shutil, subprocess, sys
+import argparse, fcntl, hashlib, json, os, shlex, shutil, subprocess, sys, uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +54,7 @@ def service_spec(workspace_value: str | Path) -> ServiceSpec:
     # that prevents its coordinators, workers, or mutation reviewer from editing.
     arguments = ["/usr/bin/env", f"DE67_CODEX={codex}",
                  "DE67_COORDINATOR_SANDBOX=danger-full-access",
+                 f"DE67_SUPERVISOR_START_TOKEN={uuid.uuid4().hex}",
                  f"PATH={os.environ.get('PATH', '/usr/bin:/bin:/usr/sbin:/sbin')}"]
     codex_state = os.environ.get("DE67_CODEX_STATE", "").strip()
     if codex_state: arguments.append(f"DE67_CODEX_STATE={Path(codex_state).expanduser().resolve()}")

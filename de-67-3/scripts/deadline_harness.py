@@ -1061,9 +1061,41 @@ class DeadlineHarness:
             END;
             """
         )
+        self._migrate_task_terminal_kind_triggers()
         self._migrate_v2_closure_gaps()
         self.connection.execute("PRAGMA user_version = 5")
         self.connection.commit()
+
+    def _migrate_task_terminal_kind_triggers(self) -> None:
+        """Keep persisted terminal validation aligned with harness lifecycle states."""
+        self.connection.executescript(
+            """
+            DROP TRIGGER IF EXISTS task_terminal_kind_is_valid_on_insert;
+            DROP TRIGGER IF EXISTS task_terminal_kind_is_valid_on_update;
+
+            CREATE TRIGGER task_terminal_kind_is_valid_on_insert
+            BEFORE INSERT ON tasks
+            WHEN NEW.attempt_terminal_kind IS NOT NULL
+             AND NEW.attempt_terminal_kind NOT IN (
+                 'completed', 'abandoned', 'finding', 'integrity_breach',
+                 'restart_normalized'
+             )
+            BEGIN
+                SELECT RAISE(ABORT, 'unsupported attempt terminal kind');
+            END;
+
+            CREATE TRIGGER task_terminal_kind_is_valid_on_update
+            BEFORE UPDATE OF attempt_terminal_kind ON tasks
+            WHEN NEW.attempt_terminal_kind IS NOT NULL
+             AND NEW.attempt_terminal_kind NOT IN (
+                 'completed', 'abandoned', 'finding', 'integrity_breach',
+                 'restart_normalized'
+             )
+            BEGIN
+                SELECT RAISE(ABORT, 'unsupported attempt terminal kind');
+            END;
+            """
+        )
 
     def _migrate_random_interval_constraint(self) -> None:
         """Widen legacy cadence storage without redrawing persisted cycles."""

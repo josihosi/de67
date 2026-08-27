@@ -204,6 +204,20 @@ class SupervisorServiceTests(unittest.TestCase):
                 "UPDATE random_mutation_cycles SET interval_windows = 11, "
                 "due_after_terminal_windows = 11 WHERE lineage_id = 'lineage'"
             )
+            harness.connection.executescript(
+                """
+                DROP TRIGGER task_terminal_kind_is_valid_on_update;
+                CREATE TRIGGER task_terminal_kind_is_valid_on_update
+                BEFORE UPDATE OF attempt_terminal_kind ON tasks
+                WHEN NEW.attempt_terminal_kind IS NOT NULL
+                 AND NEW.attempt_terminal_kind NOT IN (
+                     'completed', 'abandoned', 'finding', 'integrity_breach'
+                 )
+                BEGIN
+                    SELECT RAISE(ABORT, 'unsupported attempt terminal kind');
+                END;
+                """
+            )
             harness.connection.commit()
             mutation_before = harness.list_tasks(now=23)["random_mutation"]
             self.assertFalse(mutation_before["due"])

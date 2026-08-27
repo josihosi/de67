@@ -1923,15 +1923,27 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("decision opportunity 2 of 3", corrective_prompt)
         self.assertIn("Do not open a replacement task", corrective_prompt)
         self.assertIn("spawn_agent", corrective_prompt)
-        self.assertIn("durably close or block", corrective_prompt)
+        self.assertIn("Durably close or block", corrective_prompt)
         self.assertIn("SQL schemas, queries, migrations", corrective_prompt)
         self.assertIn("SQLite-backed harness transitions", corrective_prompt)
+        self.assertIn("DFS red lamps:\n- [ ] 🔴 R-001 — Open", corrective_prompt)
+        self.assertIn(
+            "Ledger executable entries:\n- [ ] R-001 — Current route",
+            corrective_prompt,
+        )
+        self.assertIn(
+            "If either list is nonempty, Phase 3 is unfinished", corrective_prompt
+        )
+        self.assertIn("Trust your own causal judgment", corrective_prompt)
+        self.assertIn("repair the edge case", corrective_prompt)
+        self.assertIn("rerun the policy decision", corrective_prompt)
 
         final_prompt = (
             self.run_root / "fresh-final-decision" / "prompt.txt"
         ).read_text(encoding="utf-8")
         self.assertIn("decision opportunity 3 of 3", final_prompt)
         self.assertIn("final automatic opportunity", final_prompt)
+        self.assertIn("Trust your own causal judgment", final_prompt)
 
     def test_successful_pass_resets_the_consecutive_decision_fuse(self) -> None:
         self.write_work_documents(red=True, active=True)

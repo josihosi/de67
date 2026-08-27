@@ -777,7 +777,31 @@ def worker_result_ingress_contract() -> str:
     )
 
 
-def coordinator_recovery_contract(opportunity: int) -> str:
+def recovery_frontier_snapshot(workspace: Path) -> str:
+    """Render the small durable frontier a recovery coordinator must resolve."""
+    dfs = workspace / ".de67" / "DFS.md"
+    ledger = workspace / ".de67" / "work-ledger.md"
+    red_lamps = (
+        [line for line in dfs.read_text(encoding="utf-8").splitlines()
+         if line.startswith("- [ ] 🔴 ")]
+        if dfs.is_file()
+        else []
+    )
+    executable_entries = (
+        [line for line in ledger.read_text(encoding="utf-8").splitlines()
+         if line.startswith("- [ ] ")]
+        if ledger.is_file()
+        else []
+    )
+    return (
+        "DFS red lamps:\n"
+        + ("\n".join(red_lamps) if red_lamps else "(none)")
+        + "\nLedger executable entries:\n"
+        + ("\n".join(executable_entries) if executable_entries else "(none)")
+    )
+
+
+def coordinator_recovery_contract(opportunity: int, workspace: Path) -> str:
     """Return bounded corrective context after a failed coordinator decision."""
     if opportunity <= 1 or opportunity > COORDINATOR_DECISION_OPPORTUNITIES:
         raise SupervisorError(f"Invalid coordinator decision opportunity: {opportunity}")
@@ -787,19 +811,23 @@ def coordinator_recovery_contract(opportunity: int) -> str:
         if opportunity == COORDINATOR_DECISION_OPPORTUNITIES
         else ""
     )
+    snapshot = recovery_frontier_snapshot(workspace)
     return (
         f"Recovery: this is coordinator decision opportunity {opportunity} of "
-        f"{COORDINATOR_DECISION_OPPORTUNITIES}. The preceding coordinator exited with "
-        "executable work still present. Re-read the current durable ledger and execute "
-        "DE67_POLICY_DECIDE_ARGV_JSON before choosing the next action. Do not open a "
-        "replacement task merely because an earlier attempt was abandoned. If policy returns "
-        "spawn_worker, use the exact injected task_name and concrete spawn_agent call, adapting "
-        "only the self-contained brief, model, and effort. Otherwise durably close or block the "
-        "existing work with evidence, or complete the DFS when its proof is already sufficient. "
-        "This recovery guard is not a read-only restriction: retain normal repository editing "
-        "authority, including SQL schemas, queries, migrations, and SQLite-backed harness "
-        "transitions; mutate DE67 clock state through the deadline harness rather than ad hoc SQL. "
-        "Waiting or exiting without one of those durable outcomes is another failed decision."
+        f"{COORDINATOR_DECISION_OPPORTUNITIES}.\n{snapshot}\n"
+        "If either list is nonempty, Phase 3 is unfinished. Execute the exact policy decision. "
+        "If the returned action cannot advance, untangle and repair the edge case instead of "
+        "repeating the failed surface action. Trust your own causal judgment: you may change the "
+        "implementation, harness, fixtures, SQL schemas, queries, migrations, SQLite-backed "
+        "harness transitions, or ledger projection when that is the shortest honest fix. Mutate "
+        "DE67 clock state through the deadline harness rather than ad hoc SQL. Then rerun the "
+        "policy decision and continue de67 3. Do not open a replacement task merely because an "
+        "earlier attempt was abandoned. When policy returns spawn_worker, use its exact injected "
+        "task_name and concrete spawn_agent call. Waiting, exiting, or calling an internal "
+        "delegation/harness defect a blocker without first repairing it is another failed "
+        "decision. Durably close or block existing work only when evidence proves completion "
+        "or a genuinely external blocker. A durable external blocker, proved DFS completion, or no red lamp and no "
+        "executable ledger entry remains a valid stop."
         + final
     )
 
@@ -1049,7 +1077,7 @@ def run_child(
         )
     if decision_opportunity > 1:
         prompt = prompt.rstrip() + "\n" + coordinator_recovery_contract(
-            decision_opportunity
+            decision_opportunity, workspace
         ) + "\n"
     _write(run_dir / "prompt.txt", prompt)
     _write(run_dir / "status.txt", "STARTING\n")

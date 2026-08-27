@@ -42,10 +42,11 @@ source exactly; lossy or noncanonical artifacts fail closed.
 ## Route locally
 
 On macOS, start the external supervisor only through
-`scripts/supervisor_service.py start --workspace <workspace>`. This installs one workspace-keyed
-LaunchAgent whose lifetime is independent of the invoking terminal. Use its `status` and `stop`
-commands for observation and shutdown. The service deliberately has `KeepAlive` disabled: a crash
-stays visible and requires an explicit start instead of becoming an automatic restart loop. Direct
+`scripts/supervisor_service.py start --workspace <workspace>`. This creates one detached,
+workspace-keyed tmux session whose lifetime is independent of the invoking terminal and which
+retains the invoking user's workspace permissions. Use its `status` and `stop` commands for
+observation and shutdown. The session has no automatic restart: a crash stays visible and requires
+an explicit start instead of becoming an automatic restart loop. Direct
 foreground execution of `coordinator_supervisor.py` is reserved for tests and attended diagnosis,
 not an ordinary Phase-3 launch.
 

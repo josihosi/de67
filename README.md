@@ -1,189 +1,115 @@
 # de67
 
-When software work turns 67—plans multiplying, agents looping, and proof wandering off—de67 acts
-like a small coordination enzyme. It recognizes one cut site: work that can be deleted without
-leaving the requested outcome unmet or unproved. It preserves the useful strand and permits
-mutation only where evidence shows that the method needs editing.
+> Things go 67 when agents build software. Build, don't aura farm. You need to **de67**.
 
-de67 is an OpenAI Codex skill for turning that drift back into a short path from an idea to working,
-honestly proven code. It separates discussion, specification, and delivery so each phase receives a
-small durable artifact instead of inheriting an expanding conversation.
+de67 is a **skill**, an **autonomous delivery loop**, and—where reality gets sharp—just enough
+**harness** to cover the whole software-building stack.
 
-## Three explicit phases
+It turns an idea into a code-grounded specification, gives implementation to agents, keeps proof
+attached to progress, and repairs its working method when evidence says the method—not the
+product—is failing.
 
-Invoke the phases as skill commands: `de67 1`, `de67 2`, and `de67 3`.
+Built natively for [OpenAI Codex](https://openai.com/codex/). The method could be adapted to other
+frontier models, and possibly strong local models, when their agent runtime provides equivalent
+tools, subagents, durable state, and reasoning control. Those ports are not shipped today.
 
-- **de67 1 — Discuss.** Focused questions turn the user's idea and language into `WEC.md`, without
-  prematurely designing the implementation.
-- **de67 2 — Specify.** A fresh specification owner inspects the real repository and turns the WEC
-  into a frozen, code-grounded `.de67/DFS.md`.
-- **de67 3 — Deliver.** Coordinators and workers implement the frozen DFS through deadline-bound
-  work, production-route proof, independent failure diagnosis, and controlled mutation.
+## Use de67
+
+Install or link this complete repository as a folder named `de67` in your Codex skills directory.
+Keep the router, phase folders, scripts, references, assets, integrations, and agent metadata
+together.
+
+Then invoke one phase at a time from your project:
 
 ```text
-WEC.md  ->  frozen DFS.md  ->  working, proven code
+de67 1   discuss the idea
+de67 2   inspect the code and freeze the specification
+de67 3   build and prove it autonomously
 ```
 
-Phases never silently start one another. The user chooses the boundary, and accepted progress
-survives coordinator or worker replacement.
+Each phase ends with a durable artifact. You decide when to begin the next phase.
 
-## Phase 3 at a glance
+## Three phases
 
-Phase 3 keeps implementation work separate from coordination and judges progress through durable
-evidence rather than agent confidence.
+- **[de67 1 — Discuss](de-67-1/SKILL.md)**
+  Focused questions preserve the requested experience, language, and owner choices in `WEC.md`.
+  Phase 1 does not design or implement the solution.
 
-```mermaid
-flowchart LR
-    DFS["Frozen DFS"] --> Ledger["Active work ledger"]
-    Ledger --> Coordinator["Coordinator"]
-    Clock["Clock"] --> Coordinator
-    Coordinator --> Worker["Worker"]
-    Worker --> Result{"Evidence, ordinary failure, or terminal finding?"}
-    Result -->|Evidence| Acceptance["Accept the gap or claim"]
-    Result -->|Ordinary failure or terminal finding| Coordinator
-    Acceptance --> Ledger
-    Acceptance --> DFS
-```
+- **[de67 2 — Specify](de-67-2/SKILL.md)**
+  A fresh specification owner inspects the actual repository and turns the WEC into a frozen,
+  code-grounded `.de67/DFS.md`.
 
-When evidence contradicts the current route, Phase 3 changes the smallest justified part of the
-method without rewriting the user's outcome or erasing failed attempts.
+- **[de67 3 — Deliver](de-67-3/SKILL.md)**
+  Coordinators and workers autonomously implement the frozen DFS, test production routes, preserve
+  evidence, and continue until the requested outcome is proved.
 
-```mermaid
-flowchart LR
-    Event["Deadline, integrity incident, or due review"] --> Review["Independent mutation review"]
-    Review --> Candidate["Smallest evidence-backed candidate"]
-    Candidate --> Guard{"Applicable guard passes?"}
-    Guard -->|No| Preserve["Preserve current method and open gate"]
-    Guard -->|Yes| Apply["Apply receipt-bound mutation"]
-    Apply --> Restart["Fresh coordinator generation"]
-    Restart --> Ledger["Continue the durable ledger"]
-```
+**[See the complete de67 lifecycle and diagrams →](docs/how-de67-works.md)**
 
-## Lean coordination
+## Structure, not a prison
 
-de67 is deliberately hostile to coordination theatre. It tries to minimize prompt churn, handovers,
-duplicated contracts, speculative documents, repeated tests, and agents reading material they do not
-need. Ordinary work mostly uses GPT-5.6 Sol at low reasoning plus Luna and Terra workers selected for
-the task. GPT-5.6 Sol at `high` is reserved for ordinary independent mutation review, while the
-rare universal mutation uses `ultra`, rather
-than routine implementation.
+The coordinator owns the trajectory. Workers implement, investigate, test, and repair. A
+deterministic clock and SQLite ledger preserve deadlines, attempts, evidence, and handovers without
+spending model tokens while nothing is happening.
 
-### Role roster
+The machinery gives capable agents durable structure. It does not try to replace their judgment with
+a maze of administrative rules.
 
-| Role | What it does | Shipped LLM profile |
-| --- | --- | --- |
-| Phase 1 discussion owner | Clarifies the idea and writes the WEC. | Current Codex agent; no fixed model |
-| Phase 2 specification owner | Inspects the repository and freezes the DFS. | GPT-5.6 Sol at `high` |
-| Coordinator | Routes the ledger, workers, evidence, and blockers. | GPT-5.6 Sol at `low` |
-| Ordinary worker | Implements, investigates, builds, or tests one bounded task. | Luna by default; Terra for difficult diagnosis or risky cross-cutting work; never Terra/`max`; no Sol |
-| Deadline, integrity, or random mutator | Independently diagnoses failure and proposes a guarded method change. | Fresh GPT-5.6 Sol at `high` |
-| Rare universal mutator | Reviews the whole method after the exact rare trigger. | Fresh GPT-5.6 Sol at `ultra` |
+Accepted progress survives worker or coordinator replacement. Ordinary failures remain ordinary
+work. Independent mutation review changes the delivery method only when evidence or a scheduled
+review justifies it.
 
-This is the shipped roster, not a claim that every installation needs the same price-performance
-choice forever. A user can deliberately use a cheaper roster, such as a Terra coordinator. Make
-that change in the writable de67 lab, prove the selected model and effort, and update
-the matching guidance, guards, and tests together. A different model changes cost and capability;
-it does not expand a role's authority or weaken the evidence required for acceptance.
+## Watch it work
 
-The clock is deterministic Python, not another language-model agent. It records deadlines, claims,
-attempts, evidence, misses, and restart generations without consuming model tokens while it waits.
-Mutation is gated and receipt-backed so a failed approach can change without rewriting the user's
-goal or erasing accepted work. An ordinary test failure remains worker input; it is not a formal
-finding, mutation trigger, or coordinator-restart trigger.
-Add `Owner-authorized [trigger]: ...` to `.de67/mutation-suggestions.md` when the correction should
-start a mutation review as soon as workers are quiet. Use `Owner-authorized [defer]: ...` to queue
-the same mandatory reviewer input without disturbing ordinary work; the next regularly due mutation
-review consumes it. The instruction may expand the ordinary mutation lane when necessary; the
-reviewer still preserves honest evidence and the owner's requested outcome.
+Phase 3 includes an optional passive website showing the live DFS, ledger, clock, workers,
+coordinator, mutation state, and recent evidence. The dashboard cannot control or stop delivery.
 
-For non-gating provenance, run `python de-67-3/scripts/method_provenance.py --workspace <repo>`.
-It reports the machine and workspace, method Git baseline when available, method and local-guidance
-hashes, uncheckpointed Git state, restart generation, and accepted mutation-receipt count. The
-report is visibility only: missing Git metadata or a changed local method never blocks delivery.
+[![de67 dashboard overview](integrations/dashboard/dashboard.png)](integrations/dashboard/README.md)
 
-## Shared writing foundations
+- **[Host the dashboard](integrations/dashboard/README.md)** locally or through authenticated
+  [Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve).
+- **[Contact the owner through OpenClaw](integrations/openclaw_discord/README.md)** when no
+  executable route remains and one human answer is genuinely required.
 
-All three phases use the verbatim [MSW kernel](references/msw-kernel.md) to delete work that the
-requested outcome does not need. DE67 also uses one central
-[controlled-English guideline](references/controlled-english.md) for owner questions, the WEC, the
-DFS, work ledgers, test findings, and blocker messages. The guideline preserves exact technical
-identifiers and does not claim formal ASD-STE100 compliance. Compact profiles keep ledger and
-OpenClaw writers from loading the full DFS-oriented guideline.
+## Go deeper
 
-## Requirements
+| Topic | Read |
+| --- | --- |
+| Complete lifecycle and diagrams | [How de67 works](docs/how-de67-works.md) |
+| Installation and skill routing | [Skill router](SKILL.md) |
+| Discussion and the WEC | [de67 1](de-67-1/SKILL.md) |
+| Repository inspection and frozen DFS | [de67 2](de-67-2/SKILL.md) |
+| Autonomous delivery and mutation | [de67 3](de-67-3/SKILL.md) |
+| Minimal-work reasoning | [MSW kernel](references/msw-kernel.md) |
+| Writing clear, auditable artifacts | [Writing guideline](references/controlled-english.md) |
+| Live progress website | [Dashboard](integrations/dashboard/README.md) |
+| Optional owner contact | [OpenClaw adapter](integrations/openclaw_discord/README.md) |
+| Moving lab work into a release | [Release promotion](RELEASE_PROMOTION.md) |
 
-de67 is built specifically for **OpenAI Codex**. It is not an Anthropic or generic multi-agent skill.
-It requires:
+## Lab and release
 
-- the current Codex CLI with subagents and reasoning-effort selection;
-- access to GPT-5.6 Sol, GPT-5.6 Luna, and GPT-5.6 Terra, including Sol at `high` and `ultra`;
-- Python 3.10 or newer, using only the standard library;
-- Git and a repository with an upstream branch for guarded routine checkpoints.
+Use a writable fork or private `de67-lab` to observe and evolve the method against real work.
+Accepted mutations become reviewable Git history there.
 
-The repository is the complete skill package. Its router, phase instructions, templates, clock,
-mutation guards, workspace setup, supervisor, and cross-platform Codex runner are kept together so
-an agent can install the `de67` folder into the active Codex skills directory without relying on a
-personal machine wrapper.
+Promote stable changes deliberately into the public release. Never overwrite the release repository
+with a lab worktree. See [release promotion](RELEASE_PROMOTION.md).
 
-## Optional integrations
+## Credits
 
-Optional integrations live under `integrations/` and are not core DE67 dependencies. Each package
-owns its transport-specific requirements, agent installation guidance, tests, and failure boundary.
-Core discussion, specification, supervision, clocks, and delivery must keep working when every
-integration is absent or broken.
+- Josef Horvath directed the product and method, contributed the imagination round, and supplied
+  the live Cataclysm-AOL proving ground.
+- OpenAI Codex implemented and integrated the current skill, loop, harness, dashboard, integrations,
+  and failure controls.
+- [OpenClaw](https://docs.openclaw.ai/) provides the optional owner-contact route.
+- [Tailscale](https://tailscale.com/) provides the tested private-network and HTTPS route.
+- The [MSW kernel](references/msw-kernel.md) comes from
+  [@aienginerd](https://x.com/aienginerd).
+- Phase 1's question-driven flow was inspired by
+  [Jekudy's GrillMe](https://github.com/Jekudy/grillme-skill).
+- [Absurd](https://github.com/earendil-works/absurd) by Earendil Works influenced de67's
+  database-owned durable workflow state and inspectable agent-loop design. de67's implementation is
+  independent and contains no Absurd code.
+- The trajectory sidecar was inspired by [Slopo](https://github.com/rafal-qa/slopo). Its
+  implementation is independent and contains no Slopo code.
+- SolAdvisor influenced the advisory approach to agent reasoning and review.
 
-The OpenClaw Discord blocker adapter is in `integrations/openclaw_discord/`. It can relay one genuine
-blocked-only owner question and return one authenticated answer through a generic subprocess
-contract. It requires an explicitly configured [OpenClaw](https://docs.openclaw.ai/) installation
-and Discord channel; OpenClaw is never imported or required by core DE67.
-
-The read-only dashboard in `integrations/dashboard/` serves live DFS, ledger, clock, mutation, and
-process state without coordinator or model calls. It requires only Python. Loopback hosting works
-without Tailscale; [Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve) is the recommended
-optional route for authenticated home-network HTTPS. Installing, stopping, or breaking the
-dashboard must not affect ordinary DE67 work.
-
-![DE67 dashboard overview](integrations/dashboard/dashboard.png)
-
-## Release and lab
-
-This repository is the publishable de67 release. Before enabling method mutation, users should
-create their own writable Git repository or fork for a `de67-lab` and install the skill from that
-checkout. Accepted mutations are checkpointed there, giving the owner a reviewable history and a
-safe place to rewind a harmful change. The folder name is not authoritative; the active checkout and
-its Git history are. Stable changes can then be promoted deliberately into a public release instead
-of turning every live experiment into an upstream change.
-
-Release maintainers must follow `RELEASE_PROMOTION.md`. In particular, promote lab work by merging a
-reviewed candidate into the release repository while preserving release history and tags; never
-force-push or copy the lab worktree over the release repository.
-
-## Contributions and acknowledgements
-
-- Josef Horvath directed the product, supplied the DE67 method and live CAOL proving ground, and
-  made the calls about what was useful versus bureaucracy.
-- OpenAI Codex, mostly GPT-5.6 Sol at light reasoning, implemented and integrated the current method,
-  optional OpenClaw adapter, dashboard, failure controls, and release packaging—with a suspicious
-  willingness to keep going forever.
-- [OpenClaw](https://docs.openclaw.ai/) provides the optional owner-messaging route used by the
-  Discord blocker adapter.
-- [Tailscale](https://tailscale.com/) provides the optional private-network and HTTPS route used by
-  the tested Mac-mini dashboard deployment.
-
-- The MSW kernel comes from [@aienginerd on X](https://x.com/aienginerd).
-- The imagination round comes from Josef Horvath.
-- Phase de67 1's question-driven flow is based on
-  [Jekudy's GrillMe skill](https://github.com/Jekudy/grillme-skill).
-- Phase de67 1 uses [Simplified Technical English](https://en.wikipedia.org/wiki/Simplified_Technical_English)
-  as a practical clarity influence for owner questions. de67 does not claim formal ASD-STE100
-  conformance.
-- The read-only Phase de67 3 trajectory sidecar was inspired by
-  [Slopo's](https://github.com/rafal-qa/slopo) semantic code-similarity approach. de67's independent
-  implementation adapts vector proximity to DFS gaps, diffs, tests, and accepted evidence; it does
-  not include Slopo code.
-- SolAdvisor also influenced de67's advisory approach to agent reasoning and review.
-
-The WEC contract and de67's code-grounded specification, delivery, proof, deadlines, and controlled
-method mutation were designed for this skill.
-
-de67 is licensed under [Apache License 2.0](LICENSE).
+Licensed under the [Apache License 2.0](LICENSE).

@@ -77,6 +77,9 @@ class DashboardTests(unittest.TestCase):
                  self.workspace / ".de67/state/deadlines.sqlite3"]
         before = [path.read_bytes() for path in paths]
         page = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).render("dfs").decode()
+        self.assertIn("<title>de67</title>", page)
+        self.assertIn("<h1>de67</h1>", page)
+        self.assertNotIn("DE67", page)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
         self.assertNotIn("<script>", page)
         self.assertEqual(before, [path.read_bytes() for path in paths])

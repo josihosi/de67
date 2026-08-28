@@ -1,8 +1,8 @@
-# DE67 dashboard
+# de67 dashboard
 
-This optional package serves a small, read-only view of one DE67 workspace. It reads
+This optional package serves a small, read-only view of one de67 workspace. It reads
 `.de67/DFS.md`, `.de67/work-ledger.md`, the deadline SQLite database, and supervisor process state.
-It does not import DE67 core, write workspace state, or require OpenClaw.
+It does not import de67 core, write workspace state, or require OpenClaw.
 
 Run on loopback:
 
@@ -25,7 +25,7 @@ or HTTPS proxy when the workspace contents are sensitive.
 
 The dashboard uses only Python's standard library. It keeps the last good Markdown and clock panel
 in memory when a source becomes unavailable. A missing workspace, locked database, malformed text,
-unknown schema, failed process probe, or dashboard crash cannot stop or mutate DE67.
+unknown schema, failed process probe, or dashboard crash cannot stop or mutate de67.
 
 The overview shows active Luna, Terra, and Sol workers by reasoning effort from Codex's existing local
 session records. It does not add worker fields or coordinator reporting. Use `--codex-sessions PATH`
@@ -42,7 +42,7 @@ python3 integrations/dashboard/de67_dashboard.py \
 ```
 
 The report stays in memory until the clock changes. The dashboard does not create sidecar
-snapshots, history files, or refresh artifacts. A missing or failed sidecar cannot stop DE67.
+snapshots, history files, or refresh artifacts. A missing or failed sidecar cannot stop de67.
 The plot keeps current closure gaps around the claim, draws product and test cosine similarity
 along each spoke, and shows the sidecar's categorical trajectory observations without scoring them.
 

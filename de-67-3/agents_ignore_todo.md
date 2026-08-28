@@ -6,17 +6,17 @@ state. Only the repository owner or an agent directly tasked with maintaining th
 
 ## Pending
 
-- Add a low-maintenance, read-only DE67 dashboard for the repository owner.
+- Add a low-maintenance, read-only de67 dashboard for the repository owner.
 
   Purpose and boundary:
 
-  - Host a small home-network website on the machine that owns the long-lived DE67 workspaces.
+  - Host a small home-network website on the machine that owns the long-lived de67 workspaces.
   - Show the authoritative `.de67/DFS.md`, active and blocked `.de67/work-ledger.md` items, and a
     compact projection of SQLite clock, deadline-generation, restart, supervisor, and optional
     sidecar state.
   - Do not use a coordinator, worker, observer, or language-model call to render or refresh it.
-  - Do not edit DE67 state from the site, create a second source of truth, add required ledger
-    fields, add coordinator rituals, or make dashboard health a DE67 blocker.
+  - Do not edit de67 state from the site, create a second source of truth, add required ledger
+    fields, add coordinator rituals, or make dashboard health a de67 blocker.
   - Keep public hosting, remote code execution, a large frontend framework, and automatic user
     deployment outside the first version.
 
@@ -29,9 +29,9 @@ state. Only the repository owner or an agent directly tasked with maintaining th
   - Do not require an on-disk generated snapshot in the first version. A persisted cache may be
     considered later, but it must stay explicitly disposable and non-authoritative.
   - Serve small server-rendered HTML. A manual-refresh page should have effectively zero idle work;
-    optional browser refresh may be configured explicitly without becoming DE67 policy.
-  - Run under process supervision independent of the DE67 supervisor. Removing, breaking, or
-    restarting the dashboard must have no effect on DE67.
+    optional browser refresh may be configured explicitly without becoming de67 policy.
+  - Run under process supervision independent of the de67 supervisor. Removing, breaking, or
+    restarting the dashboard must have no effect on de67.
 
   Source and rendering rules:
 
@@ -63,7 +63,7 @@ state. Only the repository owner or an agent directly tasked with maintaining th
   - Refresh requests share one refresh operation instead of multiplying filesystem and database
     reads during active churn.
   - Display exceptions, service crashes, restart loops, and complete dashboard absence never stop,
-    restart, mutate, or block DE67.
+    restart, mutate, or block de67.
 
   Home-network access:
 
@@ -71,7 +71,7 @@ state. Only the repository owner or an agent directly tasked with maintaining th
   - Prefer an authenticated home-network or Tailscale HTTPS endpoint in front of the loopback
     service. Direct unauthenticated LAN binding exposes specifications, paths, findings, and blocker
     text to every device on that network and should not be the default.
-  - Keep authentication and TLS concerns outside the DE67 runtime and outside the authoritative
+  - Keep authentication and TLS concerns outside the de67 runtime and outside the authoritative
     workspace state.
 
   Smallest honest vertical slice:
@@ -84,7 +84,7 @@ state. Only the repository owner or an agent directly tasked with maintaining th
   - Focused controls for partial files, invalid UTF-8, incomplete Markdown, unknown fields, HTML and
     script payloads, source changes during reads, SQLite locks, missing/replaced/newer databases,
     parser exceptions, workspace disappearance, service restart, and concurrent refreshes.
-  - Prove that dashboard reads do not initialize, migrate, or modify SQLite and that DE67 continues
+  - Prove that dashboard reads do not initialize, migrate, or modify SQLite and that de67 continues
     when the dashboard is absent or repeatedly broken.
 
   Packaging direction:

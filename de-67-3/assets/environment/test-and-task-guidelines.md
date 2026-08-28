@@ -28,7 +28,7 @@ Derive every output bound from the current claim and evidence shape; never inven
 line, file, or command quota. Larger evidence remains available when you can explain why deleting
 that read would leave the current claim unproved. After each result, name the next causal question.
 When accumulated context no longer helps close the assigned gap, return the result to the coordinator
-rather than repeatedly resubmitting it. The coordinator owns durable DE67 transitions. Do not write
+rather than repeatedly resubmitting it. The coordinator owns durable de67 transitions. Do not write
 the deadline database, work ledger, DFS state, or mutation ledger; return the evidence and requested
 terminal disposition for the coordinator to judge and record.
 

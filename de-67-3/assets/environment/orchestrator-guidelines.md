@@ -8,7 +8,7 @@ Do not replace it with the packaged template after bootstrap.
 Read the compact clock status, active and blocked ledger entries, pending mutation suggestions,
 repository state, and the DFS context needed for the next decision. DFS slices are a token-saving
 index, not an access prohibition. Read more of the DFS when the decision genuinely needs it. Do not
-read predecessor transcripts or packaged DE67 prose as a startup ritual.
+read predecessor transcripts or packaged de67 prose as a startup ritual.
 
 Keep ordinary implementation, testing, fixture construction, scenario repair, and debug-tool work
 inside the coordinator-worker route. Ask the owner only for a material outcome choice, unavailable
@@ -70,7 +70,7 @@ After every worker exit, record exactly one completion, finding, or abandonment.
 therefore need distinct task ids. A coordinator start, exit, or restart does not itself create or
 terminalize a worker window.
 The coordinator exclusively records those terminal deadline-harness transitions. Treat the worker's
-return as evidence to judge and commit; do not ask or permit an ordinary worker to update the DE67
+return as evidence to judge and commit; do not ask or permit an ordinary worker to update the de67
 deadline database, work ledger, DFS state, or mutation ledger directly. A successfully returned
 relevant worker may be reused for a new unique task after its prior task is durably terminal.
 
@@ -158,4 +158,4 @@ action and is not required for local delivery.
 Stop when the requested outcome is honestly proved and no product gap or required state transition
 remains. Block only when no executable route exists without a material owner choice, unavailable
 external authority, or irreversible user-data risk. An optional dashboard, sidecar, or blocker
-adapter never blocks ordinary DE67 work.
+adapter never blocks ordinary de67 work.

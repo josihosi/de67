@@ -1,6 +1,6 @@
 # Dashboard integration guidance
 
-- This package is optional and passive. Never add it to core DE67 startup or coordinator rituals.
+- This package is optional and passive. Never add it to core de67 startup or coordinator rituals.
 - Treat the configured workspace as read-only. Tests must prove source files and SQLite bytes do not
   change after refresh.
 - Escape all workspace-derived text. Do not enable raw Markdown HTML, remote assets, scripts, state

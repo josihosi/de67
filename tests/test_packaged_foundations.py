@@ -9,6 +9,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackagedFoundationTests(unittest.TestCase):
+    def test_reader_facing_brand_is_canonical(self) -> None:
+        for path in ROOT.rglob("*.md"):
+            if ".git" in path.parts:
+                continue
+            with self.subTest(path=path.relative_to(ROOT)):
+                self.assertNotIn("DE67", path.read_text(encoding="utf-8"))
+
     def test_verbatim_foundations_are_unchanged(self) -> None:
         expected = {
             "references/imagination-round.md":
@@ -45,7 +52,7 @@ class PackagedFoundationTests(unittest.TestCase):
     def test_authoring_roles_route_to_controlled_english(self) -> None:
         guideline = (ROOT / "references/controlled-english.md").read_text(encoding="utf-8")
         self.assertIn("apply the MSW deletion test", guideline)
-        self.assertIn("Write DE67 work ledgers as current operational state", guideline)
+        self.assertIn("Write de67 work ledgers as current operational state", guideline)
         self.assertIn("Write blocker messages as owner decisions", guideline)
 
         ledger_profile = (
@@ -60,7 +67,7 @@ class PackagedFoundationTests(unittest.TestCase):
         task_guidance = (
             ROOT / "de-67-3/assets/environment/test-and-task-guidelines.md"
         ).read_text(encoding="utf-8")
-        self.assertIn("controlled-English evidence profile", task_guidance)
+        self.assertIn("in controlled English with exact identifiers", task_guidance)
 
         phase_one = (ROOT / "de-67-1/SKILL.md").read_text(encoding="utf-8")
         self.assertNotIn("Write owner questions and choices in Simplified Technical English", phase_one)

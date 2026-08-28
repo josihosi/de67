@@ -10,7 +10,7 @@ lab candidate wins. Preserve release-side implementation only when the owner exp
 evidence shows that the lab never absorbed a still-required release fix. Do not keep stale release
 code merely because it differs.
 
-This file is human/agent release guidance. It has no DE67 runtime authority and must not be copied
+This file is human/agent release guidance. It has no de67 runtime authority and must not be copied
 into project `.de67/` state.
 
 ## Surfaces that must remain intact

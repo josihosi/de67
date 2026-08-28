@@ -58,6 +58,24 @@ Accepted progress survives worker or coordinator replacement. Ordinary failures 
 work. Independent mutation review changes the delivery method only when evidence or a scheduled
 review justifies it.
 
+## Steer Phase 3 while it runs
+
+Autonomous does not mean unsteerable. Add plain-English guidance to
+`.de67/mutation-suggestions.md` at any time:
+
+```text
+- Owner-authorized [trigger]: Review this at the next safe worker-quiet junction.
+- Owner-authorized [defer]: Keep this for the next regularly due mutation review.
+```
+
+A **trigger** is the forcing mode: it makes mutation review due without killing work already in
+flight. A **defer** is the non-forcing mode: ordinary delivery continues, and the next scheduled
+review must consume the suggestion. The independent reviewer reads the complete ledger, applies
+the owner-authorized outcome through guarded changes, and then returns control to a fresh
+coordinator. This is the main steering wheel for Phase 3.
+
+**[See mutation steering and the review lifecycle →](docs/how-de67-works.md#mutation-without-losing-the-work)**
+
 ## Watch it work
 
 Phase 3 includes an optional passive website showing the live DFS, ledger, clock, workers,
@@ -79,6 +97,7 @@ coordinator, mutation state, and recent evidence. The dashboard cannot control o
 | Discussion and the WEC | [de67 1](de-67-1/SKILL.md) |
 | Repository inspection and frozen DFS | [de67 2](de-67-2/SKILL.md) |
 | Autonomous delivery and mutation | [de67 3](de-67-3/SKILL.md) |
+| Steering a live Phase 3 run | [Mutation review](docs/how-de67-works.md#mutation-without-losing-the-work) |
 | Minimal-work reasoning | [MSW kernel](references/msw-kernel.md) |
 | Writing clear, auditable artifacts | [Writing guideline](references/controlled-english.md) |
 | Live progress website | [Dashboard](integrations/dashboard/README.md) |

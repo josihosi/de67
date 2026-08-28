@@ -256,6 +256,8 @@ def _record_session(line: str, environment: dict[str, str]) -> str | None:
         event = json.loads(line)
     except json.JSONDecodeError:
         return None
+    if not isinstance(event, dict):
+        return None
     if event.get("type") != "thread.started":
         return None
     session_id = event.get("thread_id")
@@ -598,6 +600,8 @@ def run(
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
                     continue
                 try:
                     loop_guard.observe(event)

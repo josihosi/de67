@@ -92,6 +92,32 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertEqual(status["model"], "gpt-5.6-sol")
         self.assertEqual(status["session_id"], "session-1")
 
+    def test_runner_ignores_json_primitives_in_merged_diagnostic_output(self) -> None:
+        lines = [
+            "apply_patch verification failed:\n",
+            '  "cockpit:run.finish"\n',
+            '{"type":"thread.started","thread_id":"session-after-diagnostic"}\n',
+        ]
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=FakeProcess(lines, 0)
+        ):
+            self.assertEqual(
+                codex_runner.run(
+                    self.workspace, "coordinate this", environment=self.environment()
+                ),
+                0,
+            )
+
+        run_directory = next((self.root / "runs").iterdir())
+        self.assertEqual(
+            json.loads((run_directory / "status.json").read_text())["session_id"],
+            "session-after-diagnostic",
+        )
+        self.assertIn(
+            '"cockpit:run.finish"',
+            (run_directory / "events.jsonl").read_text(encoding="utf-8"),
+        )
+
     def test_runner_resumes_the_exact_coordinator_session(self) -> None:
         captured: dict[str, object] = {}
         environment = self.environment()

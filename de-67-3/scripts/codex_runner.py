@@ -400,7 +400,7 @@ def _roster_resolver(
                 return None
             rows = connection.execute(
                 """
-                SELECT child.id, child.model, child.agent_path,
+                SELECT child.id, child.agent_path,
                        child.created_at_ms, child.created_at
                 FROM thread_spawn_edges AS edge
                 JOIN threads AS child ON child.id = edge.child_thread_id
@@ -411,7 +411,7 @@ def _roster_resolver(
             ).fetchall()
         finally:
             connection.close()
-        for worker_id, model, agent_path, created_at_ms, created_at in rows:
+        for worker_id, agent_path, created_at_ms, created_at in rows:
             created = (
                 float(created_at_ms) / 1000.0
                 if created_at_ms is not None
@@ -422,7 +422,6 @@ def _roster_resolver(
                 and str(worker_id) not in used_workers
                 and agent_path == expected_path
                 and created >= started_at
-                and any(name in str(model or "").lower() for name in ("luna", "terra"))
             ):
                 return str(worker_id)
         return None
@@ -447,7 +446,7 @@ def _roster_validator(
         try:
             row = connection.execute(
                 """
-                SELECT child.model
+                SELECT 1
                 FROM thread_spawn_edges AS edge
                 JOIN threads AS child ON child.id = edge.child_thread_id
                 WHERE edge.parent_thread_id = ? AND edge.child_thread_id = ?
@@ -457,9 +456,7 @@ def _roster_validator(
             ).fetchone()
         finally:
             connection.close()
-        return row is not None and any(
-            name in str(row[0] or "").lower() for name in ("luna", "terra")
-        )
+        return row is not None
 
     return validate
 

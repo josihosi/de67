@@ -225,7 +225,7 @@ class CodexRunnerTests(unittest.TestCase):
 
     def write_roster_state(
         self,
-        model: str,
+        model: str | None,
         *,
         task_id: str = "route",
         agent_path: str | None = None,
@@ -362,6 +362,23 @@ class CodexRunnerTests(unittest.TestCase):
                 codex_runner.run(self.workspace, "coordinate", environment=environment), 0
             )
 
+    def test_runner_accepts_exact_spawn_when_duplicate_model_metadata_is_missing(self) -> None:
+        environment = self.environment()
+        environment["DE67_CODEX_STATE"] = str(self.write_roster_state(None))
+        trace = [line for line in self.handoff_trace() if '"spawn_agent"' not in line]
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=FakeProcess(trace, 0)
+        ):
+            self.assertEqual(
+                codex_runner.run(self.workspace, "coordinate", environment=environment), 0
+            )
+
+    def test_roster_validator_accepts_exact_child_with_missing_model_metadata(self) -> None:
+        environment = self.environment()
+        environment["DE67_CODEX_STATE"] = str(self.write_roster_state(None))
+        validate = codex_runner._roster_validator(self.workspace.resolve(), environment)
+        self.assertTrue(validate("worker", "coordinator"))
+
     def test_roster_recovery_rejects_worker_for_different_task_name(self) -> None:
         environment = self.environment()
         environment["DE67_CODEX_STATE"] = str(
@@ -390,17 +407,16 @@ class CodexRunnerTests(unittest.TestCase):
         resolver = codex_runner._roster_resolver(self.workspace, environment)
         self.assertIsNone(resolver("route", started_at, "coordinator", frozenset()))
 
-    def test_runner_rejects_inherited_sol_child_as_ordinary_handoff(self) -> None:
+    def test_runner_does_not_police_model_after_exact_worker_handoff(self) -> None:
         environment = self.environment()
         environment["DE67_CODEX_STATE"] = str(self.write_roster_state("gpt-5.6-sol"))
         with patch("codex_runner.shutil.which", return_value="codex"), patch(
             "codex_runner.subprocess.Popen",
             return_value=FakeProcess(self.handoff_trace(), 0),
-        ), patch("codex_runner._abandon_unbound_tasks"):
-            with self.assertRaisesRegex(
-                codex_runner.RunnerError, "still lacked a verified roster worker"
-            ):
-                codex_runner.run(self.workspace, "coordinate", environment=environment)
+        ):
+            self.assertEqual(
+                codex_runner.run(self.workspace, "coordinate", environment=environment), 0
+            )
 
     def test_loop_guard_rejects_symbolic_task_name_as_worker_identity(self) -> None:
         guard = codex_runner.CoordinatorLoopGuard(

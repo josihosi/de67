@@ -10,7 +10,11 @@ Start from the assigned outcome, proof route, known facts, and durable evidence 
 user-owned dirty work. When the route is finite, own the complete goal inside one worker window:
 diagnose, repair, test, and continue through reversible in-scope defects until the evidence is
 complete or a real authority, frozen-scope, material-risk, external-state, or deadline blocker ends
-the window. An intermediate failure informs the next decision; it is never acceptance.
+the window. A discrepancy is never acceptance. Continue past one only when positive evidence proves
+it clerical, incidental, or non-causal and proves it cannot affect acceptance, authority, proof
+class, identity or ownership, persistence, or required behavior. Preserve the original failure and
+record the materiality decision, evidence, and continuation rationale; uncertainty remains
+fail-closed. Otherwise repair it or use it as the next causal observation.
 
 Use exploration for one concrete unknown and return a usable strategy plus proof route. Use closure
 when ownership, mechanism, gaps, and proof are finite. Make ordinary setup choices that remain inside
@@ -38,8 +42,11 @@ Identify the authoritative state owner and inspect its callers, competing reader
 owning tests only as needed for the outcome. Stop blind repetition at the first divergent production
 transition and repair the visible family of related transitions.
 
-Use the smallest honest test through the real route. Add a negative control only when it excludes a
-real competing explanation. Static inspection, startup, helper output, synthetic setup, focused
+Test through the highest changed authoritative boundary reachable without consuming one-use
+authority; a helper test proves only its helper. Before a token, lease, destructive action, or other
+single-use transition, make the owning test reach that boundary with the downstream owner replaced
+by a sentinel, so a pre-boundary defect fails without consuming authority. Add a negative control
+only when it excludes a real competing explanation. Static inspection, startup, helper output, synthetic setup, focused
 feature proof, diagnostic replay, continuous certification, and Windows feel are distinct evidence
 classes. Bind compiled proof to source and executable; inspect serialized state and its owning
 normalization for persistence claims. Structured product state and bound artifacts decide machine
@@ -56,6 +63,8 @@ uncertainty in controlled English with exact identifiers. Keep a new divergence,
 reversible route change inside the goal-bound task while its outcome, authority, deadline, and risk
 boundary remain valid. A proved prerequisite is not terminal completion of a broader assigned
 outcome; preserve it and continue. Return a finding only when progress requires a different owner
-outcome, unavailable authority, frozen-scope change, material risk, or external-state change. State
-the expected behavior, observed behavior, contradicted premise, and direct evidence. A finding never
-weakens acceptance or causes mutation.
+outcome, unavailable authority, frozen-scope change, material risk, or external-state change. A
+failure report separates the observed symptom, proved mechanism, surrounding failure pattern,
+immediate recovery, and smallest tested stable correction. If mechanism or correction is not proved,
+state that exact uncertainty instead of handing the symptom to the owner as a design problem. A
+finding never weakens acceptance or causes mutation.

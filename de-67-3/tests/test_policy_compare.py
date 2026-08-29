@@ -38,7 +38,9 @@ class PolicyComparisonTests(unittest.TestCase):
             if case["main"] != case["lab"]
         }
         self.assertEqual(divergences, {
-            "late-acceptance-before-review", "mutation-ignores-suggestion"
+            "late-acceptance-before-review",
+            "mutation-ignores-suggestion",
+            "proof-owner-replacement-leaves-stale-projection",
         })
 
     @unittest.skipUnless(HAS_REPOSITORY_HISTORY, "comparison needs de67 Git history")

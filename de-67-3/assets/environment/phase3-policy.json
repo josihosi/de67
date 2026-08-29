@@ -156,6 +156,9 @@
         "coordinator_exclusively_commits_terminal_worker_result",
         "preserve_evidence_class",
         "continue_same_coordinator",
+        "keep_named_in_scope_repair_or_rerun_as_nonterminal_checkpoint",
+        "keep_same_task_and_worker_across_checkpoint",
+        "terminal_finding_requires_named_route_exit",
         "evaluate_convergence_after_every_worker",
         "transition_to_named_independently_provable_closure_gaps_when_finite",
         "record_specific_uncertainty_before_more_exploration"
@@ -215,6 +218,7 @@
         "use_existing_deadline_task",
         "call_spawn_agent_before_wait",
         "do_not_merely_announce_assignment",
+        "spawn_worker_with_outcome_and_visible_subtasks",
         "preserve_parallel_independent_dispatch"
       ]
     },
@@ -234,7 +238,8 @@
       ],
       "obligations": [
         "wake_no_later_than_item_deadline",
-        "do_not_poll_faster_without_new_event"
+        "do_not_poll_faster_without_new_event",
+        "preserve_live_outcome_across_subtask_checkpoints"
       ]
     },
     {
@@ -259,7 +264,10 @@
         "start_unique_worker_window",
         "use_ordinary_worker_profile",
         "delegate_executable_work_to_roster_worker",
+        "dispatch_outcome_sized_task_with_visible_subtasks",
+        "derive_claim_deadline_from_outcome_spokes_single_use_authority_and_repair",
         "size_one_generous_claim_deadline_for_full_route",
+        "reject_attempt_estimate_shrunk_to_remaining_claim_clock",
         "include_worker_lifecycle_and_uncertainty_margin",
         "delegate_evidence_sized_worker_retrieval"
       ]
@@ -288,7 +296,10 @@
         "start_unique_worker_window",
         "use_ordinary_worker_profile",
         "delegate_executable_work_to_roster_worker",
+        "dispatch_outcome_sized_task_with_visible_subtasks",
+        "derive_claim_deadline_from_outcome_spokes_single_use_authority_and_repair",
         "size_one_generous_claim_deadline_for_full_route",
+        "reject_attempt_estimate_shrunk_to_remaining_claim_clock",
         "include_worker_lifecycle_and_uncertainty_margin",
         "delegate_evidence_sized_worker_retrieval"
       ]
@@ -333,6 +344,15 @@
   ],
   "trace": {
     "events": {
+      "affected_projection_rebased": {
+        "clear": [
+          "projection_rebase_pending"
+        ],
+        "requires": [
+          "mutation_open",
+          "projection_rebase_pending"
+        ]
+      },
       "deadline_expired": {
         "set": [
           "deadline_open"
@@ -377,10 +397,19 @@
           "mutation_open"
         ],
         "forbids": [
-          "suggestions_pending"
+          "suggestions_pending",
+          "projection_rebase_pending"
         ],
         "clear": [
           "mutation_open"
+        ]
+      },
+      "proof_owner_replaced": {
+        "requires": [
+          "mutation_open"
+        ],
+        "set": [
+          "projection_rebase_pending"
         ]
       },
       "task_started": {

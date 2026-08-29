@@ -264,7 +264,7 @@ class CoordinatorLoopRuntimeTests(unittest.TestCase):
         captured_start = task_start("R-008-closure-003")
         captured_start["item"]["command"] = (
             "/Library/Developer/CommandLineTools/usr/bin/python3 "
-            "/Users/josefhorvath/.codex/skills/de67/de-67-3/scripts/deadline_harness.py "
+            "/Users/example/.codex/skills/de67/de-67-3/scripts/deadline_harness.py "
             "start --state /tmp/deadlines.sqlite3 --lineage project "
             "--task R-008-closure-003 --claim R-008 --estimate-seconds 84000 "
             "--phase closure --gap R-008-production-matrix"

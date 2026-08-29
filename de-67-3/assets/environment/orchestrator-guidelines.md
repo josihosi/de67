@@ -33,15 +33,30 @@ tools; do not read packaged prose or script source as policy.
 
 ## Plan and dispatch
 
-Project currently actionable work into `.de67/work-ledger.md`. One red claim may have several
+Treat `.de67/work-ledger.md` as a replaceable snapshot of current truth. SQLite, immutable artifacts,
+and source control retain attempt history. Delete superseded routes and prior-task narrative when
+the frontier changes. Under `## Active work`, encode each executable outcome as one canonical
+`- [ ] R-... — ...` item with exactly one indented `DFS slices:` line. When an outcome genuinely
+decomposes, list coherent visible subtasks under it; they are progress spokes, not separate worker
+windows or acceptance claims. Use fewer for a small outcome and one only when atomic. Never add
+filler, unrelated work, or an unbounded bucket. Close the task only when its outcome is settled;
+record subtask progress, contradiction, and uncertainty as nonterminal checkpoints. Put external
+waits under `## Waiting on external authority` without unchecked work-item syntax, and use
+`- Blocked:` only when no executable route remains. Each projected route states its current status,
+accepted frontier, first unresolved uncertainty, and next action. One red claim may have several
 entries when its independently provable outcomes can proceed separately. Freely split, merge,
-replace, or reorder that projection as evidence changes. Keep each entry short and point it to the
-DFS context needed for the work. Do not impose a batch-size limit. A missing or imperfect slice can
-be repaired, but it must not prevent necessary read-only context gathering.
+replace, or reorder the projection as evidence changes. Do not impose a batch-size limit. A missing
+or imperfect slice can be repaired, but it must not prevent necessary read-only context gathering.
 
-Use exploration when ownership, mechanism, strategy, or proof is unknown. Use closure immediately
-when the strategy, finite gaps, and proof route are already known. A task may cover more than one
-gap when the work and proof form one inseparable authority boundary.
+Use exploration when ownership, mechanism, strategy, or proof is unknown. Use closure only when the
+strategy, finite gaps, and public proof route are known. Name the worker-facing operation and
+authoritative receipt that make each prerequisite executable. Capability labels, declarations,
+hidden or source-only controls, raw subprocess fields, and coincidental artifacts do not establish
+reachability. If the public route cannot reach the required owner or receipt, keep the prerequisite
+open and repair that interface inside the same worker goal. Project closure by compatible
+preconditions and authority. Combine obligations only when one start state and route can satisfy all
+of them without disabling a required counterexample. Mutually exclusive states require separate
+ledger entries, authorities, and receipts, even when one task executes them.
 
 Worker: Luna for clear execution; Terra for debugging/discovery. Effort low-max: lowest sufficient
 for complexity/research. Never Sol. Every new ordinary worker uses `fork_turns="none"`, receives a
@@ -49,15 +64,12 @@ self-contained brief, and explicitly selects Luna or Terra; omitting the model w
 coordinator and is invalid. Reusing an already relevant worker is allowed, but a new worker never
 receives the coordinator or predecessor transcript.
 
-Set one generous deadline for the whole ledger item. Include setup, implementation, builds, repeated
-test runs, repairs between runs, review, disposition, and the uncertainty of the route. Unknown work
-does not take zero time. Variable playtesting needs room for several relevant runs and material code
-changes between them. Finish early when possible. Do not turn an attempt estimate, test finding, or
-revised plan into a deadline miss. A deadline miss occurs only when the item clock actually expires.
-The coordinator must set a deadline it can honestly deliver, including room for foreseeable problems,
-known unknowns, and an uncertainty margin for problems it has not predicted.
-Never copy one worker attempt's runtime into the next whole-item deadline or omit worker startup,
-evidence return, diagnosis, repair, rebuild, rerun, and coordination time.
+Set one claim deadline from the whole outcome and its visible spokes: setup, implementation, builds,
+tests, repairs, single-use authority replacement, reruns, evidence return, coordination, and
+unknowns. Finish early when possible. A later attempt estimate is an honest forecast, not the
+remaining claim clock: never shrink it to fit that remainder. If it does not fit, the original
+whole-outcome estimate is disproved; preserve progress and let the clock expose that miss instead of
+admitting a doomed window. Only actual clock expiry is a deadline miss.
 
 Give each worker a self-contained brief. Require the worker to read the relevant sections of
 `.de67/test-and-task-guidelines.md`. Use parallel workers only when their work is genuinely disjoint.
@@ -76,17 +88,26 @@ relevant worker may be reused for a new unique task after its prior task is dura
 
 ## Receive results
 
-Treat a verified worker return as durable-state ingress before the next route decision. Judge its
-evidence and record exactly one matching completion, finding, or abandonment first; only then ask
+Treat a verified worker return as durable-state ingress before the next route decision. Evidence
+that names an authorized in-scope repository repair or rerun is a nonterminal checkpoint, regardless
+of whether its prose calls itself a finding; keep the same task and worker through that work. A
+terminal finding must name the exact authority, scope, risk, external-state, disproved-strategy, or
+exhausted-route boundary that makes continuation unlawful or materially different. When the outcome
+is settled, record exactly one matching completion, finding, or abandonment; only then ask
 the compiled policy for the next action. The kernel derives worker-result facts from that committed
 state, so waiting for a still-live task after its worker has returned creates a circular wait.
 
-Judge the actual diff and direct evidence. A focused test proves only the route it exercised. An
-ordinary failed test is not a finding. Keep it inside the worker route: inspect, repair, and rerun.
-Record a terminal finding only when the assigned strategy is disproved, a materially different route
-is required, an external blocker exists, or the bounded route is exhausted. A finding does not cause
-mutation or a coordinator restart. Revise the DFS only when accepted evidence changes the requested
-outcome or its authoritative decomposition.
+Judge the actual diff and direct evidence. A focused test proves only the route it exercised. Keep a
+first divergence inside the worker route as the next observation unless positive evidence proves it
+clerical, incidental, or non-causal and unable to affect acceptance, authority, proof class,
+identity or ownership, persistence, or required behavior. Such continuation is optional, preserves
+the failure, and records the materiality decision, evidence, and rationale; uncertainty remains
+fail-closed. Otherwise inspect, repair, and rerun. Do not open a successor task or gap revision for
+repair already admitted by the same outcome. A finding does not cause mutation or a coordinator
+restart. When a result reports failure, preserve one concise owner-facing packet that distinguishes
+the symptom, proved mechanism, surrounding pattern, immediate recovery, and smallest tested stable
+correction. Name exact uncertainty where the mechanism or correction is unproved. Revise the DFS
+only when accepted evidence changes the requested outcome or its authoritative decomposition.
 
 After every terminal worker result, perform one explicit convergence check before dispatching more
 exploration. If ownership, mechanism, remaining gaps, and the proof route are now finite, immediately
@@ -96,6 +117,12 @@ exploration dispatch. Do not use generic uncertainty or an unchanged brief to re
 Give each independently provable remaining outcome its own closure gap. Keep one gap only when the
 route is genuinely indivisible; do not collapse several ledger obligations merely to reduce
 coordination.
+
+When a finding proves that one item needs unavailable external authority, remove that item from the
+executable projection and retain its exact identity, authority owner, and wake condition without
+opening another worker window or rechecking unchanged state. Continue with a different lawful item
+when one exists. Use the machine-readable `- Blocked:` marker only when no executable ledger item
+remains; it represents the whole current projection, not one waiting item.
 
 Do not repeat an unchanged failing route. Trust the agent doing repository work to change the
 implementation, harness, fixture, or observation path when that is the shortest honest route to
@@ -147,15 +174,21 @@ state or promote itself. Use the mutation guard for the selected local guideline
 Use guarded DFS transitions for acceptance, reopen, or same-outcome expansion. A guard protects
 existing accepted work and evidence; it does not require a packaged role document.
 
-A successful local mutation requests one fresh coordinator. The external supervisor owns that
-restart. Every mutation retires the prior claim deadline. The fresh coordinator reads the current
-ledger and remaining DFS route and sets a new generous whole-item deadline without inheriting any
-prior duration. Publishing a generalized rule to `de67-lab` is a separate owner-authorized maintenance
-action and is not required for local delivery.
+A successful local mutation requests one fresh coordinator only after every added or changed red
+claim—whether projected, waiting, or not yet selected—has a guarded, machine-readable DFS slice
+binding that can produce its lawful brief. When the mutation replaces a proof owner, append a
+replacement revision for every affected open SQLite gap and replace its active ledger brief and
+decomposition; neither may still require the retired owner. This projection rebase is part of the
+mutation lifecycle, not successor work. The external supervisor owns the restart. Every mutation
+retires the prior claim deadline. The fresh coordinator reads the current ledger and remaining DFS
+route and sets a new generous whole-item deadline without inheriting any prior duration. Publishing
+a generalized rule to `de67-lab` is a separate owner-authorized maintenance action and is not
+required for local delivery.
 
 ## Stop or block
 
 Stop when the requested outcome is honestly proved and no product gap or required state transition
-remains. Block only when no executable route exists without a material owner choice, unavailable
-external authority, or irreversible user-data risk. An optional dashboard, sidecar, or blocker
-adapter never blocks ordinary de67 work.
+remains. Block the whole projection only when every remaining item needs a material owner choice,
+unavailable external authority, or irreversible user-data risk. Preserve a partially blocked item's
+wake condition while continuing unrelated executable work. An optional dashboard, sidecar, or
+blocker adapter never blocks ordinary de67 work.

@@ -72,6 +72,20 @@ class PackagedFoundationTests(unittest.TestCase):
         phase_one = (ROOT / "de-67-1/SKILL.md").read_text(encoding="utf-8")
         self.assertNotIn("Write owner questions and choices in Simplified Technical English", phase_one)
 
+    def test_promoted_runtime_guidance_is_general_and_outcome_sized(self) -> None:
+        coordinator = (
+            ROOT / "de-67-3/assets/environment/orchestrator-guidelines.md"
+        ).read_text(encoding="utf-8")
+        worker = (
+            ROOT / "de-67-3/assets/environment/test-and-task-guidelines.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("replaceable snapshot of current truth", coordinator)
+        self.assertIn("nonterminal checkpoint", coordinator)
+        self.assertIn("projection rebase is part of the", coordinator.lower())
+        self.assertIn("highest changed authoritative boundary", worker)
+        self.assertNotIn("caol-harness", coordinator + worker)
+
 
 if __name__ == "__main__":
     unittest.main()

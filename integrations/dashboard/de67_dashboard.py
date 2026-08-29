@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Optional read-only DE67 workspace dashboard."""
+"""Optional read-only de67 workspace dashboard."""
 
 from __future__ import annotations
 
@@ -165,22 +165,10 @@ def render_trajectory(report: dict[str, Any]) -> str:
     ] if isinstance(raw_gaps, list) else []
     if not gaps:
         return '<section class="trajectory"><h2>Trajectory sidecar</h2><p class="subtle">No closure trajectory.</p></section>'
-    churn = report.get("churn_vector") or {}
-    if not isinstance(churn, dict):
-        churn = {}
-    observation_chips: list[str] = []
-    for name, value in churn.items():
-        if not isinstance(value, dict) or not value.get("direction"):
-            continue
-        evidence = "; ".join(str(item) for item in value.get("evidence", []) if item)
-        observation_chips.append(
-            f'<span title="{_escape(evidence)}"><b>{_escape(str(name).replace("_", " "))}</b>'
-            f'{_escape(str(value["direction"]).replace("-", " "))}</span>'
-        )
     return (
         '<section class="trajectory"><h2>Trajectory sidecar</h2>'
         f'{render_attention_spider(report, gaps)}'
-        f'<div class="trajectory-observations">{"".join(observation_chips)}</div></section>'
+        '</section>'
     )
 
 
@@ -260,6 +248,18 @@ def render_attention_spider(report: dict[str, Any], gaps: list[dict[str, Any]]) 
         legend.append(
             f'<span title="{_escape(source)}"><i class="attention-key attention-{css_key}"></i>{_escape(label)}</span>'
         )
+    gap_cards: list[str] = []
+    for gap_id, gap in zip(gap_ids, gaps):
+        summary = " ".join(str(gap.get("summary", "No explanation recorded.")).split())
+        status = str(gap.get("status", "open"))
+        active = gap_id == latest_gap and report.get("latest_task_result") == "active"
+        tone = "active" if active else "proved" if status == "proved" else "open"
+        gap_cards.append(
+            f'<article class="gap-explanation {tone}">'
+            f'<div><span>{_escape(gap_id)} r{_escape(gap.get("revision", "?"))}</span>'
+            f'<strong class="gap-state">{_escape("active" if active else status)}</strong></div>'
+            f'<p>{_escape(summary)}</p></article>'
+        )
     return (
         '<article class="attention-panel"><div class="attention-heading"><h3>Attention spider</h3>'
         f'<span>{"Relative pull · not completion" if series else "Waiting for attention data"}</span></div>'
@@ -269,6 +269,7 @@ def render_attention_spider(report: dict[str, Any], gaps: list[dict[str, Any]]) 
         f'<div class="attention-legend">{"".join(legend)}</div>'
         f'<div class="attention-claim"><strong>{_escape(report.get("claim", "Claim"))}</strong>'
         f'<span>{_escape(report.get("latest_task") or "No active attempt")}</span></div>'
+        f'<div class="gap-explanations">{"".join(gap_cards)}</div>'
         '<p>Each line is scaled to its own strongest gap. Hover a point for raw cosine similarity.</p>'
         '</article>'
     )
@@ -300,6 +301,7 @@ def parse_ledger(text: str) -> dict[str, Any]:
         heading = re.match(r"^#{1,6}\s+(.+?)\s*$", line, re.I)
         if heading:
             name = heading.group(1).lower()
+            owning_claim = OWNING_CLAIM.match(heading.group(1))
             target = None
             if "active" in name:
                 target = "active"
@@ -307,10 +309,12 @@ def parse_ledger(text: str) -> dict[str, Any]:
                 target = "waiting"
             elif "blocked" in name:
                 target = "blocked"
-            if target:
-                current = target
-            elif current:
+            if owning_claim and current:
                 sections[current].append(line)
+            elif target:
+                current = target
+            else:
+                current = None
         elif current and line.strip():
             sections[current].append(line)
     if not any(sections.values()) and text.strip():
@@ -432,6 +436,10 @@ def _active_task(connection: sqlite3.Connection) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def _latest_task(connection: sqlite3.Connection) -> dict[str, Any] | None:
+    return _latest(connection, "tasks", "started_at")
+
+
 def _active_deadline(
     connection: sqlite3.Connection, task: dict[str, Any] | None
 ) -> dict[str, Any] | None:
@@ -456,7 +464,15 @@ def _active_deadline(
             tuple(value for _column, value in filters),
         ).fetchone()
         return dict(row) if row else None
-    return _latest(connection, "claim_deadline_generations", "generation")
+    order_column = "started_at" if "started_at" in columns else "generation"
+    if "retired_at" in columns:
+        row = connection.execute(
+            f'SELECT * FROM "claim_deadline_generations" '
+            f'WHERE "retired_at" IS NULL ORDER BY "{order_column}" DESC LIMIT 1'
+        ).fetchone()
+        if row:
+            return dict(row)
+    return _latest(connection, "claim_deadline_generations", order_column)
 
 
 def _completed_mutation_counts(connection: sqlite3.Connection) -> tuple[int, int, dict[str, Any] | None]:
@@ -529,6 +545,8 @@ def _mutation_review_state(connection: sqlite3.Connection) -> dict[str, Any]:
         ).fetchone()
         if incident is None:
             continue
+        if "reviewed_at" in incident.keys() and incident["reviewed_at"] is not None:
+            continue
         where = " AND ".join(f'"{key}" = ?' for key in keys)
         components = {row[0] for row in connection.execute(
             f'SELECT "component" FROM "{component_table}" WHERE {where}',
@@ -587,18 +605,30 @@ def read_clock(path: Path) -> dict[str, Any]:
         connection.execute("PRAGMA query_only=ON")
         connection.execute("BEGIN")
         task = _active_task(connection)
+        latest_task = _latest_task(connection)
         deadline = _active_deadline(connection, task)
         restart = _latest(connection, "coordinator_restart_requests", "generation")
         finding = _latest(connection, "worker_findings", "reported_at")
         mutations, random_mutations, next_random = _completed_mutation_counts(connection)
         mutation_review = _mutation_review_state(connection)
         connection.execute("COMMIT")
-        return {"task": task, "deadline": deadline, "restart": restart,
+        return {"task": task, "latest_task": latest_task,
+                "deadline": deadline, "restart": restart,
                 "finding": finding,
                 "mutations": mutations, "random_mutations": random_mutations,
                 "next_random_mutation": next_random, "mutation_review": mutation_review}
     finally:
         connection.close()
+
+
+def _command_owns_workspace(command: str, workspace: Path) -> bool:
+    """Compare process workspace arguments by filesystem identity, not spelling."""
+    try:
+        arguments = shlex.split(command, posix=os.name != "nt")
+        value = arguments[arguments.index("--workspace") + 1]
+        return Path(value.strip('"')).expanduser().resolve() == workspace.resolve()
+    except (OSError, RuntimeError, ValueError, IndexError):
+        return False
 
 
 def process_state(workspace: Path) -> dict[str, Any]:
@@ -616,20 +646,43 @@ def process_state(workspace: Path) -> dict[str, Any]:
             timeout=1, check=False,
         ).stdout
         if pid is None:
-            workspace_marker = f"--workspace {workspace}"
             for line in output.splitlines():
                 match = re.match(r"\s*(\d+)\s+\d+\s+(.*)", line)
-                if match and "coordinator_supervisor.py" in match.group(2) and workspace_marker in match.group(2):
+                if (match and "coordinator_supervisor.py" in match.group(2)
+                        and _command_owns_workspace(match.group(2), workspace)):
                     pid = int(match.group(1))
                     break
         if pid is None:
-            return {"supervisor": "absent", "coordinator": "absent", "pid": None}
+            return {"supervisor": "absent", "coordinator": "absent",
+                    "role": None, "pid": None}
         children = [line for line in output.splitlines() if re.match(rf"\s*\d+\s+{pid}\s+", line)]
         coordinator = "running" if any("codex-remote-run" in line or "codex" in line for line in children) else "waiting"
     except (OSError, subprocess.SubprocessError):
         if pid is None:
-            return {"supervisor": "unknown", "coordinator": "unknown", "pid": None}
-    return {"supervisor": "running", "coordinator": coordinator, "pid": pid}
+            return {"supervisor": "unknown", "coordinator": "unknown",
+                    "role": None, "pid": None}
+    role = "coordinator"
+    run_root = workspace / ".de67/state/coordinator-runs"
+    for status_path in sorted(
+        run_root.glob("*/status.txt"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    ):
+        try:
+            if status_path.read_text(encoding="ascii").strip() != "RUNNING":
+                continue
+            if _recorded_run_pid_is_alive(status_path) is False:
+                continue
+            role = (
+                "mutation-reviewer"
+                if status_path.parent.name.startswith("mutation-")
+                else "coordinator"
+            )
+            break
+        except (OSError, UnicodeError):
+            continue
+    return {"supervisor": "running", "coordinator": coordinator,
+            "role": role, "pid": pid}
 
 
 def _session_header(path: Path) -> dict[str, Any]:
@@ -668,6 +721,28 @@ def _session_complete(path: Path) -> bool:
     return completed >= 0 and completed > started
 
 
+def _recorded_run_pid_is_alive(status_path: Path) -> bool | None:
+    """Return whether a recorded runner PID is alive, or None for legacy records."""
+    pid_path = status_path.with_name("pid.txt")
+    try:
+        pid = int(pid_path.read_text(encoding="ascii").strip())
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def _active_coordinator_id(workspace: Path) -> str | None:
     """Read one unambiguous active coordinator id from passive durable run records."""
     status_root = workspace / ".de67/state"
@@ -676,10 +751,10 @@ def _active_coordinator_id(workspace: Path) -> str | None:
             ["ps", "axww", "-o", "pid=,command="], capture_output=True,
             text=True, timeout=1, check=False,
         ).stdout
-        workspace_marker = f"--workspace {workspace}"
         commands = [
             line.split(None, 1)[1] for line in output.splitlines()
-            if "coordinator_supervisor.py" in line and workspace_marker in line
+            if "coordinator_supervisor.py" in line
+            and _command_owns_workspace(line.split(None, 1)[1], workspace)
         ]
         if len(commands) != 1:
             raise ValueError("active coordinator supervisor is ambiguous")
@@ -696,6 +771,8 @@ def _active_coordinator_id(workspace: Path) -> str | None:
     for status_path in status_root.glob("**/status.txt"):
         try:
             if status_path.read_text(encoding="ascii").strip() != "RUNNING":
+                continue
+            if _recorded_run_pid_is_alive(status_path) is False:
                 continue
             session_id = status_path.with_name("session_id.txt").read_text(
                 encoding="ascii"
@@ -738,9 +815,9 @@ def _active_coordinator_id(workspace: Path) -> str | None:
 
 
 def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
-    """Project active Luna/Terra subagents from Codex's existing read-only session records."""
+    """Project active roster subagents from Codex's existing read-only session records."""
     counts = {model: {effort: 0 for effort in ("low", "medium", "high", "max")}
-              for model in ("luna", "terra")}
+              for model in ("luna", "terra", "sol")}
     paths = sorted(sessions_root.glob("**/rollout-*.jsonl"), reverse=True)
     root_path: Path | None = None
     root: dict[str, Any] = {}
@@ -870,9 +947,12 @@ class Dashboard:
             clock = self._clock_source()
             clock_data = clock.get("data", {})
             task = clock_data.get("task") or {}
-            claim = _claim_id(task.get("claim_id")) or parse_ledger(
+            latest_task = clock_data.get("latest_task") or {}
+            claim = (_claim_id(task.get("claim_id"))
+                     or _claim_id(latest_task.get("claim_id"))
+                     or parse_ledger(
                 ledger.get("text", "")
-            ).get("claim")
+            ).get("claim"))
             clock_path = clock.get("path")
             if isinstance(clock_path, Path):
                 sidecar = self._sidecar_source(clock_path, claim)
@@ -902,7 +982,10 @@ class Dashboard:
         ledger_data = parse_ledger(ledger.get("text", ""))
         clock_data = clock.get("data", {})
         task = clock_data.get("task") or {}
-        active_claim = _claim_id(task.get("claim_id")) or ledger_data["claim"]
+        latest_task = clock_data.get("latest_task") or {}
+        active_claim = (_claim_id(task.get("claim_id"))
+                        or _claim_id(latest_task.get("claim_id"))
+                        or ledger_data["claim"])
         upcoming = upcoming_dfs_work(dfs.get("text", ""), ledger_data, active_claim)
         deadline = clock_data.get("deadline") or {}
         restart = clock_data.get("restart") or {}
@@ -942,7 +1025,13 @@ class Dashboard:
 
         supervisor = process.get("supervisor", "unknown")
         coordinator = process.get("coordinator", "unknown")
-        work_value = "Blocked" if ledger_data["blocked"] else (task.get("task_id") or ledger_data["claim"] or "Idle")
+        process_role = process.get("role")
+        mutation_running = bool(
+            mutation_review.get("running") or process_role == "mutation-reviewer"
+        )
+        work_value = "Blocked" if ledger_data["blocked"] else (
+            task.get("task_id") or active_claim or "Idle"
+        )
         work_tone = (
             "red" if ledger_data["blocked"] else
             "green" if ledger_data["active"] and supervisor == "running" else
@@ -961,10 +1050,13 @@ class Dashboard:
         else:
             cards = "".join([
                 lamp("Supervisor", supervisor.title(), "green" if supervisor == "running" else "grey"),
-                lamp("Coordinator", coordinator.title(), "green" if coordinator == "running" else "yellow" if coordinator == "waiting" else "grey"),
+                lamp("Coordinator", (
+                    "Mutation reviewer" if process_role == "mutation-reviewer"
+                    else coordinator.title()
+                ), "yellow" if process_role == "mutation-reviewer" else "green" if coordinator == "running" else "yellow" if coordinator == "waiting" else "grey"),
                 lamp("Work", work_value, work_tone),
-                lamp("Mutation review", "Running" if mutation_review.get("running") else "Off",
-                     "yellow" if mutation_review.get("running") else "grey"),
+                lamp("Mutation review", "Running" if mutation_running else "Off",
+                     "yellow" if mutation_running else "grey"),
                 f'<div class="metric"><small>Deadline</small><strong>{remaining}</strong></div>',
                 f'<div class="metric"><small>Mutations</small><strong>{_escape((clock_data.get("mutations", 0) + clock_data.get("random_mutations", 0)) if clock_data else "—")}</strong><span class="metric-note">{_escape(random_note)}</span></div>',
             ])
@@ -974,7 +1066,7 @@ class Dashboard:
                     f'<tr><th>{model.title()}</th>' + "".join(
                         f'<td class="{"active-count" if worker_counts.get(model, {}).get(effort, 0) else ""}">{_escape(worker_counts.get(model, {}).get(effort, 0))}</td>'
                         for effort in ("low", "medium", "high", "max")
-                    ) + "</tr>" for model in ("luna", "terra")
+                    ) + "</tr>" for model in ("luna", "terra", "sol")
                 )
                 worker_body = f'<table><thead><tr><th>Model</th><th>Low</th><th>Medium</th><th>High</th><th>Max</th></tr></thead><tbody>{rows}</tbody></table>'
             else:
@@ -998,7 +1090,7 @@ class Dashboard:
                     f'<p class="subtle">Unavailable · {_escape(sidecar.get("error", "no report"))}</p></section>'
                 )
             details = " · ".join(filter(None, [
-                f'claim {_escape(task.get("claim_id"))}' if task.get("claim_id") else "",
+                f'claim {_escape(active_claim)}' if active_claim else "",
                 f'gap {_escape(task.get("closure_gap_id"))} r{_escape(task.get("closure_gap_revision"))}' if task.get("closure_gap_id") else "",
                 f'deadline generation {_escape(deadline.get("generation"))}' if deadline.get("generation") else "",
                 f'restart {_escape(restart.get("generation"))}' if restart.get("generation") else "",
@@ -1013,16 +1105,17 @@ class Dashboard:
                 )
             body = f'<div class="status">{cards}</div>{workers_html}{sidecar_html}{finding_html}<section><h2>Active work ledger</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section><h2>Upcoming DFS work</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
         page = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">{meta}
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>DE67</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>de67</title>
 <style>
 :root{{--bg:#101318;--panel:#1a1e24;--line:#343a43;--text:#eee9df;--muted:#9ca3ad;--green:#75c84c;--yellow:#f0bc28;--red:#e05248;--blue:#75a7d8}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}}main{{max-width:1180px;margin:auto;padding:24px}}header{{display:flex;align-items:baseline;gap:22px}}h1{{font-size:25px;margin:0}}header span,.subtle{{color:var(--muted)}}nav{{display:flex;margin:18px 0;border-bottom:1px solid var(--line)}}nav a{{color:var(--muted);text-decoration:none;padding:10px 16px}}nav a.selected{{color:var(--text);border:1px solid var(--line);border-bottom-color:var(--bg);border-radius:6px 6px 0 0;margin-bottom:-1px}}nav a:last-child{{margin-left:auto}}.status{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}}.lamp,.metric,section,.activity{{background:var(--panel);border:1px solid var(--line);border-radius:7px}}.lamp,.metric{{padding:13px 14px;min-height:82px}}small{{display:block;color:var(--muted);margin-bottom:10px}}strong{{font-size:18px}}.metric-note{{display:block;color:var(--muted);font-size:11px;margin-top:5px;white-space:nowrap}}.workers{{padding:12px 16px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:7px 12px;text-align:center;border-top:1px solid var(--line)}}thead th{{border-top:0;color:var(--muted);font-size:12px;font-weight:500}}tbody th{{text-align:left}}td{{font-variant-numeric:tabular-nums;color:var(--muted)}}td.active-count{{color:var(--green);font-weight:700}}.activity{{display:grid;grid-template-columns:100px max-content 1fr max-content;align-items:center;gap:12px;margin-top:10px;padding:10px 14px}}.activity small{{margin:0}}.activity strong{{font-size:13px}}.activity span{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.activity em{{color:var(--muted);font-style:normal;font-size:12px}}.dot{{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:8px}}.green{{background:var(--green)}}.yellow{{background:var(--yellow)}}.red{{background:var(--red)}}.grey{{background:#737983}}section{{margin-top:12px;padding:16px}}h2{{font-size:16px;margin:0 0 12px}}h3{{font-size:15px}}p,li{{line-height:1.55}}code{{background:#11151a;padding:2px 4px;border-radius:3px}}pre{{overflow:auto;background:#11151a;padding:12px;border-radius:5px}}.ledger-list{{margin-top:12px}}.ledger-item{{position:relative;margin:10px 0 0;padding:12px 16px 12px 22px;border:0;border-radius:0;background:linear-gradient(90deg,rgba(117,167,216,.08),transparent 68%)}}.ledger-item::before{{content:"";position:absolute;left:0;top:6px;bottom:6px;width:4px;border-radius:4px;background:linear-gradient(180deg,var(--blue),#536c86)}}.ledger-title{{font-weight:650;line-height:1.45}}.ledger-item ul{{list-style:none;margin:8px 0 0;padding-left:0;color:var(--muted)}}.ledger-item li{{padding:4px 0}}.ledger-item p{{margin:8px 0 0;color:var(--muted)}}.trajectory{{padding-bottom:12px}}.trajectory-scroll{{overflow:auto;display:flex;justify-content:center}}.trajectory svg{{display:block;width:min(100%,560px);height:auto;min-width:500px}}.trajectory-lines line{{stroke:var(--line);stroke-width:2}}.trajectory-node rect{{fill:#20252c;stroke:var(--line);stroke-width:2}}.trajectory-node.open rect{{stroke:var(--yellow)}}.trajectory-node.proved rect{{stroke:var(--green)}}.trajectory-node.active rect{{fill:#202b35;stroke:var(--blue);stroke-width:3}}.trajectory-node text,.trajectory-center text{{fill:var(--text);font:600 13px system-ui,sans-serif;text-anchor:middle}}.trajectory-node .node-state,.trajectory-center .node-state{{fill:var(--muted);font-size:10px;font-weight:500}}.trajectory-center rect{{fill:#111820;stroke:var(--blue);stroke-width:3}}.trajectory-note{{color:var(--muted);font-size:11px;text-align:center;line-height:1.5;padding:0 8px 4px}}footer{{display:flex;gap:25px;flex-wrap:wrap;color:var(--muted);padding:14px 4px}}footer em{{font-style:normal;color:#747c87;margin-left:5px}}.document{{padding:22px}}@media(max-width:900px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}@media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}header span{{display:none}}.activity{{grid-template-columns:1fr}}.activity span{{white-space:normal}}.trajectory svg{{min-width:460px}}}}
 .status{{grid-template-columns:repeat(6,1fr)}}
 .trajectory-observations{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}}.trajectory-observations span{{display:flex;flex-direction:column;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:5px;color:var(--muted);font-size:10px;line-height:1.35}}.trajectory-observations b{{color:var(--text);font-size:10px;font-weight:600;text-transform:capitalize;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.attention-panel{{min-width:0;padding:12px 12px 10px;border:1px solid var(--line);border-radius:6px;background:#151a20;overflow:auto}}.attention-heading{{display:flex;align-items:baseline;justify-content:space-between;gap:12px}}.attention-heading h3{{margin:0;font-size:13px}}.attention-heading span{{color:var(--muted);font-size:12px}}.attention-panel svg{{display:block;width:min(100%,760px);height:auto;min-width:540px;margin:auto}}.attention-grid polygon{{fill:none;stroke:#303741;stroke-width:1}}.attention-grid line{{stroke:#303741;stroke-width:1}}.attention-series polygon{{stroke-width:2.5;stroke-linejoin:round}}.attention-series circle{{stroke:none}}.attention-target polygon{{fill:none;stroke:#eee9df;stroke-dasharray:6 5}}.attention-target circle{{fill:#eee9df}}.attention-code polygon{{fill:rgba(117,167,216,.13);stroke:var(--blue)}}.attention-code circle{{fill:var(--blue)}}.attention-test polygon{{fill:rgba(240,188,40,.09);stroke:var(--yellow)}}.attention-test circle{{fill:var(--yellow)}}.attention-result polygon{{fill:rgba(189,128,214,.08);stroke:#bd80d6}}.attention-result circle{{fill:#bd80d6}}.attention-other polygon{{fill:none;stroke:#aab0b8}}.attention-other circle{{fill:#aab0b8}}.attention-legend{{display:flex;justify-content:center;gap:8px 13px;flex-wrap:wrap;color:var(--muted);font-size:12px}}.attention-legend span{{white-space:nowrap}}.attention-key{{display:inline-block;width:14px;height:3px;margin:0 5px 3px 0;border-radius:3px}}.attention-key.attention-target{{background:#eee9df}}.attention-key.attention-code{{background:var(--blue)}}.attention-key.attention-test{{background:var(--yellow)}}.attention-key.attention-result{{background:#bd80d6}}.attention-key.attention-other{{background:#aab0b8}}.attention-claim{{display:flex;justify-content:center;align-items:baseline;gap:9px;margin-top:7px}}.attention-claim strong{{font-size:14px}}.attention-claim span{{color:var(--muted);font-size:11px}}.attention-panel>p{{margin:6px 0 0;text-align:center;color:var(--muted);font-size:10px;line-height:1.4}}
+.gap-explanations{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-width:900px;margin:14px auto 0}}.gap-explanation{{position:relative;margin:0;padding:10px 12px 11px;border:1px solid var(--line);border-left:4px solid var(--yellow);border-radius:6px;background:#171c22}}.gap-explanation.proved{{border-left-color:var(--green)}}.gap-explanation.active{{border-left-color:var(--blue);background:#18212a}}.gap-explanation div{{display:flex;justify-content:space-between;gap:8px;margin-bottom:6px}}.gap-explanation div span{{font-size:12px;font-weight:700}}.gap-explanation .gap-state{{font-size:11px;font-weight:750;line-height:1.2;text-transform:capitalize}}.gap-explanation.open .gap-state{{color:var(--yellow)}}.gap-explanation.active .gap-state{{color:var(--blue)}}.gap-explanation.proved .gap-state{{color:var(--green)}}.gap-explanation p{{margin:5px 0 0;color:var(--muted);font-size:11px;font-weight:400;line-height:1.45}}
 @media(max-width:1000px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}
-@media(max-width:700px){{.trajectory-observations{{grid-template-columns:1fr 1fr}}.attention-heading{{align-items:flex-start;flex-direction:column}}}}
+@media(max-width:700px){{.gap-explanations{{grid-template-columns:1fr}}.attention-heading{{align-items:flex-start;flex-direction:column}}}}
 @media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}}}
-</style></head><body><main><header><h1>DE67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
+</style></head><body><main><header><h1>de67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")
 
 
@@ -1067,7 +1160,7 @@ def serve(workspace: Path, bind: str, port: int, refresh_seconds: int,
             print(f"dashboard: {format % args}")
 
     server = Server((bind, port), Handler)
-    print(f"DE67 dashboard: http://{bind}:{server.server_port} ({workspace})")
+    print(f"de67 dashboard: http://{bind}:{server.server_port} ({workspace})")
     server.serve_forever()
 
 
@@ -1080,7 +1173,7 @@ def main() -> None:
     parser.add_argument("--codex-sessions", type=Path, default=None,
                         help="Codex session root used for optional active-worker counts")
     parser.add_argument("--sidecar-script", type=Path, default=None,
-                        help="Optional DE67 trajectory_sidecar.py path")
+                        help="Optional de67 trajectory_sidecar.py path")
     args = parser.parse_args()
     if args.refresh_seconds < 0:
         parser.error("--refresh-seconds cannot be negative")

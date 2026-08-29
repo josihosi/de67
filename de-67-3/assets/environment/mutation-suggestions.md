@@ -1,10 +1,22 @@
 # DE-67 mutation suggestion ledger
 
-This is consumable scratch, not history or promotion authority. Independent reviews and manual
-suggestions use ordinary Markdown. At the end of a mutation review, reset the live ledger to this
-empty template. Applied suggestions need no other record. Move each rejected or failed suggestion
-to one short entry in optional `.de67/human-todo.md` before removing it. Mutation validation does
-not require an empty ledger, and ledger cleanup never blocks ordinary work.
+This is a consumable mutation queue, not history. User-authored entries carry the explicit
+mutation-scoped owner authority defined by the Phase-3 guidance; reviewer-authored candidates remain
+evidence-backed proposals. A successful review removes only the entries it completed. Preserve any
+blocked entry in place with its exact system/developer conflict, technical impossibility, unavailable
+external authority, or irreversible risk. A failed review removes nothing. Ledger cleanup never
+blocks unrelated ordinary work.
+
+Prefix every new user entry with one of these modes:
+
+- `Owner-authorized [trigger]:` requests an exclusive mutation review as soon as workers are quiet.
+- `Owner-authorized [defer]:` stays queued without waking or retiring the coordinator. The next
+  deadline, integrity, random, or otherwise regularly due mutation review consumes it as mandatory
+  input.
+
+An older unlabelled entry keeps the legacy `trigger` behavior. Changing modes does not change the
+entry's mutation-scoped owner authority. A reviewer removes an entry only after applying or exactly
+dispositioning it; supervisor recovery cannot consume it a second time.
 
 Every deadline miss records both:
 

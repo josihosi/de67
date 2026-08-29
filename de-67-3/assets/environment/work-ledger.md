@@ -3,7 +3,9 @@
 DFS: `.de67/DFS.md`
 Lineage: `<one stable project identity; the deadline database binds it on first task>`
 
-Keep only the current batch, with at most ten still-red DFS claims. Each item names one mode:
+Keep the currently actionable red DFS claims. Refill this projection whenever executable red DFS
+work remains; an empty batch is not completion. Do not impose a batch-size limit. Each item names
+one mode:
 
 - `Exploration` — one learning goal, the unknown premise, and evidence that will yield a strategy
   plus proof route.

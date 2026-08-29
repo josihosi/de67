@@ -10,36 +10,75 @@ This file routes Phase 3; it is not the coordinator procedure.
 The invocation authorizes implementation of the frozen DFS in the named working repository. Do not
 read `de-67-1/` or `de-67-2/`. Never inventory, search, or read `.de67/no-go-zone/`.
 
-This router is bootstrap material. A launcher may read it to initialize Phase 3. Runtime
-coordinators, workers, stewards, and mutators must not read packaged Phase-3 prose under this skill
-after launch. They may execute the packaged scripts as tools.
+This router is bootstrap material. A launcher may read it to initialize Phase 3. Runtime decisions
+come from the compiled policy kernel, not packaged or workspace guideline prose. Packaged scripts
+may be executed as tools.
 
 Inspect `.de67/state/workspace.json` and verify that `.de67/DFS.md` records `Frozen` or `Refrozen`
 against an inspected source baseline. A missing configuration, draft DFS, unresolved material owner
 choice, or changed user outcome returns to de67 2.
 
-Copy each missing ledger or guideline from `assets/environment/` individually. Never overwrite an
-existing project file with a template. Machine state stays under `.de67/state/`; the DFS, ledgers,
-and mutable guidance are ordinary project artifacts. During delivery, the active policy is only:
+Copy each missing environment artifact individually. Never overwrite an existing project file.
+Machine state stays under `.de67/state/`; the DFS and ledgers remain ordinary project artifacts.
+The machine-canonical runtime policy is `.de67/phase3-policy.d67`, compiled from the branch's Phase-3
+policy source and bound to its canonical digest. Route priorities, predicates, actions, reads,
+obligations, fallback behavior, event vocabulary, temporal transitions, and keyed lifecycle rules
+are mutable source data. The immutable kernel only authenticates and interprets that data. Guideline
+Markdown is retained only as a legacy differential fixture during this experiment.
 
-- `.de67/orchestrator-guidelines.md` for coordination and routed mutation work;
-- `.de67/test-and-task-guidelines.md` for task, worker, and test work.
+Before every route decision, execute `scripts/policy_kernel.py decide` against the local compiled
+policy, workspace, and deadline database. The returned action names the only policy reads and
+obligations that enter the next brief. Unknown, corrupt, ambiguous, or unsupported policy fails
+closed instead of falling back to prose.
 
-Every runtime brief must point to the relevant local file and section. Read only the sections on the
-current route, but never substitute the packaged template or role prose for the local mutable copy.
+Policy mutations operate on a candidate machine source and contract corpus under `.de67/state/`.
+Promote the candidate source and compiled bytecode together only after `policy_kernel.py guard`
+proves every contract, temporal invariant, mutation-ledger route, deadline wake, and rule necessity.
+The successful promotion requests one fresh coordinator; failed candidates have no authority.
+Compilation lowers object-shaped policy into positional instruction vectors, interns repeated
+symbols, and compresses the resulting tape. `policy_kernel.py decompile` must recover the normalized
+source exactly; lossy or noncanonical artifacts fail closed.
 
 ## Route locally
 
-The supervisor launches a coordinator against the workspace-local orchestration guidance. The
-coordinator routes workers to relevant workspace-local task guidance. Deadline, integrity, random,
-DFS, and universal reviews use the corresponding local sections and durable clock state. Loading
-unrelated sections is discouraged for token cost, not forbidden when the current decision needs
-them.
+If you are explicitly starting, restarting, stopping, or diagnosing the external Phase-3
+supervisor, first read [references/external-supervisor.md](references/external-supervisor.md).
+Ordinary coordination, worker execution, and internal mutation handoff do not read that reference.
+
+On macOS, start the external supervisor only through
+`scripts/supervisor_service.py start --workspace <workspace>`. This creates one detached,
+workspace-keyed tmux session whose lifetime is independent of the invoking terminal and which
+retains the invoking user's workspace permissions. Use its `status` and `stop` commands for
+observation and shutdown. The session has no automatic restart: a crash stays visible and requires
+an explicit start instead of becoming an automatic restart loop. Direct
+foreground execution of `coordinator_supervisor.py` is reserved for tests and attended diagnosis,
+not an ordinary Phase-3 launch.
+
+The supervisor launches an ordinary `gpt-5.6-sol` coordinator at low against the compiled workspace
+policy. The coordinator asks the kernel for the next transition and routes only the returned minimal
+brief. A due mutation blocks new dispatch. Once all already-live worker windows are terminal, the
+coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh
+`gpt-5.6-sol` reviewer at high with no coordinator or worker active. That reviewer reads the complete
+mutation-suggestion ledger and treats each user-authored suggestion as explicit mutation-scoped
+owner authority beneath system and developer instructions. Within the Phase-3 framework, that
+authority supersedes conflicting ordinary skill, workspace, selected-lane, freeze, and
+mutation-surface restrictions to the extent necessary to achieve the suggestion. It may, for
+example, thaw and refreeze the DFS or change a normally protected method artifact when the
+suggestion requires that change. It does not authorize unrelated work, dishonest evidence, or a
+different owner outcome. The reviewer follows every suggestion through, dispositions every entry,
+resolves the durable mutation gate, and exits.
+An `Owner-authorized [trigger]:` entry creates that exclusive gate as soon as workers are quiet. An
+`Owner-authorized [defer]:` entry remains mandatory queued reviewer input but does not wake, retire,
+or replace the ordinary coordinator; the next regularly due mutation review consumes it. Legacy
+unlabelled entries retain trigger behavior.
+Only then does the supervisor launch one fresh low coordinator. Product strategy and evidence
+judgment remain model work inside the selected route.
 
 ## Terminal routing
 
 Ordinary worker results, test failures, acceptance, ledger refill, and exploration-to-closure
 transition stay with the same coordinator. A formal terminal finding also stays with that
 coordinator; it is reserved for a disproved strategy, materially different route, external blocker,
-or exhausted bounded route. An applied method or DFS mutation requests a fresh coordinator and
-retires the old one. The external supervisor launches and acknowledges the successor.
+or exhausted bounded route. Mutation completion is the only planned fresh-coordinator boundary.
+An abnormal process exit remains recoverable, but it is recorded as recovery rather than treated as
+a policy restart. The external supervisor exclusively launches and acknowledges every process.

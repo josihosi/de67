@@ -154,6 +154,7 @@ class DeadlineHarness:
                 abandonment_reason TEXT,
                 closure_gap_id TEXT,
                 closure_gap_revision INTEGER,
+                supervisor_epoch_generation INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (lineage_id, task_id)
             );
 
@@ -185,6 +186,34 @@ class DeadlineHarness:
                 short_verdict TEXT NOT NULL,
                 evidence TEXT NOT NULL,
                 PRIMARY KEY (lineage_id, task_id),
+                FOREIGN KEY (lineage_id, task_id)
+                    REFERENCES tasks(lineage_id, task_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS worker_claims (
+                lineage_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                worker_id TEXT NOT NULL,
+                coordinator_session_id TEXT NOT NULL,
+                supervisor_id TEXT NOT NULL,
+                claimed_at REAL NOT NULL,
+                last_checkpoint_at REAL NOT NULL,
+                released_at REAL,
+                release_reason TEXT,
+                PRIMARY KEY (lineage_id, task_id),
+                FOREIGN KEY (lineage_id, task_id)
+                    REFERENCES tasks(lineage_id, task_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS worker_checkpoints (
+                lineage_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL CHECK (sequence > 0),
+                worker_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                evidence TEXT NOT NULL,
+                recorded_at REAL NOT NULL,
+                PRIMARY KEY (lineage_id, task_id, sequence),
                 FOREIGN KEY (lineage_id, task_id)
                     REFERENCES tasks(lineage_id, task_id)
             );
@@ -250,6 +279,13 @@ class DeadlineHarness:
                 )
             );
 
+            CREATE TABLE IF NOT EXISTS external_supervisor_epochs (
+                lineage_id TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK (generation > 0),
+                normalized_at REAL NOT NULL,
+                PRIMARY KEY (lineage_id, generation)
+            );
+
             CREATE TABLE IF NOT EXISTS claim_clocks (
                 lineage_id TEXT NOT NULL,
                 claim_id TEXT NOT NULL,
@@ -270,6 +306,8 @@ class DeadlineHarness:
                 started_at REAL NOT NULL,
                 deadline_at REAL NOT NULL,
                 armed_by_restart_generation INTEGER,
+                retired_at REAL,
+                retirement_reason TEXT,
                 PRIMARY KEY (lineage_id, claim_id, generation),
                 FOREIGN KEY (lineage_id, claim_id)
                     REFERENCES claim_clocks(lineage_id, claim_id)
@@ -624,9 +662,28 @@ class DeadlineHarness:
             self.connection.execute(
                 "ALTER TABLE tasks ADD COLUMN closure_gap_revision INTEGER"
             )
+        if "supervisor_epoch_generation" not in task_columns:
+            self.connection.execute(
+                "ALTER TABLE tasks ADD COLUMN supervisor_epoch_generation "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
         if "deadline_generation" not in task_columns:
             self.connection.execute(
                 "ALTER TABLE tasks ADD COLUMN deadline_generation INTEGER NOT NULL DEFAULT 1"
+            )
+        generation_columns = {
+            row[1]
+            for row in self.connection.execute(
+                "PRAGMA table_info(claim_deadline_generations)"
+            ).fetchall()
+        }
+        if "retired_at" not in generation_columns:
+            self.connection.execute(
+                "ALTER TABLE claim_deadline_generations ADD COLUMN retired_at REAL"
+            )
+        if "retirement_reason" not in generation_columns:
+            self.connection.execute(
+                "ALTER TABLE claim_deadline_generations ADD COLUMN retirement_reason TEXT"
             )
         self.connection.execute(
             """
@@ -1004,9 +1061,41 @@ class DeadlineHarness:
             END;
             """
         )
+        self._migrate_task_terminal_kind_triggers()
         self._migrate_v2_closure_gaps()
         self.connection.execute("PRAGMA user_version = 5")
         self.connection.commit()
+
+    def _migrate_task_terminal_kind_triggers(self) -> None:
+        """Keep persisted terminal validation aligned with harness lifecycle states."""
+        self.connection.executescript(
+            """
+            DROP TRIGGER IF EXISTS task_terminal_kind_is_valid_on_insert;
+            DROP TRIGGER IF EXISTS task_terminal_kind_is_valid_on_update;
+
+            CREATE TRIGGER task_terminal_kind_is_valid_on_insert
+            BEFORE INSERT ON tasks
+            WHEN NEW.attempt_terminal_kind IS NOT NULL
+             AND NEW.attempt_terminal_kind NOT IN (
+                 'completed', 'abandoned', 'finding', 'integrity_breach',
+                 'restart_normalized'
+             )
+            BEGIN
+                SELECT RAISE(ABORT, 'unsupported attempt terminal kind');
+            END;
+
+            CREATE TRIGGER task_terminal_kind_is_valid_on_update
+            BEFORE UPDATE OF attempt_terminal_kind ON tasks
+            WHEN NEW.attempt_terminal_kind IS NOT NULL
+             AND NEW.attempt_terminal_kind NOT IN (
+                 'completed', 'abandoned', 'finding', 'integrity_breach',
+                 'restart_normalized'
+             )
+            BEGIN
+                SELECT RAISE(ABORT, 'unsupported attempt terminal kind');
+            END;
+            """
+        )
 
     def _migrate_random_interval_constraint(self) -> None:
         """Widen legacy cadence storage without redrawing persisted cycles."""
@@ -1434,6 +1523,55 @@ class DeadlineHarness:
             self.connection.rollback()
             raise
 
+    def retire_claim_clocks_for_mutation(
+        self,
+        lineage_id: str,
+        reason: str,
+        *,
+        now: float | None = None,
+    ) -> int:
+        """Retire every active claim deadline before an exclusive mutation review."""
+
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        reason = self._nonempty_text(reason, "Mutation clock retirement reason")
+        retired_at = self._now(now)
+        self._begin()
+        try:
+            self._bind_lineage(lineage_id)
+            running = self.connection.execute(
+                """
+                SELECT task_id FROM tasks
+                WHERE lineage_id = ? AND attempt_terminal_at IS NULL
+                ORDER BY started_at, task_id LIMIT 1
+                """,
+                (lineage_id,),
+            ).fetchone()
+            if running is not None:
+                raise DeadlineError(
+                    "Mutation cannot retire clocks while a worker attempt is running: "
+                    + str(running["task_id"])
+                )
+            cursor = self.connection.execute(
+                """
+                UPDATE claim_deadline_generations AS generation
+                SET retired_at = ?, retirement_reason = ?
+                WHERE generation.lineage_id = ?
+                  AND generation.retired_at IS NULL
+                  AND generation.generation = (
+                    SELECT MAX(latest.generation)
+                    FROM claim_deadline_generations AS latest
+                    WHERE latest.lineage_id = generation.lineage_id
+                      AND latest.claim_id = generation.claim_id
+                  )
+                """,
+                (retired_at, reason, lineage_id),
+            )
+            self.connection.commit()
+            return cursor.rowcount
+        except Exception:
+            self.connection.rollback()
+            raise
+
     def _task(self, lineage_id: str, task_id: str) -> sqlite3.Row:
         row = self.connection.execute(
             "SELECT * FROM tasks WHERE lineage_id = ? AND task_id = ?",
@@ -1451,7 +1589,8 @@ class DeadlineHarness:
                    generation.deadline_at, clock.phase,
                    clock.migrated_from_task_id, clock.migration_note,
                    generation.generation AS deadline_generation,
-                   generation.armed_by_restart_generation
+                   generation.armed_by_restart_generation,
+                   generation.retired_at, generation.retirement_reason
             FROM claim_clocks AS clock
             JOIN claim_deadline_generations AS generation
               ON generation.lineage_id = clock.lineage_id
@@ -1726,7 +1865,8 @@ class DeadlineHarness:
                    generation.deadline_at, clock.phase,
                    clock.migrated_from_task_id, clock.migration_note,
                    generation.generation AS deadline_generation,
-                   generation.armed_by_restart_generation
+                   generation.armed_by_restart_generation,
+                   generation.retired_at, generation.retirement_reason
             FROM claim_clocks AS clock
             JOIN claim_deadline_generations AS generation
               ON generation.lineage_id = clock.lineage_id
@@ -2321,6 +2461,13 @@ class DeadlineHarness:
             """
             SELECT COUNT(*) AS total FROM tasks
             WHERE lineage_id = ? AND attempt_terminal_at IS NOT NULL
+              AND NOT (
+                attempt_terminal_kind = 'restart_normalized'
+                OR (
+                    attempt_terminal_kind = 'abandoned'
+                    AND abandonment_reason = 'external_supervisor_restart_normalization'
+                )
+              )
             """,
             (lineage_id,),
         ).fetchone()
@@ -2552,13 +2699,13 @@ class DeadlineHarness:
     def _ensure_random_cycle(self, lineage_id: str) -> sqlite3.Row:
         cycle = self._latest_random_cycle(lineage_id)
         if cycle is not None and cycle["resolution_evidence"] is None:
+            cycle = self._mark_random_cycle_due_if_reached(cycle)
             if cycle["due_task_id"] is not None:
                 cycle = self._snapshot_universal_capability(
                     lineage_id, int(cycle["cycle_number"])
                 )
             if cycle["resolution_evidence"] is None:
                 return cycle
-        completed = self._terminal_window_count(lineage_id)
         number = 1 if cycle is None else int(cycle["cycle_number"]) + 1
         cycle_start = (
             0 if cycle is None else int(cycle["due_after_terminal_windows"])
@@ -2583,29 +2730,53 @@ class DeadlineHarness:
         cycle = self._latest_random_cycle(lineage_id)
         if cycle is None:
             raise DeadlineError("Failed to persist random mutation cycle")
-        if completed >= cycle["due_after_terminal_windows"]:
-            boundary = self.connection.execute(
-                """
-                SELECT task_id FROM tasks
-                WHERE lineage_id = ? AND attempt_terminal_at IS NOT NULL
-                ORDER BY attempt_terminal_at, task_id
-                LIMIT 1 OFFSET ?
-                """,
-                (lineage_id, cycle["due_after_terminal_windows"] - 1),
-            ).fetchone()
-            self.connection.execute(
-                """
-                UPDATE random_mutation_cycles SET due_task_id = ?
-                WHERE lineage_id = ? AND cycle_number = ?
-                """,
-                (boundary["task_id"], lineage_id, cycle["cycle_number"]),
+        cycle = self._mark_random_cycle_due_if_reached(cycle)
+        if cycle["due_task_id"] is not None:
+            cycle = self._snapshot_universal_capability(
+                lineage_id, int(cycle["cycle_number"])
             )
-            cycle = self._latest_random_cycle(lineage_id)
-            if cycle is not None:
-                cycle = self._snapshot_universal_capability(
-                    lineage_id, int(cycle["cycle_number"])
-                )
         return cycle
+
+    def _mark_random_cycle_due_if_reached(self, cycle: sqlite3.Row) -> sqlite3.Row:
+        if cycle["due_task_id"] is not None:
+            return cycle
+        boundary = self.connection.execute(
+            """
+            SELECT task_id FROM tasks
+            WHERE lineage_id = ? AND attempt_terminal_at IS NOT NULL
+              AND NOT (
+                attempt_terminal_kind = 'restart_normalized'
+                OR (
+                    attempt_terminal_kind = 'abandoned'
+                    AND abandonment_reason = 'external_supervisor_restart_normalization'
+                )
+              )
+            ORDER BY attempt_terminal_at, task_id
+            LIMIT 1 OFFSET ?
+            """,
+            (
+                cycle["lineage_id"],
+                cycle["due_after_terminal_windows"] - 1,
+            ),
+        ).fetchone()
+        if boundary is None:
+            return cycle
+        self.connection.execute(
+            """
+            UPDATE random_mutation_cycles SET due_task_id = ?
+            WHERE lineage_id = ? AND cycle_number = ?
+              AND due_task_id IS NULL AND resolution_evidence IS NULL
+            """,
+            (
+                boundary["task_id"],
+                cycle["lineage_id"],
+                cycle["cycle_number"],
+            ),
+        )
+        refreshed = self._latest_random_cycle(cycle["lineage_id"])
+        if refreshed is None:
+            raise DeadlineError("Failed to reconcile random mutation cycle")
+        return refreshed
 
     def _random_cycle_result(self, row: sqlite3.Row) -> dict[str, Any]:
         completed = self._terminal_window_count(row["lineage_id"])
@@ -2669,6 +2840,19 @@ class DeadlineHarness:
                 terminal_at,
                 terminal_at,
                 terminal_kind,
+                task["lineage_id"],
+                task["task_id"],
+            ),
+        )
+        self.connection.execute(
+            """
+            UPDATE worker_claims
+            SET released_at = ?, release_reason = ?
+            WHERE lineage_id = ? AND task_id = ? AND released_at IS NULL
+            """,
+            (
+                terminal_at,
+                f"task_{terminal_kind}",
                 task["lineage_id"],
                 task["task_id"],
             ),
@@ -2792,6 +2976,8 @@ class DeadlineHarness:
         completion_invalid: bool = False,
     ) -> dict[str, Any] | None:
         claim = self._task_claim(task["lineage_id"], task["task_id"])
+        if claim["retired_at"] is not None:
+            return None
         accepted = self._latest_valid_acceptance(
             str(task["lineage_id"]), str(task["claim_id"])
         )
@@ -2925,6 +3111,8 @@ class DeadlineHarness:
         )
         if task["integrity_breached_at"] is not None:
             state = "integrity_breach"
+        elif task["attempt_terminal_kind"] == "restart_normalized":
+            state = "restart_normalized"
         elif task["attempt_terminal_kind"] == "abandoned":
             state = "abandoned"
         elif attempt_completed:
@@ -3131,6 +3319,170 @@ class DeadlineHarness:
             for row in rows
         ]
 
+    def claim_worker(
+        self,
+        lineage_id: str,
+        task_id: str,
+        worker_id: str,
+        coordinator_session_id: str,
+        supervisor_id: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        task_id = self._identity(task_id, "Task id")
+        worker_id = self._identity(worker_id, "Worker id")
+        coordinator_session_id = self._identity(
+            coordinator_session_id, "Coordinator session id"
+        )
+        supervisor_id = self._identity(supervisor_id, "Supervisor id")
+        claimed_at = self._now(now)
+        self._begin()
+        try:
+            task = self._task(lineage_id, task_id)
+            if task["attempt_terminal_at"] is not None:
+                raise DeadlineError("Cannot claim a terminal worker attempt")
+            existing = self.connection.execute(
+                "SELECT * FROM worker_claims WHERE lineage_id = ? AND task_id = ?",
+                (lineage_id, task_id),
+            ).fetchone()
+            identity = (worker_id, coordinator_session_id, supervisor_id)
+            if existing is None:
+                self.connection.execute(
+                    """
+                    INSERT INTO worker_claims (
+                        lineage_id, task_id, worker_id, coordinator_session_id,
+                        supervisor_id, claimed_at, last_checkpoint_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (lineage_id, task_id, *identity, claimed_at, claimed_at),
+                )
+                recorded = True
+            elif existing["released_at"] is None and identity == (
+                existing["worker_id"],
+                existing["coordinator_session_id"],
+                existing["supervisor_id"],
+            ):
+                recorded = False
+            else:
+                raise DeadlineError("Worker attempt already has another ownership claim")
+            self.connection.commit()
+            return {
+                "task_id": task_id,
+                "worker_id": worker_id,
+                "coordinator_session_id": coordinator_session_id,
+                "supervisor_id": supervisor_id,
+                "claimed_at": claimed_at if existing is None else existing["claimed_at"],
+                "recorded": recorded,
+                "state": "claimed",
+            }
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def checkpoint_worker(
+        self,
+        lineage_id: str,
+        task_id: str,
+        worker_id: str,
+        kind: str,
+        evidence: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        task_id = self._identity(task_id, "Task id")
+        worker_id = self._identity(worker_id, "Worker id")
+        kind = self._identity(kind, "Checkpoint kind")
+        evidence = self._nonempty_text(evidence, "Checkpoint evidence")
+        recorded_at = self._now(now)
+        self._begin()
+        try:
+            claim = self.connection.execute(
+                "SELECT * FROM worker_claims WHERE lineage_id = ? AND task_id = ?",
+                (lineage_id, task_id),
+            ).fetchone()
+            if claim is None or claim["released_at"] is not None:
+                raise DeadlineError("Worker attempt has no active ownership claim")
+            if claim["worker_id"] != worker_id:
+                raise DeadlineError("Checkpoint worker does not own this attempt")
+            sequence = int(
+                self.connection.execute(
+                    "SELECT COUNT(*) FROM worker_checkpoints WHERE lineage_id = ? AND task_id = ?",
+                    (lineage_id, task_id),
+                ).fetchone()[0]
+            ) + 1
+            self.connection.execute(
+                """
+                INSERT INTO worker_checkpoints
+                (lineage_id, task_id, sequence, worker_id, kind, evidence, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (lineage_id, task_id, sequence, worker_id, kind, evidence, recorded_at),
+            )
+            self.connection.execute(
+                """
+                UPDATE worker_claims SET last_checkpoint_at = ?
+                WHERE lineage_id = ? AND task_id = ?
+                """,
+                (recorded_at, lineage_id, task_id),
+            )
+            self.connection.commit()
+            return {"task_id": task_id, "worker_id": worker_id, "sequence": sequence,
+                    "kind": kind, "state": "checkpointed"}
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def release_worker_claim(
+        self,
+        lineage_id: str,
+        task_id: str,
+        worker_id: str,
+        reason: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        task_id = self._identity(task_id, "Task id")
+        worker_id = self._identity(worker_id, "Worker id")
+        reason = self._nonempty_text(reason, "Release reason")
+        released_at = self._now(now)
+        self._begin()
+        try:
+            claim = self.connection.execute(
+                "SELECT * FROM worker_claims WHERE lineage_id = ? AND task_id = ?",
+                (lineage_id, task_id),
+            ).fetchone()
+            if claim is None:
+                raise DeadlineError("Worker attempt has no ownership claim")
+            if claim["worker_id"] != worker_id:
+                raise DeadlineError("Release worker does not own this attempt")
+            if claim["released_at"] is None:
+                task = self._task(lineage_id, task_id)
+                if task["attempt_terminal_at"] is None:
+                    self._record_miss_if_due(task, released_at)
+                    self.connection.execute(
+                        """UPDATE tasks SET abandoned_at = ?, abandonment_reason = ?
+                           WHERE lineage_id = ? AND task_id = ?""",
+                        (released_at, reason, lineage_id, task_id),
+                    )
+                    self._record_terminal_window(task, released_at, "abandoned")
+                self.connection.execute(
+                    """UPDATE worker_claims SET released_at = ?, release_reason = ?
+                       WHERE lineage_id = ? AND task_id = ?""",
+                    (released_at, reason, lineage_id, task_id),
+                )
+                recorded = True
+            else:
+                recorded = False
+            self.connection.commit()
+            return {"task_id": task_id, "worker_id": worker_id,
+                    "released_at": claim["released_at"] or released_at,
+                    "recorded": recorded, "state": "released"}
+        except Exception:
+            self.connection.rollback()
+            raise
     def start_task(
         self,
         lineage_id: str,
@@ -3226,11 +3578,57 @@ class DeadlineHarness:
                 )
             advanced_deadline_generation = False
             if existing is None and claim is not None:
-                incident = self._claim_deadline_incident(
-                    lineage_id, claim_id, int(claim["deadline_generation"])
-                )
-                if incident is not None and not self._deadline_mutation_pending(
+                if claim["retired_at"] is not None:
+                    administrative_restart = (
+                        claim["retirement_reason"]
+                        == "external_supervisor_restart_normalization"
+                    )
+                    restart = None
+                    if not administrative_restart:
+                        restart = self.connection.execute(
+                            """
+                            SELECT * FROM coordinator_restart_requests
+                            WHERE lineage_id = ? AND acknowledged_at IS NOT NULL
+                              AND requested_at >= ?
+                            ORDER BY generation DESC LIMIT 1
+                            """,
+                            (lineage_id, claim["retired_at"]),
+                        ).fetchone()
+                        if restart is None:
+                            raise DeadlineError(
+                                "A retired mutation clock requires its acknowledged fresh "
+                                "coordinator before a new deadline can be armed"
+                            )
+                    next_generation = int(claim["deadline_generation"]) + 1
+                    self.connection.execute(
+                        """
+                        INSERT INTO claim_deadline_generations (
+                            lineage_id, claim_id, generation, estimate_seconds,
+                            started_at, deadline_at, armed_by_restart_generation
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            lineage_id,
+                            claim_id,
+                            next_generation,
+                            estimate,
+                            started_at,
+                            started_at + estimate,
+                            restart["generation"] if restart is not None else None,
+                        ),
+                    )
+                    claim = self._claim(lineage_id, claim_id)
+                    advanced_deadline_generation = True
+                else:
+                    incident = self._claim_deadline_incident(
+                        lineage_id, claim_id, int(claim["deadline_generation"])
+                    )
+                if (
+                    not advanced_deadline_generation
+                    and incident is not None
+                    and not self._deadline_mutation_pending(
                     lineage_id, claim_id
+                    )
                 ):
                     restart_generation = incident["restart_generation"]
                     restart = (
@@ -3244,26 +3642,7 @@ class DeadlineHarness:
                         if restart_generation is not None
                         else None
                     )
-                    macro = self.connection.execute(
-                        """
-                        SELECT no_change_required
-                        FROM deadline_generation_mutation_components
-                        WHERE lineage_id = ? AND claim_id = ?
-                          AND generation = ? AND component = 'macro'
-                        """,
-                        (
-                            lineage_id,
-                            claim_id,
-                            int(claim["deadline_generation"]),
-                        ),
-                    ).fetchone()
-                    no_change_required = bool(
-                        macro is not None and macro["no_change_required"]
-                    )
-                    if (
-                        not no_change_required
-                        and (restart is None or restart["acknowledged_at"] is None)
-                    ):
+                    if restart is None or restart["acknowledged_at"] is None:
                         raise DeadlineError(
                             "Resolved deadline generation requires its acknowledged "
                             "successor before a new work deadline can be armed"
@@ -3283,7 +3662,7 @@ class DeadlineHarness:
                             estimate,
                             started_at,
                             started_at + estimate,
-                            restart_generation if not no_change_required else None,
+                            restart_generation,
                         ),
                     )
                     claim = self._claim(lineage_id, claim_id)
@@ -3438,6 +3817,11 @@ class DeadlineHarness:
                                 "Closure gap revision already has a live attempt; "
                                 "abandon it before dispatching a replacement"
                             )
+            supervisor_epoch = self.connection.execute(
+                "SELECT COALESCE(MAX(generation), 0) FROM external_supervisor_epochs "
+                "WHERE lineage_id = ?",
+                (lineage_id,),
+            ).fetchone()[0]
             cursor = self.connection.execute(
                 """
                 INSERT OR IGNORE INTO tasks (
@@ -3445,8 +3829,9 @@ class DeadlineHarness:
                     estimate_seconds, started_at, deadline_at,
                     deadline_generation,
                     phase_at_dispatch, phase_sequence_at_dispatch,
-                    closure_gap_id, closure_gap_revision
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    closure_gap_id, closure_gap_revision,
+                    supervisor_epoch_generation
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     lineage_id,
@@ -3460,6 +3845,7 @@ class DeadlineHarness:
                     phase_sequence,
                     selected_gap_id,
                     selected_gap_revision,
+                    supervisor_epoch,
                 ),
             )
             created = cursor.rowcount == 1
@@ -4228,6 +4614,92 @@ class DeadlineHarness:
             result["random_mutation"] = self._random_mutation_status(lineage_id)
             self.connection.commit()
             return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def normalize_external_supervisor_start(
+        self,
+        lineage_id: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Remove prior-epoch runtime ownership before one explicit start."""
+
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        normalized_at = self._now(now)
+        reason = "external_supervisor_restart_normalization"
+        self._begin()
+        try:
+            self._bind_lineage(lineage_id)
+            epoch = self.connection.execute(
+                "SELECT COALESCE(MAX(generation), 0) + 1 FROM external_supervisor_epochs "
+                "WHERE lineage_id = ?",
+                (lineage_id,),
+            ).fetchone()[0]
+            self.connection.execute(
+                "INSERT INTO external_supervisor_epochs "
+                "(lineage_id, generation, normalized_at) VALUES (?, ?, ?)",
+                (lineage_id, epoch, normalized_at),
+            )
+            active = self.connection.execute(
+                """
+                SELECT * FROM tasks
+                WHERE lineage_id = ? AND attempt_terminal_at IS NULL
+                ORDER BY started_at, task_id
+                """,
+                (lineage_id,),
+            ).fetchall()
+            for task in active:
+                self.connection.execute(
+                    """
+                    UPDATE tasks
+                    SET terminal_at = ?, attempt_terminal_at = ?,
+                        attempt_terminal_kind = 'restart_normalized',
+                        abandoned_at = ?, abandonment_reason = ?
+                    WHERE lineage_id = ? AND task_id = ?
+                    """,
+                    (
+                        normalized_at, normalized_at, normalized_at, reason,
+                        lineage_id, task["task_id"],
+                    ),
+                )
+                self.connection.execute(
+                    """
+                    UPDATE worker_claims
+                    SET released_at = ?, release_reason = 'restart_normalized'
+                    WHERE lineage_id = ? AND task_id = ? AND released_at IS NULL
+                    """,
+                    (normalized_at, lineage_id, task["task_id"]),
+                )
+            self.connection.execute(
+                """
+                UPDATE claim_deadline_generations
+                SET retired_at = ?, retirement_reason = ?
+                WHERE lineage_id = ? AND retired_at IS NULL
+                  AND generation = (
+                    SELECT MAX(latest.generation)
+                    FROM claim_deadline_generations AS latest
+                    WHERE latest.lineage_id = claim_deadline_generations.lineage_id
+                      AND latest.claim_id = claim_deadline_generations.claim_id
+                  )
+                """,
+                (normalized_at, reason, lineage_id),
+            )
+            released = self.connection.execute(
+                """
+                UPDATE coordinator_restart_requests
+                SET claimed_at = NULL, expected_run_id = NULL
+                WHERE lineage_id = ? AND acknowledged_at IS NULL
+                  AND expected_run_id IS NOT NULL
+                """,
+                (lineage_id,),
+            ).rowcount
+            self.connection.commit()
+            return {
+                "abandoned_attempts": len(active),
+                "released_restart_claim": released > 0,
+            }
         except Exception:
             self.connection.rollback()
             raise
@@ -5121,10 +5593,11 @@ class DeadlineHarness:
                 refreshed = self._claim_deadline_incident(lineage_id, claim_id)
                 if refreshed is None:
                     raise DeadlineError("Failed to read claim deadline incident")
-                if refreshed["restart_generation"] is None and not no_change_required:
+                if refreshed["restart_generation"] is None:
                     restart, _ = self._request_coordinator_restart(
                         lineage_id,
-                        f"deadline mutation resolved for {claim_id}",
+                        f"deadline mutation resolved for {claim_id}; "
+                        "successor must set a fresh clock without inheritance",
                         resolved_at,
                     )
                     self.connection.execute(
@@ -6248,6 +6721,20 @@ def build_parser() -> argparse.ArgumentParser:
     add_task_identity_flags(abandon)
     abandon.add_argument("--reason", required=True)
 
+    checkpoint_worker = commands.add_parser(
+        "checkpoint-worker", help="Record durable progress for the owning worker"
+    )
+    add_task_identity_flags(checkpoint_worker)
+    checkpoint_worker.add_argument("--worker", required=True)
+    checkpoint_worker.add_argument("--kind", required=True)
+    checkpoint_worker.add_argument("--evidence", required=True)
+
+    release_worker = commands.add_parser(
+        "release-worker", help="Release one durable worker ownership claim"
+    )
+    add_task_identity_flags(release_worker)
+    release_worker.add_argument("--worker", required=True)
+    release_worker.add_argument("--reason", required=True)
     diagnose_claim = commands.add_parser(
         "diagnose-claim-deadline", help="Diagnose one exact claim deadline miss"
     )
@@ -6493,6 +6980,16 @@ def main(argv: list[str] | None = None) -> int:
                 elif arguments.command == "abandon-attempt":
                     result = harness.abandon_attempt(
                         arguments.lineage, arguments.task, arguments.reason
+                    )
+                elif arguments.command == "checkpoint-worker":
+                    result = harness.checkpoint_worker(
+                        arguments.lineage, arguments.task, arguments.worker,
+                        arguments.kind, arguments.evidence,
+                    )
+                elif arguments.command == "release-worker":
+                    result = harness.release_worker_claim(
+                        arguments.lineage, arguments.task, arguments.worker,
+                        arguments.reason,
                     )
                 elif arguments.command == "finding":
                     result = harness.report_worker_finding(

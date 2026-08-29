@@ -267,9 +267,9 @@ After:
 > If a worker exits unexpectedly, the coordinator must record the exit code and mark the active
 > attempt as interrupted.
 
-## 10. Write DE67 work ledgers as current operational state
+## 10. Write de67 work ledgers as current operational state
 
-A DE67 work ledger describes the current work frontier. It states what is done, what remains open,
+A de67 work ledger describes the current work frontier. It states what is done, what remains open,
 the latest material result, and the next necessary action. SQLite and referenced artifacts preserve
 detailed event history.
 

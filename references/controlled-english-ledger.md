@@ -1,4 +1,4 @@
-# Controlled English for a DE67 work ledger
+# Controlled English for a de67 work ledger
 
 Use this medium profile when writing the active work ledger. The full writing guideline is
 `controlled-english.md`, but a ledger writer does not need to load it merely to update current

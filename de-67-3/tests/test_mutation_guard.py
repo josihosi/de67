@@ -93,7 +93,7 @@ class MutationGuardTests(unittest.TestCase):
     def test_guideline_heading_change_is_allowed(self) -> None:
         path = self.candidate / guard.TASK_GUIDELINES
         path.write_text(
-            TASK_GUIDANCE.replace("## Prepare the task", "## Prepare work"),
+            TASK_GUIDANCE.replace("## Own the assigned outcome", "## Own useful work"),
             encoding="utf-8",
         )
         self.assertEqual(
@@ -104,7 +104,7 @@ class MutationGuardTests(unittest.TestCase):
         )
 
     def test_changed_baseline_heading_does_not_block_a_real_mutation(self) -> None:
-        corrupt = TASK_GUIDANCE.replace("## Prepare the task", "## Prepare work")
+        corrupt = TASK_GUIDANCE.replace("## Own the assigned outcome", "## Own useful work")
         baseline_corrupt = corrupt
         candidate_corrupt = corrupt + "\nPreserve the useful local context.\n"
         (self.baseline / guard.TASK_GUIDELINES).write_text(
@@ -137,7 +137,7 @@ class MutationGuardTests(unittest.TestCase):
     def test_incident_mutations_reject_whitespace_only_ledger_consumption(self) -> None:
         task_path = self.candidate / guard.TASK_GUIDELINES
         task_path.write_text(
-            TASK_GUIDANCE.replace("Read the current", "Read  the current"),
+            TASK_GUIDANCE.replace("Start from the assigned", "Start  from the assigned"),
             encoding="utf-8",
         )
         with self.assertRaisesRegex(guard.GuardError, "whitespace-only"):
@@ -460,7 +460,7 @@ class MutationGuardTests(unittest.TestCase):
         items = guard.validate_work_ledger(ledger, dfs)
         self.assertEqual(items, ("R-001 — Implement the red claim",))
 
-    def test_work_ledger_rejects_two_items_for_one_claim(self) -> None:
+    def test_work_ledger_accepts_independent_items_for_one_claim(self) -> None:
         dfs = self.write_dfs("# DFS\n\n- [ ] 🔴 R-001 — Still open\n")
         ledger = self.write_ledger(
             "# Work ledger\n\n## Active work\n\n"
@@ -468,8 +468,10 @@ class MutationGuardTests(unittest.TestCase):
             "- [ ] R-001 — Second route\n"
         )
 
-        with self.assertRaisesRegex(guard.GuardError, "more than one active item"):
-            guard.validate_work_ledger(ledger, dfs)
+        self.assertEqual(
+            guard.validate_work_ledger(ledger, dfs),
+            ("R-001 — First route", "R-001 — Second route"),
+        )
 
     def test_work_ledger_rejects_multiple_stored_task_identities(self) -> None:
         dfs = self.write_dfs("# DFS\n\n- [ ] 🔴 R-001 — Still open\n")
@@ -1208,6 +1210,36 @@ class MutationGuardTests(unittest.TestCase):
                 self.assertIn(f"ok: {kind} finding expanded R-001", output)
                 self.assertIn("added R-003", output)
 
+    def test_owner_expand_dfs_consumes_only_owner_guidance_and_preserves_frontier(self) -> None:
+        before, candidate = self.expansion_files()
+        ledger_before = self.root / "owner-ledger-before.md"
+        ledger_after = self.root / "owner-ledger-after.md"
+        ledger_before.write_text(
+            "# Ledger\n\n## Pending suggestions\n\n"
+            "- Owner-authorized same-outcome expansion\n"
+            "- Reviewer-authored candidate remains\n",
+            encoding="utf-8",
+        )
+        ledger_after.write_text(
+            "# Ledger\n\n## Pending suggestions\n\n"
+            "- Reviewer-authored candidate remains\n",
+            encoding="utf-8",
+        )
+        added, consumed = guard.validate_owner_dfs_expansion(
+            before, candidate, ledger_before, ledger_after
+        )
+        self.assertEqual(added, ("R-003",))
+        self.assertEqual(consumed, ("Owner-authorized same-outcome expansion",))
+
+        ledger_after.write_text(
+            "# Ledger\n\n## Pending suggestions\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(guard.GuardError, "only owner-authorized"):
+            guard.validate_owner_dfs_expansion(
+                before, candidate, ledger_before, ledger_after
+            )
+
     def test_expand_dfs_cli_rejects_missing_or_mismatched_finding(self) -> None:
         missing = self.finding_state("missing", report=False)
         result, output = self.run_expand_cli(missing)
@@ -1405,7 +1437,7 @@ class MutationGuardTests(unittest.TestCase):
         state, cycle = self.random_review_state(0)
         path = self.candidate / guard.TASK_GUIDELINES
         path.write_text(
-            TASK_GUIDANCE.replace("Read the current", "Read  the current"),
+            TASK_GUIDANCE.replace("Start from the assigned", "Start  from the assigned"),
             encoding="utf-8",
         )
         result, output = self.run_random_review_cli(state, cycle)
@@ -1522,8 +1554,8 @@ class MutationGuardTests(unittest.TestCase):
         )
         original = guideline.read_text(encoding="utf-8")
         mutations = (
-            ("rename", "## Prepare the task", "## Prepare tasks"),
-            ("delete", "## Prepare the task\n", ""),
+            ("rename", "## Own the assigned outcome", "## Own useful outcomes"),
+            ("delete", "## Own the assigned outcome\n", ""),
         )
         for name, old, new in mutations:
             with self.subTest(name=name):
@@ -1846,7 +1878,7 @@ class MutationGuardTests(unittest.TestCase):
             "stay with the same coordinator",
             normalized,
         )
-        self.assertIn("An applied method or DFS mutation requests a fresh coordinator", combined)
+        self.assertIn("Mutation completion is the only planned fresh-coordinator boundary", combined)
 
     def test_worker_lifecycle_is_not_a_task_requirement(self) -> None:
         combined = SKILL_TEXT + "\n" + KERNEL_TEXT + "\n" + TASK_GUIDANCE
@@ -1863,16 +1895,17 @@ class MutationGuardTests(unittest.TestCase):
         self.assertIn("record exactly one completion, finding, or abandonment", normalized)
         self.assertIn("A coordinator start, exit, or restart does not itself create", normalized)
 
-    def test_worker_model_guidance_reserves_sol_without_a_worker_gate(self) -> None:
+    def test_worker_model_guidance_isolates_new_workers_and_reserves_sol(self) -> None:
         self.assertIn("Sol is not an ordinary worker", TASK_GUIDANCE)
-        self.assertIn("Choose Luna by default", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("Use Terra for ambiguous ownership", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("Luna for clear execution", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("Terra for debugging/discovery", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("lowest sufficient", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("complexity/research", ORCHESTRATOR_GUIDANCE)
         self.assertIn("reviewer at high", ORCHESTRATOR_GUIDANCE)
-        self.assertIn(
-            "a mismatch does not stop delivery",
-            " ".join(ORCHESTRATOR_GUIDANCE.split()),
-        )
-        self.assertNotIn("stop before acting", ORCHESTRATOR_GUIDANCE)
+        self.assertIn('`fork_turns="none"`', ORCHESTRATOR_GUIDANCE)
+        self.assertIn("explicitly selects Luna or Terra", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("new worker never", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("receives the coordinator or predecessor transcript", ORCHESTRATOR_GUIDANCE)
 
 
 if __name__ == "__main__":

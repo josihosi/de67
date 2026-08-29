@@ -14,18 +14,33 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from coordinator_supervisor import (  # noqa: E402
+    ChildResult,
+    MutationGate,
+    SupervisorJournal,
     SupervisionEvent,
     SupervisorError,
+    _complete_mutation_review,
     _supervisor_lock,
     build_parser,
+    coordinator_ledger_contract,
     coordinator_prompt,
+    consume_supervision_event,
     blocked_ledger_audit_reason,
     ledger_has_only_blocked_work,
     main,
+    mutation_gate,
+    pending_mutation_suggestions,
+    mutation_reviewer_prompt,
+    ordinary_worker_evidence_contract,
     read_clock,
     run_supervisor,
+    supervision_fingerprint,
+    terminalize_unowned_worker_windows,
+    active_worker_coordinator_session,
     wait_for_supervision_event,
     work_is_complete,
+    worker_handoff_contract,
+    worker_result_ingress_contract,
 )
 from blocker_adapter import BlockerReply  # noqa: E402
 from deadline_harness import DeadlineHarness  # noqa: E402
@@ -55,9 +70,14 @@ event = {
     "workspace_argument": arguments.cwd,
     "generation": generation,
     "run_id": os.environ["DE67_COORDINATOR_RUN_ID"],
+    "role": os.environ.get("DE67_PROCESS_ROLE"),
+    "model": os.environ.get("DE67_COORDINATOR_MODEL"),
+    "effort": os.environ.get("DE67_COORDINATOR_REASONING_EFFORT"),
     "ack_argv": json.loads(os.environ["DE67_COORDINATOR_ACK_ARGV_JSON"])
     if generation is not None
     else None,
+    "policy_argv": json.loads(os.environ["DE67_POLICY_DECIDE_ARGV_JSON"]),
+    "policy_guard_argv": json.loads(os.environ["DE67_POLICY_GUARD_ARGV_JSON"]),
     "resume_session": os.environ.get("DE67_COORDINATOR_RESUME_SESSION"),
 }
 with Path(os.environ["FAKE_EVENTS"]).open("a", encoding="utf-8") as output:
@@ -71,7 +91,132 @@ if not (mode == "crash-without-session-then-complete" and event_count == 1):
     )
 
 with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
-    if mode == "two-restarts":
+    if mode in {
+        "mutation-lifecycle",
+        "mutation-after-coordinator",
+        "deadline-mutation-lifecycle",
+        "recovery-before-and-after-mutation",
+    }:
+        if os.environ.get("DE67_PROCESS_ROLE") == "mutation-reviewer":
+            suggestions = Path(os.environ["DE67_WORKSPACE"]) / ".de67" / "mutation-suggestions.md"
+            if not suggestions.is_file():
+                raise AssertionError("mutation reviewer must receive the suggestion ledger")
+            if mode in {
+                "mutation-lifecycle",
+                "mutation-after-coordinator",
+                "recovery-before-and-after-mutation",
+            }:
+                cycle = harness.list_tasks()["random_mutation"]
+                harness.resolve_random_mutation(
+                    os.environ["DE67_LINEAGE"],
+                    cycle["cycle_number"],
+                    "reviewed the complete suggestion ledger; no change required",
+                )
+            else:
+                incident = harness.list_tasks()["pending_incident_reviews"][0]
+                harness.diagnose_claim_deadline(
+                    os.environ["DE67_LINEAGE"],
+                    incident["claim_id"],
+                    incident["task_id"],
+                    "The deadline expired before the worker returned.",
+                )
+                harness.resolve_deadline_mutation(
+                    os.environ["DE67_LINEAGE"], incident["claim_id"],
+                    "micro", "Recover with a fresh whole-item clock."
+                )
+                harness.resolve_deadline_mutation(
+                    os.environ["DE67_LINEAGE"], incident["claim_id"],
+                    "macro", "Keep the existing general deadline guidance."
+                )
+        else:
+            if mode == "recovery-before-and-after-mutation":
+                root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+                if event_count == 1:
+                    harness.claim_worker(
+                        os.environ["DE67_LINEAGE"], "seed", "worker-one",
+                        "fake-session", os.environ["DE67_SUPERVISOR_PID"],
+                    )
+                    harness.complete_task(
+                        os.environ["DE67_LINEAGE"], "seed", "worker one proof"
+                    )
+                    raise SystemExit(9)
+                if event_count == 2:
+                    harness.start_task(
+                        os.environ["DE67_LINEAGE"], "worker-two-task", "R-001", 3600
+                    )
+                    harness.claim_worker(
+                        os.environ["DE67_LINEAGE"], "worker-two-task", "worker-two",
+                        "fake-session", os.environ["DE67_SUPERVISOR_PID"],
+                    )
+                    harness.complete_task(
+                        os.environ["DE67_LINEAGE"], "worker-two-task", "worker two proof"
+                    )
+                    raise SystemExit(0)
+                if event_count == 3:
+                    harness.start_task(
+                        os.environ["DE67_LINEAGE"], "worker-three-task", "R-001", 3600
+                    )
+                    harness.claim_worker(
+                        os.environ["DE67_LINEAGE"], "worker-three-task", "worker-three",
+                        "fake-session", os.environ["DE67_SUPERVISOR_PID"],
+                    )
+                    harness.complete_task(
+                        os.environ["DE67_LINEAGE"], "worker-three-task",
+                        "worker three proof triggers mutation",
+                    )
+                    raise SystemExit(0)
+                if event_count == 5:
+                    harness.acknowledge_coordinator_restart(
+                        os.environ["DE67_LINEAGE"],
+                        generation,
+                        os.environ["DE67_COORDINATOR_RUN_ID"],
+                    )
+                    harness.start_task(
+                        os.environ["DE67_LINEAGE"], "post-mutation", "R-001", 3600
+                    )
+                    harness.claim_worker(
+                        os.environ["DE67_LINEAGE"], "post-mutation", "worker-four",
+                        "fake-session", os.environ["DE67_SUPERVISOR_PID"],
+                    )
+                    raise SystemExit(9)
+                if event_count == 6:
+                    harness.complete_task(
+                        os.environ["DE67_LINEAGE"],
+                        "post-mutation",
+                        "post-mutation recovery proof",
+                    )
+                    (root / "DFS.md").write_text(
+                        "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+                        encoding="utf-8",
+                    )
+                    (root / "work-ledger.md").write_text(
+                        "# Work ledger\n\n## Active work\n",
+                        encoding="utf-8",
+                    )
+                    raise SystemExit(0)
+                raise AssertionError(f"unexpected event count: {event_count}")
+            if mode == "mutation-after-coordinator" and generation is None:
+                harness.complete_task(
+                    os.environ["DE67_LINEAGE"], "seed", "trigger mutation boundary"
+                )
+                raise SystemExit(0)
+            if generation is None:
+                raise AssertionError("post-mutation coordinator must be a fresh generation")
+            harness.acknowledge_coordinator_restart(
+                os.environ["DE67_LINEAGE"],
+                generation,
+                os.environ["DE67_COORDINATOR_RUN_ID"],
+            )
+            root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+            (root / "DFS.md").write_text(
+                "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+                encoding="utf-8",
+            )
+            (root / "work-ledger.md").write_text(
+                "# Work ledger\n\n## Active work\n",
+                encoding="utf-8",
+            )
+    elif mode == "two-restarts":
         if generation is None:
             harness.request_coordinator_restart(
                 os.environ["DE67_LINEAGE"], "fake first retirement"
@@ -131,6 +276,23 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
         completed.check_returncode()
     elif mode == "unacknowledged":
         pass
+    elif mode == "ack-on-second-opportunity":
+        if event_count == 1:
+            pass
+        else:
+            harness.acknowledge_coordinator_restart(
+                os.environ["DE67_LINEAGE"],
+                generation,
+                os.environ["DE67_COORDINATOR_RUN_ID"],
+            )
+            root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+            (root / "DFS.md").write_text(
+                "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+                encoding="utf-8",
+            )
+            (root / "work-ledger.md").write_text(
+                "# Work ledger\n\n## Active work\n", encoding="utf-8"
+            )
     elif mode == "complete-program":
         harness.complete_task(
             os.environ["DE67_LINEAGE"], "seed", "final proof"
@@ -144,8 +306,22 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             "# Work ledger\n\n## Active work\n",
             encoding="utf-8",
         )
+    elif mode == "leave-task-and-close-work":
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        (root / "DFS.md").write_text(
+            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+            encoding="utf-8",
+        )
+        (root / "work-ledger.md").write_text(
+            "# Work ledger\n\n## Active work\n",
+            encoding="utf-8",
+        )
     elif mode == "handover-then-complete":
-        if event_count > 1:
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        if event_count == 1:
+            with (root / "work-ledger.md").open("a", encoding="utf-8") as output:
+                output.write("\nDurable coordinator handoff recorded.\n")
+        else:
             if generation is not None:
                 harness.acknowledge_coordinator_restart(
                     os.environ["DE67_LINEAGE"],
@@ -194,9 +370,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             raise SystemExit(9)
         if generation is not None:
             raise AssertionError("resumable crash must keep the same coordinator generation")
-        harness.complete_task(
-            os.environ["DE67_LINEAGE"], "seed", "successor proof"
-        )
+        harness.start_task(os.environ["DE67_LINEAGE"], "recovery", "R-001", 3600)
+        harness.complete_task(os.environ["DE67_LINEAGE"], "recovery", "successor proof")
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
         (root / "DFS.md").write_text(
             "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
@@ -206,19 +381,68 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             "# Work ledger\n\n## Active work\n",
             encoding="utf-8",
         )
+    elif mode == "crash-three-times":
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        if event_count == 1:
+            with (root / "work-ledger.md").open("a", encoding="utf-8") as output:
+                output.write("\nFirst crash made durable progress.\n")
+            raise SystemExit(9)
+        if event_count == 2:
+            harness.start_task(
+                os.environ["DE67_LINEAGE"], "second-crash", "R-001", 3600
+            )
+            raise SystemExit(9)
+        if event_count == 3:
+            harness.start_task(
+                os.environ["DE67_LINEAGE"], "third-crash", "R-001", 3600
+            )
+            raise SystemExit(9)
+        raise AssertionError("the decision-opportunity fuse allowed a fourth launch")
+    elif mode == "successful-pass-resets-decision-fuse":
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        if event_count == 1:
+            with (root / "work-ledger.md").open("a", encoding="utf-8") as output:
+                output.write("\nInitial failed decision.\n")
+            raise SystemExit(9)
+        harness.start_task(
+            os.environ["DE67_LINEAGE"], f"reset-{event_count}", "R-001", 3600
+        )
+        if event_count == 2:
+            harness.complete_task(
+                os.environ["DE67_LINEAGE"], "reset-2", "successful recovery pass"
+            )
+            raise SystemExit(0)
+        if event_count <= 5:
+            raise SystemExit(9)
+        raise AssertionError("the reset decision fuse allowed a sixth launch")
+    elif mode == "claimed-worker-crash-then-complete":
+        if event_count == 1:
+            harness.claim_worker(
+                os.environ["DE67_LINEAGE"], "seed", "worker-a",
+                "fake-session", os.environ["DE67_SUPERVISOR_PID"],
+            )
+            raise SystemExit(9)
+        if generation is not None:
+            raise AssertionError("worker recovery must keep the coordinator generation")
+        harness.complete_task(
+            os.environ["DE67_LINEAGE"], "seed", "worker result ingested"
+        )
+        root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
+        (root / "DFS.md").write_text(
+            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 N{EM DASH} Done\n",
+            encoding="utf-8",
+        )
+        (root / "work-ledger.md").write_text(
+            "# Work ledger\n\n## Active work\n",
+            encoding="utf-8",
+        )
     elif mode == "crash-without-session-then-complete":
         if event_count == 1:
             raise SystemExit(9)
-        if generation is None:
-            raise AssertionError("non-resumable crash must get a fresh generation")
-        harness.acknowledge_coordinator_restart(
-            os.environ["DE67_LINEAGE"],
-            generation,
-            os.environ["DE67_COORDINATOR_RUN_ID"],
-        )
-        harness.complete_task(
-            os.environ["DE67_LINEAGE"], "seed", "successor proof"
-        )
+        if generation is not None:
+            raise AssertionError("crash recovery must not manufacture a mutation generation")
+        harness.start_task(os.environ["DE67_LINEAGE"], "recovery", "R-001", 3600)
+        harness.complete_task(os.environ["DE67_LINEAGE"], "recovery", "successor proof")
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
         (root / "DFS.md").write_text(
             "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
@@ -271,9 +495,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
         event_count = len(Path(os.environ["FAKE_EVENTS"]).read_text(encoding="utf-8").splitlines())
         if event_count == 1:
             raise SystemExit(int(os.environ["FAKE_FIRST_EXIT"]))
-        harness.complete_task(
-            os.environ["DE67_LINEAGE"], "seed", "matrix recovery proof"
-        )
+        harness.start_task(os.environ["DE67_LINEAGE"], "recovery", "R-001", 3600)
+        harness.complete_task(os.environ["DE67_LINEAGE"], "recovery", "matrix recovery proof")
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
         (root / "DFS.md").write_text(
             "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
@@ -298,6 +521,99 @@ def restart_required(restart: dict[str, object]) -> bool:
 
 
 class CoordinatorSupervisorTests(unittest.TestCase):
+    def test_packaged_ledger_refills_until_dfs_is_green_without_batch_cap(self) -> None:
+        template = (
+            SCRIPTS.parent / "assets" / "environment" / "work-ledger.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Refill this projection", template)
+        self.assertIn("empty batch is not completion", template)
+        self.assertIn("Do not impose a batch-size limit", template)
+        self.assertNotIn("at most ten", template)
+
+    def test_mutation_suggestion_modes_separate_wakeup_from_consumption(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "terminal proof")
+        (self.workspace / ".de67").mkdir()
+        ledger = self.workspace / ".de67" / "mutation-suggestions.md"
+        ledger.write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n\n"
+            "- Owner-authorized [defer]: Improve the worker proof handoff.\n",
+            encoding="utf-8",
+        )
+
+        suggestions = pending_mutation_suggestions(self.workspace)
+
+        self.assertEqual([item.mode for item in suggestions], ["defer"])
+        self.assertIsNone(mutation_gate(self.state_path, "project", self.workspace))
+
+        ledger.write_text(
+            ledger.read_text(encoding="utf-8")
+            + "- Owner-authorized [trigger]: Repair the supervisor immediately.\n",
+            encoding="utf-8",
+        )
+        gate = mutation_gate(self.state_path, "project", self.workspace)
+        self.assertIsNotNone(gate)
+        assert gate is not None
+        self.assertEqual(gate.kind, "owner-suggestion")
+
+    def test_legacy_unlabelled_owner_suggestion_still_triggers(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "terminal proof")
+        (self.workspace / ".de67").mkdir()
+        (self.workspace / ".de67" / "mutation-suggestions.md").write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n\n- Keep legacy behavior.\n",
+            encoding="utf-8",
+        )
+
+        gate = mutation_gate(self.state_path, "project", self.workspace)
+
+        self.assertIsNotNone(gate)
+        assert gate is not None
+        self.assertEqual(gate.kind, "owner-suggestion")
+
+    def test_supervisor_journal_persists_frontier_replay_fuse(self) -> None:
+        first = SupervisorJournal(self.state_path, "project", "owner-one")
+        first.begin("coordinator", "frontier-a", "run-one")
+        first.finish("run-one", "failed", "runner died")
+
+        recovered = SupervisorJournal(self.state_path, "project", "owner-two")
+        with self.assertRaisesRegex(SupervisorError, "frontier was already attempted"):
+            recovered.begin("coordinator", "frontier-a", "run-two")
+
+        recovered.begin("coordinator", "frontier-b", "run-three")
+
+    def test_supervisor_journal_scopes_replay_fuse_to_explicit_start_epoch(self) -> None:
+        first = SupervisorJournal(self.state_path, "project", "owner-one", "start-one")
+        first.begin("coordinator", "frontier-a", "run-one")
+        first.finish("run-one", "failed", "service died")
+
+        restarted = SupervisorJournal(
+            self.state_path, "project", "owner-two", "start-two"
+        )
+        restarted.begin("coordinator", "frontier-a", "run-two")
+        with self.assertRaisesRegex(SupervisorError, "frontier was already attempted"):
+            restarted.begin("coordinator", "frontier-a", "run-three")
+
+    def test_worker_handoff_contract_explains_runtime_owned_claim(self) -> None:
+        contract = worker_handoff_contract()
+        self.assertIn("do not require receiver_thread_ids", contract)
+        self.assertIn("do not abandon solely because that field is absent", contract)
+        self.assertIn("records the durable claim automatically", contract)
+        self.assertIn(
+            "R-008-closure-108 becomes task_522d3030382d636c6f737572652d313038",
+            contract,
+        )
+        self.assertIn("correlation metadata", contract)
+        self.assertIn("spawn_worker response injects the exact task_name", contract)
+        self.assertIn("concrete self-contained spawn_agent call", contract)
+        self.assertIn("announcing that you are assigning a worker is not delegation", contract)
+        self.assertIn("spawn one distinct worker for each task before waiting", contract)
+        self.assertIn("do not serialize independent work", contract)
+        self.assertIn("Never invoke claim-worker", contract)
+        self.assertIn("never use /root/<task-name>", contract)
+        self.assertIn("Proceed to the normal wait", contract)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
@@ -322,7 +638,264 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.waiter.stop()
         self.temporary.cleanup()
 
-    def test_clock_event_waits_once_and_requests_a_successor(self) -> None:
+    def test_coordinator_exit_preserves_claimed_worker_window(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            harness.claim_worker(
+                "project", "seed", "worker-a", "coordinator-a", "supervisor-a", now=1
+            )
+        terminalized = terminalize_unowned_worker_windows(
+            self.state_path,
+            "project",
+            {"worker-a": "coordinator-a"},
+        )
+
+        self.assertEqual(terminalized, ())
+        with DeadlineHarness(self.state_path) as harness:
+            status = harness.status_task("project", "seed")
+        self.assertEqual(status["state"], "running")
+        self.assertIsNone(status["attempt_terminal_kind"])
+
+    def test_coordinator_exit_terminalizes_only_unclaimed_worker_window(self) -> None:
+        terminalized = terminalize_unowned_worker_windows(
+            self.state_path,
+            "project",
+        )
+
+        self.assertEqual(terminalized, ("seed",))
+        with DeadlineHarness(self.state_path) as harness:
+            status = harness.status_task("project", "seed")
+        self.assertEqual(status["state"], "abandoned")
+
+    def test_coordinator_exit_terminalizes_stale_worker_claim(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            harness.claim_worker(
+                "project", "seed", "worker-a", "coordinator-a", "supervisor-a", now=1
+            )
+
+        terminalized = terminalize_unowned_worker_windows(
+            self.state_path,
+            "project",
+            {},
+        )
+
+        self.assertEqual(terminalized, ("seed",))
+        with DeadlineHarness(self.state_path) as harness:
+            status = harness.status_task("project", "seed")
+        self.assertEqual(status["state"], "abandoned")
+
+    def test_supervisor_restart_recovers_the_active_worker_owner_session(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            harness.claim_worker(
+                "project", "seed", "worker-a", "coordinator-a", "supervisor-old", now=1
+            )
+
+        self.assertEqual(
+            active_worker_coordinator_session(self.state_path, "project"),
+            "coordinator-a",
+        )
+
+    def test_supervisor_restart_rejects_multiple_active_worker_owners(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            harness.claim_worker(
+                "project", "seed", "worker-a", "coordinator-a", "supervisor-old", now=1
+            )
+            harness.start_task("project", "other", "R-001", 3600, now=2)
+            harness.claim_worker(
+                "project", "other", "worker-b", "coordinator-b", "supervisor-old", now=3
+            )
+
+        with self.assertRaisesRegex(SupervisorError, "multiple coordinator sessions"):
+            active_worker_coordinator_session(self.state_path, "project")
+
+    def test_worker_checkpoint_changes_the_durable_progress_fingerprint(self) -> None:
+        before = supervision_fingerprint(
+            self.state_path, "project", self.workspace
+        )
+        with DeadlineHarness(self.state_path) as harness:
+            harness.claim_worker(
+                "project", "seed", "worker-a", "coordinator-a", "supervisor-a", now=1
+            )
+            claimed = supervision_fingerprint(
+                self.state_path, "project", self.workspace
+            )
+            harness.checkpoint_worker(
+                "project", "seed", "worker-a", "tested", "focused test passed", now=2
+            )
+        checkpointed = supervision_fingerprint(
+            self.state_path, "project", self.workspace
+        )
+
+        self.assertNotEqual(before, claimed)
+        self.assertNotEqual(claimed, checkpointed)
+
+    def test_supervisor_does_not_resume_after_child_leaves_orphan_clock(self) -> None:
+        self.write_work_documents(red=True, active=True)
+
+        with patch("coordinator_supervisor.mutation_gate", return_value=None):
+            result = run_supervisor(
+                self.state_path,
+                "project",
+                self.workspace,
+                self.runner_command(),
+                self.run_root,
+                extra_env=self.environment("leave-task-and-close-work"),
+                run_id_factory=lambda _generation: "orphan-clock",
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.read_events()), 1)
+        with DeadlineHarness(self.state_path) as harness:
+            row = harness.connection.execute(
+                "SELECT attempt_terminal_kind, abandonment_reason "
+                "FROM tasks WHERE task_id = 'seed'"
+            ).fetchone()
+        self.assertEqual(row["attempt_terminal_kind"], "abandoned")
+        self.assertIn("worker_owner_lost", row["abandonment_reason"])
+
+    def test_unchanged_success_with_executable_work_is_not_resumed(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        (self.workspace / ".de67" / "mutation-suggestions.md").write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n",
+            encoding="utf-8",
+        )
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "prior proof")
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("unacknowledged"),
+            run_id_factory=lambda _generation: "unchanged-success",
+        )
+
+        self.assertEqual(result, 1)
+        self.assertEqual(len(self.read_events()), 1)
+        error = (self.run_root / "unchanged-success" / "supervisor_error.txt").read_text()
+        self.assertIn("made no durable progress", error)
+
+    def test_persistent_crash_without_durable_progress_is_not_retried(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        (self.workspace / ".de67" / "mutation-suggestions.md").write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n",
+            encoding="utf-8",
+        )
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "prior proof")
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("fail-before-ack"),
+            run_id_factory=lambda _generation: "unchanged-crash",
+        )
+
+        self.assertEqual(result, 7)
+        self.assertEqual(len(self.read_events()), 1)
+        error = (self.run_root / "unchanged-crash" / "supervisor_error.txt").read_text()
+        self.assertIn("crashed", error)
+        self.assertIn("made no durable progress", error)
+
+    def test_unresolved_mutation_gate_is_not_reviewed_twice(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "terminal proof")
+        gate = MutationGate("owner-suggestion", "same-gate", None)
+        result_dir = self.run_root / "mutation-one"
+        result_dir.mkdir(parents=True)
+        result = ChildResult("mutation-one", result_dir, 0, True)
+
+        with patch(
+            "coordinator_supervisor.run_mutation_reviewer", return_value=result
+        ) as reviewer, patch(
+            "coordinator_supervisor.mutation_gate", return_value=gate
+        ):
+            with self.assertRaisesRegex(SupervisorError, "repeated without resolution"):
+                _complete_mutation_review(
+                    self.runner_command(),
+                    self.workspace,
+                    self.state_path,
+                    "project",
+                    self.run_root,
+                    gate,
+                    extra_env=self.environment("unacknowledged"),
+                )
+
+        self.assertEqual(reviewer.call_count, 1)
+
+    def test_supervision_event_signature_is_consumed_once(self) -> None:
+        consumed: set[str] = set()
+        event = SupervisionEvent(None, "gate:stable")
+
+        consume_supervision_event(consumed, event)
+        with self.assertRaisesRegex(SupervisorError, "event replayed"):
+            consume_supervision_event(consumed, event)
+
+    def test_alternating_mutation_gates_cannot_cycle_back(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "terminal proof")
+        gate_a = MutationGate("owner-suggestion", "gate-a", None)
+        gate_b = MutationGate("incident-review", "gate-b", None)
+        results = []
+        for name in ("mutation-a", "mutation-b"):
+            run_dir = self.run_root / name
+            run_dir.mkdir(parents=True)
+            results.append(ChildResult(name, run_dir, 0, True))
+
+        with patch(
+            "coordinator_supervisor.run_mutation_reviewer", side_effect=results
+        ) as reviewer, patch(
+            "coordinator_supervisor.mutation_gate", side_effect=(gate_b, gate_a)
+        ):
+            with self.assertRaisesRegex(SupervisorError, "repeated without resolution"):
+                _complete_mutation_review(
+                    self.runner_command(),
+                    self.workspace,
+                    self.state_path,
+                    "project",
+                    self.run_root,
+                    gate_a,
+                    extra_env=self.environment("unacknowledged"),
+                )
+
+        self.assertEqual(reviewer.call_count, 2)
+
+    def test_recovery_start_terminalizes_preexisting_orphan_before_child(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        (self.workspace / ".de67" / "mutation-suggestions.md").write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n",
+            encoding="utf-8",
+        )
+        self.run_root.mkdir()
+        (self.run_root / "prior-run").mkdir()
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("complete-program"),
+            run_id_factory=lambda _generation: "recovered-run",
+        )
+
+        self.assertEqual(result, 1)
+        self.assertEqual(len(self.read_events()), 1)
+        with DeadlineHarness(self.state_path) as harness:
+            row = harness.connection.execute(
+                "SELECT attempt_terminal_kind, abandonment_reason "
+                "FROM tasks WHERE task_id = 'seed'"
+            ).fetchone()
+        self.assertEqual(row["attempt_terminal_kind"], "abandoned")
+        self.assertIn("worker_owner_lost", row["abandonment_reason"])
+
+    def test_clock_event_waits_once_and_signals_mutation_without_restart(self) -> None:
         base = time.time()
         with DeadlineHarness(self.state_path) as harness:
             deadline = harness._claim("project", "R-000")["deadline_at"]
@@ -339,15 +912,14 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         assert event is not None
         self.assertAlmostEqual(sleeps[0], float(deadline) - base, places=3)
         self.assertTrue(event.signature.startswith("gate:"))
-        self.assertTrue(event.restart.required)
-        self.assertEqual(event.restart.generation, 1)
+        self.assertIsNone(event.restart)
         with DeadlineHarness(self.state_path) as harness:
             summary = harness.list_tasks(now=float(deadline))
         self.assertEqual(
             summary["pending_incident_reviews"][0]["kind"], "deadline_miss"
         )
 
-    def test_pending_incident_requests_a_successor_without_sleeping(self) -> None:
+    def test_pending_incident_signals_mutation_without_sleeping(self) -> None:
         with DeadlineHarness(self.state_path) as harness:
             deadline = float(harness._claim("project", "R-000")["deadline_at"])
             harness.expire_claim("project", "R-000", now=deadline)
@@ -363,10 +935,10 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIsNotNone(event)
         self.assertEqual(sleeps, [])
         assert event is not None
-        self.assertTrue(event.restart.required)
+        self.assertIsNone(event.restart)
         self.assertTrue(event.signature.startswith("gate:"))
 
-    def test_unchanged_incident_hands_off_to_another_successor(self) -> None:
+    def test_unchanged_incident_does_not_manufacture_restarts(self) -> None:
         with DeadlineHarness(self.state_path) as harness:
             deadline = float(harness._claim("project", "R-000")["deadline_at"])
             harness.expire_claim("project", "R-000", now=deadline)
@@ -376,14 +948,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             now=lambda: deadline,
             sleep=lambda _seconds: None,
         )
-        assert first is not None and first.restart.generation is not None
-        with DeadlineHarness(self.state_path) as harness:
-            harness.claim_coordinator_restart(
-                "project", first.restart.generation, "successor-1", now=deadline
-            )
-            harness.acknowledge_coordinator_restart(
-                "project", first.restart.generation, "successor-1", now=deadline
-            )
+        assert first is not None
+        self.assertIsNone(first.restart)
 
         second = wait_for_supervision_event(
             self.state_path,
@@ -397,9 +963,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             restart = harness.coordinator_restart_status("project")[
                 "coordinator_restart"
             ]
-        self.assertEqual(restart["generation"], 2)
-        self.assertTrue(restart["pending"])
-        self.assertEqual(second.restart.generation, 2)
+        self.assertIsNone(restart)
+        self.assertIsNone(second.restart)
 
     def test_resolved_deadline_does_not_rearm_a_successor(self) -> None:
         with DeadlineHarness(self.state_path) as harness:
@@ -466,6 +1031,10 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             "# Work ledger\n\n## Active work\n\n" + item,
             encoding="utf-8",
         )
+        (state_root / "mutation-suggestions.md").write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n",
+            encoding="utf-8",
+        )
 
     def request_restart(self) -> int:
         with DeadlineHarness(self.state_path) as harness:
@@ -485,7 +1054,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             for line in self.events.read_text(encoding="utf-8").splitlines()
         ]
 
-    def test_supervisor_prompt_routes_only_workspace_local_guidance(self) -> None:
+    def test_supervisor_prompt_routes_only_compiled_workspace_policy(self) -> None:
         prompt = coordinator_prompt(
             self.workspace.resolve(),
             self.state_path.resolve(),
@@ -495,14 +1064,179 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         )
 
         self.assertIn("Do not read packaged DE-67", prompt)
-        self.assertIn(".de67/orchestrator-guidelines.md", prompt)
-        self.assertIn(".de67/test-and-task-guidelines.md", prompt)
-        self.assertIn("active mutable policy", prompt)
-        self.assertIn("DFS slices as the compact default", prompt)
-        self.assertIn("Read more of the DFS", prompt)
-        self.assertIn("If the ledger is blocked-only, audit", prompt)
-        self.assertIn("terminalize every live attempt", prompt)
-        self.assertIn("Never ask the owner or an external contact adapter", prompt)
+        self.assertIn(".de67/phase3-policy.d67", prompt)
+        self.assertIn("DE67_POLICY_DECIDE_ARGV_JSON", prompt)
+        self.assertIn("machine-canonical", prompt)
+        self.assertIn("Never review, apply, or resolve a mutation", prompt)
+        self.assertIn("exit immediately", prompt)
+        self.assertNotIn("promote both candidate source", prompt)
+        self.assertIn("legacy differential fixtures", prompt)
+        self.assertIn("Write every owner-facing text field rendered on the hosted dashboard in simple English", prompt)
+        self.assertIn("ledger items, latest findings, waiting work", prompt)
+        self.assertIn("explain what happened and why it matters", prompt)
+        self.assertIn("state what remains or happens next", prompt)
+        self.assertIn("exposes a contradiction or a missing causal step", prompt)
+        self.assertIn("Internal machine state and DFS detail", prompt)
+        self.assertIn('fork_turns="none"', prompt)
+        self.assertIn("explicitly select gpt-5.6-luna or gpt-5.6-terra", prompt)
+        self.assertIn("Never omit model selection", prompt)
+        self.assertIn("pass coordinator or predecessor history", prompt)
+        self.assertIn("freely rewrite the active work-ledger projection", prompt)
+        self.assertIn("multiple simultaneous entries for one", prompt)
+        self.assertIn("ordinary recoverable work, not external authority", prompt)
+        self.assertIn("closed diagnostic or documentation gap", prompt)
+        self.assertIn("four to six meaningful gaps", prompt)
+        self.assertIn("exceed eight only", prompt)
+        self.assertIn(ordinary_worker_evidence_contract(), prompt)
+        ingress = worker_result_ingress_contract()
+        self.assertIn(ingress, prompt)
+        self.assertLess(prompt.index(ingress), prompt.index("Before every route decision"))
+        self.assertIn("before executing DE67_POLICY_DECIDE_ARGV_JSON", ingress)
+        self.assertIn("exactly one", ingress)
+        self.assertNotIn("Read .de67/orchestrator-guidelines.md", prompt)
+        self.assertNotIn("test-and-task-guidelines.md", prompt)
+
+    def test_pending_owner_suggestion_becomes_gate_only_after_workers_are_quiet(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        (self.workspace / ".de67" / "mutation-suggestions.md").write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n\n- Review this.\n",
+            encoding="utf-8",
+        )
+        self.assertIsNone(mutation_gate(self.state_path, "project", self.workspace))
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "done", now=time.time())
+        gate = mutation_gate(self.state_path, "project", self.workspace)
+        self.assertIsNotNone(gate)
+        assert gate is not None
+        self.assertEqual(gate.kind, "owner-suggestion")
+
+    def test_coordinator_contract_trusts_worker_and_coordinator_agents(self) -> None:
+        contract = coordinator_ledger_contract()
+        self.assertEqual(contract.count("Trust the agent"), 2)
+        self.assertIn("retry fuse ends a strategy, not recoverable work", contract)
+        self.assertIn("non-credit observation/bootstrap step", contract)
+
+    def test_fresh_restart_prompt_includes_exact_owner_reason(self) -> None:
+        prompt = coordinator_prompt(
+            self.workspace.resolve(),
+            self.state_path.resolve(),
+            "project",
+            "owner-restart",
+            3,
+            "Return to the still-red R-008 tooling route.",
+        )
+
+        self.assertIn("exact owner-authorized restart reason", prompt)
+        self.assertIn("Return to the still-red R-008 tooling route.", prompt)
+
+    def test_ordinary_worker_route_retrieves_successive_evidence_slices(self) -> None:
+        prompt = coordinator_prompt(
+            self.workspace.resolve(),
+            self.state_path.resolve(),
+            "project",
+            "evidence-route",
+            None,
+        )
+        report = {
+            "irrelevant_history": [f"old-event-{number}" for number in range(2_000)],
+            "proof": {
+                "first_divergence": "owner stayed local after dematerialization",
+                "expected_owner": "overmap",
+                "observed_owner": "local",
+            },
+        }
+        search_results = [
+            {"path": f"archive/noise-{number}.cpp", "symbol": "unrelated"}
+            for number in range(2_000)
+        ] + [{"path": "src/owner.cpp", "symbol": "commit_owner_transfer"}]
+        verbose_output = [f"trace: repeated step {number}" for number in range(2_000)] + [
+            "error: owner acknowledgement was not persisted",
+            "trace: cleanup",
+        ]
+
+        retrieved = [
+            next(
+                item["path"]
+                for item in search_results
+                if item["symbol"] == "commit_owner_transfer"
+            ),
+            report["proof"]["first_divergence"],
+            next(line for line in verbose_output if line.startswith("error:")),
+            {
+                "expected": report["proof"]["expected_owner"],
+                "observed": report["proof"]["observed_owner"],
+            },
+        ]
+        evidence_grounded_result = (
+            f"{retrieved[0]} failed because {retrieved[2]}; "
+            f"expected {retrieved[3]['expected']}, observed {retrieved[3]['observed']}."
+        )
+        bulk_result = (
+            f"src/owner.cpp failed because "
+            f"{next(line for line in verbose_output if line.startswith('error:'))}; "
+            f"expected {report['proof']['expected_owner']}, "
+            f"observed {report['proof']['observed_owner']}."
+        )
+
+        self.assertIn(ordinary_worker_evidence_contract(), prompt)
+        self.assertEqual(evidence_grounded_result, bulk_result)
+        self.assertEqual(
+            retrieved,
+            [
+                "src/owner.cpp",
+                "owner stayed local after dematerialization",
+                "error: owner acknowledgement was not persisted",
+                {"expected": "overmap", "observed": "local"},
+            ],
+        )
+        self.assertNotIn(report["irrelevant_history"][0], json.dumps(retrieved))
+        self.assertNotIn(verbose_output[0], json.dumps(retrieved))
+
+    def test_mutation_reviewer_prompt_is_outcome_led_and_autonomy_first(self) -> None:
+        prompt = mutation_reviewer_prompt(
+            self.workspace.resolve(),
+            self.state_path.resolve(),
+            "project",
+            MutationGate("random mutation", "cycle 2", "test-and-task-guidelines.md"),
+        )
+
+        self.assertIn("complete workspace mutation-suggestion ledger is mandatory owner input", prompt)
+        self.assertIn("repair the earliest preventable systemic cause", prompt)
+        self.assertIn("separate immediate recovery from repeatable method correction", prompt)
+        self.assertIn("reproduction or counterexample that could expose the original failure", prompt)
+        self.assertIn("preserve the gate and state the exact remaining uncertainty", prompt)
+        self.assertIn("external supervisor alone launches the successor", prompt)
+        self.assertNotIn("test-and-task-guidelines.md", prompt)
+        self.assertNotIn("Read the exact live selected mutation target", prompt)
+        self.assertNotIn("deadline_harness.py", prompt)
+        self.assertNotIn("mutation guard", prompt)
+        self.assertNotIn("DFS candidates", prompt)
+
+    def test_supervisor_exports_exact_compiled_policy_decision_command(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("complete-program"),
+            run_id_factory=lambda _generation: "policy-command",
+        )
+
+        self.assertEqual(result, 0)
+        command = self.read_events()[0]["policy_argv"]
+        self.assertEqual(command[2], "decide")
+        self.assertEqual(
+            command[3:5],
+            ["--policy", str((self.workspace / ".de67" / "phase3-policy.d67").resolve())],
+        )
+        self.assertIn("--workspace", command)
+        self.assertIn("--state", command)
+        guard = self.read_events()[0]["policy_guard_argv"]
+        self.assertEqual(guard[2], "guard")
+        self.assertTrue(any(str(item).endswith("phase3-policy.candidate.json") for item in guard))
+        self.assertTrue(any(str(item).endswith("phase3-policy.candidate.d67") for item in guard))
 
     def test_cli_defaults_coordinator_to_sol_low_without_changing_runner_args(self) -> None:
         arguments = build_parser().parse_args(
@@ -518,6 +1252,216 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(arguments.coordinator_model, "gpt-5.6-sol")
         self.assertEqual(arguments.coordinator_reasoning_effort, "low")
         self.assertEqual(arguments.runner, ["runner", "--runner-owned-option"])
+
+    def test_due_mutation_exclusively_runs_high_reviewer_then_fresh_low_coordinator(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.connection.execute(
+                """
+                UPDATE random_mutation_cycles
+                SET interval_windows = 10, due_after_terminal_windows = 10,
+                    selected_lane = 'orchestrator-guidelines.md'
+                WHERE lineage_id = 'project' AND cycle_number = 1
+                """
+            )
+            harness.connection.commit()
+            harness.complete_task("project", "seed", "terminal one")
+            for number in range(2, 11):
+                task_id = f"terminal-{number}"
+                harness.start_task("project", task_id, "R-001", 3600)
+                harness.complete_task("project", task_id, f"terminal {number}")
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env={
+                **self.environment("mutation-lifecycle"),
+                "DE67_COORDINATOR_MODEL": "gpt-5.6-sol",
+                "DE67_COORDINATOR_REASONING_EFFORT": "low",
+            },
+            run_id_factory=lambda _generation: "fresh-low-coordinator",
+        )
+
+        self.assertEqual(result, 0)
+        events = self.read_events()
+        self.assertEqual([event["role"] for event in events], [
+            "mutation-reviewer", "coordinator",
+        ])
+        self.assertEqual(
+            [(event["model"], event["effort"]) for event in events],
+            [("gpt-5.6-sol", "high"), ("gpt-5.6-sol", "low")],
+        )
+        reviewer_run = next(
+            path for path in self.run_root.iterdir() if path.name.startswith("mutation-")
+        )
+        reviewer_prompt = (reviewer_run / "prompt.txt").read_text(encoding="utf-8")
+        self.assertIn("complete workspace mutation-suggestion ledger is mandatory owner input", reviewer_prompt)
+        self.assertIn("repair the earliest preventable systemic cause", reviewer_prompt)
+        self.assertIn("reproduction or counterexample", reviewer_prompt)
+        self.assertIn("durably resolve the gate", reviewer_prompt)
+        self.assertIn("external supervisor alone launches the successor", reviewer_prompt)
+        self.assertNotIn("orchestrator-guidelines.md", reviewer_prompt)
+        self.assertNotIn("test-and-task-guidelines.md", reviewer_prompt)
+        self.assertNotIn("deadline_harness.py", reviewer_prompt)
+
+    def test_mutation_becoming_due_retires_coordinator_before_reviewer(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.connection.execute(
+                """
+                UPDATE random_mutation_cycles
+                SET interval_windows = 10, due_after_terminal_windows = 10,
+                    selected_lane = 'test-and-task-guidelines.md'
+                WHERE lineage_id = 'project' AND cycle_number = 1
+                """
+            )
+            harness.connection.commit()
+            for number in range(2, 11):
+                task_id = f"terminal-{number}"
+                harness.start_task("project", task_id, "R-001", 3600)
+                harness.complete_task("project", task_id, f"terminal {number}")
+
+        run_ids = iter(("retiring-low-coordinator", "fresh-low-coordinator"))
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env={
+                **self.environment("mutation-after-coordinator"),
+                "DE67_COORDINATOR_MODEL": "gpt-5.6-sol",
+                "DE67_COORDINATOR_REASONING_EFFORT": "low",
+            },
+            run_id_factory=lambda _generation: next(run_ids),
+        )
+
+        self.assertEqual(result, 0)
+        events = self.read_events()
+        self.assertEqual(
+            [(event["role"], event["effort"]) for event in events],
+            [("coordinator", "low"), ("mutation-reviewer", "high"),
+             ("coordinator", "low")],
+        )
+        self.assertEqual([event["generation"] for event in events], [None, None, 1])
+
+    def test_mutation_starts_a_fresh_process_recovery_episode(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.connection.execute(
+                """
+                UPDATE random_mutation_cycles
+                SET interval_windows = 10, due_after_terminal_windows = 10,
+                    selected_lane = 'test-and-task-guidelines.md'
+                WHERE lineage_id = 'project' AND cycle_number = 1
+                """
+            )
+            harness.connection.commit()
+            for number in range(2, 9):
+                task_id = f"pre-mutation-terminal-{number}"
+                harness.start_task("project", task_id, "R-001", 3600)
+                harness.complete_task("project", task_id, f"terminal {number}")
+
+        run_ids = iter(
+            (
+                "pre-mutation-crash",
+                "pre-mutation-recovery",
+                "pre-mutation-third-wave",
+                "post-mutation-crash",
+                "post-mutation-recovery",
+            )
+        )
+        with patch(
+            "coordinator_supervisor.runtime_worker_owners",
+            return_value={"worker-four": "fake-session"},
+        ):
+            result = run_supervisor(
+                self.state_path,
+                "project",
+                self.workspace,
+                self.runner_command(),
+                self.run_root,
+                extra_env=self.environment("recovery-before-and-after-mutation"),
+                run_id_factory=lambda _generation: next(run_ids),
+            )
+
+        events = self.read_events()
+        self.assertEqual(
+            result,
+            0,
+            {"statuses": self.statuses(), "events": events},
+        )
+        self.assertEqual(
+            [event["role"] for event in events],
+            [
+                "coordinator",
+                "coordinator",
+                "coordinator",
+                "mutation-reviewer",
+                "coordinator",
+                "coordinator",
+            ],
+        )
+        self.assertEqual(
+            [event["run_id"] for event in events if event["role"] == "coordinator"],
+            [
+                "pre-mutation-crash",
+                "pre-mutation-recovery",
+                "pre-mutation-third-wave",
+                "post-mutation-crash",
+                "post-mutation-recovery",
+            ],
+        )
+        self.assertEqual(
+            [event["resume_session"] for event in events],
+            [None, "fake-session", "fake-session", None, None, "fake-session"],
+        )
+        self.assertEqual(
+            self.statuses(),
+            {
+                "pre-mutation-crash": "FAILED",
+                "pre-mutation-recovery": "DONE",
+                "pre-mutation-third-wave": "DONE",
+                next(
+                    path.name
+                    for path in self.run_root.iterdir()
+                    if path.name.startswith("mutation-")
+                ): "DONE",
+                "post-mutation-crash": "FAILED",
+                "post-mutation-recovery": "DONE",
+            },
+        )
+        with DeadlineHarness(self.state_path) as harness:
+            tasks = {
+                task["task_id"]: task
+                for task in harness.list_tasks()["tasks"]
+            }
+            restart = harness.coordinator_restart_status("project")[
+                "coordinator_restart"
+            ]
+            claims = harness.connection.execute(
+                "SELECT task_id, worker_id, released_at FROM worker_claims "
+                "WHERE lineage_id = 'project' ORDER BY claimed_at"
+            ).fetchall()
+        self.assertEqual(
+            [
+                (claim["task_id"], claim["worker_id"], claim["released_at"] is not None)
+                for claim in claims
+            ],
+            [
+                ("seed", "worker-one", True),
+                ("worker-two-task", "worker-two", True),
+                ("worker-three-task", "worker-three", True),
+                ("post-mutation", "worker-four", True),
+            ],
+        )
+        self.assertTrue(all(task["state"] == "completed" for task in tasks.values()))
+        self.assertEqual(restart["generation"], 1)
+        self.assertFalse(restart_required(restart))
+        self.assertEqual(restart["run_id"], "post-mutation-crash")
 
     def test_optional_adapter_argument_stays_outside_runner_arguments(self) -> None:
         arguments = build_parser().parse_args(
@@ -580,9 +1524,9 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         )
         self.assertIn("DE67_DEADLINE_STATE", initial_prompt)
         self.assertIn("DE67_LINEAGE", initial_prompt)
-        self.assertIn("Before spawning each worker", initial_prompt)
-        self.assertIn("model-verification child", initial_prompt)
-        self.assertIn("Never count a coordinator restart as a worker window", initial_prompt)
+        self.assertIn("DE67_POLICY_DECIDE_ARGV_JSON", initial_prompt)
+        self.assertIn("preserve every emitted obligation", initial_prompt)
+        self.assertNotIn("Before spawning each worker", initial_prompt)
 
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.list_tasks()["coordinator_restart"]
@@ -958,6 +1902,120 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             {"crashed-run": "FAILED", "recovery-run": "DONE"},
         )
 
+    def test_three_failed_decisions_stop_without_a_fourth_launch(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        run_ids = iter((
+            "normal-decision",
+            "corrective-decision",
+            "fresh-final-decision",
+            "forbidden-fourth-run",
+        ))
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("crash-three-times"),
+            run_id_factory=lambda _generation: next(run_ids),
+        )
+
+        self.assertEqual(result, 9)
+        events = self.read_events()
+        self.assertEqual(
+            [event["run_id"] for event in events],
+            ["normal-decision", "corrective-decision", "fresh-final-decision"],
+        )
+        self.assertEqual(events[1]["resume_session"], "fake-session")
+        self.assertIsNone(events[2]["resume_session"])
+        error = (
+            self.run_root / "fresh-final-decision" / "supervisor_error.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Three coordinator decision opportunities were exhausted", error)
+
+        corrective_prompt = (
+            self.run_root / "corrective-decision" / "prompt.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("decision opportunity 2 of 3", corrective_prompt)
+        self.assertIn("Do not open a replacement task", corrective_prompt)
+        self.assertIn("spawn_agent", corrective_prompt)
+        self.assertIn("Durably close or block", corrective_prompt)
+        self.assertIn("SQL schemas, queries, migrations", corrective_prompt)
+        self.assertIn("SQLite-backed harness transitions", corrective_prompt)
+        self.assertIn("DFS red lamps:\n- [ ] 🔴 R-001 — Open", corrective_prompt)
+        self.assertIn(
+            "Ledger executable entries:\n- [ ] R-001 — Current route",
+            corrective_prompt,
+        )
+        self.assertIn(
+            "If either list is nonempty, Phase 3 is unfinished", corrective_prompt
+        )
+        self.assertIn("Trust your own causal judgment", corrective_prompt)
+        self.assertIn("repair the edge case", corrective_prompt)
+        self.assertIn("rerun the policy decision", corrective_prompt)
+
+        final_prompt = (
+            self.run_root / "fresh-final-decision" / "prompt.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("decision opportunity 3 of 3", final_prompt)
+        self.assertIn("final automatic opportunity", final_prompt)
+        self.assertIn("Trust your own causal judgment", final_prompt)
+
+    def test_successful_pass_resets_the_consecutive_decision_fuse(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        run_ids = iter(("failed", "successful", "new-1", "new-2", "new-3", "forbidden"))
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("successful-pass-resets-decision-fuse"),
+            run_id_factory=lambda _generation: next(run_ids),
+        )
+
+        self.assertEqual(result, 9)
+        self.assertEqual(
+            [event["run_id"] for event in self.read_events()],
+            ["failed", "successful", "new-1", "new-2", "new-3"],
+        )
+        normal_prompt = (self.run_root / "new-1" / "prompt.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("decision opportunity 2 of 3", normal_prompt)
+
+    def test_crashed_coordinator_preserves_claimed_worker_and_resumes_once(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        run_ids = iter(("worker-owner-crashed", "worker-result-ingress"))
+
+        with patch(
+            "coordinator_supervisor.runtime_worker_owners",
+            return_value={"worker-a": "fake-session"},
+        ):
+            result = run_supervisor(
+                self.state_path,
+                "project",
+                self.workspace,
+                self.runner_command(),
+                self.run_root,
+                extra_env=self.environment("claimed-worker-crash-then-complete"),
+                run_id_factory=lambda _generation: next(run_ids),
+            )
+
+        self.assertEqual(result, 0)
+        events = self.read_events()
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1]["resume_session"], "fake-session")
+        with DeadlineHarness(self.state_path) as harness:
+            task = harness.status_task("project", "seed")
+        self.assertEqual(task["state"], "completed")
+        self.assertEqual(
+            self.statuses(),
+            {"worker-owner-crashed": "FAILED", "worker-result-ingress": "DONE"},
+        )
+
     def test_nonresumable_crash_with_active_work_gets_a_fresh_coordinator(self) -> None:
         self.write_work_documents(red=True, active=True)
         run_ids = iter(("crashed-run", "recovery-run"))
@@ -975,14 +2033,13 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(result, 0)
         events = self.read_events()
         self.assertIsNone(events[0]["generation"])
-        self.assertEqual(events[1]["generation"], 1)
+        self.assertIsNone(events[1]["generation"])
         self.assertIsNone(events[1]["resume_session"])
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.coordinator_restart_status("project")[
                 "coordinator_restart"
             ]
-        self.assertEqual(restart["generation"], 1)
-        self.assertFalse(restart_required(restart))
+        self.assertIsNone(restart)
 
     def test_missing_runner_is_a_concrete_environment_blocker(self) -> None:
         self.write_work_documents(red=True, active=True)
@@ -1031,7 +2088,10 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.run_root / "active-ledger-continuation" / "prompt.txt"
         ).read_text(encoding="utf-8")
         self.assertNotIn("orchestrator-guidelines.md", continuation_prompt)
-        self.assertIn("findings are work input", continuation_prompt)
+        self.assertIn("findings are state events", continuation_prompt)
+        self.assertIn("minimal action brief", continuation_prompt)
+        self.assertIn("freely rewrite the active work-ledger projection", continuation_prompt)
+        self.assertIn("ordinary recoverable work, not external authority", continuation_prompt)
 
     def test_active_clock_prevents_completion(self) -> None:
         self.write_work_documents()
@@ -1145,12 +2205,16 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.workspace,
             self.runner_command(),
             self.run_root,
-            extra_env=self.environment("unacknowledged"),
+            extra_env=self.environment("deadline-mutation-lifecycle"),
             run_id_factory=lambda _generation: "incident-run",
         )
 
         self.assertEqual(result, 0)
-        self.assertEqual(len(self.read_events()), 1)
+        events = self.read_events()
+        self.assertEqual(len(events), 2)
+        self.assertEqual([event["role"] for event in events], [
+            "mutation-reviewer", "coordinator",
+        ])
 
     def test_pending_integrity_mutation_prevents_completion(self) -> None:
         self.write_work_documents()
@@ -1258,8 +2322,9 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             ],
         )
 
-    def test_unacknowledged_successor_is_not_retried_and_stays_pending(self) -> None:
+    def test_unacknowledged_successor_gets_three_opportunities_then_stops(self) -> None:
         generation = self.request_restart()
+        run_ids = iter(("ack-1", "ack-2", "ack-3", "forbidden-4"))
 
         result = run_supervisor(
             self.state_path,
@@ -1268,25 +2333,55 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.runner_command(),
             self.run_root,
             extra_env=self.environment("unacknowledged"),
-            run_id_factory=lambda _generation: "unacknowledged-run",
+            run_id_factory=lambda _generation: next(run_ids),
         )
 
         self.assertEqual(result, 1)
         events = self.read_events()
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["generation"], generation)
+        self.assertEqual(len(events), 3)
+        self.assertEqual([event["generation"] for event in events], [generation] * 3)
+        self.assertEqual(events[1]["resume_session"], "fake-session")
+        self.assertIsNone(events[2]["resume_session"])
         self.assertEqual(events[0]["ppid"], os.getpid())
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.list_tasks()["coordinator_restart"]
         self.assertTrue(restart_required(restart))
         self.assertEqual(restart["generation"], generation)
         self.assertIsNone(restart["run_id"])
-        self.assertEqual(restart["expected_run_id"], "unacknowledged-run")
-        self.assertEqual(self.statuses(), {"unacknowledged-run": "FAILED"})
+        self.assertEqual(restart["expected_run_id"], "ack-3")
+        self.assertEqual(
+            self.statuses(), {"ack-1": "FAILED", "ack-2": "FAILED", "ack-3": "FAILED"}
+        )
         self.assertNotIn("RUNNING", self.statuses().values())
 
-    def test_failed_successor_is_not_retried_and_stays_pending(self) -> None:
+    def test_unacknowledged_successor_can_acknowledge_on_second_opportunity(self) -> None:
+        self.write_work_documents(red=True, active=True)
         generation = self.request_restart()
+        run_ids = iter(("missed-ack", "recovered-ack", "forbidden-third"))
+
+        result = run_supervisor(
+            self.state_path,
+            "project",
+            self.workspace,
+            self.runner_command(),
+            self.run_root,
+            extra_env=self.environment("ack-on-second-opportunity"),
+            run_id_factory=lambda _generation: next(run_ids),
+        )
+
+        self.assertEqual(result, 0)
+        events = self.read_events()
+        self.assertEqual([event["run_id"] for event in events], ["missed-ack", "recovered-ack"])
+        self.assertEqual([event["generation"] for event in events], [generation, generation])
+        prompt = (self.run_root / "recovered-ack" / "prompt.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("decision opportunity 2 of 3", prompt)
+        self.assertIn("DE67_COORDINATOR_ACK_ARGV_JSON", prompt)
+
+    def test_failed_successor_gets_three_opportunities_and_stays_pending(self) -> None:
+        generation = self.request_restart()
+        run_ids = iter(("failed-1", "failed-2", "failed-3", "forbidden-4"))
 
         result = run_supervisor(
             self.state_path,
@@ -1295,21 +2390,24 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.runner_command(),
             self.run_root,
             extra_env=self.environment("fail-before-ack"),
-            run_id_factory=lambda _generation: "failed-run",
+            run_id_factory=lambda _generation: next(run_ids),
         )
 
         self.assertEqual(result, 7)
         events = self.read_events()
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["generation"], generation)
+        self.assertEqual(len(events), 3)
+        self.assertEqual([event["generation"] for event in events], [generation] * 3)
         with DeadlineHarness(self.state_path) as harness:
             restart = harness.list_tasks()["coordinator_restart"]
         self.assertTrue(restart_required(restart))
         self.assertEqual(restart["generation"], generation)
-        self.assertEqual(restart["expected_run_id"], "failed-run")
-        self.assertEqual(self.statuses(), {"failed-run": "FAILED"})
+        self.assertEqual(restart["expected_run_id"], "failed-3")
         self.assertEqual(
-            (self.run_root / "failed-run" / "exit_code.txt")
+            self.statuses(),
+            {"failed-1": "FAILED", "failed-2": "FAILED", "failed-3": "FAILED"},
+        )
+        self.assertEqual(
+            (self.run_root / "failed-3" / "exit_code.txt")
             .read_text(encoding="utf-8")
             .strip(),
             "7",

@@ -36,6 +36,72 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.harness.close()
         self.temporary.cleanup()
 
+    def test_worker_claim_is_durable_idempotent_and_exclusive(self) -> None:
+        self.harness.start_task("project", "route-a", "R-1", 60, now=0)
+
+        first = self.harness.claim_worker(
+            "project", "route-a", "worker-a", "coordinator-a", "supervisor-a", now=1
+        )
+        duplicate = self.harness.claim_worker(
+            "project", "route-a", "worker-a", "coordinator-a", "supervisor-a", now=2
+        )
+
+        self.assertTrue(first["recorded"])
+        self.assertFalse(duplicate["recorded"])
+        self.assertEqual(duplicate["claimed_at"], 1)
+        with self.assertRaisesRegex(DeadlineError, "another ownership claim"):
+            self.harness.claim_worker(
+                "project", "route-a", "worker-b", "coordinator-a", "supervisor-a", now=3
+            )
+
+    def test_worker_checkpoints_are_ordered_and_require_the_owner(self) -> None:
+        self.harness.start_task("project", "route-a", "R-1", 60, now=0)
+        self.harness.claim_worker(
+            "project", "route-a", "worker-a", "coordinator-a", "supervisor-a", now=1
+        )
+
+        first = self.harness.checkpoint_worker(
+            "project", "route-a", "worker-a", "delegated", "handoff", now=2
+        )
+        second = self.harness.checkpoint_worker(
+            "project", "route-a", "worker-a", "tested", "focused test", now=3
+        )
+
+        self.assertEqual((first["sequence"], second["sequence"]), (1, 2))
+        with self.assertRaisesRegex(DeadlineError, "does not own"):
+            self.harness.checkpoint_worker(
+                "project", "route-a", "worker-b", "tested", "not mine", now=4
+            )
+
+    def test_terminal_task_releases_its_worker_claim(self) -> None:
+        self.harness.start_task("project", "route-a", "R-1", 60, now=0)
+        self.harness.claim_worker(
+            "project", "route-a", "worker-a", "coordinator-a", "supervisor-a", now=1
+        )
+
+        self.harness.abandon_attempt("project", "route-a", "owner lost", now=2)
+
+        claim = self.harness.connection.execute(
+            "SELECT * FROM worker_claims WHERE lineage_id = 'project' AND task_id = 'route-a'"
+        ).fetchone()
+        self.assertEqual(claim["released_at"], 2)
+        self.assertEqual(claim["release_reason"], "task_abandoned")
+
+    def test_parallel_tasks_keep_independent_worker_claims(self) -> None:
+        for task, worker in (("route-a", "worker-a"), ("route-b", "worker-b")):
+            self.harness.start_task("project", task, "R-1", 60, now=0)
+            self.harness.claim_worker(
+                "project", task, worker, "coordinator-a", "supervisor-a", now=1
+            )
+
+        rows = self.harness.connection.execute(
+            "SELECT task_id, worker_id FROM worker_claims ORDER BY task_id"
+        ).fetchall()
+        self.assertEqual(
+            [(row["task_id"], row["worker_id"]) for row in rows],
+            [("route-a", "worker-a"), ("route-b", "worker-b")],
+        )
+
     def resolve_claim_miss(self, claim_id: str, *, diagnose: bool = True) -> None:
         if diagnose:
             self.harness.diagnose_claim_deadline(
@@ -810,6 +876,45 @@ class DeadlineHarnessTests(unittest.TestCase):
             [item["task_id"] for item in summary["recent_failure_verdicts"]],
             ["miss-1"],
         )
+
+    def test_mutation_retires_old_clock_and_fresh_coordinator_sets_new_one(self) -> None:
+        self.harness.start_task("project", "before-mutation", "R-001", 10, now=0)
+        self.harness.complete_task(
+            "project", "before-mutation", "terminal before mutation", now=5
+        )
+
+        retired = self.harness.retire_claim_clocks_for_mutation(
+            "project", "random mutation", now=6
+        )
+        self.assertEqual(retired, 1)
+        self.assertEqual(
+            self.harness.list_tasks(now=100)["pending_deadline_mutations"], []
+        )
+
+        restart = self.harness.request_coordinator_restart(
+            "project", "mutation complete", now=101
+        )["coordinator_restart"]
+        self.harness.claim_coordinator_restart(
+            "project", restart["generation"], "fresh", now=102
+        )
+        self.harness.acknowledge_coordinator_restart(
+            "project", restart["generation"], "fresh", now=102
+        )
+        started = self.harness.start_task(
+            "project", "after-mutation", "R-001", 300, now=103
+        )
+
+        self.assertEqual(started["deadline_generation"], 2)
+        self.assertEqual(started["estimate_seconds"], 300)
+        self.assertEqual(started["deadline_at"], 403)
+
+    def test_mutation_clock_retirement_refuses_a_live_worker(self) -> None:
+        self.harness.start_task("project", "live", "R-001", 100, now=0)
+
+        with self.assertRaisesRegex(DeadlineError, "worker attempt is running"):
+            self.harness.retire_claim_clocks_for_mutation(
+                "project", "random mutation", now=1
+            )
 
     def test_seven_due_breaches_cannot_crowd_out_pending_incident_reviews(self) -> None:
         with patch("deadline_harness.secrets.randbelow", side_effect=[20, 0]):
@@ -2474,6 +2579,41 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertTrue(second["due"])
         self.assertEqual(second["due_task_id"], "window-40")
 
+    def test_status_repairs_missed_random_due_marker_while_worker_is_live(self) -> None:
+        with patch("deadline_harness.secrets.randbelow", side_effect=[0, 0]):
+            for number in range(1, 22):
+                self.harness.start_task(
+                    "project", f"window-{number}", f"R-{number:03d}", 100, now=0
+                )
+            for number in range(1, 21):
+                self.harness.complete_task(
+                    "project", f"window-{number}", "green", now=number
+                )
+
+        self.harness.connection.execute(
+            """
+            UPDATE random_mutation_cycles
+            SET due_task_id = NULL
+            WHERE lineage_id = 'project' AND cycle_number = 1
+            """
+        )
+        self.harness.connection.commit()
+
+        view = self.harness.coordinator_view(now=21)
+        cycle = self.harness.connection.execute(
+            """
+            SELECT due_task_id FROM random_mutation_cycles
+            WHERE lineage_id = 'project' AND cycle_number = 1
+            """
+        ).fetchone()
+
+        self.assertIn(
+            "window-21",
+            [task["task_id"] for task in view["tasks"] if task["state"] == "running"],
+        )
+        self.assertEqual(view["random_mutation"]["due_task_id"], "window-20")
+        self.assertEqual(cycle["due_task_id"], "window-20")
+
     def test_interval_thirty_dfs_requires_ordinary_and_universal_before_restart(self) -> None:
         self.write_sol_ultra_capability()
         with patch(
@@ -3424,15 +3564,37 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertEqual(resolved["disposition"], "no_change_required")
         self.assertIsNone(resolved["receipt_id"])
         self.assertEqual(resolved["pending_components"], [])
-        self.assertIsNone(resolved["coordinator_restart"])
+        restart = resolved["coordinator_restart"]
+        self.assertIsNotNone(restart)
+        self.assertTrue(restart["pending"])
         self.assertEqual(
             self.harness.coordinator_view(now=5)["pending_deadline_mutations"], []
         )
+        with self.assertRaisesRegex(DeadlineError, "restart generation 1 is pending"):
+            self.harness.start_task("project", "retry", "R-LATE", 100, now=6)
+        self.harness.claim_coordinator_restart(
+            "project", restart["generation"], "fresh-coordinator", now=6
+        )
+        self.harness.acknowledge_coordinator_restart(
+            "project", restart["generation"], "fresh-coordinator", now=6
+        )
         resumed = self.harness.start_task(
-            "project", "retry", "R-LATE", 100, now=6
+            "project", "retry", "R-LATE", 100, now=7
         )
         self.assertEqual(resumed["deadline_generation"], 2)
-        self.assertEqual(resumed["deadline_at"], 106)
+        self.assertEqual(resumed["deadline_at"], 107)
+        generation = self.harness.connection.execute(
+            """
+            SELECT armed_by_restart_generation
+            FROM claim_deadline_generations
+            WHERE lineage_id = ? AND claim_id = ? AND generation = 2
+            """,
+            ("project", "R-LATE"),
+        ).fetchone()
+        self.assertIsNotNone(generation)
+        self.assertEqual(
+            generation["armed_by_restart_generation"], restart["generation"]
+        )
 
     def test_no_change_required_is_macro_only_and_cannot_consume_receipt(self) -> None:
         self.harness.start_task("project", "late", "R-LATE", 1, now=0)
@@ -3643,6 +3805,18 @@ class DeadlineHarnessTests(unittest.TestCase):
             ]
         )
         self.assertEqual(named.named_gaps, ["G-001::first", "G-002::second"])
+
+    def test_worker_claim_is_not_a_coordinator_callable_cli_command(self) -> None:
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(
+                [
+                    "claim-worker", "--state", "state.sqlite",
+                    "--lineage", "project", "--task", "W-001",
+                    "--worker", "/root/r008_closure_088",
+                    "--coordinator-session", "coordinator",
+                    "--supervisor", "123",
+                ]
+            )
 
 
 if __name__ == "__main__":

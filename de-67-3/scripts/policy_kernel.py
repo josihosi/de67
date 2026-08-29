@@ -782,7 +782,23 @@ def workspace_facts(
     suggestions = workspace / ".de67" / "mutation-suggestions.md"
     if suggestions.is_file():
         pending = suggestions.read_text(encoding="utf-8").partition("## Pending suggestions")[2]
-        if any(line.startswith("- ") for line in pending.splitlines()):
+        # Legacy unlabelled entries and explicit [trigger] entries are
+        # immediate owner gates.  [defer] entries are proposals for the next
+        # regular review and must not retire an otherwise healthy coordinator.
+        entries = (
+            line[2:].strip()
+            for line in pending.splitlines()
+            if line.startswith("- ")
+        )
+        if any(
+            entry.lower() != "none."
+            and not re.match(
+                r"^(?:owner-authorized\s+)?\[defer\]:?\s+",
+                entry,
+                re.IGNORECASE,
+            )
+            for entry in entries
+        ):
             facts.add("pending_suggestions")
     dfs = workspace / ".de67" / "DFS.md"
     dfs_text = dfs.read_text(encoding="utf-8") if dfs.is_file() else ""

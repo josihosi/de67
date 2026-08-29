@@ -534,6 +534,42 @@ class PolicyKernelTests(unittest.TestCase):
             } <= facts)
             self.assertNotIn("worker_failed", facts)
 
+    def test_workspace_probe_does_not_turn_deferred_suggestion_into_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            de67 = workspace / ".de67"
+            de67.mkdir()
+            (de67 / "work-ledger.md").write_text("", encoding="utf-8")
+            (de67 / "DFS.md").write_text("- [ ] 🔴 R-1\n", encoding="utf-8")
+            suggestions = de67 / "mutation-suggestions.md"
+            suggestions.write_text(
+                "## Pending suggestions\n\n- [defer]: review this later\n",
+                encoding="utf-8",
+            )
+            state = workspace / "state.sqlite3"
+            connection = sqlite3.connect(state)
+            connection.execute(
+                "CREATE TABLE tasks (lineage_id TEXT, task_id TEXT, "
+                "started_at REAL, attempt_terminal_at REAL, "
+                "attempt_terminal_kind TEXT)"
+            )
+            connection.commit()
+            connection.close()
+
+            facts = kernel.workspace_facts(workspace, state, "project", now=1)
+            self.assertNotIn("pending_suggestions", facts)
+            self.assertNotEqual(
+                kernel.decide(source_policy(), facts).action,
+                "retire_for_mutation_review",
+            )
+
+            suggestions.write_text(
+                "## Pending suggestions\n\n- [trigger]: review this now\n",
+                encoding="utf-8",
+            )
+            facts = kernel.workspace_facts(workspace, state, "project", now=1)
+            self.assertIn("pending_suggestions", facts)
+
     def test_initial_red_ledger_routes_exploration_without_a_claim_clock(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

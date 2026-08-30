@@ -163,17 +163,31 @@ def render_trajectory(report: dict[str, Any]) -> str:
         gap if isinstance(gap, dict) else {"summary": str(gap)}
         for gap in raw_gaps
     ] if isinstance(raw_gaps, list) else []
-    if not gaps:
+    raw_subtasks = report.get("subtasks")
+    subtasks = [
+        item if isinstance(item, dict) else {"summary": str(item)}
+        for item in raw_subtasks
+    ] if isinstance(raw_subtasks, list) else []
+    axes = subtasks or gaps
+    if not axes:
         return '<section class="trajectory"><h2>Trajectory sidecar</h2><p class="subtle">No closure trajectory.</p></section>'
     return (
         '<section class="trajectory"><h2>Trajectory sidecar</h2>'
-        f'{render_attention_spider(report, gaps)}'
+        f'{render_attention_spider(report, axes, gaps, bool(subtasks))}'
         '</section>'
     )
 
 
-def render_attention_spider(report: dict[str, Any], gaps: list[dict[str, Any]]) -> str:
-    gap_ids = [str(gap.get("gap_id", "?")) for gap in gaps]
+def render_attention_spider(
+    report: dict[str, Any],
+    axes_data: list[dict[str, Any]],
+    gaps: list[dict[str, Any]],
+    uses_subtasks: bool = False,
+) -> str:
+    gap_ids = [
+        str(axis.get("subtask_id" if uses_subtasks else "gap_id", "?"))
+        for axis in axes_data
+    ]
     raw_series = report.get("attention")
     series = [item for item in raw_series if isinstance(item, dict)] if isinstance(raw_series, list) else []
     radius = max(174, len(gap_ids) * 18)
@@ -194,20 +208,23 @@ def render_attention_spider(report: dict[str, Any], gaps: list[dict[str, Any]]) 
     axes: list[str] = []
     nodes: list[str] = []
     latest_gap = str(report.get("latest_task_gap") or "")
-    for index, (gap_id, gap) in enumerate(zip(gap_ids, gaps)):
+    for index, (gap_id, gap) in enumerate(zip(gap_ids, axes_data)):
         x, y = point(index, radius)
         node_x, node_y = point(index, node_radius)
         axes.append(f'<line x1="{center:.1f}" y1="{center:.1f}" x2="{x:.1f}" y2="{y:.1f}" />')
         status = str(gap.get("status", "open"))
-        active = gap_id == latest_gap and report.get("latest_task_result") == "active"
-        tone = "active" if active else "proved" if status == "proved" else "open"
+        active = status == "active" if uses_subtasks else (
+            gap_id == latest_gap and report.get("latest_task_result") == "active"
+        )
+        tone = "active" if active else "proved" if status in {"proved", "done"} else "open"
         summary = " ".join(str(gap.get("summary", "")).split())
         nodes.append(
             f'<g class="trajectory-node {tone}" transform="translate({node_x - 58:.1f} {node_y - 28:.1f})">'
             f'<title>{_escape(summary)}</title><rect width="116" height="56" rx="8" />'
-            f'<text x="58" y="21">{_escape(gap_id)} r{_escape(gap.get("revision", "?"))}</text>'
-            f'<text class="node-state" x="58" y="41">{_escape("active" if active else status)} · '
-            f'{_escape(gap.get("attempts", 0))} attempts</text></g>'
+            f'<text x="58" y="21">{_escape(gap_id)}'
+            f'{"" if uses_subtasks else " r" + _escape(gap.get("revision", "?"))}</text>'
+            f'<text class="node-state" x="58" y="41">{_escape("active" if active else status)}'
+            f'{"" if uses_subtasks else " · " + _escape(gap.get("attempts", 0)) + " attempts"}</text></g>'
         )
 
     shapes: list[str] = []
@@ -249,7 +266,8 @@ def render_attention_spider(report: dict[str, Any], gaps: list[dict[str, Any]]) 
             f'<span title="{_escape(source)}"><i class="attention-key attention-{css_key}"></i>{_escape(label)}</span>'
         )
     gap_cards: list[str] = []
-    for gap_id, gap in zip(gap_ids, gaps):
+    for gap in gaps:
+        gap_id = str(gap.get("gap_id", "?"))
         summary = " ".join(str(gap.get("summary", "No explanation recorded.")).split())
         status = str(gap.get("status", "open"))
         active = gap_id == latest_gap and report.get("latest_task_result") == "active"
@@ -261,9 +279,11 @@ def render_attention_spider(report: dict[str, Any], gaps: list[dict[str, Any]]) 
             f'<p>{_escape(summary)}</p></article>'
         )
     return (
-        '<article class="attention-panel"><div class="attention-heading"><h3>Attention spider</h3>'
+        f'<article class="attention-panel"><div class="attention-heading"><h3>'
+        f'{"Subtask attention" if uses_subtasks else "Attention spider"}</h3>'
         f'<span>{"Relative pull · not completion" if series else "Waiting for attention data"}</span></div>'
-        f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="Attention distribution across closure gaps">'
+        f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="Attention distribution across '
+        f'{"ledger subtasks" if uses_subtasks else "closure gaps"}">'
         f'<g class="attention-grid">{"".join(grid)}{"".join(axes)}</g>'
         f'{"".join(shapes)}<g class="attention-nodes">{"".join(nodes)}</g></svg>'
         f'<div class="attention-legend">{"".join(legend)}</div>'

@@ -557,6 +557,32 @@ class DashboardTests(unittest.TestCase):
         empty = dashboard_module.render_trajectory({"claim": "R-EXPLORE", "gaps": []})
         self.assertIn("No closure trajectory", empty)
 
+    def test_trajectory_uses_literal_subtasks_as_axes_and_keeps_gap_cards(self) -> None:
+        rendered = dashboard_module.render_trajectory({
+            "claim": "R-008",
+            "latest_task": "R008-M3",
+            "latest_task_result": "active",
+            "subtasks": [
+                {"subtask_id": "setup", "status": "done", "summary": "Fixture setup"},
+                {"subtask_id": "signal", "status": "active", "summary": "Signal causation"},
+                {"subtask_id": "bandits", "status": "open", "summary": "Bandit lifecycle"},
+                {"subtask_id": "camp", "status": "finding", "summary": "Camp interaction"},
+            ],
+            "gaps": [
+                {"gap_id": "G-001", "revision": 2, "status": "open",
+                 "summary": "Acceptance proof", "attempts": 3},
+            ],
+            "attention": [],
+        })
+
+        self.assertIn("Subtask attention", rendered)
+        self.assertIn("Attention distribution across ledger subtasks", rendered)
+        self.assertEqual(rendered.count('class="trajectory-node '), 4)
+        self.assertIn(">signal</text>", rendered)
+        self.assertNotIn("signal r?", rendered)
+        self.assertIn("G-001 r2", rendered)
+        self.assertEqual(rendered.count('class="gap-explanation '), 1)
+
     def test_exploration_without_closure_gaps_is_a_healthy_empty_sidecar(self) -> None:
         script = self.workspace / "trajectory_sidecar.py"
         script.write_text("# test sidecar\n", encoding="utf-8")

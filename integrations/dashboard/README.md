@@ -46,6 +46,31 @@ snapshots, history files, or refresh artifacts. A missing or failed sidecar cann
 The plot keeps current closure gaps around the claim, draws product and test cosine similarity
 along each spoke, and shows the sidecar's categorical trajectory observations without scoring them.
 
+## Optional Fratbro status
+
+The dashboard can ask a read-only Luna-medium narrator to translate current agent activity into a
+short, concrete status card directly below the trajectory plot. It explains what is cooking, what
+changed, the current snag, the next move, and whether work is moving, waiting, or stuck.
+
+This feature is off by default. Core de67 never starts it, and running the dashboard without these
+flags creates no narrator process or model usage:
+
+```sh
+python3 integrations/dashboard/de67_dashboard.py \
+  --workspace /path/to/project \
+  --sidecar-script de-67-3/scripts/trajectory_sidecar.py \
+  --fratbro-script integrations/dashboard/fratbro_narrator.py \
+  --fratbro-cache "/path/outside/project/fratbro-status.json" \
+  --fratbro-codex /path/to/codex
+```
+
+The dashboard starts one narrator only when the configured workspace's ledger, current task, or
+Codex session activity changes. Repeated page refreshes with unchanged input reuse the cached
+summary. The narrator reads the workspace and session records, runs Luna medium in a read-only
+sandbox, and writes only the configured external cache. It cannot steer the coordinator,
+supervisor, ledger, or delivery loop. A previous summary remains visible as stale while a new one
+is being produced.
+
 Run focused tests:
 
 ```sh

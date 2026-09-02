@@ -54,6 +54,10 @@ def render_markdown(text: str) -> str:
             list_open = False
 
     for line in text.splitlines():
+        if re.fullmatch(r"\s*<!--\s*DE67:[^<>]*-->\s*", line):
+            flush_paragraph()
+            close_list()
+            continue
         if line.lstrip().startswith("```"):
             flush_paragraph()
             close_list()
@@ -176,6 +180,21 @@ def render_trajectory(report: dict[str, Any]) -> str:
         f'{render_attention_spider(report, axes, gaps, bool(subtasks))}'
         '</section>'
     )
+
+
+def render_fratbro_status(value: dict[str, Any]) -> str:
+    summary = value.get("summary") if isinstance(value, dict) else None
+    if not isinstance(summary, dict):
+        return ('<section class="fratbro"><h2>Fratbro status</h2>'
+                '<p class="subtle">Luna is cooking the first summary.</p></section>')
+    rows = "".join(
+        f'<div><strong>{_escape(label)}</strong><span>{_escape(summary.get(key, "—"))}</span></div>'
+        for key, label in (("cooking", "What’s cooking"), ("changed", "What changed"),
+                           ("snag", "Current snag"), ("next", "Next move"),
+                           ("health", "Health"))
+    )
+    stale = " <em>stale</em>" if value.get("stale") else ""
+    return f'<section class="fratbro"><h2>Fratbro status{stale}</h2>{rows}</section>'
 
 
 def render_attention_spider(
@@ -736,9 +755,55 @@ def _session_complete(path: Path) -> bool:
         tail = source.read().decode("utf-8", errors="replace")
     started = max(tail.rfind('"type":"task_started"'),
                   tail.rfind('"type": "task_started"'))
-    completed = max(tail.rfind('"type":"task_complete"'),
-                    tail.rfind('"type": "task_complete"'))
-    return completed >= 0 and completed > started
+    terminal = max(
+        tail.rfind('"type":"task_complete"'),
+        tail.rfind('"type": "task_complete"'),
+        tail.rfind('"type":"turn_aborted"'),
+        tail.rfind('"type": "turn_aborted"'),
+    )
+    return terminal >= 0 and terminal > started
+
+
+def _active_worker_claims(workspace: Path) -> dict[str, str] | None:
+    """Return live primary worker-to-coordinator ownership, or None for legacy clocks."""
+    config_path = workspace / ".de67/state/workspace.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    clock = config.get("clock")
+    if not isinstance(clock, dict):
+        raise ValueError("workspace configuration lacks clock state")
+    configured = clock.get("state")
+    if not isinstance(configured, str) or not configured.strip():
+        raise ValueError("workspace clock.state must be a non-empty path")
+    state = Path(configured).expanduser()
+    if not state.is_absolute():
+        state = (workspace / state).resolve()
+    uri = f"file:{quote(str(state.resolve()).replace(os.sep, '/'), safe='/:')}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, timeout=0)
+    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        if not {"tasks", "worker_claims"}.issubset(tables):
+            return None
+        task_columns = _table_columns(connection, "tasks")
+        terminal_columns = [
+            name for name in (
+                "completed_at", "terminal_at", "attempt_terminal_at", "abandoned_at"
+            ) if name in task_columns
+        ]
+        terminal = " AND ".join(f'task."{name}" IS NULL' for name in terminal_columns)
+        where = f" AND {terminal}" if terminal else ""
+        rows = connection.execute(
+            "SELECT claim.worker_id, claim.coordinator_session_id "
+            "FROM worker_claims AS claim JOIN tasks AS task "
+            "ON task.lineage_id = claim.lineage_id AND task.task_id = claim.task_id "
+            f"WHERE claim.released_at IS NULL{where}"
+        ).fetchall()
+        return {str(row["worker_id"]): str(row["coordinator_session_id"]) for row in rows}
+    finally:
+        connection.close()
 
 
 def _recorded_run_pid_is_alive(status_path: Path) -> bool | None:
@@ -860,6 +925,8 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
             break
     if root_path is None or not root.get("id"):
         return {"counts": counts, "available": False, "error": "active Codex session unavailable"}
+    active_claims = _active_worker_claims(workspace)
+    candidates: list[tuple[Path, dict[str, Any]]] = []
     for path in paths:
         if path == root_path:
             continue
@@ -868,30 +935,133 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
             candidate_cwd = Path(candidate.get("cwd", "")).resolve()
         except (OSError, RuntimeError):
             continue
-        if (
-            candidate_cwd != target
-            or candidate.get("parent") != root["id"]
-            or _session_complete(path)
-        ):
+        if candidate_cwd != target:
             continue
-        model = str(candidate.get("model", "")).lower().rsplit("-", 1)[-1]
-        effort = str(candidate.get("effort", "")).lower()
-        if model in counts and effort in counts[model]:
-            counts[model][effort] += 1
+        candidates.append((path, candidate))
+
+    # Codex owns the real spawn tree. Count all live descendants, including
+    # optional Luna helpers below a primary Terra worker, without creating a
+    # parallel ownership model in DE67.
+    root_id = str(root["id"])
+    descendants = {root_id}
+    pending = candidates
+    while pending:
+        next_pending: list[tuple[Path, dict[str, Any]]] = []
+        changed = False
+        for path, candidate in pending:
+            parent = str(candidate.get("parent", ""))
+            candidate_id = str(candidate.get("id", ""))
+            if parent not in descendants:
+                next_pending.append((path, candidate))
+                continue
+            if (
+                active_claims is not None
+                and parent == root_id
+                and active_claims.get(candidate_id) != root_id
+            ):
+                # A direct coordinator child is a primary worker only while its
+                # durable claim belongs to this coordinator. Do not inherit the
+                # descendants of a released or owner-lost primary.
+                changed = True
+                continue
+            descendants.add(candidate_id)
+            changed = True
+            if active_claims is None and _session_complete(path):
+                continue
+            if active_claims is not None and parent != root_id and _session_complete(path):
+                continue
+            model = str(candidate.get("model", "")).lower().rsplit("-", 1)[-1]
+            effort = str(candidate.get("effort", "")).lower()
+            if model in counts and effort in counts[model]:
+                counts[model][effort] += 1
+        if not changed:
+            break
+        pending = next_pending
     return {"counts": counts, "available": True, "error": None}
 
 
 class Dashboard:
     def __init__(self, workspace: Path, refresh_seconds: int = 0,
                  sessions_root: Path | None = None,
-                 sidecar_script: Path | None = None) -> None:
+                 sidecar_script: Path | None = None,
+                 fratbro_script: Path | None = None,
+                 fratbro_cache: Path | None = None,
+                 fratbro_codex: str = "codex") -> None:
         self.workspace = workspace
         self.refresh_seconds = refresh_seconds
         self.sessions_root = sessions_root or Path.home() / ".codex/sessions"
         self.sidecar_script = sidecar_script
+        self.fratbro_script = fratbro_script
+        self.fratbro_cache = fratbro_cache
+        self.fratbro_codex = fratbro_codex
         self._lock = threading.Lock()
         self._good: dict[str, dict[str, Any]] = {}
         self._sidecar_signature: tuple[Any, ...] | None = None
+        self._fratbro_signature: tuple[Any, ...] | None = None
+        self._fratbro_process: subprocess.Popen[str] | None = None
+        self._fratbro_session_messages: dict[Path, tuple[int, str]] = {}
+
+    def _fratbro_activity_signature(self) -> tuple[tuple[str, str], ...]:
+        target = self.workspace.resolve()
+        activity: list[tuple[str, str]] = []
+        for path in self.sessions_root.glob("**/rollout-*.jsonl"):
+            header = _session_header(path)
+            if Path(str(header.get("cwd", ""))).resolve() != target:
+                continue
+            modified = path.stat().st_mtime_ns
+            cached = self._fratbro_session_messages.get(path)
+            if cached is None or cached[0] != modified:
+                latest = ""
+                with path.open("r", encoding="utf-8", errors="replace") as source:
+                    for line in source:
+                        try:
+                            item = json.loads(line)
+                        except (TypeError, ValueError):
+                            continue
+                        payload = item.get("payload", {})
+                        if (item.get("type") != "response_item"
+                                or payload.get("type") != "message"
+                                or payload.get("role") != "assistant"):
+                            continue
+                        text = " ".join(
+                            str(part.get("text", "")) for part in payload.get("content", [])
+                            if isinstance(part, dict)
+                        ).strip()
+                        if text:
+                            latest = text
+                digest = hashlib.sha256(latest.encode("utf-8")).hexdigest()
+                cached = (modified, digest)
+                self._fratbro_session_messages[path] = cached
+            activity.append((str(header.get("id", path.name)), cached[1]))
+        return tuple(sorted(activity))
+
+    def _fratbro_source(self, ledger: dict[str, Any], clock: dict[str, Any]) -> dict[str, Any]:
+        if self.fratbro_cache is None:
+            return {}
+        signature = (
+            ledger.get("identity", {}).get("hash"),
+            (clock.get("data", {}).get("task") or {}).get("task_id"),
+            self._fratbro_activity_signature(),
+        )
+        signature_text = hashlib.sha256(
+            json.dumps(signature, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if (self.fratbro_script is not None and signature != self._fratbro_signature
+                and (self._fratbro_process is None or self._fratbro_process.poll() is not None)):
+            self._fratbro_signature = signature
+            self._fratbro_process = subprocess.Popen(
+                [sys.executable, str(self.fratbro_script), "--workspace", str(self.workspace),
+                 "--cache", str(self.fratbro_cache), "--signature", signature_text,
+                 "--codex", self.fratbro_codex,
+                 "--codex-sessions", str(self.sessions_root)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+            )
+        try:
+            value = json.loads(self.fratbro_cache.read_text(encoding="utf-8"))
+            value["stale"] = value.get("signature") != signature_text
+            return value
+        except (OSError, TypeError, ValueError):
+            return {}
 
     def _markdown_source(self, name: str, path: Path) -> dict[str, Any]:
         try:
@@ -991,7 +1161,9 @@ class Dashboard:
                 workers = worker_state(self.workspace, self.sessions_root)
             except Exception as error:
                 workers = {"counts": {}, "available": False, "error": str(error)}
+            fratbro = self._fratbro_source(ledger, clock)
             return {"dfs": dfs, "ledger": ledger, "clock": clock, "sidecar": sidecar,
+                    "fratbro": fratbro,
                     "process": process,
                     "workers": workers, "process_error": process_error, "observed": time.time()}
 
@@ -999,6 +1171,7 @@ class Dashboard:
         state = self.snapshot()
         dfs, ledger, clock = state["dfs"], state["ledger"], state["clock"]
         sidecar = state["sidecar"]
+        fratbro = state.get("fratbro", {})
         ledger_data = parse_ledger(ledger.get("text", ""))
         clock_data = clock.get("data", {})
         task = clock_data.get("task") or {}
@@ -1123,7 +1296,8 @@ class Dashboard:
                     f'<span>{_escape(finding.get("short_verdict", ""))}</span>'
                     f'<em>{_escape(finding_age)}</em></div>'
                 )
-            body = f'<div class="status">{cards}</div>{workers_html}{sidecar_html}{finding_html}<section><h2>Active work ledger</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section><h2>Upcoming DFS work</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
+            fratbro_html = render_fratbro_status(fratbro) if self.fratbro_cache else ""
+            body = f'<div class="status">{cards}</div>{workers_html}{sidecar_html}{fratbro_html}{finding_html}<section><h2>Active work ledger</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section><h2>Upcoming DFS work</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
         page = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>de67</title>
 <style>
@@ -1132,6 +1306,7 @@ class Dashboard:
 .status{{grid-template-columns:repeat(6,1fr)}}
 .trajectory-observations{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}}.trajectory-observations span{{display:flex;flex-direction:column;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:5px;color:var(--muted);font-size:10px;line-height:1.35}}.trajectory-observations b{{color:var(--text);font-size:10px;font-weight:600;text-transform:capitalize;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.attention-panel{{min-width:0;padding:12px 12px 10px;border:1px solid var(--line);border-radius:6px;background:#151a20;overflow:auto}}.attention-heading{{display:flex;align-items:baseline;justify-content:space-between;gap:12px}}.attention-heading h3{{margin:0;font-size:13px}}.attention-heading span{{color:var(--muted);font-size:12px}}.attention-panel svg{{display:block;width:min(100%,760px);height:auto;min-width:540px;margin:auto}}.attention-grid polygon{{fill:none;stroke:#303741;stroke-width:1}}.attention-grid line{{stroke:#303741;stroke-width:1}}.attention-series polygon{{stroke-width:2.5;stroke-linejoin:round}}.attention-series circle{{stroke:none}}.attention-target polygon{{fill:none;stroke:#eee9df;stroke-dasharray:6 5}}.attention-target circle{{fill:#eee9df}}.attention-code polygon{{fill:rgba(117,167,216,.13);stroke:var(--blue)}}.attention-code circle{{fill:var(--blue)}}.attention-test polygon{{fill:rgba(240,188,40,.09);stroke:var(--yellow)}}.attention-test circle{{fill:var(--yellow)}}.attention-result polygon{{fill:rgba(189,128,214,.08);stroke:#bd80d6}}.attention-result circle{{fill:#bd80d6}}.attention-other polygon{{fill:none;stroke:#aab0b8}}.attention-other circle{{fill:#aab0b8}}.attention-legend{{display:flex;justify-content:center;gap:8px 13px;flex-wrap:wrap;color:var(--muted);font-size:12px}}.attention-legend span{{white-space:nowrap}}.attention-key{{display:inline-block;width:14px;height:3px;margin:0 5px 3px 0;border-radius:3px}}.attention-key.attention-target{{background:#eee9df}}.attention-key.attention-code{{background:var(--blue)}}.attention-key.attention-test{{background:var(--yellow)}}.attention-key.attention-result{{background:#bd80d6}}.attention-key.attention-other{{background:#aab0b8}}.attention-claim{{display:flex;justify-content:center;align-items:baseline;gap:9px;margin-top:7px}}.attention-claim strong{{font-size:14px}}.attention-claim span{{color:var(--muted);font-size:11px}}.attention-panel>p{{margin:6px 0 0;text-align:center;color:var(--muted);font-size:10px;line-height:1.4}}
 .gap-explanations{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-width:900px;margin:14px auto 0}}.gap-explanation{{position:relative;margin:0;padding:10px 12px 11px;border:1px solid var(--line);border-left:4px solid var(--yellow);border-radius:6px;background:#171c22}}.gap-explanation.proved{{border-left-color:var(--green)}}.gap-explanation.active{{border-left-color:var(--blue);background:#18212a}}.gap-explanation div{{display:flex;justify-content:space-between;gap:8px;margin-bottom:6px}}.gap-explanation div span{{font-size:12px;font-weight:700}}.gap-explanation .gap-state{{font-size:11px;font-weight:750;line-height:1.2;text-transform:capitalize}}.gap-explanation.open .gap-state{{color:var(--yellow)}}.gap-explanation.active .gap-state{{color:var(--blue)}}.gap-explanation.proved .gap-state{{color:var(--green)}}.gap-explanation p{{margin:5px 0 0;color:var(--muted);font-size:11px;font-weight:400;line-height:1.45}}
+.fratbro h2 em{{color:var(--yellow);font-size:11px;font-style:normal;margin-left:6px}}.fratbro>div{{display:grid;grid-template-columns:130px 1fr;gap:12px;padding:7px 0;border-top:1px solid var(--line)}}.fratbro>div:first-of-type{{border-top:0}}.fratbro>div strong{{font-size:12px;color:var(--muted)}}.fratbro>div span{{line-height:1.5}}
 @media(max-width:1000px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}
 @media(max-width:700px){{.gap-explanations{{grid-template-columns:1fr}}.attention-heading{{align-items:flex-start;flex-direction:column}}}}
 @media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}}}
@@ -1141,8 +1316,12 @@ class Dashboard:
 
 def serve(workspace: Path, bind: str, port: int, refresh_seconds: int,
           sessions_root: Path | None = None,
-          sidecar_script: Path | None = None) -> None:
-    dashboard = Dashboard(workspace.resolve(), refresh_seconds, sessions_root, sidecar_script)
+          sidecar_script: Path | None = None,
+          fratbro_script: Path | None = None,
+          fratbro_cache: Path | None = None,
+          fratbro_codex: str = "codex") -> None:
+    dashboard = Dashboard(workspace.resolve(), refresh_seconds, sessions_root, sidecar_script,
+                          fratbro_script, fratbro_cache, fratbro_codex)
 
     class Server(ThreadingHTTPServer):
         def server_bind(self) -> None:
@@ -1194,11 +1373,20 @@ def main() -> None:
                         help="Codex session root used for optional active-worker counts")
     parser.add_argument("--sidecar-script", type=Path, default=None,
                         help="Optional de67 trajectory_sidecar.py path")
+    parser.add_argument("--fratbro-script", type=Path, default=None,
+                        help="Optional Luna-medium fratbro_narrator.py path")
+    parser.add_argument("--fratbro-cache", type=Path, default=None,
+                        help="Optional narrator cache outside the configured workspace")
+    parser.add_argument("--fratbro-codex", default="codex",
+                        help="Codex executable used only by the optional narrator")
     args = parser.parse_args()
     if args.refresh_seconds < 0:
         parser.error("--refresh-seconds cannot be negative")
+    if bool(args.fratbro_script) != bool(args.fratbro_cache):
+        parser.error("--fratbro-script and --fratbro-cache must be configured together")
     serve(args.workspace, args.bind, args.port, args.refresh_seconds,
-          args.codex_sessions, args.sidecar_script)
+          args.codex_sessions, args.sidecar_script, args.fratbro_script, args.fratbro_cache,
+          args.fratbro_codex)
 
 
 if __name__ == "__main__":

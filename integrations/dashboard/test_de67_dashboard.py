@@ -107,6 +107,61 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("escaped &lt;finding&gt;", page)
         self.assertNotIn("escaped <finding>", page)
 
+    def test_fratbro_card_is_opt_in_and_directly_below_trajectory(self) -> None:
+        cache = self.workspace / "dashboard-cache/fratbro.json"
+        cache.parent.mkdir()
+        cache.write_text(json.dumps({"summary": {
+            "cooking": "Bro, testing real smoke.",
+            "changed": "The wall blocked it.",
+            "snag": "The avatar is on fire.",
+            "next": "Clean the save and rerun.",
+            "health": "moving — one concrete snag",
+        }}), encoding="utf-8")
+        sidecar = self.workspace / "sidecar.py"
+        sidecar.write_text("# fixture\n", encoding="utf-8")
+        report = {"claim": "R-009", "gaps": [{"gap_id": "G-002", "status": "open"}]}
+
+        with patch.object(dashboard_module, "read_sidecar", return_value=report):
+            page = dashboard_module.Dashboard(
+                self.workspace, sessions_root=self.sessions,
+                sidecar_script=sidecar, fratbro_cache=cache,
+            ).render("overview").decode()
+
+        self.assertLess(page.index("Trajectory sidecar"), page.index("Fratbro status"))
+        self.assertLess(page.index("Fratbro status"), page.index("Latest finding"))
+        self.assertIn("Bro, testing real smoke.", page)
+        self.assertIn("stale", page)
+        self.assertNotIn("Fratbro status", dashboard_module.Dashboard(
+            self.workspace, sessions_root=self.sessions
+        ).render("overview").decode())
+
+    def test_unchanged_fratbro_input_does_not_spawn_luna_again(self) -> None:
+        session = self.sessions / "rollout-current.jsonl"
+        session.write_text(json.dumps({"type": "session_meta", "payload": {
+            "id": "worker", "parent_thread_id": "root", "cwd": str(self.workspace)
+        }}) + "\n", encoding="utf-8")
+        script = self.workspace / "fratbro_narrator.py"
+        script.write_text("# fixture\n", encoding="utf-8")
+        cache = self.workspace / "fratbro.json"
+        dashboard = dashboard_module.Dashboard(
+            self.workspace, sessions_root=self.sessions,
+            fratbro_script=script, fratbro_cache=cache,
+        )
+        ledger = {"identity": {"hash": "ledger"}}
+        clock = {"data": {"task": {"task_id": "R-009"}}}
+        process = type("Process", (), {"poll": lambda self: None})()
+
+        with patch.object(dashboard_module.subprocess, "Popen", return_value=process) as spawn:
+            dashboard._fratbro_source(ledger, clock)
+            dashboard._fratbro_source(ledger, clock)
+            with session.open("a", encoding="utf-8") as target:
+                target.write(json.dumps({"type": "event_msg", "payload": {
+                    "type": "item_completed"
+                }}) + "\n")
+            dashboard._fratbro_source(ledger, clock)
+
+        self.assertEqual(spawn.call_count, 1)
+
     def test_overview_falls_back_to_ledger_for_non_string_clock_claim(self) -> None:
         database = self.workspace / ".de67/state/deadlines.sqlite3"
         connection = sqlite3.connect(database)
@@ -380,6 +435,18 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("&lt;img src=x onerror=bad&gt;", rendered)
         self.assertNotIn("<img", rendered)
 
+    def test_de67_control_markers_are_hidden_without_enabling_raw_html(self) -> None:
+        rendered = dashboard_module.render_markdown(
+            "<!-- DE67:DELIVERY-STATUS:BEGIN claim=R-ONE -->\n"
+            "- [x] R-ONE — accepted\n"
+            "<!-- DE67:DELIVERY-STATUS:END -->\n"
+            "<!-- ordinary comment -->\n"
+        )
+
+        self.assertNotIn("DE67:DELIVERY-STATUS", rendered)
+        self.assertIn("☑ R-ONE — accepted", rendered)
+        self.assertIn("&lt;!-- ordinary comment --&gt;", rendered)
+
     def test_ledger_continuations_stay_inside_one_decorative_rail(self) -> None:
         rendered = dashboard_module.render_ledger_section(
             "- [ ] R-009 — useful work\n"
@@ -635,6 +702,139 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("<tr><th>Terra</th><td class=\"\">0</td><td class=\"\">0</td><td class=\"\">0</td>", page)
         self.assertIn("<tr><th>Sol</th><td class=\"active-count\">1</td>", page)
         self.assertNotIn("Unavailable", page)
+
+    def test_nested_luna_helpers_count_as_active_workers(self) -> None:
+        day = self.sessions / "2026/08/18"
+        day.mkdir(parents=True)
+
+        def write_session(name, session_id, parent, model, effort, complete=False):
+            items = [
+                {"type": "session_meta", "payload": {
+                    "id": session_id, "parent_thread_id": parent,
+                    "cwd": str(self.workspace), "timestamp": "2026-08-18T08:00:00Z",
+                }},
+                {"type": "turn_context", "payload": {"model": model, "effort": effort}},
+                {"type": "event_msg", "payload": {"type": "task_started"}},
+            ]
+            if complete:
+                items.append({"type": "event_msg", "payload": {"type": "task_complete"}})
+            (day / name).write_text(
+                "".join(json.dumps(item) + "\n" for item in items), encoding="utf-8"
+            )
+
+        write_session("rollout-root.jsonl", "root", None, "gpt-5.6-sol", "low")
+        write_session("rollout-terra.jsonl", "terra", "root", "gpt-5.6-terra", "high")
+        write_session("rollout-helper-a.jsonl", "helper-a", "terra", "gpt-5.6-luna", "low")
+        write_session("rollout-helper-b.jsonl", "helper-b", "terra", "gpt-5.6-luna", "max")
+        write_session(
+            "rollout-finished-helper.jsonl", "helper-old", "terra",
+            "gpt-5.6-luna", "medium", complete=True,
+        )
+
+        workers = dashboard_module.worker_state(self.workspace, self.sessions)
+
+        self.assertEqual(workers["counts"]["terra"]["high"], 1)
+        self.assertEqual(workers["counts"]["luna"]["low"], 1)
+        self.assertEqual(workers["counts"]["luna"]["max"], 1)
+        self.assertEqual(workers["counts"]["luna"]["medium"], 0)
+
+    def test_interrupted_nested_luna_helpers_are_not_active_workers(self) -> None:
+        day = self.sessions / "2026/09/02"
+        day.mkdir(parents=True)
+
+        def write_session(name, session_id, parent, model, effort, events):
+            items = [
+                {"type": "session_meta", "payload": {
+                    "id": session_id, "parent_thread_id": parent,
+                    "cwd": str(self.workspace), "timestamp": "2026-09-02T08:00:00Z",
+                }},
+                {"type": "turn_context", "payload": {"model": model, "effort": effort}},
+            ] + [{"type": "event_msg", "payload": {"type": event}}
+                 for event in events]
+            (day / name).write_text(
+                "".join(json.dumps(item) + "\n" for item in items), encoding="utf-8"
+            )
+
+        write_session("rollout-root.jsonl", "root", None,
+                      "gpt-5.6-sol", "low", ["task_started"])
+        write_session("rollout-terra.jsonl", "terra", "root",
+                      "gpt-5.6-terra", "high", ["task_started"])
+        write_session("rollout-interrupted-a.jsonl", "helper-a", "terra",
+                      "gpt-5.6-luna", "low", ["task_started", "turn_aborted"])
+        write_session("rollout-interrupted-b.jsonl", "helper-b", "terra",
+                      "gpt-5.6-luna", "max", ["task_started", "turn_aborted"])
+
+        workers = dashboard_module.worker_state(self.workspace, self.sessions)
+
+        self.assertEqual(workers["counts"]["terra"]["high"], 1)
+        self.assertEqual(workers["counts"]["luna"]["low"], 0)
+        self.assertEqual(workers["counts"]["luna"]["max"], 0)
+
+    def test_interrupted_worker_can_be_reactivated(self) -> None:
+        session = self.sessions / "rollout-worker.jsonl"
+        session.write_text("".join(json.dumps(item) + "\n" for item in (
+            {"type": "event_msg", "payload": {"type": "task_started"}},
+            {"type": "event_msg", "payload": {"type": "turn_aborted"}},
+            {"type": "event_msg", "payload": {"type": "task_started"}},
+        )), encoding="utf-8")
+
+        self.assertFalse(dashboard_module._session_complete(session))
+
+    def test_durable_claims_hide_released_primaries_without_completion_markers(self) -> None:
+        day = self.sessions / "2026/08/18"
+        day.mkdir(parents=True)
+
+        def write_session(name, session_id, parent, model, effort):
+            items = [
+                {"type": "session_meta", "payload": {
+                    "id": session_id, "parent_thread_id": parent,
+                    "cwd": str(self.workspace), "timestamp": "2026-08-18T08:00:00Z",
+                }},
+                {"type": "turn_context", "payload": {"model": model, "effort": effort}},
+                {"type": "event_msg", "payload": {"type": "task_started"}},
+            ]
+            (day / name).write_text(
+                "".join(json.dumps(item) + "\n" for item in items), encoding="utf-8"
+            )
+
+        write_session("rollout-root.jsonl", "root", None, "gpt-5.6-sol", "low")
+        write_session("rollout-live.jsonl", "live", "root", "gpt-5.6-terra", "medium")
+        write_session("rollout-owner-lost.jsonl", "owner-lost", "root",
+                      "gpt-5.6-terra", "medium")
+        write_session("rollout-returned.jsonl", "returned", "root",
+                      "gpt-5.6-terra", "medium")
+        write_session("rollout-helper.jsonl", "helper", "live", "gpt-5.6-luna", "low")
+        write_session("rollout-stale-helper.jsonl", "stale-helper", "owner-lost",
+                      "gpt-5.6-luna", "low")
+
+        database = self.workspace / ".de67/state/deadlines.sqlite3"
+        connection = sqlite3.connect(database)
+        connection.executescript("""
+            ALTER TABLE tasks RENAME TO legacy_tasks;
+            CREATE TABLE tasks (
+              lineage_id TEXT, task_id TEXT, started_at REAL,
+              attempt_terminal_at REAL, abandoned_at REAL
+            );
+            CREATE TABLE worker_claims (
+              lineage_id TEXT, task_id TEXT, worker_id TEXT,
+              coordinator_session_id TEXT, released_at REAL
+            );
+            INSERT INTO tasks VALUES
+              ('lineage','live-task',1,NULL,NULL),
+              ('lineage','lost-task',2,3,3),
+              ('lineage','returned-task',4,5,5);
+            INSERT INTO worker_claims VALUES
+              ('lineage','live-task','live','root',NULL),
+              ('lineage','lost-task','owner-lost','root',3),
+              ('lineage','returned-task','returned','root',5);
+        """)
+        connection.commit()
+        connection.close()
+
+        workers = dashboard_module.worker_state(self.workspace, self.sessions)
+
+        self.assertEqual(workers["counts"]["terra"]["medium"], 1)
+        self.assertEqual(workers["counts"]["luna"]["low"], 1)
 
     def test_worker_header_survives_large_metadata_before_turn_context(self) -> None:
         day = self.sessions / "2026/08/18"

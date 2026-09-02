@@ -78,9 +78,12 @@ def activity_payload(workspace: Path, sessions_root: Path) -> dict[str, Any]:
 def _prompt(evidence: dict[str, Any]) -> str:
     return (
         "You are the read-only de67 dashboard fratbro narrator. Summarize what the agents are "
-        "actually doing for the repository owner in casual, plain fratbro language. Be concrete "
-        "about the product, gameplay, or code behavior; translate process language instead of "
-        "repeating it. Distinguish progress from churn. Do not advise, steer, edit, or run tools. "
+        "actually doing for the repository owner in casual, plain fratbro language. Each update "
+        "must stand alone: never assume the reader knows the task, acronyms, attempt history, or "
+        "what happened earlier. Name the concrete feature or test, the observed result, and the "
+        "immediate next move. Keep every field crisp and short. Be concrete about the product, "
+        "gameplay, or code behavior; translate process language instead of repeating it. "
+        "Distinguish progress from churn. Do not advise, steer, edit, or run tools. "
         "Return ONLY one JSON object with string fields cooking, changed, snag, next, health. "
         "Health must plainly say moving, waiting, or stuck and briefly why. Do not claim more than "
         "the supplied evidence.\n\nCURRENT EVIDENCE:\n" + json.dumps(evidence, ensure_ascii=False)

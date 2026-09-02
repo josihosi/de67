@@ -49,8 +49,9 @@ along each spoke, and shows the sidecar's categorical trajectory observations wi
 ## Optional Fratbro status
 
 The dashboard can ask a read-only Luna-medium narrator to translate current agent activity into a
-short, concrete status card directly below the trajectory plot. It explains what is cooking, what
-changed, the current snag, the next move, and whether work is moving, waiting, or stuck.
+short, concrete status card directly below the trajectory plot. Each update stands alone, names
+the feature or test and observed result, and explains what is cooking, what changed, the current
+snag, the next move, and whether work is moving, waiting, or stuck.
 
 This feature is off by default. Core de67 never starts it, and running the dashboard without these
 flags creates no narrator process or model usage:

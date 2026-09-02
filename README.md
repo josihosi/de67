@@ -1,6 +1,6 @@
 # de67
 
-> Things go 67 when agents build software. Build, don't aura farm. You need to **de67**.
+> Don't let your vibe coding project turn 67. Stop aura farming and start building. You need to **de67**.
 
 de67 is a **skill**, an **autonomous delivery loop**, and—where reality gets sharp—just enough
 **harness** to cover the whole software-building stack.

@@ -1009,15 +1009,7 @@ class Dashboard:
             return ("active", active_workers)
         if not self._fratbro_last_active_workers:
             return None
-        latest = clock.get("latest_task") or {}
-        terminal = next(
-            (latest.get(name) for name in (
-                "completed_at", "terminal_at", "attempt_terminal_at", "abandoned_at"
-            ) if latest.get(name) is not None),
-            None,
-        )
-        return ("terminal", self._fratbro_last_active_workers,
-                latest.get("task_id"), terminal)
+        return ("terminal", self._fratbro_last_active_workers)
 
     def _fratbro_source(self, ledger: dict[str, Any], clock: dict[str, Any]) -> dict[str, Any]:
         if self.fratbro_cache is None:

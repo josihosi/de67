@@ -14,6 +14,16 @@ SPEC.loader.exec_module(narrator)
 
 
 class FratbroNarratorTests(unittest.TestCase):
+    def test_prompt_requires_crisp_standalone_grounded_status(self) -> None:
+        prompt = narrator._prompt({"work_ledger": "Testing bandit fire detection."})
+
+        self.assertIn("must stand alone", prompt)
+        self.assertIn("never assume the reader knows", prompt)
+        self.assertIn("concrete feature or test", prompt)
+        self.assertIn("observed result", prompt)
+        self.assertIn("immediate next move", prompt)
+        self.assertIn("crisp and short", prompt)
+
     def test_luna_medium_is_read_only_and_structured(self) -> None:
         answer = {key: key for key in ("cooking", "changed", "snag", "next", "health")}
         event = {"type": "item.completed", "item": {

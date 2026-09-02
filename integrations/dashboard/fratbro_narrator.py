@@ -77,20 +77,20 @@ def activity_payload(workspace: Path, sessions_root: Path) -> dict[str, Any]:
 
 def _prompt(evidence: dict[str, Any]) -> str:
     return (
-        "You are the read-only de67 dashboard fratbro narrator. Summarize what the agents are "
-        "actually doing for the repository owner in casual, plain fratbro language. Each update "
-        "must stand alone: never assume the reader knows the task, acronyms, attempt history, or "
-        "what happened earlier. Name the concrete feature or test, the observed result, and the "
-        "immediate next move. Keep every field crisp and short. Be concrete about the product, "
-        "gameplay, or code behavior; translate process language instead of repeating it. "
-        "Distinguish progress from churn. Do not advise, steer, edit, or run tools. "
-        "Return ONLY one JSON object with string fields cooking, changed, snag, next, health. "
-        "Health must plainly say moving, waiting, or stuck and briefly why. Do not claim more than "
-        "the supplied evidence.\n\nCURRENT EVIDENCE:\n" + json.dumps(evidence, ensure_ascii=False)
+        "You are the read-only de67 dashboard fratbro narrator. Explain the current work to the "
+        "repository owner in one short, natural paragraph. Start from first principles and assume "
+        "the reader knows nothing about the project, task IDs, acronyms, attempt history, or prior "
+        "updates. Say what concrete feature or behavior is being built or tested, what the worker "
+        "actually did or observed, whether that is meaningful progress or churn, and what happens "
+        "next. Use casual plain language, but stay crisp, clear, factual, and grounded in the "
+        "evidence. Translate process language instead of repeating it. Do not use headings, labels, "
+        "bullet points, JSON, or administrative jargon. Do not advise, steer, edit, or run tools. "
+        "Do not claim more than the supplied evidence. Return only the paragraph.\n\n"
+        "CURRENT EVIDENCE:\n" + json.dumps(evidence, ensure_ascii=False)
     )
 
 
-def run_luna(workspace: Path, evidence: dict[str, Any], codex: str) -> dict[str, str]:
+def run_luna(workspace: Path, evidence: dict[str, Any], codex: str) -> str:
     # Run outside the observed workspace so this narrator session cannot become
     # fresh project activity and recursively trigger another narration.
     command = [codex, "exec", "--sandbox", "read-only", "--json", "--skip-git-repo-check",
@@ -112,11 +112,7 @@ def run_luna(workspace: Path, evidence: dict[str, Any], codex: str) -> dict[str,
             answer = item.get("text")
     if not answer:
         raise RuntimeError("Luna narrator returned no final message")
-    value = json.loads(answer)
-    fields = ("cooking", "changed", "snag", "next", "health")
-    if not isinstance(value, dict) or any(not isinstance(value.get(key), str) for key in fields):
-        raise ValueError("Luna narrator returned an invalid summary")
-    return {key: value[key] for key in fields}
+    return " ".join(answer.split())
 
 
 def write_cache(cache: Path, value: dict[str, Any]) -> None:

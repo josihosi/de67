@@ -110,13 +110,10 @@ class DashboardTests(unittest.TestCase):
     def test_fratbro_card_is_opt_in_and_directly_below_trajectory(self) -> None:
         cache = self.workspace / "dashboard-cache/fratbro.json"
         cache.parent.mkdir()
-        cache.write_text(json.dumps({"summary": {
-            "cooking": "Bro, testing real smoke.",
-            "changed": "The wall blocked it.",
-            "snag": "The avatar is on fire.",
-            "next": "Clean the save and rerun.",
-            "health": "moving — one concrete snag",
-        }}), encoding="utf-8")
+        cache.write_text(json.dumps({"summary": (
+            "The worker is testing whether real smoke escapes a building. The wall blocked it, "
+            "which is useful progress; next it will clean the save and rerun."
+        )}), encoding="utf-8")
         sidecar = self.workspace / "sidecar.py"
         sidecar.write_text("# fixture\n", encoding="utf-8")
         report = {"claim": "R-009", "gaps": [{"gap_id": "G-002", "status": "open"}]}
@@ -129,7 +126,7 @@ class DashboardTests(unittest.TestCase):
 
         self.assertLess(page.index("Trajectory sidecar"), page.index("Fratbro status"))
         self.assertLess(page.index("Fratbro status"), page.index("Latest finding"))
-        self.assertIn("Bro, testing real smoke.", page)
+        self.assertIn("The worker is testing whether real smoke escapes a building.", page)
         self.assertNotIn("Fratbro status <em>stale</em>", page)
         self.assertNotIn("Fratbro status", dashboard_module.Dashboard(
             self.workspace, sessions_root=self.sessions

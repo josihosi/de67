@@ -193,8 +193,7 @@ def render_fratbro_status(value: dict[str, Any]) -> str:
                            ("snag", "Current snag"), ("next", "Next move"),
                            ("health", "Health"))
     )
-    stale = " <em>stale</em>" if value.get("stale") else ""
-    return f'<section class="fratbro"><h2>Fratbro status{stale}</h2>{rows}</section>'
+    return f'<section class="fratbro"><h2>Fratbro status</h2>{rows}</section>'
 
 
 def render_attention_spider(
@@ -999,50 +998,36 @@ class Dashboard:
         self._sidecar_signature: tuple[Any, ...] | None = None
         self._fratbro_signature: tuple[Any, ...] | None = None
         self._fratbro_process: subprocess.Popen[str] | None = None
-        self._fratbro_session_messages: dict[Path, tuple[int, str]] = {}
+        self._fratbro_last_active_workers: tuple[str, ...] = ()
 
-    def _fratbro_activity_signature(self) -> tuple[tuple[str, str], ...]:
-        target = self.workspace.resolve()
-        activity: list[tuple[str, str]] = []
-        for path in self.sessions_root.glob("**/rollout-*.jsonl"):
-            header = _session_header(path)
-            if Path(str(header.get("cwd", ""))).resolve() != target:
-                continue
-            modified = path.stat().st_mtime_ns
-            cached = self._fratbro_session_messages.get(path)
-            if cached is None or cached[0] != modified:
-                latest = ""
-                with path.open("r", encoding="utf-8", errors="replace") as source:
-                    for line in source:
-                        try:
-                            item = json.loads(line)
-                        except (TypeError, ValueError):
-                            continue
-                        payload = item.get("payload", {})
-                        if (item.get("type") != "response_item"
-                                or payload.get("type") != "message"
-                                or payload.get("role") != "assistant"):
-                            continue
-                        text = " ".join(
-                            str(part.get("text", "")) for part in payload.get("content", [])
-                            if isinstance(part, dict)
-                        ).strip()
-                        if text:
-                            latest = text
-                digest = hashlib.sha256(latest.encode("utf-8")).hexdigest()
-                cached = (modified, digest)
-                self._fratbro_session_messages[path] = cached
-            activity.append((str(header.get("id", path.name)), cached[1]))
-        return tuple(sorted(activity))
+    def _fratbro_lifecycle_signature(self, clock: dict[str, Any]) -> tuple[Any, ...] | None:
+        """Emit only durable worker-start and worker-finish lifecycle events."""
+        claims = _active_worker_claims(self.workspace)
+        active_workers = tuple(sorted(claims)) if claims else ()
+        if active_workers:
+            self._fratbro_last_active_workers = active_workers
+            return ("active", active_workers)
+        if not self._fratbro_last_active_workers:
+            return None
+        latest = clock.get("latest_task") or {}
+        terminal = next(
+            (latest.get(name) for name in (
+                "completed_at", "terminal_at", "attempt_terminal_at", "abandoned_at"
+            ) if latest.get(name) is not None),
+            None,
+        )
+        return ("terminal", self._fratbro_last_active_workers,
+                latest.get("task_id"), terminal)
 
     def _fratbro_source(self, ledger: dict[str, Any], clock: dict[str, Any]) -> dict[str, Any]:
         if self.fratbro_cache is None:
             return {}
-        signature = (
-            ledger.get("identity", {}).get("hash"),
-            (clock.get("data", {}).get("task") or {}).get("task_id"),
-            self._fratbro_activity_signature(),
-        )
+        signature = self._fratbro_lifecycle_signature(clock.get("data", {}))
+        if signature is None:
+            try:
+                return json.loads(self.fratbro_cache.read_text(encoding="utf-8"))
+            except (OSError, TypeError, ValueError):
+                return {}
         signature_text = hashlib.sha256(
             json.dumps(signature, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
@@ -1057,9 +1042,7 @@ class Dashboard:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
             )
         try:
-            value = json.loads(self.fratbro_cache.read_text(encoding="utf-8"))
-            value["stale"] = value.get("signature") != signature_text
-            return value
+            return json.loads(self.fratbro_cache.read_text(encoding="utf-8"))
         except (OSError, TypeError, ValueError):
             return {}
 

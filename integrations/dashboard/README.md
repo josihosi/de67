@@ -64,12 +64,11 @@ python3 integrations/dashboard/de67_dashboard.py \
   --fratbro-codex /path/to/codex
 ```
 
-The dashboard starts one narrator only when the configured workspace's ledger, current task, or
-Codex session activity changes. Repeated page refreshes with unchanged input reuse the cached
-summary. The narrator reads the workspace and session records, runs Luna medium in a read-only
-sandbox, and writes only the configured external cache. It cannot steer the coordinator,
-supervisor, ledger, or delivery loop. A previous summary remains visible as stale while a new one
-is being produced.
+The dashboard starts one narrator when a worker becomes durably active and once more when that
+worker finishes. Tool calls, commentary, ledger edits, and page refreshes reuse the cached summary
+instead of spending another model call. The narrator reads the workspace and session records, runs
+Luna medium in a read-only sandbox, and writes only the configured external cache. It cannot steer
+the coordinator, supervisor, ledger, or delivery loop.
 
 Run focused tests:
 

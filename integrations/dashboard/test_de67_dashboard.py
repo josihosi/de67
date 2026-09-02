@@ -130,16 +130,12 @@ class DashboardTests(unittest.TestCase):
         self.assertLess(page.index("Trajectory sidecar"), page.index("Fratbro status"))
         self.assertLess(page.index("Fratbro status"), page.index("Latest finding"))
         self.assertIn("Bro, testing real smoke.", page)
-        self.assertIn("stale", page)
+        self.assertNotIn("Fratbro status <em>stale</em>", page)
         self.assertNotIn("Fratbro status", dashboard_module.Dashboard(
             self.workspace, sessions_root=self.sessions
         ).render("overview").decode())
 
     def test_unchanged_fratbro_input_does_not_spawn_luna_again(self) -> None:
-        session = self.sessions / "rollout-current.jsonl"
-        session.write_text(json.dumps({"type": "session_meta", "payload": {
-            "id": "worker", "parent_thread_id": "root", "cwd": str(self.workspace)
-        }}) + "\n", encoding="utf-8")
         script = self.workspace / "fratbro_narrator.py"
         script.write_text("# fixture\n", encoding="utf-8")
         cache = self.workspace / "fratbro.json"
@@ -151,16 +147,36 @@ class DashboardTests(unittest.TestCase):
         clock = {"data": {"task": {"task_id": "R-009"}}}
         process = type("Process", (), {"poll": lambda self: None})()
 
-        with patch.object(dashboard_module.subprocess, "Popen", return_value=process) as spawn:
+        with (patch.object(dashboard_module, "_active_worker_claims",
+                           return_value={"worker": "coordinator"}),
+              patch.object(dashboard_module.subprocess, "Popen", return_value=process) as spawn):
             dashboard._fratbro_source(ledger, clock)
             dashboard._fratbro_source(ledger, clock)
-            with session.open("a", encoding="utf-8") as target:
-                target.write(json.dumps({"type": "event_msg", "payload": {
-                    "type": "item_completed"
-                }}) + "\n")
-            dashboard._fratbro_source(ledger, clock)
+            dashboard._fratbro_source({"identity": {"hash": "changed"}}, clock)
 
         self.assertEqual(spawn.call_count, 1)
+
+    def test_fratbro_fires_again_when_worker_finishes(self) -> None:
+        script = self.workspace / "fratbro_narrator.py"
+        script.write_text("# fixture\n", encoding="utf-8")
+        cache = self.workspace / "fratbro.json"
+        dashboard = dashboard_module.Dashboard(
+            self.workspace, sessions_root=self.sessions,
+            fratbro_script=script, fratbro_cache=cache,
+        )
+        process = type("Process", (), {"poll": lambda self: 0})()
+        active_clock = {"data": {"latest_task": {"task_id": "R-009"}}}
+        terminal_clock = {"data": {"latest_task": {
+            "task_id": "R-009", "completed_at": 42,
+        }}}
+
+        with (patch.object(dashboard_module, "_active_worker_claims",
+                           side_effect=[{"worker": "coordinator"}, {}]),
+              patch.object(dashboard_module.subprocess, "Popen", return_value=process) as spawn):
+            dashboard._fratbro_source({}, active_clock)
+            dashboard._fratbro_source({}, terminal_clock)
+
+        self.assertEqual(spawn.call_count, 2)
 
     def test_overview_falls_back_to_ledger_for_non_string_clock_claim(self) -> None:
         database = self.workspace / ".de67/state/deadlines.sqlite3"

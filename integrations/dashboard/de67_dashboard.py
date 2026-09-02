@@ -184,16 +184,17 @@ def render_trajectory(report: dict[str, Any]) -> str:
 
 def render_fratbro_status(value: dict[str, Any]) -> str:
     summary = value.get("summary") if isinstance(value, dict) else None
-    if not isinstance(summary, dict):
+    if isinstance(summary, dict):
+        summary = " ".join(
+            str(summary.get(key, "")).strip()
+            for key in ("cooking", "changed", "snag", "next", "health")
+            if str(summary.get(key, "")).strip()
+        )
+    if not isinstance(summary, str) or not summary.strip():
         return ('<section class="fratbro"><h2>Fratbro status</h2>'
                 '<p class="subtle">Luna is cooking the first summary.</p></section>')
-    rows = "".join(
-        f'<div><strong>{_escape(label)}</strong><span>{_escape(summary.get(key, "—"))}</span></div>'
-        for key, label in (("cooking", "What’s cooking"), ("changed", "What changed"),
-                           ("snag", "Current snag"), ("next", "Next move"),
-                           ("health", "Health"))
-    )
-    return f'<section class="fratbro"><h2>Fratbro status</h2>{rows}</section>'
+    return (f'<section class="fratbro"><h2>Fratbro status</h2>'
+            f'<p>{_escape(summary)}</p></section>')
 
 
 def render_attention_spider(

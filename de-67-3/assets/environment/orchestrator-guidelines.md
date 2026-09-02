@@ -37,8 +37,11 @@ Treat `.de67/work-ledger.md` as a replaceable snapshot of current truth. SQLite,
 and source control retain attempt history. Delete superseded routes and prior-task narrative when
 the frontier changes. Under `## Active work`, encode each executable outcome as one canonical
 `- [ ] R-... — ...` item with exactly one indented `DFS slices:` line. When an outcome genuinely
-decomposes, list coherent visible subtasks under it; they are progress spokes, not separate worker
-windows or acceptance claims. Use fewer for a small outcome and one only when atomic. Never add
+decomposes, write one exact `  - Subtasks:` line followed by rows exactly
+`    - [STATE] ID :: DESCRIPTION`. `STATE` is `open`, `active`, `done`, or `finding`; `ID` is a
+stable lowercase hyphenated identifier. Usually write four to seven meaningful rows and update them
+in place. They are progress subdivisions, not separate worker windows, deadline tasks, closure gaps,
+or acceptance claims. Use fewer for an honestly small outcome and none when atomic. Never add
 filler, unrelated work, or an unbounded bucket. Close the task only when its outcome is settled;
 record subtask progress, contradiction, and uncertainty as nonterminal checkpoints. Put external
 waits under `## Waiting on external authority` without unchecked work-item syntax, and use

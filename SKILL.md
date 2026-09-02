@@ -1,6 +1,6 @@
 ---
 name: de67
-description: Route Codex work through de67 discussion, code-grounded specification, or delivery. Use when the user says `de67 1`, `de67 2`, or `de67 3`, invokes `$de67`, or asks Codex to install or integrate de67. Route to exactly one phase and never preload sibling phase instructions.
+description: Route Codex work through de67 discussion, code-grounded specification, delivery, or an optional alignment audit. Use when the user says `de67 1`, `de67 2`, `de67 3`, or `de67 alignment audit`, invokes `$de67`, or asks Codex to install or integrate de67. Route to exactly one surface and never preload unrelated instructions.
 ---
 
 # de67 router
@@ -12,10 +12,17 @@ Match the user's command and read exactly one entrypoint:
 - `de67 1`: read `de-67-1/SKILL.md` for the current-chat discussion and WEC.
 - `de67 2`: read `de-67-2/SKILL.md` for code inspection and DFS authoring.
 - `de67 3`: read `de-67-3/SKILL.md` for implementation, deadlines, and mutation.
+- `de67 alignment audit`: read `alignment-audit/SKILL.md` for a manual, read-only review of
+  agent-facing instructions, machine responses, and active workflow tests.
 
 Open the exact selected entrypoint directly; do not inventory or read sibling phase folders for
 background or completeness. The handoff artifacts are the interface: phase 2 receives `WEC.md`;
 phase 3 receives the frozen `DFS.md` and Phase-2-initialized `.de67/` clock state.
+
+The alignment audit is an optional manual tool, not a fourth phase. It does not receive phase
+handoffs, join the delivery loop, mutate the method, or become a completion gate. Route there only
+when the user asks to audit agentic workflow alignment, contradictory instructions, or rules and
+tests that may be boxing agents in.
 
 If `$de67` is invoked without a phase, ask one structured multiple-choice question listing the
 three phases, put the recommended phase first, and route after the answer. Do not infer implementation

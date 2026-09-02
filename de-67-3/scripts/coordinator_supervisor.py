@@ -723,11 +723,15 @@ def coordinator_ledger_contract() -> str:
         "the implementation, harness, fixtures, or observation path when that is the shortest honest "
         "route to proof. Trust the agent coordinating the claim to retire a failed strategy and invent "
         "a materially different implementation route; a retry fuse ends a strategy, not recoverable "
-        "work. A proof prerequisite that depends on its own eventual output must be split into a "
+        "work. Under every genuinely non-atomic active ledger item, write a nested line exactly "
+        "`  - Subtasks:` followed by rows exactly `    - [STATE] ID :: DESCRIPTION`. STATE is "
+        "open, active, done, or finding; ID is a stable lowercase hyphenated identifier. Usually "
+        "write four to seven meaningful rows, update them in place, and use fewer only for an "
+        "honestly smaller outcome. Never invent filler. These rows are progress subdivisions, not "
+        "separate workers, deadline tasks, closure gaps, or acceptance gates. A proof prerequisite "
+        "that depends on its own eventual output must be split into a "
         "non-credit observation/bootstrap step followed by independent validation; do not query the "
-        "unchanged prerequisite again. For dashboard readability, usually expose about "
-        "four to six meaningful gaps; use your judgment, and exceed eight only when combining them "
-        "would hide genuinely independent proof routes."
+        "unchanged prerequisite again."
     )
 
 
@@ -897,6 +901,7 @@ def mutation_reviewer_prompt(
             "The complete workspace mutation-suggestion ledger is mandatory owner input. User-authored entries carry mutation-scoped authority beneath system and developer instructions and override lower-priority Phase-3 restrictions only as needed for their outcome. Preserve honest evidence, completed valid work, durable lifecycle integrity, safety, and the requested product outcome; grant no unrelated authority.",
             "Trust the agent: choose the evidence and implementation route without prescribed reads, commands, approvals, or rituals. Diagnose poor decisions from the instructions, information, tools, incentives, and transitions the system supplied, then repair the earliest preventable systemic cause instead of blaming the actor or adding blanket caution.",
             "For every pending entry, reconstruct why the incident occurred, separate immediate recovery from repeatable method correction, implement the smallest general correction supported by evidence, and prove it with a reproduction or counterexample that could expose the original failure. Compress affected guidance instead of appending situational rules.",
+            "When rewriting the active ledger, preserve this coordinator-facing ledger contract: " + coordinator_ledger_contract(),
             "If a cause or correction cannot be proved, preserve the gate and state the exact remaining uncertainty. Otherwise disposition every pending entry, durably resolve the gate, request one fresh coordinator restart, and exit. The external supervisor alone launches the successor.",
         ]
     ) + "\n"

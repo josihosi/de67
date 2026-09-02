@@ -150,6 +150,45 @@ class TrajectorySidecarTests(unittest.TestCase):
         with self.assertRaisesRegex(sidecar.TrajectoryError, "No closure gaps"):
             sidecar.build_report(self.workspace, self.state, "R-999")
 
+    def test_explicit_ledger_subtasks_replace_gap_axes_without_replacing_gaps(self) -> None:
+        (self.workspace / ".de67" / "work-ledger.md").write_text(
+            "# Ledger\n\n## Active work\n\n"
+            "- [ ] R-001 — Deliver the whole route\n"
+            "  - Subtasks:\n"
+            "    - [done] canonical-setup :: Prepare the canonical fixture\n"
+            "    - [active] signal-causation :: Establish signal causation\n"
+            "    - [open] bandit-lifecycle :: Exercise the bandit lifecycle\n"
+            "    - [finding] camp-interaction :: Record the camp interaction issue\n",
+            encoding="utf-8",
+        )
+
+        report = sidecar.build_report(self.workspace, self.state, "R-001")
+
+        self.assertEqual(len(report.gaps), 2)
+        self.assertEqual(
+            [subtask.subtask_id for subtask in report.subtasks],
+            ["canonical-setup", "signal-causation", "bandit-lifecycle", "camp-interaction"],
+        )
+        target = next(series for series in report.attention if series.key == "target")
+        self.assertEqual([point.gap_id for point in target.points], [
+            "canonical-setup", "signal-causation", "bandit-lifecycle", "camp-interaction"
+        ])
+        self.assertEqual([point.relative_pull for point in target.points], [0.0, 1.0, 0.0, 0.0])
+
+    def test_subtask_parser_rejects_malformed_and_duplicate_rows(self) -> None:
+        ledger = self.workspace / ".de67" / "work-ledger.md"
+        for body, message in (
+            ("    - [doing] bad-state :: Not in the grammar\n", "Malformed subtask row"),
+            ("    - [open] same-id :: First\n    - [done] same-id :: Second\n", "Duplicate subtask id"),
+        ):
+            with self.subTest(message=message):
+                ledger.write_text(
+                    "- [ ] R-001 — Route\n  - Subtasks:\n" + body,
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(sidecar.TrajectoryError, message):
+                    sidecar.build_report(self.workspace, self.state, "R-001")
+
 
 if __name__ == "__main__":
     unittest.main()

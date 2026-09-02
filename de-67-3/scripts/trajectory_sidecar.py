@@ -69,6 +69,13 @@ class GapReport:
 
 
 @dataclass(frozen=True)
+class SubtaskReport:
+    subtask_id: str
+    status: str
+    summary: str
+
+
+@dataclass(frozen=True)
 class AttentionPoint:
     gap_id: str
     raw_relation: float
@@ -89,11 +96,58 @@ class TrajectoryReport:
     claim: str
     closure_sequence: int
     gaps: tuple[GapReport, ...]
+    subtasks: tuple[SubtaskReport, ...]
     latest_task: str | None
     latest_task_gap: str | None
     latest_task_result: str
     attention: tuple[AttentionSeries, ...]
     churn_vector: ChurnVector
+
+
+SUBTASK_ROW = re.compile(
+    r"^    - \[(open|active|done|finding)\] ([a-z0-9][a-z0-9-]*) :: (.+)$"
+)
+
+
+def ledger_subtasks(workspace: Path, claim: str) -> tuple[SubtaskReport, ...]:
+    """Parse explicit progress subdivisions for one active ledger item."""
+    ledger = workspace / ".de67" / "work-ledger.md"
+    if not ledger.is_file():
+        return ()
+    lines = ledger.read_text(encoding="utf-8").splitlines()
+    item = re.compile(rf"^- \[ \] {re.escape(claim)}(?=[ \t]+—|[ \t]*$)")
+    start = next((index for index, line in enumerate(lines) if item.match(line)), None)
+    if start is None:
+        return ()
+    end = next(
+        (index for index in range(start + 1, len(lines)) if lines[index].startswith("- [")),
+        len(lines),
+    )
+    block = lines[start + 1:end]
+    heading = next((index for index, line in enumerate(block) if line == "  - Subtasks:"), None)
+    if heading is None:
+        return ()
+    parsed: list[SubtaskReport] = []
+    seen: set[str] = set()
+    for line in block[heading + 1:]:
+        if not line.strip():
+            continue
+        if not line.startswith("    "):
+            break
+        match = SUBTASK_ROW.fullmatch(line)
+        if match is None:
+            raise TrajectoryError(
+                f"Malformed subtask row for {claim}: {line!r}; expected "
+                "    - [STATE] ID :: DESCRIPTION"
+            )
+        status, subtask_id, summary = match.groups()
+        if subtask_id in seen:
+            raise TrajectoryError(f"Duplicate subtask id for {claim}: {subtask_id}")
+        seen.add(subtask_id)
+        parsed.append(SubtaskReport(subtask_id, status, summary.strip()))
+    if not parsed:
+        raise TrajectoryError(f"Subtasks heading for {claim} has no valid rows")
+    return tuple(parsed)
 
 
 def git_changed_paths(workspace: Path) -> tuple[str, ...]:
@@ -387,6 +441,7 @@ def build_report(
 ) -> TrajectoryReport:
     changed_paths = git_changed_paths(workspace)
     production_units, test_units = git_diff_units(workspace)
+    subtasks = ledger_subtasks(workspace, claim)
     with closing(readonly_connection(state)) as connection:
         lineage_id = infer_lineage(connection, lineage)
         sequence_row = connection.execute(
@@ -504,7 +559,28 @@ def build_report(
                 result_label = "Latest finding"
                 result_source = str(finding["task_id"])
     latest_result = str(latest["attempt_terminal_kind"] or "active") if latest is not None else "none"
-    gap_ids = [report.gap_id for report in reports]
+    axis_ids = [subtask.subtask_id for subtask in subtasks] or [report.gap_id for report in reports]
+    axis_obligations = [subtask.summary for subtask in subtasks] or obligations
+    axis_vectors = tfidf_vectors([
+        *axis_obligations,
+        *(text for _, text in production_units),
+        *(text for _, text in test_units),
+    ])
+    obligation_count = len(axis_obligations)
+    production_start = obligation_count
+    test_start = production_start + len(production_units)
+    code_relations = [
+        nearest_relation(
+            vector,
+            production_units,
+            axis_vectors[production_start:test_start],
+        )[0]
+        for vector in axis_vectors[:obligation_count]
+    ]
+    test_relations = [
+        nearest_relation(vector, test_units, axis_vectors[test_start:])[0]
+        for vector in axis_vectors[:obligation_count]
+    ]
     active_gap = (
         str(latest["closure_gap_id"])
         if latest is not None and latest["closure_gap_id"]
@@ -515,33 +591,34 @@ def build_report(
             "target",
             "Assigned gap",
             str(latest["task_id"]) if latest is not None else "No active task",
-            gap_ids,
-            [1.0 if gap_id == active_gap else 0.0 for gap_id in gap_ids],
+            axis_ids,
+            ([1.0 if subtask.status == "active" else 0.0 for subtask in subtasks]
+             if subtasks else [1.0 if gap_id == active_gap else 0.0 for gap_id in axis_ids]),
         ),
         attention_series(
             "code",
             "Workspace code",
             "Current uncommitted diff",
-            gap_ids,
-            [report.implementation_relation for report in reports],
+            axis_ids,
+            code_relations,
         ),
         attention_series(
             "test",
             "Workspace tests",
             "Current uncommitted diff",
-            gap_ids,
-            [report.test_relation for report in reports],
+            axis_ids,
+            test_relations,
         ),
     ]
     if result_text:
-        result_vectors = tfidf_vectors([*obligations, result_text])
+        result_vectors = tfidf_vectors([*axis_obligations, result_text])
         result_vector = result_vectors[-1]
         attention.append(
             attention_series(
                 "result",
                 result_label,
                 result_source,
-                gap_ids,
+                axis_ids,
                 [round(cosine(vector, result_vector), 3) for vector in result_vectors[:-1]],
             )
         )
@@ -551,6 +628,7 @@ def build_report(
         claim,
         sequence,
         tuple(reports),
+        subtasks,
         str(latest["task_id"]) if latest is not None else None,
         str(latest["closure_gap_id"]) if latest is not None and latest["closure_gap_id"] else None,
         latest_result,

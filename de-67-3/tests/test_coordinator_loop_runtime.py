@@ -86,10 +86,13 @@ def wait_for(*worker_ids: str) -> dict[str, object]:
 
 
 class CoordinatorLoopRuntimeTests(unittest.TestCase):
-    def replay(self, *events: dict[str, object], initial_tasks: tuple[str, ...] = ()) -> None:
+    def replay(
+        self, *events: dict[str, object], initial_tasks: tuple[str, ...] = ()
+    ) -> CoordinatorLoopGuard:
         guard = CoordinatorLoopGuard(initial_unbound_tasks=initial_tasks)
         for event in events:
             guard.observe(event)
+        return guard
 
     def test_real_regression_running_task_then_empty_wait_is_rejected(self) -> None:
         with self.assertRaisesRegex(RunnerError, "R-008-closure-003.*no roster worker"):
@@ -158,14 +161,14 @@ class CoordinatorLoopRuntimeTests(unittest.TestCase):
             wait_for("worker-a", "worker-b"),
         )
 
-    def test_parallel_second_window_cannot_borrow_first_worker(self) -> None:
-        with self.assertRaisesRegex(RunnerError, "route-b.*no roster worker"):
-            self.replay(
-                task_start("route-a"),
-                handoff("spawn_agent", "worker-a"),
-                task_start("route-b"),
-                wait_for("worker-a"),
-            )
+    def test_parallel_second_window_stays_queued_while_first_worker_runs(self) -> None:
+        guard = self.replay(
+            task_start("route-a"),
+            handoff("spawn_agent", "worker-a"),
+            task_start("route-b"),
+            wait_for("worker-a"),
+        )
+        self.assertEqual(guard.unbound_tasks, ("route-b",))
 
     def test_resume_cannot_wait_on_an_unbound_durable_task(self) -> None:
         with self.assertRaisesRegex(RunnerError, "closure-004.*no roster worker"):
@@ -186,6 +189,16 @@ class CoordinatorLoopRuntimeTests(unittest.TestCase):
             task_start("replacement"),
             handoff("spawn_agent", "worker-b"),
             wait_for("worker-b"),
+        )
+
+    def test_recoverable_return_can_continue_same_live_window(self) -> None:
+        self.replay(
+            task_start("route-repair"),
+            handoff("spawn_agent", "worker-a"),
+            wait_for("worker-a"),
+            handoff("followup_task", "worker-a"),
+            wait_for("worker-a"),
+            task_terminal("route-repair"),
         )
 
     def test_abandonment_terminalizes_the_worker_window_before_replacement(self) -> None:
@@ -214,15 +227,15 @@ class CoordinatorLoopRuntimeTests(unittest.TestCase):
                 wait_for("worker-a"),
             )
 
-    def test_duplicate_handoff_cannot_prebind_the_next_window(self) -> None:
-        with self.assertRaisesRegex(RunnerError, "route-b.*no roster worker"):
-            self.replay(
-                task_start("route-a"),
-                handoff("spawn_agent", "worker-a"),
-                handoff("spawn_agent", "worker-extra"),
-                task_start("route-b"),
-                wait_for("worker-a", "worker-extra"),
-            )
+    def test_duplicate_handoff_does_not_prebind_the_queued_window(self) -> None:
+        guard = self.replay(
+            task_start("route-a"),
+            handoff("spawn_agent", "worker-a"),
+            handoff("spawn_agent", "worker-extra"),
+            task_start("route-b"),
+            wait_for("worker-a", "worker-extra"),
+        )
+        self.assertEqual(guard.unbound_tasks, ("route-b",))
 
     def test_failed_task_start_does_not_require_a_worker(self) -> None:
         self.replay(failed_task_start("never-created"), wait_for())
@@ -249,13 +262,13 @@ class CoordinatorLoopRuntimeTests(unittest.TestCase):
             initial_tasks=("resumed-route",),
         )
 
-    def test_one_handoff_cannot_bind_two_resumed_tasks(self) -> None:
-        with self.assertRaisesRegex(RunnerError, "resumed-b.*no roster worker"):
-            self.replay(
-                handoff("followup_task", "worker-a"),
-                wait_for("worker-a"),
-                initial_tasks=("resumed-a", "resumed-b"),
-            )
+    def test_one_handoff_leaves_the_other_resumed_task_queued(self) -> None:
+        guard = self.replay(
+            handoff("followup_task", "worker-a"),
+            wait_for("worker-a"),
+            initial_tasks=("resumed-a", "resumed-b"),
+        )
+        self.assertEqual(guard.unbound_tasks, ("resumed-b",))
 
     def test_wait_without_any_durable_task_is_not_a_phantom_worker_error(self) -> None:
         self.replay(wait_for())

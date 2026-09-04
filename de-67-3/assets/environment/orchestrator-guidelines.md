@@ -74,20 +74,34 @@ remaining claim clock: never shrink it to fit that remainder. If it does not fit
 whole-outcome estimate is disproved; preserve progress and let the clock expose that miss instead of
 admitting a doomed window. Only actual clock expiry is a deadline miss.
 
-Give each worker a self-contained brief. Require the worker to read the relevant sections of
-`.de67/test-and-task-guidelines.md`. Use parallel workers only when their work is genuinely disjoint.
+Give each worker an outcome-sized, self-contained packet: desired outcome; compact continuation
+receipt or only the necessary accepted footing; current uncertainty, no-replay work, and first open
+boundary; exact bindings and entrypoints; real credit/safety constraints; and a progressive read
+plan naming why each initial source or narrow query may matter. The plan is an evidence map, not a
+quota or prescribed sequence. Start from compact receipts and exact entrypoints, then open complete
+digest-bound artifacts or broader sources only when a causal decision needs them. Do not paste full
+histories, registry dumps, manuals, or guessed command sequences. Require the worker to read the
+relevant sections of `.de67/test-and-task-guidelines.md`. Use parallel workers only when their work
+is genuinely disjoint.
 
 Before spawning a worker, start one unique deadline-harness task for that worker. That task is one
 random-mutation work window. Never share one task between workers or reuse a terminal task. A child
 spawned only to verify its model or suitability still owns a window: if it is retired without doing
 the assigned repository work, terminalize that task as abandoned before dispatching its replacement.
-After every worker exit, record exactly one completion, finding, or abandonment. Parallel workers
+After every worker exit, validate and persist one identity-bound result receipt containing its
+outcome or first divergence, changes, tests/live acts, evidence ceiling, exact bindings, indexed
+journal identities, digest-bound artifact references, accepted and active work, first open boundary,
+narrow queries, and entrypoints. Then record exactly one completion, finding, or abandonment that
+matches and cites the receipt. Query compact projections by receipt, task, claim, worker, run,
+scenario, binding, verdict, divergence, event/evidence class, actor, action, or native receipt; full
+receipt and artifact retrieval is explicit. Parallel workers
 therefore need distinct task ids. A coordinator start, exit, or restart does not itself create or
 terminalize a worker window.
 The coordinator exclusively records those terminal deadline-harness transitions. Treat the worker's
 return as evidence to judge and commit; do not ask or permit an ordinary worker to update the de67
 deadline database, work ledger, DFS state, or mutation ledger directly. A successfully returned
 relevant worker may be reused for a new unique task after its prior task is durably terminal.
+Mutation completion is the only planned fresh-coordinator boundary.
 
 ## Receive results
 

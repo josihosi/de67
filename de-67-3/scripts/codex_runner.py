@@ -28,7 +28,7 @@ def worker_task_name(task_id: str) -> str:
 
 
 class CoordinatorLoopGuard:
-    """Reject a coordinator wait while a durable task has no roster handoff."""
+    """Reject a coordinator wait only when no durable task has a worker handoff."""
 
     def __init__(
         self,
@@ -108,6 +108,23 @@ class CoordinatorLoopGuard:
             return None
         return result if isinstance(result, dict) else None
 
+    @staticmethod
+    def _spawn_worker_task_ids(result: dict[str, object]) -> tuple[str, ...]:
+        """Read authoritative unbound task ids from a spawn-worker decision."""
+        if result.get("action") != "spawn_worker":
+            return ()
+        worker_spawns = result.get("worker_spawns")
+        if not isinstance(worker_spawns, list):
+            return ()
+        task_ids: list[str] = []
+        for spawn in worker_spawns:
+            if not isinstance(spawn, dict):
+                continue
+            task_id = spawn.get("task_id")
+            if isinstance(task_id, str) and task_id and task_id not in task_ids:
+                task_ids.append(task_id)
+        return tuple(task_ids)
+
     def observe(self, event: dict[str, object]) -> None:
         item = event.get("item")
         if event.get("type") == "thread.started":
@@ -131,6 +148,12 @@ class CoordinatorLoopGuard:
 
         result = self._command_result(item)
         if result is not None:
+            for announced_task_id in self._spawn_worker_task_ids(result):
+                if (
+                    announced_task_id not in self._unbound
+                    and announced_task_id not in self._task_workers
+                ):
+                    self._unbound[announced_task_id] = self._clock()
             task_id = result.get("task_id")
             if isinstance(task_id, str) and task_id:
                 if result.get("attempt_created") is True and result.get("state") == "running":
@@ -184,7 +207,7 @@ class CoordinatorLoopGuard:
                 for task_id in self._unbound
                 if task_id not in self._pending_delegations
             ]
-            if missing:
+            if missing and not (self._task_workers or self._pending_delegations):
                 raise RunnerError(
                     f"Running task {', '.join(missing)} has no roster worker before wait"
                 )

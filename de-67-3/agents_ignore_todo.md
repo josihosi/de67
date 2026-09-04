@@ -98,3 +98,82 @@ state. Only the repository owner or an agent directly tasked with maintaining th
 - Add an owner-contact route for blockers that require a material user decision. Preserve unattended
   progress on other unblocked work, and do not treat ordinary worker findings as reasons to contact
   the owner.
+- Revisit the C-AOL light-and-zombie package: player light, Writhing Stalker, and Zombie Rider.
+
+  Source-bound audit:
+
+  - Read-only inspection of the current Mac hostile-ecology `dev` working-tree bytes at
+    `c6616640a768625ce2673de56f336ae387ee0fc9` on 2026-09-03. Recheck references after rebases.
+  - Keep this as a deferred light-and-zombie lane. It has no DE-67 runtime authority and does not make the
+    current helper tests or debug-spawn scenarios production gameplay proof.
+
+  Verdict:
+
+  - Both concepts have useful local policy pieces, but neither currently proves the full physical
+    light -> abstract travel -> reality-bubble handoff -> characteristic local behavior trajectory.
+  - Treat movement ownership and multi-action behavior as the first problems. Tuning numbers before
+    those are true would polish behavior that can contradict its own decisions.
+
+  Shared player-light requirement:
+
+  - The player's actual illuminated position must publish a shared physical light point on the
+    overmap. This includes active flashlights and other lights carried or worn by the player, which
+    the current ground-item/field/terrain/vehicle scan omits (`src/do_turn.cpp:6553-6633`).
+  - Illumination cast onto the player by another physical source must use the same representation.
+    Derive intensity, exposure, and range from the actual light state rather than treating possession
+    of a named item as sufficient.
+  - Every intended overmap entity must be able to observe the same point through common physical
+    range and occlusion rules. The point carries light facts, never player identity, faction knowledge,
+    or a guaranteed target; actor-specific policy decides the response.
+  - Movement must update or coalesce the point, switching the light off must expire it honestly, and
+    unload/save/load must not leave permanent breadcrumb lights or duplicate a moving player source.
+  - Prove held-versus-dropped parity for the same active light, externally illuminated player tiles,
+    movement across OMT boundaries, contained versus exposed buildings, light-off decay, and multiple
+    actor consumers from one source record.
+
+  Writhing Stalker findings:
+
+  - An unloaded stalker can receive the generic `ZOMBIE`/`FERAL` plus `HEARS` horde signal, but the
+    dedicated planner runs only after generic loaded target acquisition. There is no dedicated
+    abstract stalker-light state (`src/horde_map.cpp:125-239`, `src/monmove.cpp:1648-1689,1997-2001`).
+  - The creature has no actual pounce. A `strike` increments the burst count during planning and sets
+    a destination; it does not require a landed attack. From three tiles away it can spend the default
+    burst merely approaching and then withdraw (`src/monmove.cpp:1096-1128`,
+    `src/writhing_stalker_ai.cpp:448-469`).
+  - `hold`, `interested`, and `ignore` unset the destination, after which generic scent or wander
+    movement can immediately advance anyway (`src/monmove.cpp:1138-1145,2325-2407`).
+  - The live latch is rebuilt without stored age and advanced with zero elapsed minutes; the field
+    named cooldown-minutes decreases per planner invocation. Shadow and retreat validate endpoints,
+    not complete routes (`src/writhing_stalker_ai.cpp:725-789`, `src/monmove.cpp:825-989`).
+
+  Zombie Rider findings:
+
+  - Dedicated light selection scans loaded `g->all_monsters()` only. Abstract riders use the generic
+    horde signal without the dedicated cap, so the nominal 36-OMT query and two-rider cap do not govern
+    one actor population (`src/do_turn.cpp:7234-7351`, `src/zombie_rider_overmap_ai.h:14-19`).
+  - `band_formed` currently means that two riders were selected for one light, not that they met.
+    There is no durable band identity, and loaded IDs are derived from changing positions
+    (`src/zombie_rider_overmap_ai.cpp:151-218`, `src/do_turn.cpp:7242-7258`).
+  - Open ground fails the current direct-attack opening heuristic, while nearby impassable clutter can
+    satisfy it. The default result for two healthy riders in open ground is circle/harass rather than
+    aggressive attack (`src/do_turn.cpp:7129-7152`, `src/zombie_rider_overmap_ai.cpp:232-268`).
+  - Bow HIT_AND_RUN writes a four-turn retreat, but the next custom plan can replace it with an inward
+    pressure destination. Light intent lasts 90-300 turns while scans occur every 300 turns, allowing
+    periodic policy snapping (`src/mattack_actors.cpp:1549-1561`, `src/monmove.cpp:1403-1645`,
+    `src/zombie_rider_overmap_ai.cpp:62-149`).
+
+  Later acceptance checks:
+
+  - Light: start from a real illuminated player, create one source-bound overmap point for every
+    intended consumer, move and extinguish it, and preserve exact source lifetime and physical
+    visibility through OMT movement, bubble transitions, and save/load without identity leakage.
+  - Stalker: begin abstract, answer a physical light only at the intended short range, survive both
+    bubble-entry routes, shadow through route-valid darkness, land a real distraction/lone-target
+    strike, commit to egress, and preserve/expire intent honestly through unload and save/load.
+  - Rider: begin abstract, enforce one responder cap across representations, require physical meeting
+    before durable band formation, attack aggressively in open ground, preserve the complete bow
+    retreat/reload rhythm, distinguish a real defended obstacle or breach, and survive light-off plus
+    unload/save/load without stale or duplicate ownership.
+  - Exercise both handoffs: the entity walks into the loaded map, and the player loads the entity's
+    submap. The latter currently has an explicit destination-synchronization TODO
+    (`src/overmap.cpp:1606-1624`, `src/overmapbuffer.cpp:2219-2271`).

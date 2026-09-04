@@ -1420,6 +1420,14 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(result, 0, output)
         self.assertIn(guard.ORCHESTRATOR_GUIDELINES, output)
 
+    def test_random_guideline_review_accepts_exact_guarded_noop(self) -> None:
+        for lane_index in (0, 1):
+            with self.subTest(lane_index=lane_index):
+                state, cycle = self.random_review_state(lane_index)
+                result, output = self.run_random_review_cli(state, cycle)
+                self.assertEqual(result, 0, output)
+                self.assertIn("guarded no-op", output)
+
     def setUp_candidate_again(self) -> None:
         self.write_guidelines(self.candidate, TASK_GUIDANCE, ORCHESTRATOR_GUIDANCE)
         (self.candidate / guard.DFS_FILE).write_text(
@@ -1457,7 +1465,7 @@ class MutationGuardTests(unittest.TestCase):
         state, cycle = self.random_review_state(2)
         result, output = self.run_random_review_cli(state, cycle)
         self.assertEqual(result, 0, output)
-        self.assertIn("guarded DFS no-op", output)
+        self.assertIn("guarded no-op", output)
 
     def test_random_dfs_review_preserves_frozen_contract(self) -> None:
         state, cycle = self.random_review_state(2)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import time
@@ -40,6 +41,7 @@ from coordinator_supervisor import (  # noqa: E402
     wait_for_supervision_event,
     work_is_complete,
     worker_handoff_contract,
+    nested_worker_contract,
     worker_result_ingress_contract,
 )
 from blocker_adapter import BlockerReply  # noqa: E402
@@ -91,6 +93,38 @@ if not (mode == "crash-without-session-then-complete" and event_count == 1):
     )
 
 with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
+    def complete_owned(task_id, evidence):
+        owner = harness.connection.execute(
+            "SELECT task.claim_id, claim.worker_id FROM tasks AS task "
+            "JOIN worker_claims AS claim USING (lineage_id, task_id) "
+            "WHERE task.lineage_id = ? AND task.task_id = ?",
+            (os.environ["DE67_LINEAGE"], task_id),
+        ).fetchone()
+        value = {
+            "schema": "de67.worker-result-receipt.v1",
+            "lineage_id": os.environ["DE67_LINEAGE"],
+            "task_id": task_id,
+            "claim_id": owner["claim_id"],
+            "worker_id": owner["worker_id"],
+            "disposition": "completed",
+            "verdict": "fake worker outcome completed",
+            "outcome": "Complete the fake worker outcome.",
+            "summary": evidence,
+            "material_changes": [], "tests": [], "live_actions": [],
+            "evidence_ceiling": [], "bindings": {}, "journal_entries": [],
+            "artifacts": [], "first_divergence": None,
+            "accepted_no_replay": [evidence], "active_work": [],
+            "first_open_boundary": "", "narrow_queries": [f"task_id={task_id}"],
+            "entrypoints": [], "context_metrics": {},
+        }
+        receipt = harness.record_worker_result_receipt(
+            os.environ["DE67_LINEAGE"], task_id, owner["worker_id"], value
+        )
+        return harness.complete_task(
+            os.environ["DE67_LINEAGE"], task_id, evidence,
+            receipt_id=receipt["receipt_id"],
+        )
+
     if mode in {
         "mutation-lifecycle",
         "mutation-after-coordinator",
@@ -136,9 +170,7 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                         os.environ["DE67_LINEAGE"], "seed", "worker-one",
                         "fake-session", os.environ["DE67_SUPERVISOR_PID"],
                     )
-                    harness.complete_task(
-                        os.environ["DE67_LINEAGE"], "seed", "worker one proof"
-                    )
+                    complete_owned("seed", "worker one proof")
                     raise SystemExit(9)
                 if event_count == 2:
                     harness.start_task(
@@ -148,9 +180,7 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                         os.environ["DE67_LINEAGE"], "worker-two-task", "worker-two",
                         "fake-session", os.environ["DE67_SUPERVISOR_PID"],
                     )
-                    harness.complete_task(
-                        os.environ["DE67_LINEAGE"], "worker-two-task", "worker two proof"
-                    )
+                    complete_owned("worker-two-task", "worker two proof")
                     raise SystemExit(0)
                 if event_count == 3:
                     harness.start_task(
@@ -160,9 +190,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                         os.environ["DE67_LINEAGE"], "worker-three-task", "worker-three",
                         "fake-session", os.environ["DE67_SUPERVISOR_PID"],
                     )
-                    harness.complete_task(
-                        os.environ["DE67_LINEAGE"], "worker-three-task",
-                        "worker three proof triggers mutation",
+                    complete_owned(
+                        "worker-three-task", "worker three proof triggers mutation"
                     )
                     raise SystemExit(0)
                 if event_count == 5:
@@ -180,11 +209,7 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                     )
                     raise SystemExit(9)
                 if event_count == 6:
-                    harness.complete_task(
-                        os.environ["DE67_LINEAGE"],
-                        "post-mutation",
-                        "post-mutation recovery proof",
-                    )
+                    complete_owned("post-mutation", "post-mutation recovery proof")
                     (root / "DFS.md").write_text(
                         "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
                         encoding="utf-8",
@@ -424,9 +449,7 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             raise SystemExit(9)
         if generation is not None:
             raise AssertionError("worker recovery must keep the coordinator generation")
-        harness.complete_task(
-            os.environ["DE67_LINEAGE"], "seed", "worker result ingested"
-        )
+        complete_owned("seed", "worker result ingested")
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
         (root / "DFS.md").write_text(
             "# DFS\n\nStatus: Frozen\n\n- [x] R-001 N{EM DASH} Done\n",
@@ -606,13 +629,27 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         )
         self.assertIn("correlation metadata", contract)
         self.assertIn("spawn_worker response injects the exact task_name", contract)
-        self.assertIn("concrete self-contained spawn_agent call", contract)
+        self.assertIn("compact spawn_agent call", contract)
+        self.assertIn("immutable hash-bound dispatch packet", contract)
+        self.assertIn("worker input, not coordinator context", contract)
+        self.assertIn("call wait_agent", contract)
         self.assertIn("announcing that you are assigning a worker is not delegation", contract)
         self.assertIn("spawn one distinct worker for each task before waiting", contract)
         self.assertIn("do not serialize independent work", contract)
         self.assertIn("Never invoke claim-worker", contract)
         self.assertIn("never use /root/<task-name>", contract)
-        self.assertIn("Proceed to the normal wait", contract)
+        self.assertIn("After every listed spawn", contract)
+        self.assertIn("do not finish while a worker result is outstanding", contract)
+
+    def test_nested_worker_contract_preserves_primary_task_ownership(self) -> None:
+        contract = nested_worker_contract()
+
+        self.assertIn("Terra worker may optionally", contract)
+        self.assertIn("Luna-only", contract)
+        self.assertIn("Do not open deadline tasks", contract)
+        self.assertIn("may work or wait", contract)
+        self.assertIn("collects or stops them before returning", contract)
+        self.assertIn("Luna workers do not delegate further", contract)
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -727,6 +764,38 @@ class CoordinatorSupervisorTests(unittest.TestCase):
 
         self.assertNotEqual(before, claimed)
         self.assertNotEqual(claimed, checkpointed)
+
+    def test_product_checkpoint_runs_only_after_supervisor_journal_is_quiescent(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        observed_live_attempts: list[int] = []
+
+        def observe_checkpoint(_workspace: Path, state: Path, lineage: str) -> dict[str, str]:
+            with sqlite3.connect(state) as connection:
+                observed_live_attempts.append(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM supervisor_attempts "
+                        "WHERE lineage_id = ? AND finished_at IS NULL",
+                        (lineage,),
+                    ).fetchone()[0]
+                )
+            return {"status": "disabled"}
+
+        with patch(
+            "coordinator_supervisor.checkpoint_repository",
+            side_effect=observe_checkpoint,
+        ):
+            result = run_supervisor(
+                self.state_path,
+                "project",
+                self.workspace,
+                self.runner_command(),
+                self.run_root,
+                extra_env=self.environment("complete-program"),
+                run_id_factory=lambda _generation: "checkpoint-boundary",
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(observed_live_attempts, [0])
 
     def test_supervisor_does_not_resume_after_child_leaves_orphan_clock(self) -> None:
         self.write_work_documents(red=True, active=True)
@@ -1095,8 +1164,37 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertLess(prompt.index(ingress), prompt.index("Before every route decision"))
         self.assertIn("before executing DE67_POLICY_DECIDE_ARGV_JSON", ingress)
         self.assertIn("exactly one", ingress)
+        self.assertIn("completed attempt settles only that task", ingress)
+        self.assertIn("close that gap and preserve its proof", ingress)
+        self.assertIn("separate claim-acceptance transition", ingress)
+        self.assertIn("not as terminal authority", ingress)
+        self.assertIn("name the assigned-outcome exit", ingress)
+        self.assertIn("checkpoint-worker", ingress)
+        self.assertIn("keep the same task live only while", ingress)
+        self.assertIn("would repeat an unchanged request", ingress)
+        self.assertIn("compact no-replay handoff", ingress)
+        self.assertIn("project its remaining frontier to a fresh task", ingress)
+        self.assertIn("Context exhaustion is not a formal finding", ingress)
+        self.assertNotIn("followup_task to the same bound worker", ingress)
         self.assertNotIn("Read .de67/orchestrator-guidelines.md", prompt)
         self.assertNotIn("test-and-task-guidelines.md", prompt)
+
+    def test_recoverable_return_is_checkpointed_before_terminal_admission(self) -> None:
+        ingress = worker_result_ingress_contract()
+
+        # Historical counterexample: closure-031 disproved loopback TCP and named no successor,
+        # while renderer parity still had authorized repository implementation routes.
+        self.assertIn("only disproves the current strategy", ingress)
+        self.assertIn("even when the worker names no successor", ingress)
+        self.assertIn("choose the next route", ingress)
+        self.assertIn("authorized repository repair, rerun", ingress)
+        self.assertLess(
+            ingress.index("keep the same task live only while"),
+            ingress.index("execution context is exhausted"),
+        )
+        self.assertIn("abandon only that attempt", ingress)
+        self.assertIn("unfinished ledger outcome visible", ingress)
+        self.assertNotIn("Do not record finding, release the worker", ingress)
 
     def test_pending_owner_suggestion_becomes_gate_only_after_workers_are_quiet(self) -> None:
         self.write_work_documents(red=True, active=True)
@@ -1117,6 +1215,15 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(contract.count("Trust the agent"), 2)
         self.assertIn("retry fuse ends a strategy, not recoverable work", contract)
         self.assertIn("non-credit observation/bootstrap step", contract)
+
+    def test_worker_evidence_contract_does_not_terminalize_first_divergence(self) -> None:
+        contract = ordinary_worker_evidence_contract()
+        self.assertNotIn("returns the first relevant divergence", contract)
+        self.assertIn("preserves the first relevant divergence as a diagnostic anchor", contract)
+        self.assertIn("continuing diagnosis, repair, or a changed tactic", contract)
+        self.assertIn("execution context cannot carry the next necessary act", contract)
+        self.assertIn("compact handoff", contract)
+        self.assertIn("That ends only the worker attempt, not the outcome", contract)
 
     def test_fresh_restart_prompt_includes_exact_owner_reason(self) -> None:
         prompt = coordinator_prompt(

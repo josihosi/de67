@@ -24,11 +24,14 @@ the frozen outcome instead of sending them to the owner.
 
 You own evidence retrieval. For each causal decision, identify the fact that would settle it, search
 narrowly, then read only the matching fields, ranges, records, or files. Query structured reports for
-the exact fields needed. Keep verbose build, test, run, diff, and search output in artifacts. Use the
+the exact fields needed. Keep verbose build, test, run, diff, and search output in digest-bound
+artifacts; return stable journal identities and narrow query keys rather than copying bulk output.
+Compact output must preserve enough metadata to recover the full evidence losslessly. Use the
 first relevant divergence as the next observation inside the assigned outcome, not as a terminal
 return. Do not combine unrelated broad reads.
 
-Derive every output bound from the current claim and evidence shape; never invent a fixed token,
+Treat observed bytes, entries, elapsed time, checkpoint count, and retrieval shape as diagnostic
+evidence rather than gates or quotas. Derive every output bound from the current claim and evidence shape; never invent a fixed token,
 line, file, or command quota. Larger evidence remains available when you can explain why deleting
 that read would leave the current claim unproved. After each result, name the next causal question.
 When accumulated context no longer helps close the assigned gap, return the result to the coordinator
@@ -58,8 +61,11 @@ whose removal still leaves the outcome honestly proved.
 
 ## Return the terminal result
 
-Return what changed, the real command or natural route, direct evidence, result, and remaining
-uncertainty in controlled English with exact identifiers. Keep a new divergence, failed tactic, and
+Return a compact schema-shaped result with the outcome or first divergence, material changes, tests
+and live actions, evidence ceiling, exact bindings, indexed journal identities, digest-bound
+artifact references, accepted no-replay work, active work, first open boundary, useful narrow
+queries, and entrypoints. This result is continuation footing, not a replacement for its full
+artifacts. Keep a new divergence, failed tactic, and
 reversible route change inside the goal-bound task while its outcome, authority, deadline, and risk
 boundary remain valid. A proved prerequisite is not terminal completion of a broader assigned
 outcome; preserve it and continue. Return a finding only when progress requires a different owner

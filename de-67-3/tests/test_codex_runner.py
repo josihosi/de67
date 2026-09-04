@@ -543,6 +543,58 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertEqual(guard.unbound_tasks, ())
         self.assertEqual(claims, [("route", "terra-worker", "coordinator")])
 
+    def test_loop_guard_allows_wait_with_bound_workers_and_one_capacity_queued_task(self) -> None:
+        claims: list[tuple[str, str, str | None]] = []
+        guard = codex_runner.CoordinatorLoopGuard(
+            initial_unbound_tasks=("route-1", "route-2", "route-3"),
+            roster_validator=lambda _worker, _parent: True,
+            claim_recorder=lambda task, worker, parent: claims.append(
+                (task, worker, parent)
+            ),
+        )
+        guard.observe({"type": "thread.started", "thread_id": "coordinator"})
+        for worker in ("terra-1", "terra-2"):
+            guard.observe(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "collab_tool_call",
+                        "tool": "spawn_agent",
+                        "status": "completed",
+                        "receiver_thread_ids": [worker],
+                    },
+                }
+            )
+
+        wait = {
+            "type": "item.started",
+            "item": {"type": "collab_tool_call", "tool": "wait"},
+        }
+        guard.observe(wait)
+        self.assertEqual(guard.unbound_tasks, ("route-3",))
+
+        guard.observe(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "collab_tool_call",
+                    "tool": "spawn_agent",
+                    "status": "completed",
+                    "receiver_thread_ids": ["terra-3"],
+                },
+            }
+        )
+
+        self.assertEqual(guard.unbound_tasks, ())
+        self.assertEqual(
+            claims,
+            [
+                ("route-1", "terra-1", "coordinator"),
+                ("route-2", "terra-2", "coordinator"),
+                ("route-3", "terra-3", "coordinator"),
+            ],
+        )
+
     def test_resumed_runner_binds_durable_worker_without_new_spawn_timestamp(self) -> None:
         claims: list[tuple[str, str, str | None]] = []
         guard = codex_runner.CoordinatorLoopGuard(

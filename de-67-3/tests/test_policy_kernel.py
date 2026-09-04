@@ -71,7 +71,7 @@ class PolicyKernelTests(unittest.TestCase):
     def test_worker_helper_contract_keeps_one_owner_and_native_freedom(self) -> None:
         contract = kernel.worker_helper_contract()
 
-        self.assertIn("Terra worker", contract)
+        self.assertIn("primary Luna or Terra worker", contract)
         self.assertIn("consider an optional Luna helper", contract)
         self.assertIn("bounded work can return independently", contract)
         self.assertIn("isolated live playtest witness", contract)
@@ -87,7 +87,6 @@ class PolicyKernelTests(unittest.TestCase):
         self.assertIn("avoid overlapping source edits", contract)
         self.assertIn("shared mutable runtime state", contract)
         self.assertIn("explicit exclusive ownership", contract)
-        self.assertIn("If you are Luna, do not delegate further", contract)
         self.assertNotIn("must delegate", contract)
 
     def test_source_policy_covers_legacy_decision_corpus(self) -> None:

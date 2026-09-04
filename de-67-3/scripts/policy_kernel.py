@@ -506,7 +506,7 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
 def worker_helper_contract() -> str:
     """Describe optional native helper delegation without DE67 bureaucracy."""
     return (
-        "If you are the Terra worker, consider an optional Luna helper when bounded work can "
+        "As the primary Luna or Terra worker, consider an optional Luna helper when bounded work can "
         "return independently, such as an isolated live playtest witness, focused test run, log "
         "analysis, source trace, screenshot inspection, or platform check. Use Codex native "
         "subagents only, with fork_turns=\"none\", a self-contained brief, and the lowest reasoning "
@@ -517,7 +517,7 @@ def worker_helper_contract() -> str:
         "reject helper results, and must collect or stop every helper before returning. Helpers do "
         "not own this assignment or change coordination records, and must avoid "
         "overlapping source edits or shared mutable runtime state without explicit exclusive "
-        "ownership. If you are Luna, do not delegate further."
+        "ownership."
     )
 
 

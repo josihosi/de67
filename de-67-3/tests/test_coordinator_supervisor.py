@@ -23,6 +23,7 @@ from coordinator_supervisor import (  # noqa: E402
     _complete_mutation_review,
     _supervisor_lock,
     build_parser,
+    coordinator_context_contract,
     coordinator_ledger_contract,
     coordinator_prompt,
     consume_supervision_event,
@@ -666,12 +667,12 @@ class CoordinatorSupervisorTests(unittest.TestCase):
     def test_nested_worker_contract_preserves_primary_task_ownership(self) -> None:
         contract = nested_worker_contract()
 
-        self.assertIn("Terra worker may optionally", contract)
+        self.assertIn("Luna or Terra worker may optionally", contract)
         self.assertIn("Luna-only", contract)
         self.assertIn("Do not open deadline tasks", contract)
         self.assertIn("may work or wait", contract)
         self.assertIn("collects or stops them before returning", contract)
-        self.assertIn("Luna workers do not delegate further", contract)
+        self.assertIn("explicit exclusive ownership", contract)
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -1183,7 +1184,6 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("closed diagnostic or documentation gap", prompt)
         self.assertIn("`  - Subtasks:`", prompt)
         self.assertIn("`    - [STATE] ID :: DESCRIPTION`", prompt)
-        self.assertIn("four to seven meaningful rows", prompt)
         self.assertIn("not separate workers, deadline tasks, closure gaps", prompt)
         self.assertIn(ordinary_worker_evidence_contract(), prompt)
         ingress = worker_result_ingress_contract()
@@ -1343,7 +1343,6 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("preserve the gate and state the exact remaining uncertainty", prompt)
         self.assertIn("external supervisor alone launches the successor", prompt)
         self.assertIn("`  - Subtasks:`", prompt)
-        self.assertIn("four to seven meaningful rows", prompt)
         self.assertNotIn("test-and-task-guidelines.md", prompt)
         self.assertNotIn("Read the exact live selected mutation target", prompt)
         self.assertNotIn("deadline_harness.py", prompt)
@@ -1663,7 +1662,11 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("DE67_DEADLINE_STATE", initial_prompt)
         self.assertIn("DE67_LINEAGE", initial_prompt)
         self.assertIn("DE67_POLICY_DECIDE_ARGV_JSON", initial_prompt)
-        self.assertIn("preserve every emitted obligation", initial_prompt)
+        for event in events:
+            prompt = (self.run_root / event["run_id"] / "prompt.txt").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(coordinator_context_contract(), prompt)
         self.assertNotIn("Before spawning each worker", initial_prompt)
 
         with DeadlineHarness(self.state_path) as harness:

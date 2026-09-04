@@ -832,11 +832,14 @@ def coordinator_ledger_contract() -> str:
         "the implementation, harness, fixtures, or observation path when that is the shortest honest "
         "route to proof. Trust the agent coordinating the claim to retire a failed strategy and invent "
         "a materially different implementation route; a retry fuse ends a strategy, not recoverable "
-        "work. Under every genuinely non-atomic active ledger item, write a nested line exactly "
-        "`  - Subtasks:` followed by rows exactly `    - [STATE] ID :: DESCRIPTION`. STATE is "
-        "open, active, done, or finding; ID is a stable lowercase hyphenated identifier. Usually "
-        "write four to seven meaningful rows, update them in place, and use fewer only for an "
-        "honestly smaller outcome. Never invent filler. These rows are progress subdivisions, not "
+        "work. Choose whether and how to decompose an outcome; expose subdivisions when they "
+        "help execution or explain progress. For the progress plot, prefer four to seven meaningful "
+        "spokes by grouping related steps when useful; this is a presentation preference, not a "
+        "task-count or execution constraint. Do not invent work to fill the plot. When using structured "
+        "subtasks, write a nested line exactly `  - Subtasks:` followed by rows exactly "
+        "`    - [STATE] ID :: DESCRIPTION`. STATE is open, active, done, or finding; ID is a "
+        "stable lowercase hyphenated identifier. Revise the breakdown as evidence changes, "
+        "preserving durable completed work. These rows are progress subdivisions, not "
         "separate workers, deadline tasks, closure gaps, or acceptance gates. A proof prerequisite "
         "that depends on its own eventual output must be split into a "
         "non-credit observation/bootstrap step followed by independent validation; do not query the "
@@ -880,13 +883,15 @@ def worker_handoff_contract() -> str:
 
 
 def nested_worker_contract() -> str:
-    """Keep optional Terra helpers native and outside durable task ownership."""
+    """Keep optional primary-worker helpers native and outside durable task ownership."""
     return (
-        "A primary Terra worker may optionally spawn Luna-only native helpers with "
+        "A primary Luna or Terra worker may optionally spawn Luna-only native helpers for independent "
+        "work with "
         "fork_turns=\"none\", self-contained briefs, and worker-selected reasoning effort. "
-        "Do not open deadline tasks, ledger entries, or claims for helpers. The Terra worker "
+        "Do not open deadline tasks, ledger entries, or claims for helpers. The primary worker "
         "retains the assigned outcome, may work or wait while helpers run, judges their results, "
-        "and collects or stops them before returning. Luna workers do not delegate further."
+        "and collects or stops them before returning. Give helpers explicit exclusive ownership before "
+        "overlapping edits or shared mutable runtime operations."
     )
 
 
@@ -981,6 +986,19 @@ def coordinator_recovery_contract(opportunity: int, workspace: Path) -> str:
     )
 
 
+def coordinator_context_contract() -> str:
+    """Separate routing obligations from the coordinator's evidence choices."""
+    return (
+        "Follow the policy's action and preserve its ownership and lifecycle requirements. "
+        "Start with its named sources; inspect additional in-scope evidence when it can change "
+        "the current decision. The read list is a starting point, not a whitelist. "
+        "A relevant read does not authorize dispatch, mutation, or a shared-state transition. "
+        "Apply each emitted obligation to the role and transition it governs. Give workers "
+        "their outcome, material constraints, useful evidence, and handoff requirements; keep "
+        "coordinator-only routing instructions out of worker briefs."
+    )
+
+
 def coordinator_prompt(
     workspace: Path,
     state_path: Path,
@@ -995,11 +1013,10 @@ def coordinator_prompt(
         "Do not read packaged DE-67 SKILL.md, kernel, role, reference, or guideline prose during delivery.",
         "The hash-bound .de67/phase3-policy.d67 file is the machine-canonical routing policy.",
         "Before each coordinator routing transition, execute the argument array in DE67_POLICY_DECIDE_ARGV_JSON as a subprocess without a shell.",
-        "Obey its action, read only its named sources, and preserve every emitted obligation in worker or reviewer briefs.",
+        coordinator_context_contract(),
         "Write every owner-facing text field rendered on the hosted dashboard in simple English. This includes ledger items, latest findings, waiting work, mutation or incident summaries, and any DFS summary that the dashboard displays. First explain what happened and why it matters in terms any reader can understand. Then preserve the necessary technical identifiers and evidence, state what remains or happens next, and use one concrete statement per sentence. If the simple explanation exposes a contradiction or a missing causal step, record that problem instead of hiding it behind technical language. Internal machine state and DFS detail that the dashboard does not display do not need this rewrite.",
         "Never review, apply, or resolve a mutation. When the compiled policy says retire_for_mutation_review, dispatch no worker, make no guidance change, and exit immediately so the external supervisor can run the exclusive reviewer.",
         "Do not infer policy from workspace guideline prose; those files are legacy differential fixtures on this branch.",
-        "Read current code or DFS detail only when the compiled decision names ledger, dfs, or dfs_slice.",
         "For every worker, explicitly select gpt-5.6-luna or gpt-5.6-terra: Luna for clear execution and Terra for debugging/discovery. Effort low-max: lowest sufficient for complexity/research. Never Sol.",
         "For every newly spawned ordinary worker, set fork_turns=\"none\" and provide a self-contained task brief. Never omit model selection or pass coordinator or predecessor history. Reusing an already relevant worker remains allowed.",
         coordinator_ledger_contract(),
@@ -1233,6 +1250,8 @@ def run_child(
             "lowest sufficient for complexity/research. Never Sol. Every newly spawned ordinary "
             "worker must use fork_turns=\"none\" and a self-contained brief; never omit model "
             "selection or pass coordinator or predecessor history. "
+            + coordinator_context_contract()
+            + " "
             + coordinator_ledger_contract()
             + " "
             + ordinary_worker_evidence_contract()

@@ -36,15 +36,17 @@ tools; do not read packaged prose or script source as policy.
 Treat `.de67/work-ledger.md` as a replaceable snapshot of current truth. SQLite, immutable artifacts,
 and source control retain attempt history. Delete superseded routes and prior-task narrative when
 the frontier changes. Under `## Active work`, encode each executable outcome as one canonical
-`- [ ] R-... — ...` item with exactly one indented `DFS slices:` line. When an outcome genuinely
-decomposes, write one exact `  - Subtasks:` line followed by rows exactly
-`    - [STATE] ID :: DESCRIPTION`. `STATE` is `open`, `active`, `done`, or `finding`; `ID` is a
-stable lowercase hyphenated identifier. Usually write four to seven meaningful rows and update them
-in place. They are progress subdivisions, not separate worker windows, deadline tasks, closure gaps,
-or acceptance claims. Use fewer for an honestly small outcome and none when atomic. Never add
-filler, unrelated work, or an unbounded bucket. Close the task only when its outcome is settled;
-record subtask progress, contradiction, and uncertainty as nonterminal checkpoints. Put external
-waits under `## Waiting on external authority` without unchecked work-item syntax, and use
+`- [ ] R-... — ...` item with exactly one indented `DFS slices:` line. When an outcome benefits
+from visible subdivisions, choose a useful breakdown and revise it as evidence changes. For the
+progress plot, prefer four to seven meaningful spokes by grouping related steps when useful. This
+is a presentation preference, not a task-count or execution constraint; do not invent work to fill
+the plot. For structured subtasks, write one exact `  - Subtasks:` line followed
+by rows exactly `    - [STATE] ID :: DESCRIPTION`. `STATE` is `open`, `active`, `done`, or `finding`;
+`ID` is a stable lowercase hyphenated identifier. They are progress subdivisions, not separate
+worker windows, deadline tasks, closure gaps, or acceptance claims. Omit the section when it adds
+no useful information, and preserve completed work in its durable evidence records. Close the task
+only when its outcome is settled; record subtask progress, contradiction, and uncertainty as
+nonterminal checkpoints. Put external waits under `## Waiting on external authority` without unchecked work-item syntax, and use
 `- Blocked:` only when no executable route remains. Each projected route states its current status,
 accepted frontier, first unresolved uncertainty, and next action. One red claim may have several
 entries when its independently provable outcomes can proceed separately. Freely split, merge,

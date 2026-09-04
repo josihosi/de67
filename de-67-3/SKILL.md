@@ -26,10 +26,12 @@ obligations, fallback behavior, event vocabulary, temporal transitions, and keye
 are mutable source data. The immutable kernel only authenticates and interprets that data. Guideline
 Markdown is retained only as a legacy differential fixture during this experiment.
 
-Before every route decision, execute `scripts/policy_kernel.py decide` against the local compiled
-policy, workspace, and deadline database. The returned action names the only policy reads and
-obligations that enter the next brief. Unknown, corrupt, ambiguous, or unsupported policy fails
-closed instead of falling back to prose.
+Only the Phase-3 coordinator choosing the next shared workflow transition executes
+`scripts/policy_kernel.py decide` against the local compiled policy, workspace, and deadline
+database. Ordinary workers own only their sealed task brief; they do not invoke coordinator policy
+or mutate deadline state. The returned action names the only policy reads and obligations that enter
+the next brief. Unknown, corrupt, ambiguous, or unsupported policy fails closed instead of falling
+back to prose.
 
 Policy mutations operate on a candidate machine source and contract corpus under `.de67/state/`.
 Promote the candidate source and compiled bytecode together only after `policy_kernel.py guard`

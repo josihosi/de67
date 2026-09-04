@@ -993,7 +993,7 @@ def coordinator_prompt(
         worker_result_ingress_contract(),
         "Do not read packaged DE-67 SKILL.md, kernel, role, reference, or guideline prose during delivery.",
         "The hash-bound .de67/phase3-policy.d67 file is the machine-canonical routing policy.",
-        "Before every route decision, execute the argument array in DE67_POLICY_DECIDE_ARGV_JSON as a subprocess without a shell.",
+        "Before each coordinator routing transition, execute the argument array in DE67_POLICY_DECIDE_ARGV_JSON as a subprocess without a shell.",
         "Obey its action, read only its named sources, and preserve every emitted obligation in worker or reviewer briefs.",
         "Write every owner-facing text field rendered on the hosted dashboard in simple English. This includes ledger items, latest findings, waiting work, mutation or incident summaries, and any DFS summary that the dashboard displays. First explain what happened and why it matters in terms any reader can understand. Then preserve the necessary technical identifiers and evidence, state what remains or happens next, and use one concrete statement per sentence. If the simple explanation exposes a contradiction or a missing causal step, record that problem instead of hiding it behind technical language. Internal machine state and DFS detail that the dashboard does not display do not need this rewrite.",
         "Never review, apply, or resolve a mutation. When the compiled policy says retire_for_mutation_review, dispatch no worker, make no guidance change, and exit immediately so the external supervisor can run the exclusive reviewer.",

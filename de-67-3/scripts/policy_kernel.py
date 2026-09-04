@@ -296,6 +296,58 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
     return "\n\n".join(matching), match.group("body").strip()
 
 
+def worker_helper_contract() -> str:
+    """Describe optional native helper delegation without DE67 bureaucracy."""
+    return (
+        "If you are the Terra worker, consider an optional Luna helper when bounded work can "
+        "return independently, such as an isolated live playtest witness, focused test run, log "
+        "analysis, source trace, screenshot inspection, or platform check. Use Codex native "
+        "subagents only, with fork_turns=\"none\", a self-contained brief, and the lowest reasoning "
+        "effort you judge sufficient; use as many as the runtime permits, and work or wait while "
+        "they run. For a playtest, supply the compact charter and isolated run context; the Luna "
+        "helper operates the run and returns the smallest journal-cited witness, while you judge "
+        "the evidence and own any repair. You remain responsible for the whole outcome, may use or "
+        "reject helper results, and must collect or stop every helper before returning. Helpers do "
+        "not own deadline tasks or write DE67 clock, ledger, DFS, or mutation state, and must avoid "
+        "overlapping source edits or shared mutable runtime state without explicit exclusive "
+        "ownership. If you are Luna, do not delegate further."
+    )
+
+
+def worker_outcome_contract() -> str:
+    """Keep recoverable work inside the outcome and reserve terminal findings."""
+    return (
+        "Keep repository-owned implementation, tooling, fixture, scenario, binding, and "
+        "observation prerequisites inside this task while they remain useful to its outcome. "
+        "When a proof prerequisite depends on output it is about to create, treat that work as "
+        "non-credit bootstrap and validate the fresh output independently; do not query the "
+        "unchanged prerequisite again. Return completion only when the assigned outcome is "
+        "settled. A disproved strategy is progress, not a task exit: preserve its evidence and "
+        "continue through a materially different evidence-backed route while repository recovery "
+        "remains. Return a formal finding only for a contradicted assigned outcome, materially "
+        "different owner outcome, real external or human decision, unavailable capability, "
+        "irreversible risk, or an authorized route you have genuinely exhausted."
+    )
+
+
+def _write_worker_dispatch_packet(
+    workspace: Path, task_name: str, message: str
+) -> tuple[Path, str]:
+    """Persist one immutable worker-only brief and return its content identity."""
+    encoded = (message.rstrip() + "\n").encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    packet_directory = workspace / ".de67" / "state" / "worker-dispatch"
+    packet_directory.mkdir(parents=True, exist_ok=True)
+    packet = packet_directory / f"{task_name}-{digest}.md"
+    try:
+        with packet.open("xb") as stream:
+            stream.write(encoded)
+    except FileExistsError:
+        if packet.read_bytes() != encoded:
+            raise PolicyError(f"Worker dispatch packet identity collision: {packet}")
+    return packet.resolve(), digest
+
+
 def unbound_worker_spawns(
     workspace: Path, state: Path, lineage_id: str
 ) -> list[dict[str, Any]]:
@@ -353,17 +405,32 @@ def unbound_worker_spawns(
                 + f"Outcome: {outcome} Proof route: {proof_route} "
                 + "Retrieve only the evidence needed for the next causal decision. You may repair "
                 + "repository-owned implementation, harness, fixture, or observation paths when "
-                + "necessary. Return completion evidence, a formal finding, or abandonment to the "
-                + "coordinator; do not mutate DE67 deadline state yourself."
+                + "necessary. "
+                + worker_outcome_contract()
+                + " Return the settled result to the coordinator; do not mutate DE67 deadline "
+                + "state yourself. "
+                + worker_helper_contract()
             )
             task_name = "task_" + task_id.encode("utf-8").hex()
+            packet, packet_digest = _write_worker_dispatch_packet(
+                workspace, task_name, message
+            )
+            spawn_message = (
+                f"Own DE67 task {task_id}. Read your complete task brief from {packet}. "
+                f"Verify its SHA-256 is {packet_digest}, then follow it."
+            )
             spawns.append(
                 {
                     "task_id": task_id,
                     "task_name": task_name,
+                    "dispatch_packet": {
+                        "path": str(packet),
+                        "sha256": packet_digest,
+                    },
                     "instruction": (
-                        "Actually call spawn_agent with these arguments before wait. "
-                        "Announcing an assignment is not delegation."
+                        "Actually call spawn_agent with these arguments. Announcing an assignment "
+                        "is not delegation. After every listed spawn, call wait_agent for the "
+                        "spawned worker ids; do not finish while a worker result is outstanding."
                     ),
                     "example_call": {
                         "tool": "spawn_agent",
@@ -372,7 +439,7 @@ def unbound_worker_spawns(
                             "fork_turns": "none",
                             "model": "gpt-5.6-terra",
                             "reasoning_effort": "medium",
-                            "message": message,
+                            "message": spawn_message,
                         },
                     },
                 }
@@ -515,6 +582,17 @@ def _terminal_result_was_consumed(
     terminal_at = task["attempt_terminal_at"]
     if terminal_at is None:
         return False
+    if _table_exists(connection, "closure_gaps"):
+        consumed = connection.execute(
+            """
+            SELECT 1 FROM closure_gaps
+            WHERE lineage_id = ? AND closed_by_task_id = ? AND closed_at >= ?
+            LIMIT 1
+            """,
+            (lineage_id, task_id, float(terminal_at)),
+        ).fetchone()
+        if consumed is not None:
+            return True
     if _table_exists(connection, "closure_gap_revisions"):
         consumed = connection.execute(
             """
@@ -895,6 +973,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             payload["parallel_dispatch"] = (
                 "Spawn one distinct worker for each listed independent task before waiting."
+            )
+            payload["coordinator_next_action"] = (
+                "Spawn every listed worker, then call wait_agent for the spawned worker ids. "
+                "Do not finish the coordinator turn while a worker result is outstanding."
             )
         print(json.dumps(payload, sort_keys=True))
         return 0

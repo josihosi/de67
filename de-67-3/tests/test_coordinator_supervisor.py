@@ -40,6 +40,7 @@ from coordinator_supervisor import (  # noqa: E402
     wait_for_supervision_event,
     work_is_complete,
     worker_handoff_contract,
+    nested_worker_contract,
     worker_result_ingress_contract,
 )
 from blocker_adapter import BlockerReply  # noqa: E402
@@ -606,13 +607,27 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         )
         self.assertIn("correlation metadata", contract)
         self.assertIn("spawn_worker response injects the exact task_name", contract)
-        self.assertIn("concrete self-contained spawn_agent call", contract)
+        self.assertIn("compact spawn_agent call", contract)
+        self.assertIn("immutable hash-bound dispatch packet", contract)
+        self.assertIn("worker input, not coordinator context", contract)
+        self.assertIn("call wait_agent", contract)
         self.assertIn("announcing that you are assigning a worker is not delegation", contract)
         self.assertIn("spawn one distinct worker for each task before waiting", contract)
         self.assertIn("do not serialize independent work", contract)
         self.assertIn("Never invoke claim-worker", contract)
         self.assertIn("never use /root/<task-name>", contract)
-        self.assertIn("Proceed to the normal wait", contract)
+        self.assertIn("After every listed spawn", contract)
+        self.assertIn("do not finish while a worker result is outstanding", contract)
+
+    def test_nested_worker_contract_preserves_primary_task_ownership(self) -> None:
+        contract = nested_worker_contract()
+
+        self.assertIn("Terra worker may optionally", contract)
+        self.assertIn("Luna-only", contract)
+        self.assertIn("Do not open deadline tasks", contract)
+        self.assertIn("may work or wait", contract)
+        self.assertIn("collects or stops them before returning", contract)
+        self.assertIn("Luna workers do not delegate further", contract)
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -1095,8 +1110,37 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertLess(prompt.index(ingress), prompt.index("Before every route decision"))
         self.assertIn("before executing DE67_POLICY_DECIDE_ARGV_JSON", ingress)
         self.assertIn("exactly one", ingress)
+        self.assertIn("completed attempt settles only that task", ingress)
+        self.assertIn("close that gap and preserve its proof", ingress)
+        self.assertIn("separate claim-acceptance transition", ingress)
+        self.assertIn("not as terminal authority", ingress)
+        self.assertIn("name the assigned-outcome exit", ingress)
+        self.assertIn("checkpoint-worker", ingress)
+        self.assertIn("keep the same task live only while", ingress)
+        self.assertIn("would repeat an unchanged request", ingress)
+        self.assertIn("compact no-replay handoff", ingress)
+        self.assertIn("project its remaining frontier to a fresh task", ingress)
+        self.assertIn("Context exhaustion is not a formal finding", ingress)
+        self.assertNotIn("followup_task to the same bound worker", ingress)
         self.assertNotIn("Read .de67/orchestrator-guidelines.md", prompt)
         self.assertNotIn("test-and-task-guidelines.md", prompt)
+
+    def test_recoverable_return_is_checkpointed_before_terminal_admission(self) -> None:
+        ingress = worker_result_ingress_contract()
+
+        # Historical counterexample: closure-031 disproved loopback TCP and named no successor,
+        # while renderer parity still had authorized repository implementation routes.
+        self.assertIn("only disproves the current strategy", ingress)
+        self.assertIn("even when the worker names no successor", ingress)
+        self.assertIn("choose the next route", ingress)
+        self.assertIn("authorized repository repair, rerun", ingress)
+        self.assertLess(
+            ingress.index("keep the same task live only while"),
+            ingress.index("execution context is exhausted"),
+        )
+        self.assertIn("abandon only that attempt", ingress)
+        self.assertIn("unfinished ledger outcome visible", ingress)
+        self.assertNotIn("Do not record finding, release the worker", ingress)
 
     def test_pending_owner_suggestion_becomes_gate_only_after_workers_are_quiet(self) -> None:
         self.write_work_documents(red=True, active=True)
@@ -1117,6 +1161,15 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(contract.count("Trust the agent"), 2)
         self.assertIn("retry fuse ends a strategy, not recoverable work", contract)
         self.assertIn("non-credit observation/bootstrap step", contract)
+
+    def test_worker_evidence_contract_does_not_terminalize_first_divergence(self) -> None:
+        contract = ordinary_worker_evidence_contract()
+        self.assertNotIn("returns the first relevant divergence", contract)
+        self.assertIn("preserves the first relevant divergence as a diagnostic anchor", contract)
+        self.assertIn("continuing diagnosis, repair, or a changed tactic", contract)
+        self.assertIn("execution context cannot carry the next necessary act", contract)
+        self.assertIn("compact handoff", contract)
+        self.assertIn("That ends only the worker attempt, not the outcome", contract)
 
     def test_fresh_restart_prompt_includes_exact_owner_reason(self) -> None:
         prompt = coordinator_prompt(

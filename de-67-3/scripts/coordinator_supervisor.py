@@ -703,10 +703,13 @@ def ordinary_worker_evidence_contract() -> str:
         "next causal decision. Brief the outcome, proof route, known facts, and evidence locations; "
         "do not paste available bulk. The worker searches narrowly before reading, selects exact "
         "fields or slices from structured artifacts, keeps verbose command output in artifacts, "
-        "and returns the first relevant divergence. Evidence bounds come from the current claim, "
+        "and preserves the first relevant divergence as a diagnostic anchor while continuing "
+        "diagnosis, repair, or a changed tactic inside the assigned outcome. Evidence bounds come "
+        "from the current claim, "
         "never a fixed quota. A larger read remains available when deleting it would leave that "
-        "claim unproved. When accumulated context no longer helps close the assigned gap, the "
-        "worker uses the durable terminal result or handoff lifecycle instead of replaying it."
+        "claim unproved. When the execution context cannot carry the next necessary act, the worker "
+        "returns a compact handoff naming preserved evidence, the first open causal boundary, and "
+        "work that must not be replayed. That ends only the worker attempt, not the outcome."
     )
 
 
@@ -745,8 +748,10 @@ def worker_handoff_contract() -> str:
         "(for example, R-008-closure-108 becomes task_522d3030382d636c6f737572652d313038). "
         "Do not simplify or humanize this label. It is injective correlation metadata; "
         "the runtime thread UUID remains the worker identity. When policy detects an unbound task, "
-        "its spawn_worker response injects the exact task_name and a concrete self-contained "
-        "spawn_agent call for that opened task; use that call rather than reconstructing it from memory. "
+        "its spawn_worker response injects the exact task_name and a compact spawn_agent call for "
+        "that opened task. The full self-contained worker brief is an immutable hash-bound dispatch "
+        "packet named by that call; it is worker input, not coordinator context. Use the injected call "
+        "rather than reconstructing it from memory. "
         "Actually call spawn_agent; announcing that you are assigning a worker is not delegation. "
         "When several independently actionable deadline tasks are unbound, policy lists one call per "
         "task and you may spawn one "
@@ -759,10 +764,23 @@ def worker_handoff_contract() -> str:
         "records the durable claim automatically when the runtime spawn edge becomes visible. "
         "That visibility may arrive after the first wait begins; this is not a delegation failure. "
         "Never invoke claim-worker and never use "
-        "/root/<task-name> as a worker identity. Proceed to the normal wait; if no verified roster "
+        "/root/<task-name> as a worker identity. After every listed spawn, follow the response's compact "
+        "next action and call wait_agent for the spawned worker ids; do not finish while a worker "
+        "result is outstanding. If no verified roster "
         "handoff exists when the coordinator process exits, the runner abandons the attempt. "
         "After a verified handoff, remain in the worker-result lifecycle: an empty or timed wait "
         "is not completion, so wait again; record the returned terminal result before routing or exiting."
+    )
+
+
+def nested_worker_contract() -> str:
+    """Keep optional Terra helpers native and outside durable task ownership."""
+    return (
+        "A primary Terra worker may optionally spawn Luna-only native helpers with "
+        "fork_turns=\"none\", self-contained briefs, and worker-selected reasoning effort. "
+        "Do not open deadline tasks, ledger entries, or claims for helpers. The Terra worker "
+        "retains the assigned outcome, may work or wait while helpers run, judges their results, "
+        "and collects or stops them before returning. Luna workers do not delegate further."
     )
 
 
@@ -770,13 +788,29 @@ def worker_result_ingress_contract() -> str:
     """Order a verified worker return before ledger-derived route selection."""
     return (
         "A verified ordinary-worker return is durable-state ingress, not a route decision. "
-        "When a worker message returns completion evidence, a formal finding, or abandonment, "
-        "judge it and record exactly one matching deadline-harness terminal transition before "
-        "executing DE67_POLICY_DECIDE_ARGV_JSON again. This is the only pre-decision transition: "
+        "Treat the worker's requested disposition as evidence to judge, not as terminal authority. "
+        "Before recording a formal finding, name the assigned-outcome exit that its evidence proves. "
+        "A return that only disproves the current strategy is nonterminal even when the worker names "
+        "no successor. If the assigned outcome still has an authorized repository repair, rerun, "
+        "observation, or materially different implementation route, preserve the returned evidence "
+        "and choose the next route. Use checkpoint-worker and keep the same task live only while the "
+        "next turn supplies new "
+        "evidence, a new affordance, or a materially different strategy that the bound worker can "
+        "execute. If its execution context is exhausted or the next message would repeat an unchanged "
+        "request, preserve a compact no-replay handoff, abandon only that attempt, keep the unfinished "
+        "ledger outcome visible, and project its remaining frontier to a fresh task after any required "
+        "incident review. Context exhaustion is not a formal finding or an assigned-outcome exit. "
+        "When the "
+        "evidence proves completion, an assigned-outcome exit, or abandonment, record exactly one matching "
+        "deadline-harness terminal transition before executing DE67_POLICY_DECIDE_ARGV_JSON again. "
+        "A completed attempt settles only that task; "
+        "when it is bound to a closure gap, close that gap and preserve its proof while any sibling "
+        "gaps remain open. Accept the whole claim only through the separate claim-acceptance "
+        "transition after every required gap is closed. This is the only pre-decision transition: "
         "the policy kernel derives worker result facts from that committed state. Do not wait for "
         "the live task to terminalize itself, do not ask the worker to mutate DE67 state, and do "
         "not record a second terminal transition when the task is already terminal. Ordinary test "
-        "failure remains inside the worker task unless the returned evidence meets the formal "
+        "failure remains inside the worker task unless the returned evidence meets the assigned-outcome "
         "finding boundary."
     )
 
@@ -862,6 +896,7 @@ def coordinator_prompt(
         coordinator_ledger_contract(),
         ordinary_worker_evidence_contract(),
         worker_handoff_contract(),
+        nested_worker_contract(),
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every state transition; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
     ]
@@ -1016,6 +1051,8 @@ def _complete_mutation_review(
         if remaining is not None:
             gate = remaining
             continue
+        with DeadlineHarness(state_path) as harness:
+            harness.synchronize_dfs_statuses()
         restart = read_clock(state_path, lineage_id)
         if not restart.required or restart.generation is None:
             _mark_protocol_failure(
@@ -1080,6 +1117,8 @@ def run_child(
             + ordinary_worker_evidence_contract()
             + " "
             + worker_handoff_contract()
+            + " "
+            + nested_worker_contract()
             + "\n"
         )
     if decision_opportunity > 1:

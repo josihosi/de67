@@ -55,6 +55,41 @@ CASES = (
 
 
 class PolicyKernelTests(unittest.TestCase):
+    def test_worker_outcome_contract_keeps_bootstrap_and_validation_in_one_outcome(self) -> None:
+        contract = kernel.worker_outcome_contract()
+
+        self.assertIn("repository-owned implementation", contract)
+        self.assertIn("inside this task", contract)
+        self.assertIn("non-credit bootstrap", contract)
+        self.assertIn("validate the fresh output independently", contract)
+        self.assertIn("do not query the unchanged prerequisite again", contract)
+        self.assertIn("A disproved strategy is progress, not a task exit", contract)
+        self.assertIn("contradicted assigned outcome", contract)
+        self.assertIn("authorized route you have genuinely exhausted", contract)
+        self.assertNotIn("formal finding only for a disproved strategy", contract)
+
+    def test_worker_helper_contract_keeps_one_owner_and_native_freedom(self) -> None:
+        contract = kernel.worker_helper_contract()
+
+        self.assertIn("Terra worker", contract)
+        self.assertIn("consider an optional Luna helper", contract)
+        self.assertIn("bounded work can return independently", contract)
+        self.assertIn("isolated live playtest witness", contract)
+        self.assertIn("focused test run", contract)
+        self.assertIn("compact charter and isolated run context", contract)
+        self.assertIn("smallest journal-cited witness", contract)
+        self.assertIn("own any repair", contract)
+        self.assertIn('fork_turns="none"', contract)
+        self.assertIn("as many as the runtime permits", contract)
+        self.assertIn("work or wait while they run", contract)
+        self.assertIn("remain responsible for the whole outcome", contract)
+        self.assertIn("do not own deadline tasks", contract)
+        self.assertIn("avoid overlapping source edits", contract)
+        self.assertIn("shared mutable runtime state", contract)
+        self.assertIn("explicit exclusive ownership", contract)
+        self.assertIn("If you are Luna, do not delegate further", contract)
+        self.assertNotIn("must delegate", contract)
+
     def test_source_policy_covers_legacy_decision_corpus(self) -> None:
         policy = source_policy()
         for facts, expected in CASES:
@@ -746,7 +781,8 @@ class PolicyKernelTests(unittest.TestCase):
                     "Use independent production evidence.",
                     gaps=[
                         ("G-BANDIT", "Observe the actual bandit return boundary.",
-                         "Trace native scheduler inputs and stop at the first source-bound boundary."),
+                         "Add the owned scenario and portable build route, then capture fresh "
+                         "renderer transcripts from their output."),
                         ("G-CANNIBAL", "Observe the actual cannibal contact boundary.",
                          "Trace native contact inputs without manufacturing lifecycle state."),
                     ],
@@ -776,10 +812,35 @@ class PolicyKernelTests(unittest.TestCase):
             arguments = calls[0]["example_call"]["arguments"]
             self.assertEqual(arguments["fork_turns"], "none")
             self.assertEqual(arguments["model"], "gpt-5.6-terra")
-            self.assertIn("Observe the actual bandit return boundary", arguments["message"])
-            self.assertIn("Trace native scheduler inputs", arguments["message"])
-            self.assertIn("do not mutate DE67 deadline state", arguments["message"])
+            packet = Path(calls[0]["dispatch_packet"]["path"])
+            packet_text = packet.read_text(encoding="utf-8")
+            self.assertIn("Read your complete task brief", arguments["message"])
+            self.assertIn(str(packet), arguments["message"])
+            self.assertIn(calls[0]["dispatch_packet"]["sha256"], arguments["message"])
+            self.assertNotIn("Observe the actual bandit return boundary", arguments["message"])
+            self.assertIn("Observe the actual bandit return boundary", packet_text)
+            self.assertIn("Add the owned scenario and portable build route", packet_text)
+            self.assertIn("Keep repository-owned implementation", packet_text)
+            self.assertIn("non-credit bootstrap", packet_text)
+            self.assertIn("validate the fresh output independently", packet_text)
+            self.assertIn("A disproved strategy is progress, not a task exit", packet_text)
+            self.assertIn("contradicted assigned outcome", packet_text)
+            self.assertNotIn("formal finding only for a disproved strategy", arguments["message"])
+            self.assertNotIn(
+                "Return completion evidence, a formal finding, or abandonment",
+                arguments["message"],
+            )
+            self.assertIn("do not mutate DE67 deadline state", packet_text)
+            self.assertIn("consider an optional Luna helper", packet_text)
+            self.assertIn("bounded work can return independently", packet_text)
+            self.assertIn("compact charter and isolated run context", packet_text)
+            self.assertIn("smallest journal-cited witness", packet_text)
+            self.assertIn("as many as the runtime permits", packet_text)
+            self.assertIn("must collect or stop every helper", packet_text)
+            self.assertIn("avoid overlapping source edits", packet_text)
+            self.assertNotIn("must delegate", packet_text)
             self.assertIn("Announcing an assignment is not delegation", calls[0]["instruction"])
+            self.assertIn("wait_agent", calls[0]["instruction"])
             self.assertNotEqual(calls[0]["task_name"], calls[1]["task_name"])
             result = subprocess.run(
                 [
@@ -795,6 +856,10 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertEqual(injected["action"], "spawn_worker")
             self.assertEqual(len(injected["worker_spawns"]), 2)
             self.assertIn("one distinct worker", injected["parallel_dispatch"])
+            self.assertEqual(
+                injected["coordinator_next_action"],
+                "Spawn every listed worker, then call wait_agent for the spawned worker ids. Do not finish the coordinator turn while a worker result is outstanding.",
+            )
             with DeadlineHarness(state) as harness:
                 harness.claim_worker(
                     "project", "R-008-closure-119", "worker-one",
@@ -833,9 +898,41 @@ class PolicyKernelTests(unittest.TestCase):
 
             self.assertEqual(len(calls), 1)
             message = calls[0]["example_call"]["arguments"]["message"]
-            self.assertIn("Repair the native launch boundary", message)
-            self.assertIn("Native launch must reach gameplay", message)
-            self.assertNotIn("Unrelated work", message)
+            packet = Path(calls[0]["dispatch_packet"]["path"])
+            packet_text = packet.read_text(encoding="utf-8")
+            self.assertNotIn("Repair the native launch boundary", message)
+            self.assertIn("Repair the native launch boundary", packet_text)
+            self.assertIn("Native launch must reach gameplay", packet_text)
+            self.assertNotIn("Unrelated work", packet_text)
+
+    def test_large_worker_brief_is_not_echoed_to_coordinator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            de67 = workspace / ".de67"
+            de67.mkdir()
+            large_route = "worker-only-evidence " * 4000
+            (de67 / "work-ledger.md").write_text(
+                f"- [ ] R-LARGE — {large_route}\n", encoding="utf-8"
+            )
+            (de67 / "DFS.md").write_text(
+                "<!-- DE67:DFS-SLICE:BEGIN id=R-LARGE-S001 claim=R-LARGE -->\n"
+                "- [ ] 🔴 R-LARGE — Prove the large route.\n"
+                "<!-- DE67:DFS-SLICE:END id=R-LARGE-S001 claim=R-LARGE -->\n",
+                encoding="utf-8",
+            )
+            state = workspace / "state.sqlite3"
+            with DeadlineHarness(state) as harness:
+                harness.start_task(
+                    "project", "R-LARGE-exploration-001", "R-LARGE", 100, now=1
+                )
+
+            call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
+            coordinator_json = json.dumps(call, sort_keys=True)
+            packet = Path(call["dispatch_packet"]["path"])
+
+            self.assertLess(len(coordinator_json), 2000)
+            self.assertNotIn("worker-only-evidence", coordinator_json)
+            self.assertIn("worker-only-evidence", packet.read_text(encoding="utf-8"))
 
     def test_exploration_route_does_not_match_longer_claim_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -42,14 +42,23 @@ gate and create no coordination artifact unless it is named here.
    input is an attachment or chat artifact. If the destination already exists, reuse it when
    identical and stop for user resolution when it differs. Never overwrite it silently.
 3. Read `.de67/WEC.md` completely.
-4. Audit only active workflow or specification documents at the repository root or directly named
-   by authoritative agent guidance. Preserve `AGENTS.md`/`Agents.md`, contributing and licence
-   files, `README.md`, technical/design documentation, product code, tests, and unrecognized docs.
-   Carry still-binding product requirements into WEC/DFS when they preserve the user's intent;
-   ask when they would change it. Move only competing plan/specification/coordination history to
-   tracked `.de67/no-go-zone/<original-relative-path>`. If authoritative guidance directly points
-   to a moved plan, reconcile that reference with the current WEC/DFS flow. Do not broadly delete
-   or archive documents.
+4. Audit the active context surfaces that can steer repository agents: root instruction files such
+   as `AGENTS.md`/`Agents.md`, and any prompt, policy, configuration, specification, coordination,
+   or machine-response system directly named by authoritative guidance. Do not inventory generated
+   trees, unrelated documentation, or `.de67/no-go-zone/`. For each surface, determine its scope,
+   authority, current use, and whether it supplies useful repository facts or conflicts with the
+   WEC and de67 phase boundaries. Different terminology, style, or tooling is not by itself a
+   conflict.
+
+   Preserve contributing and licence files, `README.md`, technical/design documentation, product
+   code, tests, and unrecognized documents. Carry still-binding product requirements into WEC/DFS
+   when they preserve the user's intent; ask when they would change it. When an active context
+   surface duplicates or contradicts the de67 workflow, show the user the exact conflict and propose
+   the smallest remedy: retain it, narrow and route its useful facts, or move the competing surface
+   to tracked `.de67/no-go-zone/<original-relative-path>`. Edit or move it only after the user
+   approves. Until then, continue obeying it and stop for resolution only when the conflict prevents
+   a valid DFS. After approval, reconcile direct references to anything moved. Never silently
+   neutralize authoritative guidance or broadly archive documents.
 5. Inspect the real implementation before specifying changes:
    entrypoints, declarations, call sites, readers, writers, persistence, schedulers, tests, and
    relevant configuration.

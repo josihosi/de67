@@ -93,6 +93,38 @@ if not (mode == "crash-without-session-then-complete" and event_count == 1):
     )
 
 with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
+    def complete_owned(task_id, evidence):
+        owner = harness.connection.execute(
+            "SELECT task.claim_id, claim.worker_id FROM tasks AS task "
+            "JOIN worker_claims AS claim USING (lineage_id, task_id) "
+            "WHERE task.lineage_id = ? AND task.task_id = ?",
+            (os.environ["DE67_LINEAGE"], task_id),
+        ).fetchone()
+        value = {
+            "schema": "de67.worker-result-receipt.v1",
+            "lineage_id": os.environ["DE67_LINEAGE"],
+            "task_id": task_id,
+            "claim_id": owner["claim_id"],
+            "worker_id": owner["worker_id"],
+            "disposition": "completed",
+            "verdict": "fake worker outcome completed",
+            "outcome": "Complete the fake worker outcome.",
+            "summary": evidence,
+            "material_changes": [], "tests": [], "live_actions": [],
+            "evidence_ceiling": [], "bindings": {}, "journal_entries": [],
+            "artifacts": [], "first_divergence": None,
+            "accepted_no_replay": [evidence], "active_work": [],
+            "first_open_boundary": "", "narrow_queries": [f"task_id={task_id}"],
+            "entrypoints": [], "context_metrics": {},
+        }
+        receipt = harness.record_worker_result_receipt(
+            os.environ["DE67_LINEAGE"], task_id, owner["worker_id"], value
+        )
+        return harness.complete_task(
+            os.environ["DE67_LINEAGE"], task_id, evidence,
+            receipt_id=receipt["receipt_id"],
+        )
+
     if mode in {
         "mutation-lifecycle",
         "mutation-after-coordinator",
@@ -138,9 +170,7 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                         os.environ["DE67_LINEAGE"], "seed", "worker-one",
                         "fake-session", os.environ["DE67_SUPERVISOR_PID"],
                     )
-                    harness.complete_task(
-                        os.environ["DE67_LINEAGE"], "seed", "worker one proof"
-                    )
+                    complete_owned("seed", "worker one proof")
                     raise SystemExit(9)
                 if event_count == 2:
                     harness.start_task(
@@ -150,9 +180,7 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                         os.environ["DE67_LINEAGE"], "worker-two-task", "worker-two",
                         "fake-session", os.environ["DE67_SUPERVISOR_PID"],
                     )
-                    harness.complete_task(
-                        os.environ["DE67_LINEAGE"], "worker-two-task", "worker two proof"
-                    )
+                    complete_owned("worker-two-task", "worker two proof")
                     raise SystemExit(0)
                 if event_count == 3:
                     harness.start_task(
@@ -162,9 +190,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                         os.environ["DE67_LINEAGE"], "worker-three-task", "worker-three",
                         "fake-session", os.environ["DE67_SUPERVISOR_PID"],
                     )
-                    harness.complete_task(
-                        os.environ["DE67_LINEAGE"], "worker-three-task",
-                        "worker three proof triggers mutation",
+                    complete_owned(
+                        "worker-three-task", "worker three proof triggers mutation"
                     )
                     raise SystemExit(0)
                 if event_count == 5:
@@ -182,11 +209,7 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                     )
                     raise SystemExit(9)
                 if event_count == 6:
-                    harness.complete_task(
-                        os.environ["DE67_LINEAGE"],
-                        "post-mutation",
-                        "post-mutation recovery proof",
-                    )
+                    complete_owned("post-mutation", "post-mutation recovery proof")
                     (root / "DFS.md").write_text(
                         "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
                         encoding="utf-8",
@@ -426,9 +449,7 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             raise SystemExit(9)
         if generation is not None:
             raise AssertionError("worker recovery must keep the coordinator generation")
-        harness.complete_task(
-            os.environ["DE67_LINEAGE"], "seed", "worker result ingested"
-        )
+        complete_owned("seed", "worker result ingested")
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
         (root / "DFS.md").write_text(
             "# DFS\n\nStatus: Frozen\n\n- [x] R-001 N{EM DASH} Done\n",

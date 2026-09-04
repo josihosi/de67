@@ -19,6 +19,7 @@ from typing import Any, Iterable, Mapping, Sequence
 SCRIPT_ROOT = str(Path(__file__).resolve().parent)
 if SCRIPT_ROOT not in sys.path:
     sys.path.insert(0, SCRIPT_ROOT)
+from worker_receipt import compact_worker_receipt, receipt_envelope
 import symbol_codec
 
 
@@ -296,6 +297,168 @@ def _compact_worker_ledger_route(route: str) -> str:
     return "\n".join(kept).strip()
 
 
+def _ledger_objective(route: str) -> str:
+    lines = route.splitlines()
+    kept: list[str] = []
+    for line in lines:
+        if kept and line.startswith("  - "):
+            break
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def _selected_ledger_frontier(route: str, *, has_receipt: bool) -> str:
+    labels = {
+        "current uncertainty",
+        "first open boundary",
+        "waiting work",
+        "subtasks",
+    }
+    if not has_receipt:
+        labels.update({"known footing", "current progress", "current evidence"})
+    lines = route.splitlines()
+    selected: list[str] = []
+    active = False
+    for line in lines:
+        match = re.match(r"^  - ([^:\n]+):", line)
+        if match is not None:
+            active = match.group(1).strip().lower() in labels
+        if active:
+            if re.match(r"^    - \[(done)\] ", line):
+                continue
+            selected.append(line)
+    return "\n".join(selected).strip()
+
+
+def _latest_worker_receipt_for_claim(
+    connection: sqlite3.Connection, lineage_id: str, claim_id: str
+) -> dict[str, Any] | None:
+    rows = connection.execute(
+        """
+        SELECT checkpoint.sequence, checkpoint.evidence, checkpoint.recorded_at
+        FROM worker_checkpoints AS checkpoint
+        JOIN tasks AS task
+          ON task.lineage_id = checkpoint.lineage_id
+         AND task.task_id = checkpoint.task_id
+        WHERE checkpoint.lineage_id = ? AND task.claim_id = ?
+          AND checkpoint.kind = 'result-receipt-v1'
+        ORDER BY checkpoint.recorded_at DESC, checkpoint.task_id DESC,
+                 checkpoint.sequence DESC
+        """,
+        (lineage_id, claim_id),
+    ).fetchall()
+    if not rows:
+        return None
+    try:
+        envelope = json.loads(str(rows[0]["evidence"]))
+    except json.JSONDecodeError as error:
+        raise PolicyError("Latest worker result receipt is corrupt") from error
+    if not isinstance(envelope, dict) or not isinstance(envelope.get("receipt"), dict):
+        raise PolicyError("Latest worker result receipt envelope is corrupt")
+    receipt = dict(envelope["receipt"])
+    expected = receipt_envelope(receipt)["receipt_id"]
+    if envelope.get("receipt_id") != expected:
+        raise PolicyError("Latest worker result receipt digest is corrupt")
+    compact = compact_worker_receipt(
+        receipt, recorded_at=float(rows[0]["recorded_at"])
+    )
+    compact["sequence"] = int(rows[0]["sequence"])
+    return compact
+
+
+def _referenced_entrypoints(*values: str) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        for token in re.findall(r"`([^`]+)`", value):
+            candidate = token.strip()
+            if (
+                "/" not in candidate
+                and not candidate.endswith((".py", ".cpp", ".h", ".json", ".md"))
+            ):
+                continue
+            if candidate not in result:
+                result.append(candidate)
+    return result
+
+
+def _dfs_worker_boundary(dfs_slice: str) -> str:
+    """Keep acceptance-relevant DFS text without front-loading the full mechanism."""
+
+    lines = dfs_slice.splitlines()
+    selected: list[str] = []
+    active = False
+    status_index = next(
+        (index for index, line in enumerate(lines) if line.strip() == "Implementation status:"),
+        len(lines),
+    )
+    for line in lines[:status_index]:
+        if re.match(r"^- \[[ xX]\]", line):
+            selected.append(line)
+            active = False
+            continue
+        if line.startswith("- "):
+            label = line[2:].split(":", 1)[0].strip().lower()
+            active = label in {
+                "natural proof",
+                "required branches and controls",
+                "failure behavior",
+                "acceptance",
+                "proof",
+            }
+        if active:
+            selected.append(line)
+    if status_index < len(lines):
+        selected.extend(lines[status_index:])
+    return "\n".join(selected).strip()
+
+
+def _worker_read_plan(
+    workspace: Path,
+    state: Path,
+    lineage_id: str,
+    claim_id: str,
+    receipt: Mapping[str, Any] | None,
+    entrypoints: Sequence[str],
+    *,
+    playtest: bool,
+) -> list[dict[str, str]]:
+    plan: list[dict[str, str]] = []
+    if receipt is not None:
+        plan.append({
+            "source": f"worker receipt {receipt['receipt_id']}",
+            "reason": "carries the accepted no-replay boundary and exact current continuation",
+            "query": (
+                "python3 "
+                + str(Path(__file__).resolve().with_name("deadline_harness.py"))
+                + " worker-receipts --state "
+                + str(state)
+                + " --lineage " + lineage_id
+                + " --receipt " + str(receipt["receipt_id"])
+            ),
+        })
+    for entrypoint in entrypoints:
+        plan.append({
+            "source": entrypoint,
+            "reason": "named by the current boundary as an implementation or evidence entrypoint",
+        })
+    if playtest:
+        plan.append({
+            "source": ".agents/skills/caol-harness/SKILL.md",
+            "reason": "owns the current registry and cockpit authority/evidence route",
+        })
+    plan.extend([
+        {
+            "source": f".de67/DFS.md slice for {claim_id}",
+            "reason": "read on demand if the compact packet leaves the product or proof boundary ambiguous",
+        },
+        {
+            "source": f".de67/work-ledger.md item for {claim_id}",
+            "reason": "read on demand if repository evidence contradicts this packet or the active projection changes",
+        },
+    ])
+    return plan
+
+
 def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[str, str]:
     ledger_path = workspace / ".de67/work-ledger.md"
     dfs_path = workspace / ".de67/DFS.md"
@@ -412,6 +575,11 @@ def unbound_worker_spawns(
             gap_id = row["closure_gap_id"]
             revision = row["closure_gap_revision"]
             gap = None
+            latest_receipt = _latest_worker_receipt_for_claim(
+                connection, lineage_id, claim_id
+            )
+            ledger_route = ""
+            dfs_slice = ""
             if gap_id is not None and revision is not None:
                 gap = connection.execute(
                     """
@@ -429,21 +597,70 @@ def unbound_worker_spawns(
                     )
                 outcome, proof_route = str(gap["description"]), str(gap["proof_route"])
             elif phase == "exploration":
-                outcome, proof_route = _exploration_route(workspace, claim_id, task_id)
+                ledger_route, dfs_slice = _exploration_route(
+                    workspace, claim_id, task_id
+                )
+                outcome = _ledger_objective(ledger_route)
+                proof_route = _dfs_worker_boundary(dfs_slice)
             else:
                 # Legacy closure attempts predate named gap bindings. Preserve
                 # their exact claim route without pretending they are exploration.
-                outcome, proof_route = _exploration_route(workspace, claim_id, task_id)
+                ledger_route, dfs_slice = _exploration_route(
+                    workspace, claim_id, task_id
+                )
+                outcome = _ledger_objective(ledger_route)
+                proof_route = _dfs_worker_boundary(dfs_slice)
+            frontier = _selected_ledger_frontier(
+                ledger_route, has_receipt=latest_receipt is not None
+            ) if ledger_route else ""
+            receipt_entrypoints = (
+                list(latest_receipt.get("entrypoints", []))
+                if latest_receipt is not None
+                else []
+            )
+            entrypoints = list(dict.fromkeys([
+                *receipt_entrypoints,
+                *_referenced_entrypoints(outcome, frontier, proof_route),
+            ]))
+            playtest = any(
+                word in " ".join((outcome, frontier, proof_route)).lower()
+                for word in ("playtest", "cockpit", "witness", "scenario registry")
+            )
+            read_plan = _worker_read_plan(
+                workspace,
+                state,
+                lineage_id,
+                claim_id,
+                latest_receipt,
+                entrypoints,
+                playtest=playtest,
+            )
             message = (
                 f"Own assigned {phase} work {task_id} for outcome {claim_id}"
                 + (f", focus {gap_id} revision {revision}. " if gap_id else ". ")
-                + f"Outcome: {outcome} Proof route: {proof_route} "
-                + "Retrieve only the evidence needed for the next causal decision. You may repair "
+                + f"Outcome: {outcome}\n"
+                + (f"Current proof frontier:\n{frontier}\n" if frontier else "")
+                + (
+                    "Latest durable continuation receipt (compact projection):\n"
+                    + json.dumps(latest_receipt, ensure_ascii=False, sort_keys=True)
+                    + "\n"
+                    if latest_receipt is not None else ""
+                )
+                + (f"Acceptance boundary:\n{proof_route}\n" if proof_route else "")
+                + "Initial evidence read plan (expand only when its reason becomes material):\n"
+                + json.dumps(read_plan, ensure_ascii=False, sort_keys=True)
+                + "\n"
+                + "Retrieve only the evidence needed for the next causal decision. Use compact "
+                + "receipt/query output by default and explicitly open a complete artifact when "
+                + "the compact result is contradicted or insufficient. You may repair "
                 + "repository-owned implementation, harness, fixture, or observation paths when "
                 + "necessary. "
                 + worker_outcome_contract()
-                + " Return the settled result to the coordinator; do not change coordination "
-                + "records. "
+                + " Return a compact result naming the achieved outcome or first divergence, "
+                + "material changes, tests and live actions, evidence ceiling, exact bindings, "
+                + "journal entries, artifact paths and digests, accepted no-replay work, first "
+                + "open boundary, and useful narrow follow-up queries. The coordinator records "
+                + "the durable receipt and terminal transition; do not change coordination records. "
                 + worker_helper_contract()
             )
             task_name = "task_" + task_id.encode("utf-8").hex()

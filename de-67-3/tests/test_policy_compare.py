@@ -13,12 +13,7 @@ SCRIPT = ROOT / "scripts" / "policy_compare.py"
 POLICY = ROOT / "assets" / "environment" / "phase3-policy.d67"
 CONTRACTS = ROOT / "assets" / "environment" / "phase3-contracts.json"
 BASELINE_REF = "backup/pre-lab-lab-20260822"
-HAS_BASELINE_REF = subprocess.run(
-    ["git", "-C", str(ROOT.parent), "rev-parse", "--verify", "--quiet",
-     f"{BASELINE_REF}^{{commit}}"],
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
-).returncode == 0
+HAS_REPOSITORY_HISTORY = (ROOT.parent / ".git").exists()
 SPEC = importlib.util.spec_from_file_location("de67_policy_compare", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 compare_module = importlib.util.module_from_spec(SPEC)
@@ -33,7 +28,7 @@ class PolicyComparisonTests(unittest.TestCase):
         names = [case["name"] for case in value["decision_cases"] + value["trace_cases"]]
         self.assertEqual(len(names), len(set(names)))
 
-    @unittest.skipUnless(HAS_BASELINE_REF, "comparison needs its historical baseline ref")
+    @unittest.skipUnless(HAS_REPOSITORY_HISTORY, "comparison needs de67 Git history")
     def test_main_and_lab_comparison_has_only_declared_strengthenings(self) -> None:
         report = compare_module.compare(POLICY, CONTRACTS, BASELINE_REF)
         self.assertTrue(report["passed"])
@@ -44,11 +39,12 @@ class PolicyComparisonTests(unittest.TestCase):
         }
         self.assertEqual(divergences, {
             "late-acceptance-before-review",
+            "worker-terminal-without-receipt",
             "mutation-ignores-suggestion",
             "proof-owner-replacement-leaves-stale-projection",
         })
 
-    @unittest.skipUnless(HAS_BASELINE_REF, "comparison needs its historical baseline ref")
+    @unittest.skipUnless(HAS_REPOSITORY_HISTORY, "comparison needs de67 Git history")
     def test_comparison_cli_is_reproducible(self) -> None:
         command = [
             sys.executable, str(SCRIPT), "--policy", str(POLICY),

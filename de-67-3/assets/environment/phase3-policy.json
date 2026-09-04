@@ -156,9 +156,11 @@
         "coordinator_exclusively_commits_terminal_worker_result",
         "preserve_evidence_class",
         "continue_same_coordinator",
-        "distinguish_completed_attempt_bound_gap_closure_and_whole_claim_acceptance",
+        "keep_named_in_scope_repair_or_rerun_as_nonterminal_checkpoint",
         "keep_same_task_and_worker_across_checkpoint",
-        "failed_strategy_is_nonterminal_until_assigned_outcome_route_exits",
+        "terminal_finding_requires_named_route_exit",
+        "record_identity_bound_worker_receipt_before_terminal_transition",
+        "project_successor_from_compact_receipt",
         "evaluate_convergence_after_every_worker",
         "transition_to_named_independently_provable_closure_gaps_when_finite",
         "record_specific_uncertainty_before_more_exploration"
@@ -218,7 +220,7 @@
         "use_existing_deadline_task",
         "call_spawn_agent_before_wait",
         "do_not_merely_announce_assignment",
-        "spawn_worker_with_outcome_and_visible_subtasks",
+        "spawn_worker_from_outcome_sized_packet_and_reasoned_read_plan",
         "preserve_parallel_independent_dispatch"
       ]
     },
@@ -269,7 +271,8 @@
         "size_one_generous_claim_deadline_for_full_route",
         "reject_attempt_estimate_shrunk_to_remaining_claim_clock",
         "include_worker_lifecycle_and_uncertainty_margin",
-        "delegate_evidence_sized_worker_retrieval"
+        "delegate_evidence_sized_worker_retrieval",
+        "prefer_compact_indexed_receipts_with_digest_bound_artifact_drilldown"
       ]
     },
     {
@@ -301,7 +304,8 @@
         "size_one_generous_claim_deadline_for_full_route",
         "reject_attempt_estimate_shrunk_to_remaining_claim_clock",
         "include_worker_lifecycle_and_uncertainty_margin",
-        "delegate_evidence_sized_worker_retrieval"
+        "delegate_evidence_sized_worker_retrieval",
+        "prefer_compact_indexed_receipts_with_digest_bound_artifact_drilldown"
       ]
     },
     {
@@ -392,6 +396,11 @@
           "suggestions_pending"
         ]
       },
+      "worker_result_receipted": {
+        "set": [
+          "worker_receipt_pending"
+        ]
+      },
       "mutation_resolved": {
         "requires": [
           "mutation_open"
@@ -421,6 +430,12 @@
         }
       },
       "task_completed": {
+        "requires": [
+          "worker_receipt_pending"
+        ],
+        "clear": [
+          "worker_receipt_pending"
+        ],
         "keyed": {
           "field": "task_id",
           "namespace": "task",
@@ -430,6 +445,12 @@
         }
       },
       "task_finding": {
+        "requires": [
+          "worker_receipt_pending"
+        ],
+        "clear": [
+          "worker_receipt_pending"
+        ],
         "keyed": {
           "field": "task_id",
           "namespace": "task",
@@ -439,6 +460,12 @@
         }
       },
       "task_abandoned": {
+        "requires": [
+          "worker_receipt_pending"
+        ],
+        "clear": [
+          "worker_receipt_pending"
+        ],
         "keyed": {
           "field": "task_id",
           "namespace": "task",

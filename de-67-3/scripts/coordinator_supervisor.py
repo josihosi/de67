@@ -285,7 +285,8 @@ def terminalize_unowned_worker_windows(
     with DeadlineHarness(state_path) as harness:
         rows = harness.connection.execute(
                 """
-                SELECT task.task_id, claim.worker_id, claim.coordinator_session_id
+                SELECT task.task_id, task.claim_id, claim.worker_id,
+                       claim.coordinator_session_id, claim.supervisor_id
                 FROM tasks AS task
                 LEFT JOIN worker_claims AS claim
                   ON claim.lineage_id = task.lineage_id
@@ -296,22 +297,117 @@ def terminalize_unowned_worker_windows(
                 """,
                 (lineage_id,),
             ).fetchall()
-        task_ids = tuple(
-            str(row["task_id"])
-            for row in rows
-            if (
+        terminal_rows = tuple(
+            row for row in rows if (
                 (row["worker_id"] is not None or include_unclaimed)
                 and recoverable.get(str(row["worker_id"] or ""))
                 != str(row["coordinator_session_id"] or "")
             )
         )
-        for task_id in task_ids:
+        for row in terminal_rows:
+            task_id = str(row["task_id"])
+            receipt_id = None
+            if row["worker_id"] is not None:
+                existing_receipts = harness._worker_result_receipts(lineage_id, task_id)
+                terminal_receipt = next(
+                    (
+                        item for item in reversed(existing_receipts)
+                        if item["receipt"].get("disposition") != "checkpoint"
+                    ),
+                    None,
+                )
+                if terminal_receipt is not None:
+                    receipt_id = str(terminal_receipt["receipt_id"])
+                    receipt_value = terminal_receipt["receipt"]
+                    disposition = str(receipt_value["disposition"])
+                    if disposition == "completed":
+                        harness.complete_task(
+                            lineage_id,
+                            task_id,
+                            str(receipt_value["summary"]),
+                            receipt_id=receipt_id,
+                        )
+                    elif disposition == "finding":
+                        harness.report_worker_finding(
+                            lineage_id,
+                            task_id,
+                            str(receipt_value["finding_kind"]),
+                            str(receipt_value["summary"]),
+                            receipt_id=receipt_id,
+                            short_verdict=str(receipt_value["verdict"]),
+                        )
+                    else:
+                        harness.abandon_attempt(
+                            lineage_id,
+                            task_id,
+                            WORKER_OWNER_LOST_REASON,
+                            receipt_id=receipt_id,
+                        )
+                    continue
+                checkpoints = harness.connection.execute(
+                    """
+                    SELECT kind, evidence FROM worker_checkpoints
+                    WHERE lineage_id = ? AND task_id = ?
+                      AND kind != 'result-receipt-v1'
+                    ORDER BY sequence DESC
+                    """,
+                    (lineage_id, task_id),
+                ).fetchall()
+                latest = str(checkpoints[0]["evidence"]) if checkpoints else (
+                    "No worker checkpoint was recorded before ownership was lost."
+                )
+                receipt = harness.record_worker_result_receipt(
+                    lineage_id,
+                    task_id,
+                    str(row["worker_id"]),
+                    {
+                        "schema": "de67.worker-result-receipt.v1",
+                        "lineage_id": lineage_id,
+                        "task_id": task_id,
+                        "claim_id": str(row["claim_id"]),
+                        "worker_id": str(row["worker_id"]),
+                        "disposition": "abandoned",
+                        "verdict": "worker ownership lost; outcome remains open",
+                        "outcome": f"Continue claim {row['claim_id']} from durable evidence.",
+                        "summary": latest,
+                        "material_changes": [],
+                        "tests": [],
+                        "live_actions": [],
+                        "evidence_ceiling": [
+                            "The supervisor receipt preserves only durable checkpoints; it does not infer unreturned worker work."
+                        ],
+                        "bindings": {
+                            "coordinator_session_id": str(row["coordinator_session_id"]),
+                            "supervisor_id": str(row["supervisor_id"]),
+                        },
+                        "journal_entries": [],
+                        "artifacts": [],
+                        "first_divergence": {
+                            "class": "worker-ownership-lost",
+                            "summary": "The owning worker was not recoverable from the successor coordinator session.",
+                        },
+                        "accepted_no_replay": [],
+                        "active_work": [
+                            "Resume the claim from its latest durable checkpoint and current ledger frontier."
+                        ],
+                        "first_open_boundary": (
+                            "Resume from the latest durable checkpoint; treat unreturned work as unknown."
+                        ),
+                        "narrow_queries": [f"task_id={task_id}"],
+                        "entrypoints": [],
+                        "context_metrics": {
+                            "durable_checkpoint_count": len(checkpoints)
+                        },
+                    },
+                )
+                receipt_id = str(receipt["receipt_id"])
             harness.abandon_attempt(
                 lineage_id,
                 task_id,
                 WORKER_OWNER_LOST_REASON,
+                receipt_id=receipt_id,
             )
-    return task_ids
+    return tuple(str(row["task_id"]) for row in terminal_rows)
 
 
 def active_worker_coordinator_session(
@@ -703,17 +799,22 @@ def dfs_has_open_work(workspace: Path) -> bool:
 def ordinary_worker_evidence_contract() -> str:
     """Return the reusable evidence-retrieval contract for ordinary workers."""
     return (
-        "Make each ordinary worker responsible for retrieving only the evidence needed for its "
-        "next causal decision. Brief the outcome, proof route, known facts, and evidence locations; "
-        "do not paste available bulk. The worker searches narrowly before reading, selects exact "
-        "fields or slices from structured artifacts, keeps verbose command output in artifacts, "
+        "Brief each ordinary worker with the outcome, current proof frontier, accepted no-replay "
+        "facts, first open boundary, exact bindings and artifacts, relevant entrypoints, and a "
+        "small initial read plan that explains why each read matters. Do not paste available bulk "
+        "or require blanket WEC, DFS, ledger, registry, report, or repository reading. The worker "
+        "inspects metadata such as source, size, freshness, repetition, and role before contents, "
+        "uses indexed narrow queries and compact operational receipts by default, keeps complete "
+        "audit output in digest-bound artifacts, "
         "and preserves the first relevant divergence as a diagnostic anchor while continuing "
         "diagnosis, repair, or a changed tactic inside the assigned outcome. Evidence bounds come "
         "from the current claim, "
         "never a fixed quota. A larger read remains available when deleting it would leave that "
         "claim unproved. When the execution context cannot carry the next necessary act, the worker "
-        "returns a compact handoff naming preserved evidence, the first open causal boundary, and "
-        "work that must not be replayed. That ends only the worker attempt, not the outcome."
+        "returns the structured compact handoff needed for a durable continuation receipt. That "
+        "receipt names exact evidence and bindings, material changes, tests and live actions, the "
+        "first open causal boundary, narrow follow-up queries, and work that must not be replayed. "
+        "That ends only the worker attempt, not the outcome."
     )
 
 
@@ -804,9 +905,12 @@ def worker_result_ingress_contract() -> str:
         "request, preserve a compact no-replay handoff, abandon only that attempt, keep the unfinished "
         "ledger outcome visible, and project its remaining frontier to a fresh task after any required "
         "incident review. Context exhaustion is not a formal finding or an assigned-outcome exit. "
-        "When the "
-        "evidence proves completion, an assigned-outcome exit, or abandonment, record exactly one matching "
-        "deadline-harness terminal transition before executing DE67_POLICY_DECIDE_ARGV_JSON again. "
+        "Before every terminal transition, persist one identity-bound worker result receipt through "
+        "record-worker-receipt. It preserves the achieved outcome or first divergence, material "
+        "repository/runtime changes, journal entries, tests and live actions, evidence ceilings, "
+        "exact continuation bindings and artifacts, accepted no-replay work, first remaining "
+        "boundary, and narrow queries. Then cite that receipt in exactly one matching deadline-harness "
+        "terminal transition before executing DE67_POLICY_DECIDE_ARGV_JSON again. "
         "A completed attempt settles only that task; "
         "when it is bound to a closure gap, close that gap and preserve its proof while any sibling "
         "gaps remain open. Accept the whole claim only through the separate claim-acceptance "
@@ -939,6 +1043,7 @@ def mutation_reviewer_prompt(
             f"Resolve durable {gate.kind} gate {gate.identity} in {state_path} for lineage {lineage_id}.",
             "The complete workspace mutation-suggestion ledger is mandatory owner input. User-authored entries carry mutation-scoped authority beneath system and developer instructions and override lower-priority Phase-3 restrictions only as needed for their outcome. Preserve honest evidence, completed valid work, durable lifecycle integrity, safety, and the requested product outcome; grant no unrelated authority.",
             "Trust the agent: choose the evidence and implementation route without prescribed reads, commands, approvals, or rituals. Diagnose poor decisions from the instructions, information, tools, incentives, and transitions the system supplied, then repair the earliest preventable systemic cause instead of blaming the actor or adding blanket caution.",
+            "Treat operational efficiency and context shape as evidence-bearing method concerns: inspect source, size, repetition, freshness, and role metadata before loading contents; simplify only where the deletion test passes; preserve full artifacts and never turn measurements into quotas or hidden-failure incentives.",
             "For every pending entry, reconstruct why the incident occurred, separate immediate recovery from repeatable method correction, implement the smallest general correction supported by evidence, and prove it with a reproduction or counterexample that could expose the original failure. Compress affected guidance instead of appending situational rules.",
             "When rewriting the active ledger, preserve this coordinator-facing ledger contract: " + coordinator_ledger_contract(),
             "If a cause or correction cannot be proved, preserve the gate and state the exact remaining uncertainty. Otherwise disposition every pending entry, durably resolve the gate, request one fresh coordinator restart, and exit. The external supervisor alone launches the successor.",

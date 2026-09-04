@@ -409,6 +409,7 @@ class PolicyKernelTests(unittest.TestCase):
             kernel.validate_trace(source_policy(), [
                 {"event": "task_started", "task_id": "M1"},
                 {"event": "deadline_expired"},
+                {"event": "worker_result_receipted"},
                 {"event": "task_completed", "task_id": "M1"},
                 {"event": "claim_accepted"},
             ])
@@ -417,6 +418,7 @@ class PolicyKernelTests(unittest.TestCase):
         kernel.validate_trace(source_policy(), [
             {"event": "task_started", "task_id": "M1"},
             {"event": "deadline_expired"},
+            {"event": "worker_result_receipted"},
             {"event": "task_completed", "task_id": "M1"},
             {"event": "deadline_incident_reviewed"},
             {"event": "claim_accepted"},
@@ -981,6 +983,77 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertIn("Prove the live boundary", packet_text)
             self.assertNotIn("obsolete-history-one", packet_text)
             self.assertNotIn("obsolete-history-two", packet_text)
+
+    def test_successor_packet_uses_compact_receipt_and_reasoned_read_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            de67 = workspace / ".de67"
+            de67.mkdir()
+            (de67 / "work-ledger.md").write_text(
+                "- [ ] R-CONT — Finish the live outcome.\n"
+                "  - Known footing: bulky accepted history must not be copied.\n"
+                "  - Current uncertainty: The response boundary remains open.\n"
+                "  - Subtasks:\n"
+                "    - [done] transport :: Prove dispatch.\n"
+                "    - [open] response :: Observe response.\n",
+                encoding="utf-8",
+            )
+            (de67 / "DFS.md").write_text(
+                "<!-- DE67:DFS-SLICE:BEGIN id=R-CONT-S001 claim=R-CONT -->\n"
+                "- [ ] 🔴 R-CONT — Observe the response boundary.\n"
+                "<!-- DE67:DFS-SLICE:END -->\n",
+                encoding="utf-8",
+            )
+            state = workspace / "state.sqlite3"
+            with DeadlineHarness(state) as harness:
+                harness.start_task("project", "old", "R-CONT", 100, now=1)
+                harness.claim_worker(
+                    "project", "old", "worker-old", "coordinator", "supervisor", now=2
+                )
+                value = {
+                    "schema": "de67.worker-result-receipt.v1",
+                    "lineage_id": "project",
+                    "task_id": "old",
+                    "claim_id": "R-CONT",
+                    "worker_id": "worker-old",
+                    "disposition": "abandoned",
+                    "verdict": "transport accepted; response open",
+                    "outcome": "Finish the live outcome.",
+                    "summary": "Dispatch is accepted and the response is the first open boundary.",
+                    "material_changes": [],
+                    "tests": ["dispatch passed"],
+                    "live_actions": ["dispatch observed"],
+                    "evidence_ceiling": ["response not observed"],
+                    "bindings": {"run_id": "run-9", "scenario_id": "scenario-9"},
+                    "journal_entries": [],
+                    "artifacts": [],
+                    "first_divergence": {
+                        "class": "response-boundary",
+                        "summary": "No response arrived.",
+                    },
+                    "accepted_no_replay": ["Do not replay dispatch."],
+                    "active_work": ["Observe response."],
+                    "first_open_boundary": "Observe response.",
+                    "narrow_queries": ["run_id=run-9"],
+                    "entrypoints": ["src/response.cpp"],
+                    "context_metrics": {"replaced_checkpoints": 12},
+                }
+                receipt = harness.record_worker_result_receipt(
+                    "project", "old", "worker-old", value, now=3
+                )
+                harness.abandon_attempt(
+                    "project", "old", "continued", receipt_id=receipt["receipt_id"], now=4
+                )
+                harness.start_task("project", "new", "R-CONT", 100, now=5)
+
+            call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
+            packet_text = Path(call["dispatch_packet"]["path"]).read_text(encoding="utf-8")
+            self.assertIn(receipt["receipt_id"], packet_text)
+            self.assertIn("Observe response.", packet_text)
+            self.assertIn("src/response.cpp", packet_text)
+            self.assertIn("worker-receipts", packet_text)
+            self.assertIn("read on demand if", packet_text)
+            self.assertNotIn("bulky accepted history", packet_text)
 
     def test_exploration_route_does_not_match_longer_claim_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

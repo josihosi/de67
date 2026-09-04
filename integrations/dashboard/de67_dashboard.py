@@ -853,7 +853,35 @@ def _active_coordinator_id(workspace: Path) -> str | None:
     except (OSError, ValueError, IndexError, subprocess.SubprocessError):
         pass
     active_sessions: set[str] = set()
-    for status_path in status_root.glob("**/status.txt"):
+    status_paths = status_root.glob("**/status.txt")
+    # Modern supervisors already index unfinished runs. Avoid rereading all
+    # historical artifacts merely to discover the live session.
+    config_path = workspace / ".de67/state/workspace.json"
+    if config_path.is_file():
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        clock = config["clock"]
+        state = Path(clock["state"]).expanduser()
+        if not state.is_absolute():
+            state = workspace / state
+        uri = f"file:{quote(str(state.resolve()), safe='/:')}?mode=ro"
+        connection = sqlite3.connect(uri, uri=True, timeout=0)
+        try:
+            tables = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if "supervisor_attempts" in tables:
+                runs = connection.execute(
+                    "SELECT run_id FROM supervisor_attempts "
+                    "WHERE lineage_id=? AND finished_at IS NULL",
+                    (clock["lineage"],),
+                ).fetchall()
+                status_paths = [
+                    workspace / ".de67/state/coordinator-runs" / row[0] / "status.txt"
+                    for row in runs
+                ]
+        finally:
+            connection.close()
+    for status_path in status_paths:
         try:
             if status_path.read_text(encoding="ascii").strip() != "RUNNING":
                 continue
@@ -903,7 +931,29 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     """Project active roster subagents from Codex's existing read-only session records."""
     counts = {model: {effort: 0 for effort in ("low", "medium", "high", "max")}
               for model in ("luna", "terra", "sol")}
-    paths = sorted(sessions_root.glob("**/rollout-*.jsonl"), reverse=True)
+    active_claims = _active_worker_claims(workspace)
+    if active_claims == {}:
+        return {"counts": counts, "available": True}
+    index = sessions_root.parent / "state_5.sqlite"
+    if active_claims and index.is_file():
+        owners = set(active_claims.values())
+        if len(owners) != 1:
+            raise ValueError("active worker ownership is ambiguous")
+        uri = f"file:{quote(str(index), safe='/:')}?mode=ro"
+        connection = sqlite3.connect(uri, uri=True, timeout=0)
+        try:
+            rows = connection.execute(
+                "WITH RECURSIVE tree(id) AS (SELECT ? UNION "
+                "SELECT child_thread_id FROM thread_spawn_edges JOIN tree "
+                "ON parent_thread_id=tree.id) "
+                "SELECT rollout_path FROM threads JOIN tree ON threads.id=tree.id",
+                (next(iter(owners)),),
+            ).fetchall()
+            paths = [Path(row[0]) for row in rows]
+        finally:
+            connection.close()
+    else:
+        paths = sorted(sessions_root.glob("**/rollout-*.jsonl"), reverse=True)
     root_path: Path | None = None
     root: dict[str, Any] = {}
     target = workspace.resolve()

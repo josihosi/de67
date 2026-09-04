@@ -1061,3 +1061,28 @@ class DashboardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class IndexedWorkerTests(unittest.TestCase):
+    def test_no_workers_does_not_scan_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(dashboard_module, "_active_worker_claims", return_value={}),                  patch.object(Path, "glob", side_effect=AssertionError("history scan")):
+                result = dashboard_module.worker_state(root, root / "sessions")
+            self.assertTrue(result["available"])
+            self.assertTrue(all(value == 0 for row in result["counts"].values()
+                                for value in row.values()))
+
+    def test_active_worker_uses_index_without_history_scan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            connection = sqlite3.connect(root / "state_5.sqlite")
+            connection.executescript(
+                "CREATE TABLE threads(id TEXT, rollout_path TEXT);"
+                "CREATE TABLE thread_spawn_edges(parent_thread_id TEXT, child_thread_id TEXT);"
+            )
+            connection.execute("INSERT INTO threads VALUES (?, ?)", ("owner", str(root / "owner.jsonl")))
+            connection.commit()
+            connection.close()
+            with patch.object(dashboard_module, "_active_worker_claims", return_value={"worker": "owner"}),                  patch.object(dashboard_module, "_active_coordinator_id", return_value="owner"),                  patch.object(dashboard_module, "_session_header", return_value={"id": "owner", "cwd": str(root)}),                  patch.object(Path, "glob", side_effect=AssertionError("history scan")):
+                result = dashboard_module.worker_state(root, root / "sessions")
+            self.assertTrue(result["available"])

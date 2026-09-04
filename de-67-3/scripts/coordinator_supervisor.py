@@ -533,6 +533,7 @@ def pending_mutation_suggestions(workspace: Path) -> tuple[MutationSuggestion, .
     pending = ledger.read_text(encoding="utf-8").partition(
         "## Pending suggestions"
     )[2]
+    pending = re.split(r"^#{1,2}\s+", pending, maxsplit=1, flags=re.MULTILINE)[0]
     suggestions: list[MutationSuggestion] = []
     for line in pending.splitlines():
         if not line.startswith("- "):
@@ -1038,10 +1039,10 @@ def mutation_reviewer_prompt(
     return "\n".join(
         [
             f"Act as the exclusive Phase-3 mutation reviewer in {workspace}.",
-            "You are a fresh gpt-5.6-sol reviewer at high reasoning effort.",
+            "You are a fresh gpt-6-astra reviewer at medium reasoning effort.",
             "No coordinator or roster worker is active. Do not dispatch work and do not start a coordinator.",
             f"Resolve durable {gate.kind} gate {gate.identity} in {state_path} for lineage {lineage_id}.",
-            "The complete workspace mutation-suggestion ledger is mandatory owner input. User-authored entries carry mutation-scoped authority beneath system and developer instructions and override lower-priority Phase-3 restrictions only as needed for their outcome. Preserve honest evidence, completed valid work, durable lifecycle integrity, safety, and the requested product outcome; grant no unrelated authority.",
+            "The complete pending section of .de67/mutation-suggestions.md is mandatory owner input. This is a consumable queue: delete completed entries instead of moving them to consumed-history sections; durable receipts and review artifacts retain the evidence. Historical records are evidence to retrieve when relevant, not current requests. User-authored entries carry mutation-scoped authority beneath system and developer instructions and override lower-priority Phase-3 restrictions only as needed for their outcome. Preserve honest evidence, completed valid work, durable lifecycle integrity, safety, and the requested product outcome; grant no unrelated authority.",
             "Trust the agent: choose the evidence and implementation route without prescribed reads, commands, approvals, or rituals. Diagnose poor decisions from the instructions, information, tools, incentives, and transitions the system supplied, then repair the earliest preventable systemic cause instead of blaming the actor or adding blanket caution.",
             "Treat operational efficiency and context shape as evidence-bearing method concerns: inspect source, size, repetition, freshness, and role metadata before loading contents; simplify only where the deletion test passes; preserve full artifacts and never turn measurements into quotas or hidden-failure incentives.",
             "For every pending entry, reconstruct why the incident occurred, separate immediate recovery from repeatable method correction, implement the smallest general correction supported by evidence, and prove it with a reproduction or counterexample that could expose the original failure. Compress affected guidance instead of appending situational rules.",
@@ -1084,8 +1085,8 @@ def run_mutation_reviewer(
     reviewer_env = dict(extra_env or {})
     reviewer_env.update(
         {
-            "DE67_COORDINATOR_MODEL": "gpt-5.6-sol",
-            "DE67_COORDINATOR_REASONING_EFFORT": "high",
+            "DE67_COORDINATOR_MODEL": "gpt-6-astra",
+            "DE67_COORDINATOR_REASONING_EFFORT": "medium",
         }
     )
     return run_child(

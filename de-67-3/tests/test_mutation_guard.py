@@ -1909,7 +1909,7 @@ class MutationGuardTests(unittest.TestCase):
         self.assertIn("Terra for debugging/discovery", ORCHESTRATOR_GUIDANCE)
         self.assertIn("lowest sufficient", ORCHESTRATOR_GUIDANCE)
         self.assertIn("complexity/research", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("reviewer at high", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("`gpt-6-astra` reviewer at medium", ORCHESTRATOR_GUIDANCE)
         self.assertIn('`fork_turns="none"`', ORCHESTRATOR_GUIDANCE)
         self.assertIn("explicitly selects Luna or Terra", ORCHESTRATOR_GUIDANCE)
         self.assertIn("new worker never", ORCHESTRATOR_GUIDANCE)

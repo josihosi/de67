@@ -16,7 +16,10 @@ Match the user's command and read exactly one entrypoint:
   agent-facing instructions, machine responses, and active workflow tests.
 
 Open the exact selected entrypoint directly; do not inventory or read sibling phase folders for
-background or completeness. The handoff artifacts are the interface: phase 2 receives `WEC.md`;
+background or completeness. These reading boundaries apply when running a phase. An explicit request
+to inspect or improve the workflow may follow the relevant surfaces without starting those phases.
+
+The handoff artifacts are the interface: phase 2 receives `WEC.md`;
 phase 3 receives the frozen `DFS.md` and Phase-2-initialized `.de67/` clock state.
 
 ## Execution placement
@@ -60,8 +63,8 @@ When the user supplies the de67 repository and asks Codex to install or integrat
    `$de67`.
 4. Verify that `codex` and `python` resolve in the execution environment. Phase 3's bundled runner
    invokes the local Codex CLI; do not replace it with a machine-specific wrapper.
-5. Record the available Luna, Terra, and Sol profiles. Missing optional profiles must not stop
-   ordinary delivery. Use Sol only for mutation review; the rare universal route may use ultra when
-   that capability is available at the stored trigger.
+5. Use Astra high for the Phase-2 owner and Astra medium for the Phase-3 mutation reviewer.
+   Ordinary delivery keeps a Sol low coordinator and Luna/Terra workers. Verify the required models
+   in the target runtime; report unavailable capability rather than silently substituting a model.
 6. Run the skill validator when available, then run the bundled Python tests before reporting the
    installation complete.

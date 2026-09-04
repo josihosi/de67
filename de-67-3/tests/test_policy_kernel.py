@@ -580,7 +580,8 @@ class PolicyKernelTests(unittest.TestCase):
             (de67 / "DFS.md").write_text("- [ ] 🔴 R-1\n", encoding="utf-8")
             suggestions = de67 / "mutation-suggestions.md"
             suggestions.write_text(
-                "## Pending suggestions\n\n- [defer]: review this later\n",
+                "## Pending suggestions\n\n- [defer]: review this later\n"
+                "## Consumed suggestions\n\n- [trigger]: already completed\n",
                 encoding="utf-8",
             )
             state = workspace / "state.sqlite3"
@@ -954,6 +955,8 @@ class PolicyKernelTests(unittest.TestCase):
                 "  - Attempt 001: obsolete-history-one must not reach the worker.\n"
                 "  - Attempt 002: obsolete-history-two must not reach the worker.\n"
                 "  - Waiting work: Keep this newest no-replay lesson.\n"
+                "  - First open boundary: Preserve the unconsumed observation.\n"
+                "  - Attempt 003: Latest historical summary follows active obligations.\n"
                 "  - Subtasks:\n"
                 "    - [done] build :: Compile the implementation.\n"
                 "    - [open] witness :: Prove the live boundary.\n",
@@ -980,6 +983,7 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertIn("Current evidence", packet_text)
             self.assertIn("Current uncertainty", packet_text)
             self.assertIn("Keep this newest no-replay lesson", packet_text)
+            self.assertIn("Preserve the unconsumed observation", packet_text)
             self.assertIn("Prove the live boundary", packet_text)
             self.assertNotIn("obsolete-history-one", packet_text)
             self.assertNotIn("obsolete-history-two", packet_text)
@@ -1054,6 +1058,42 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertIn("worker-receipts", packet_text)
             self.assertIn("read on demand if", packet_text)
             self.assertNotIn("bulky accepted history", packet_text)
+
+    def test_exploration_packet_selects_owner_not_cross_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            de67 = workspace / ".de67"
+            de67.mkdir()
+            (de67 / "work-ledger.md").write_text(
+                "- [x] R-030 — Unrelated accepted outcome.\n"
+                "  - Known footing: This references R-029 and R-029-exploration-035.\n\n"
+                "- [ ] R-029 — Prove the assigned hostile response.\n"
+                "  - DFS slices: `R-029-S001`\n\n"
+                "  - Current uncertainty: Keep this claim's open boundary.\n"
+                "- [ ] R-031 — Another unrelated outcome.\n\n"
+                "- [ ] R-029 — Prove the same claim on the second platform.\n"
+                "  - Current uncertainty: Preserve the other platform boundary.\n",
+                encoding="utf-8",
+            )
+            (de67 / "DFS.md").write_text(
+                "<!-- DE67:DFS-SLICE:BEGIN id=R-029-S001 claim=R-029 -->\n"
+                "Prove the assigned response through its actual owner.\n"
+                "<!-- DE67:DFS-SLICE:END -->\n",
+                encoding="utf-8",
+            )
+            state = workspace / "state.sqlite3"
+            with DeadlineHarness(state) as harness:
+                harness.start_task("project", "R-029-exploration-035", "R-029", 100, now=1)
+
+            call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
+            packet = Path(call["dispatch_packet"]["path"]).read_text(encoding="utf-8")
+
+            self.assertIn("Outcome: - [ ] R-029 — Prove the assigned hostile response.", packet)
+            self.assertIn("Keep this claim's open boundary.", packet)
+            self.assertIn("Prove the same claim on the second platform.", packet)
+            self.assertIn("Preserve the other platform boundary.", packet)
+            self.assertNotIn("Unrelated accepted outcome", packet)
+            self.assertNotIn("Another unrelated outcome", packet)
 
     def test_exploration_route_does_not_match_longer_claim_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

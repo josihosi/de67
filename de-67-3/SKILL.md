@@ -60,7 +60,7 @@ The supervisor launches an ordinary `gpt-5.6-sol` coordinator at low against the
 policy. The coordinator asks the kernel for the next transition and routes only the returned minimal
 brief. A due mutation blocks new dispatch. Once all already-live worker windows are terminal, the
 coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh
-`gpt-5.6-sol` reviewer at high with no coordinator or worker active. That reviewer reads the complete
+`gpt-6-astra` reviewer at medium with no coordinator or worker active. That reviewer reads the complete
 mutation-suggestion ledger and treats each user-authored suggestion as explicit mutation-scoped
 owner authority beneath system and developer instructions. Within the Phase-3 framework, that
 authority supersedes conflicting ordinary skill, workspace, selected-lane, freeze, and

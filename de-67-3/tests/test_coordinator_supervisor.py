@@ -580,6 +580,28 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         assert gate is not None
         self.assertEqual(gate.kind, "owner-suggestion")
 
+    def test_consumed_suggestions_cannot_reactivate_review(self) -> None:
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "terminal proof")
+        (self.workspace / ".de67").mkdir()
+        ledger = self.workspace / ".de67" / "mutation-suggestions.md"
+        ledger.write_text(
+            "# Mutation suggestions\n\n## Pending suggestions\n\n"
+            "- Owner-authorized [defer]: Preserve the next owner request.\n"
+            "  Its continuation remains pending.\n\n"
+            "## Consumed suggestions\n\n"
+            "- Owner-authorized [trigger]: Already applied and proved.\n"
+            "- An old unlabelled request was also completed.\n",
+            encoding="utf-8",
+        )
+
+        suggestions = pending_mutation_suggestions(self.workspace)
+
+        self.assertEqual(len(suggestions), 1)
+        self.assertEqual(suggestions[0].mode, "defer")
+        self.assertIn("next owner request", suggestions[0].entry)
+        self.assertIsNone(mutation_gate(self.state_path, "project", self.workspace))
+
     def test_legacy_unlabelled_owner_suggestion_still_triggers(self) -> None:
         with DeadlineHarness(self.state_path) as harness:
             harness.complete_task("project", "seed", "terminal proof")
@@ -1314,7 +1336,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             MutationGate("random mutation", "cycle 2", "test-and-task-guidelines.md"),
         )
 
-        self.assertIn("complete workspace mutation-suggestion ledger is mandatory owner input", prompt)
+        self.assertIn("complete pending section of .de67/mutation-suggestions.md is mandatory owner input", prompt)
         self.assertIn("repair the earliest preventable systemic cause", prompt)
         self.assertIn("separate immediate recovery from repeatable method correction", prompt)
         self.assertIn("reproduction or counterexample that could expose the original failure", prompt)
@@ -1369,7 +1391,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(arguments.coordinator_reasoning_effort, "low")
         self.assertEqual(arguments.runner, ["runner", "--runner-owned-option"])
 
-    def test_due_mutation_exclusively_runs_high_reviewer_then_fresh_low_coordinator(self) -> None:
+    def test_due_mutation_exclusively_runs_astra_medium_then_sol_low(self) -> None:
         self.write_work_documents(red=True, active=True)
         with DeadlineHarness(self.state_path) as harness:
             harness.connection.execute(
@@ -1408,13 +1430,13 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         ])
         self.assertEqual(
             [(event["model"], event["effort"]) for event in events],
-            [("gpt-5.6-sol", "high"), ("gpt-5.6-sol", "low")],
+            [("gpt-6-astra", "medium"), ("gpt-5.6-sol", "low")],
         )
         reviewer_run = next(
             path for path in self.run_root.iterdir() if path.name.startswith("mutation-")
         )
         reviewer_prompt = (reviewer_run / "prompt.txt").read_text(encoding="utf-8")
-        self.assertIn("complete workspace mutation-suggestion ledger is mandatory owner input", reviewer_prompt)
+        self.assertIn("complete pending section of .de67/mutation-suggestions.md is mandatory owner input", reviewer_prompt)
         self.assertIn("repair the earliest preventable systemic cause", reviewer_prompt)
         self.assertIn("reproduction or counterexample", reviewer_prompt)
         self.assertIn("durably resolve the gate", reviewer_prompt)
@@ -1459,7 +1481,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         events = self.read_events()
         self.assertEqual(
             [(event["role"], event["effort"]) for event in events],
-            [("coordinator", "low"), ("mutation-reviewer", "high"),
+            [("coordinator", "low"), ("mutation-reviewer", "medium"),
              ("coordinator", "low")],
         )
         self.assertEqual([event["generation"] for event in events], [None, None, 1])

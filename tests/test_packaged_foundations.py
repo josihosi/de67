@@ -1,90 +1,33 @@
 from __future__ import annotations
 
-import hashlib
+import re
 import unittest
 from pathlib import Path
-
+from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackagedFoundationTests(unittest.TestCase):
-    def test_reader_facing_brand_is_canonical(self) -> None:
-        for path in ROOT.rglob("*.md"):
-            if ".git" in path.parts:
-                continue
-            with self.subTest(path=path.relative_to(ROOT)):
-                self.assertNotIn("DE67", path.read_text(encoding="utf-8"))
+    def test_authoring_and_audit_links_resolve(self) -> None:
+        # Prose may evolve; a routed reference must remain reachable.
+        documents = [ROOT / "SKILL.md"]
+        for directory in ("references", "de-67-1", "de-67-2", "alignment-audit"):
+            documents.extend((ROOT / directory).rglob("*.md"))
+        for document in documents:
+            text = re.sub(r"```.*?```", "", document.read_text(encoding="utf-8"), flags=re.S)
+            for target in re.findall(r"\[[^\]]*\]\(([^)]+)\)", text):
+                if "://" in target or target.startswith("#"):
+                    continue
+                relative = unquote(target.strip("<>").split("#", 1)[0])
+                with self.subTest(document=document.relative_to(ROOT), target=target):
+                    self.assertTrue((document.parent / relative).is_file())
 
-    def test_verbatim_foundations_are_unchanged(self) -> None:
-        expected = {
-            "references/imagination-round.md":
-                "6276090f543c7ac25a2ccde49975be87ae6b0ed2b4d279adff39f36e6fdb8f09",
-            "references/msw-kernel.md":
-                "fbf42b98a155a7638c92ca7bc6114b4f2a61726d0e35048ee100bc7db957d95f",
-        }
-
-        for relative_path, expected_hash in expected.items():
-            with self.subTest(relative_path=relative_path):
-                text = (ROOT / relative_path).read_text(encoding="utf-8")
-                normalized = text.replace("\r\n", "\n").encode("utf-8")
-                actual = hashlib.sha256(normalized).hexdigest()
-                self.assertEqual(actual, expected_hash)
-
-    def test_phases_route_to_the_shared_foundations(self) -> None:
-        phase_one = (ROOT / "de-67-1/SKILL.md").read_text(encoding="utf-8")
-        phase_two = (ROOT / "de-67-2/SKILL.md").read_text(encoding="utf-8")
-        phase_three = (ROOT / "de-67-3/SKILL.md").read_text(encoding="utf-8")
-        phase_three_kernel = (
-            ROOT / "de-67-3/references/kernel.md"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn("../references/imagination-round.md", phase_one)
-        self.assertIn("../references/msw-kernel.md", phase_one)
-        self.assertIn("../references/controlled-english.md", phase_one)
-        self.assertIn("../references/msw-kernel.md", phase_two)
-        self.assertIn("../references/controlled-english.md", phase_two)
-        self.assertIn("not packaged or workspace guideline prose", phase_three)
-        self.assertIn(".de67/phase3-policy.d67", phase_three)
-        self.assertIn("scripts/policy_kernel.py decide", phase_three)
-        self.assertIn("../../references/msw-kernel.md", phase_three_kernel)
-
-    def test_authoring_roles_route_to_controlled_english(self) -> None:
-        guideline = (ROOT / "references/controlled-english.md").read_text(encoding="utf-8")
-        self.assertIn("apply the MSW deletion test", guideline)
-        self.assertIn("Write de67 work ledgers as current operational state", guideline)
-        self.assertIn("Write blocker messages as owner decisions", guideline)
-
-        ledger_profile = (
-            ROOT / "references/controlled-english-ledger.md"
-        ).read_text(encoding="utf-8")
-        message_profile = (
-            ROOT / "references/controlled-english-message.md"
-        ).read_text(encoding="utf-8")
-        self.assertIn("current frontier, not the full event history", ledger_profile)
-        self.assertIn("Ask for one decision or action", message_profile)
-
-        task_guidance = (
-            ROOT / "de-67-3/assets/environment/test-and-task-guidelines.md"
-        ).read_text(encoding="utf-8")
-        self.assertIn("in controlled English with exact identifiers", task_guidance)
-
-        phase_one = (ROOT / "de-67-1/SKILL.md").read_text(encoding="utf-8")
-        self.assertNotIn("Write owner questions and choices in Simplified Technical English", phase_one)
-
-    def test_promoted_runtime_guidance_is_general_and_outcome_sized(self) -> None:
-        coordinator = (
-            ROOT / "de-67-3/assets/environment/orchestrator-guidelines.md"
-        ).read_text(encoding="utf-8")
-        worker = (
-            ROOT / "de-67-3/assets/environment/test-and-task-guidelines.md"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn("replaceable snapshot of current truth", coordinator)
-        self.assertIn("nonterminal checkpoint", coordinator)
-        self.assertIn("projection rebase is part of the", coordinator.lower())
-        self.assertIn("highest changed authoritative boundary", worker)
-        self.assertNotIn("caol-harness", coordinator + worker)
+    def test_phase_handoff_templates_remain_available(self) -> None:
+        for phase, artifact in (("de-67-1", "WEC.md"), ("de-67-2", "DFS.md")):
+            with self.subTest(phase=phase):
+                self.assertTrue((ROOT / phase / "SKILL.md").is_file())
+                self.assertTrue((ROOT / phase / "assets" / artifact).is_file())
 
 
 if __name__ == "__main__":

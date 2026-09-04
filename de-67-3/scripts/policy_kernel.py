@@ -286,6 +286,8 @@ def _compact_worker_ledger_route(route: str) -> str:
         "current progress",
         "current evidence",
         "current uncertainty",
+        "first open boundary",
+        "waiting work",
         "subtasks",
     }
     history = [segment for label, segment in segments if label not in core_labels]
@@ -300,10 +302,14 @@ def _compact_worker_ledger_route(route: str) -> str:
 def _ledger_objective(route: str) -> str:
     lines = route.splitlines()
     kept: list[str] = []
+    active = True
     for line in lines:
-        if kept and line.startswith("  - "):
-            break
-        kept.append(line)
+        if re.match(r"^- \[[ xX]\] ", line):
+            active = True
+        elif line.startswith("  - "):
+            active = False
+        if active:
+            kept.append(line)
     return "\n".join(kept).strip()
 
 
@@ -320,6 +326,8 @@ def _selected_ledger_frontier(route: str, *, has_receipt: bool) -> str:
     selected: list[str] = []
     active = False
     for line in lines:
+        if re.match(r"^- \[[ xX]\] ", line):
+            active = False
         match = re.match(r"^  - ([^:\n]+):", line)
         if match is not None:
             active = match.group(1).strip().lower() in labels
@@ -463,22 +471,23 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
     ledger_path = workspace / ".de67/work-ledger.md"
     dfs_path = workspace / ".de67/DFS.md"
     ledger = ledger_path.read_text(encoding="utf-8")
-    blocks = [block.strip() for block in re.split(r"\n\s*\n", ledger) if block.strip()]
-    def mentions_exact_identifier(block: str, identifier: str) -> bool:
-        return re.search(
-            r"(?<![A-Za-z0-9_-])" + re.escape(identifier) + r"(?![A-Za-z0-9_-])",
-            block,
-        ) is not None
-
-    matching = [
-        block for block in blocks
-        if mentions_exact_identifier(block, claim_id)
-        or mentions_exact_identifier(block, task_id)
-    ]
+    # Cross-references do not own an assignment. Select the primary item,
+    # retaining its continuation paragraphs even when separated by blank lines.
+    item_headers = list(re.finditer(
+        r"^- \[[ xX]\] (?P<identity>[A-Za-z0-9_-]+)(?=\s|$)", ledger, re.MULTILINE
+    ))
+    matching = [item for item in item_headers if item.group("identity") == task_id]
+    if not matching:
+        matching = [item for item in item_headers if item.group("identity") == claim_id]
     if not matching:
         raise PolicyError(
-            f"Unbound exploration task {task_id} has no matching ledger route for {claim_id}"
+            f"Unbound exploration task {task_id} has no primary ledger route for {claim_id}"
         )
+    routes: list[str] = []
+    for item in matching:
+        following = re.search(r"^(?:- |#{1,6} )", ledger[item.end():], re.MULTILINE)
+        end = item.end() + following.start() if following is not None else len(ledger)
+        routes.append(_compact_worker_ledger_route(ledger[item.start():end].strip()))
     dfs = dfs_path.read_text(encoding="utf-8")
     marker = re.compile(
         r"<!-- DE67:DFS-SLICE:BEGIN[^>]*claim=" + re.escape(claim_id)
@@ -491,7 +500,7 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
         raise PolicyError(
             f"Unbound exploration task {task_id} has no named DFS slice for {claim_id}"
         )
-    return _compact_worker_ledger_route("\n\n".join(matching)), match.group("body").strip()
+    return "\n\n".join(routes), match.group("body").strip()
 
 
 def worker_helper_contract() -> str:
@@ -1112,6 +1121,7 @@ def workspace_facts(
     suggestions = workspace / ".de67" / "mutation-suggestions.md"
     if suggestions.is_file():
         pending = suggestions.read_text(encoding="utf-8").partition("## Pending suggestions")[2]
+        pending = re.split(r"^#{1,2}\s+", pending, maxsplit=1, flags=re.MULTILINE)[0]
         # Legacy unlabelled entries and explicit [trigger] entries are
         # immediate owner gates.  [defer] entries are proposals for the next
         # regular review and must not retire an otherwise healthy coordinator.

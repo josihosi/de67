@@ -1336,6 +1336,17 @@ def _run_supervisor_locked(
         f"supervisor-{os.getpid()}-{uuid.uuid4().hex}",
         os.environ.get("DE67_SUPERVISOR_START_TOKEN"),
     )
+    try:
+        checkpoint_repository(
+            workdir,
+            state,
+            lineage_id,
+            supervisor_owner_id=journal.owner_id,
+        )
+    except RepositoryCheckpointError as error:
+        raise SupervisorError(
+            f"Product recovery checkpoint failed at supervisor startup: {error}"
+        ) from error
     reviewed_gates: set[tuple[str, str]] = set()
     consumed_events: set[str] = set()
     gate = mutation_gate(state, lineage_id, workdir)

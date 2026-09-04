@@ -779,7 +779,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 0)
-        self.assertEqual(observed_live_attempts, [0])
+        self.assertEqual(observed_live_attempts, [0, 0])
 
     def test_supervisor_does_not_resume_after_child_leaves_orphan_clock(self) -> None:
         self.write_work_documents(red=True, active=True)

@@ -56,7 +56,7 @@ class RepositoryCheckpointTest(unittest.TestCase):
                 );
                 CREATE TABLE supervisor_attempts (
                     lineage_id TEXT, role TEXT, run_id TEXT,
-                    started_at REAL, finished_at REAL
+                    owner_id TEXT, started_at REAL, finished_at REAL
                 );
                 CREATE TABLE coordinator_restart_requests (
                     lineage_id TEXT, generation INTEGER
@@ -189,10 +189,25 @@ class RepositoryCheckpointTest(unittest.TestCase):
         with sqlite3.connect(self.state) as connection:
             connection.execute("UPDATE worker_claims SET released_at = 2")
             connection.execute(
-                "INSERT INTO supervisor_attempts VALUES ('lineage', 'mutation-reviewer', 'review-1', 1, NULL)"
+                "INSERT INTO supervisor_attempts VALUES ('lineage', 'mutation-reviewer', 'review-1', 'current-owner', 1, NULL)"
             )
         with self.assertRaisesRegex(RepositoryCheckpointError, "mutation-reviewer"):
             checkpoint_repository(self.workspace, self.state, "lineage")
+
+    def test_current_supervisor_ignores_unfinished_rows_from_a_prior_owner(self) -> None:
+        with sqlite3.connect(self.state) as connection:
+            connection.execute(
+                "INSERT INTO supervisor_attempts VALUES ('lineage', 'coordinator', 'old-run', 'old-owner', 1, NULL)"
+            )
+
+        result = checkpoint_repository(
+            self.workspace,
+            self.state,
+            "lineage",
+            supervisor_owner_id="current-owner",
+        )
+
+        self.assertEqual(result["status"], "no_changes")
 
 
 if __name__ == "__main__":

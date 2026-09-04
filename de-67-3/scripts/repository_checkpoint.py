@@ -151,7 +151,11 @@ def _state_revision(connection: sqlite3.Connection, lineage_id: str) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _assert_quiescent(connection: sqlite3.Connection, lineage_id: str) -> None:
+def _assert_quiescent(
+    connection: sqlite3.Connection,
+    lineage_id: str,
+    supervisor_owner_id: str | None,
+) -> None:
     if _table_exists(connection, "worker_claims"):
         live_claim = connection.execute(
             "SELECT task_id FROM worker_claims WHERE lineage_id = ? AND released_at IS NULL LIMIT 1",
@@ -162,14 +166,26 @@ def _assert_quiescent(connection: sqlite3.Connection, lineage_id: str) -> None:
                 f"Checkpoint refused while worker task {live_claim[0]} is live"
             )
     if _table_exists(connection, "supervisor_attempts"):
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(supervisor_attempts)")
+        }
+        owner_clause = ""
+        parameters: list[Any] = [lineage_id]
+        if supervisor_owner_id is not None and "owner_id" in columns:
+            owner_clause = " AND owner_id = ?"
+            parameters.append(supervisor_owner_id)
         live_attempt = connection.execute(
-            """
+            (
+                """
             SELECT role, run_id FROM supervisor_attempts
             WHERE lineage_id = ? AND finished_at IS NULL
               AND role IN ('coordinator', 'mutation-reviewer', 'worker')
-            LIMIT 1
-            """,
-            (lineage_id,),
+            """
+                + owner_clause
+                + " LIMIT 1"
+            ),
+            parameters,
         ).fetchone()
         if live_attempt is not None:
             raise RepositoryCheckpointError(
@@ -228,6 +244,7 @@ def checkpoint_repository(
     *,
     now: Callable[[], float] = time.time,
     event_hook: EventHook | None = None,
+    supervisor_owner_id: str | None = None,
 ) -> dict[str, Any]:
     """Checkpoint one configured product repository or return a disabled receipt."""
 
@@ -244,7 +261,7 @@ def checkpoint_repository(
     with sqlite3.connect(state) as connection:
         connection.row_factory = sqlite3.Row
         _initialize(connection)
-        _assert_quiescent(connection, lineage)
+        _assert_quiescent(connection, lineage, supervisor_owner_id)
         row = connection.execute(
             """
             SELECT * FROM repository_checkpoints

@@ -19,6 +19,24 @@ Open the exact selected entrypoint directly; do not inventory or read sibling ph
 background or completeness. The handoff artifacts are the interface: phase 2 receives `WEC.md`;
 phase 3 receives the frozen `DFS.md` and Phase-2-initialized `.de67/` clock state.
 
+## Execution placement
+
+Resolve the execution host before delegating or launching `de67 2` or `de67 3`:
+
+- Identify the current host with `hostname`; never infer it from the cwd spelling, the device that
+  initiated the request, or a remembered SSH route.
+- Prefer Josef's Mac mini whenever the exact target workspace exists there. If already on
+  `Josefs-Mac-mini.local`, use that local workspace directly and never hand off or SSH back to the
+  same Mac.
+- From Windows, use the `remote-mac` skill for a one-shot native Mac handoff when that exact
+  workspace exists on the Mac mini. If it does not exist there, use the exact Windows workspace;
+  do not create or copy a Mac workspace solely to satisfy this preference.
+- Verify path, branch, HEAD, recent activity, and dirty state before selecting among similarly named
+  worktrees. The presence of a DE67 source checkout does not establish the product workspace.
+
+`de67 1` remains in the current conversation; this placement rule applies to the repository-owning
+specification and delivery phases.
+
 The alignment audit is an optional manual tool, not a fourth phase. It does not receive phase
 handoffs, join the delivery loop, mutate the method, or become a completion gate. Route there only
 when the user asks to audit agentic workflow alignment, contradictory instructions, or rules and

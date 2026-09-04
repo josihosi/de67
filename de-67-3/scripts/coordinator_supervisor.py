@@ -26,6 +26,10 @@ from blocker_adapter import (
     safe_wait_for_reply,
 )
 from deadline_harness import DeadlineError, DeadlineHarness
+from repository_checkpoint import (
+    RepositoryCheckpointError,
+    checkpoint_repository,
+)
 
 
 RED_DFS_CLAIM = re.compile(r"^- \[ \] \N{LARGE RED CIRCLE} ", re.MULTILINE)
@@ -1047,6 +1051,12 @@ def _complete_mutation_review(
             raise SupervisorError(
                 f"Mutation reviewer failed for {gate.kind} {gate.identity}; ordinary work remains stopped"
             )
+        try:
+            checkpoint_repository(workspace, state_path, lineage_id)
+        except RepositoryCheckpointError as error:
+            raise SupervisorError(
+                f"Product recovery checkpoint failed after mutation review: {error}"
+            ) from error
         remaining = mutation_gate(state_path, lineage_id, workspace)
         if remaining is not None:
             gate = remaining
@@ -1399,6 +1409,12 @@ def _run_supervisor_locked(
             ),
             None if result.exit_code == 0 else f"exit code {result.exit_code}",
         )
+        try:
+            checkpoint_repository(workdir, state, lineage_id)
+        except RepositoryCheckpointError as error:
+            raise SupervisorError(
+                f"Product recovery checkpoint failed after coordinator boundary: {error}"
+            ) from error
 
         # This is the only clock read after this child exits. There is no polling loop.
         after = read_clock(state, lineage_id)

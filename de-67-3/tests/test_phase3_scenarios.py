@@ -152,6 +152,60 @@ class Phase3ScenarioTests(unittest.TestCase):
             self.assertIn("open_gap", consumed_facts)
             self.assertEqual(routed.action, "dispatch_closure_worker")
 
+    def test_partial_closure_preserves_proof_and_routes_the_remaining_gap(self) -> None:
+        de67 = self.workspace / ".de67"
+        de67.mkdir(exist_ok=True)
+        (de67 / "work-ledger.md").write_text(
+            "## Active work\n\n- [ ] R-027 — Finish the remaining live proof.\n",
+            encoding="utf-8",
+        )
+        (de67 / "DFS.md").write_text("- [ ] 🔴 R-027 — Live proof remains.\n", encoding="utf-8")
+        with DeadlineHarness(self.state) as harness:
+            harness.start_task("project", "explore", "R-027", 100, now=0)
+            harness.complete_task("project", "explore", "Strategy known.", now=1)
+            harness.transition_claim_to_closure(
+                "project",
+                "R-027",
+                "explore",
+                "Prove bootstrap and live behavior.",
+                "Preserve independently proved gaps.",
+                gaps=[
+                    ("bootstrap", "Prove isolated startup.", "Run bootstrap."),
+                    ("live-proof", "Prove the live signal.", "Run live witness."),
+                ],
+                now=2,
+            )
+            harness.start_task(
+                "project",
+                "bootstrap-task",
+                "R-027",
+                100,
+                phase="closure",
+                gap_id="bootstrap",
+                now=3,
+            )
+            completed = harness.complete_task(
+                "project", "bootstrap-task", "Bootstrap repair is valid.", now=4
+            )
+            closed = harness.close_closure_gap(
+                "project",
+                "R-027",
+                "bootstrap",
+                "bootstrap-task",
+                "Preserve the valid repair without live credit.",
+                now=5,
+            )
+
+            self.assertTrue(completed["attempt_completed"])
+            self.assertFalse(completed["completion_accepted"])
+            self.assertEqual(closed["remaining_gap_ids"], ["live-proof"])
+            facts, routed = self.decision(6)
+            self.assertNotIn("accepted_evidence", facts)
+            self.assertNotIn("integrity_incident", facts)
+            self.assertIn("closure_ready", facts)
+            self.assertIn("open_gap", facts)
+            self.assertEqual(routed.action, "dispatch_closure_worker")
+
     def test_worker_twenty_three_runs_stored_mutation_once_then_restarts(self) -> None:
         with patch(
             "deadline_harness.secrets.randbelow", side_effect=[3, 1, 7, 0]

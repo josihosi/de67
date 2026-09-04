@@ -78,7 +78,9 @@ judgment remain model work inside the selected route.
 
 Ordinary worker results, test failures, acceptance, ledger refill, and exploration-to-closure
 transition stay with the same coordinator. A formal terminal finding also stays with that
-coordinator; it is reserved for a disproved strategy, materially different route, external blocker,
-or exhausted bounded route. Mutation completion is the only planned fresh-coordinator boundary.
+coordinator; it is reserved for a contradicted assigned outcome, materially different owner outcome,
+real external decision, unavailable capability, irreversible risk, or an exhausted authorized route.
+A disproved strategy is nonterminal while recoverable repository work remains. Mutation completion
+is the only planned fresh-coordinator boundary.
 An abnormal process exit remains recoverable, but it is recorded as recovery rather than treated as
 a policy restart. The external supervisor exclusively launches and acknowledges every process.

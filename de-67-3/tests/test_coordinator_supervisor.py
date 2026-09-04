@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import time
@@ -742,6 +743,38 @@ class CoordinatorSupervisorTests(unittest.TestCase):
 
         self.assertNotEqual(before, claimed)
         self.assertNotEqual(claimed, checkpointed)
+
+    def test_product_checkpoint_runs_only_after_supervisor_journal_is_quiescent(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        observed_live_attempts: list[int] = []
+
+        def observe_checkpoint(_workspace: Path, state: Path, lineage: str) -> dict[str, str]:
+            with sqlite3.connect(state) as connection:
+                observed_live_attempts.append(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM supervisor_attempts "
+                        "WHERE lineage_id = ? AND finished_at IS NULL",
+                        (lineage,),
+                    ).fetchone()[0]
+                )
+            return {"status": "disabled"}
+
+        with patch(
+            "coordinator_supervisor.checkpoint_repository",
+            side_effect=observe_checkpoint,
+        ):
+            result = run_supervisor(
+                self.state_path,
+                "project",
+                self.workspace,
+                self.runner_command(),
+                self.run_root,
+                extra_env=self.environment("complete-program"),
+                run_id_factory=lambda _generation: "checkpoint-boundary",
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(observed_live_attempts, [0])
 
     def test_supervisor_does_not_resume_after_child_leaves_orphan_clock(self) -> None:
         self.write_work_documents(red=True, active=True)

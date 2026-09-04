@@ -156,9 +156,9 @@
         "coordinator_exclusively_commits_terminal_worker_result",
         "preserve_evidence_class",
         "continue_same_coordinator",
-        "keep_named_in_scope_repair_or_rerun_as_nonterminal_checkpoint",
+        "distinguish_completed_attempt_bound_gap_closure_and_whole_claim_acceptance",
         "keep_same_task_and_worker_across_checkpoint",
-        "terminal_finding_requires_named_route_exit",
+        "failed_strategy_is_nonterminal_until_assigned_outcome_route_exits",
         "evaluate_convergence_after_every_worker",
         "transition_to_named_independently_provable_closure_gaps_when_finite",
         "record_specific_uncertainty_before_more_exploration"

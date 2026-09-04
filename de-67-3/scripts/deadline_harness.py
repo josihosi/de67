@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import secrets
 import sqlite3
 import subprocess
@@ -40,6 +41,49 @@ WORKSPACE_METHOD_GUIDELINE_FILES = (
     "test-and-task-guidelines.md",
 )
 ACTIVE_SKILL_ROOT = Path(__file__).resolve().parents[1]
+
+DFS_STATUS_BEGIN = "<!-- DE67:DELIVERY-STATUS:BEGIN"
+DFS_STATUS_END = "<!-- DE67:DELIVERY-STATUS:END -->"
+
+
+def _workspace_for_state(state_path: Path | None) -> Path | None:
+    if (
+        state_path is None
+        or state_path.parent.name != "state"
+        or state_path.parent.parent.name != ".de67"
+    ):
+        return None
+    return state_path.parent.parent.parent
+
+
+def _ledger_claim_block(ledger: str, claim_id: str) -> str | None:
+    pattern = re.compile(
+        r"(?ms)^- \[[ x]\] " + re.escape(claim_id)
+        + r"(?=[ \t]+—|[ \t]*$).*?(?=^- \[[ x]\] R-|^## |\Z)"
+    )
+    match = pattern.search(ledger)
+    return match.group(0).rstrip() if match else None
+
+
+def _dfs_claim_status_span(dfs: str, claim_id: str) -> tuple[int, int, str] | None:
+    slice_pattern = re.compile(
+        r"<!-- DE67:DFS-SLICE:BEGIN[^>]*claim=" + re.escape(claim_id)
+        + r"(?=\s|-->)[^>]*-->\n(?P<body>.*?)\n"
+        r"<!-- DE67:DFS-SLICE:END[^>]*-->",
+        re.DOTALL,
+    )
+    slice_match = slice_pattern.search(dfs)
+    if slice_match is None:
+        return None
+    body = slice_match.group("body")
+    heading = re.search(r"(?m)^Implementation status:\s*$", body)
+    if heading is None:
+        return None
+    start = slice_match.start("body") + heading.end()
+    while start < len(dfs) and dfs[start] == "\n":
+        start += 1
+    end = slice_match.end("body")
+    return start, end, dfs[start:end].rstrip()
 
 
 def _method_files(root: Path) -> dict[str, bytes]:
@@ -1433,6 +1477,103 @@ class DeadlineHarness:
                         *key,
                     ),
                 )
+
+    def synchronize_dfs_statuses(self) -> tuple[str, ...]:
+        """Project durable claim acceptance into agent-facing DFS status blocks."""
+        workspace = _workspace_for_state(self.state_path)
+        if workspace is None:
+            return ()
+        dfs_path = workspace / ".de67" / "DFS.md"
+        ledger_path = workspace / ".de67" / "work-ledger.md"
+        if not dfs_path.is_file() or not ledger_path.is_file():
+            raise DeadlineError("DFS status projection requires DFS.md and work-ledger.md")
+        dfs = dfs_path.read_text(encoding="utf-8")
+        ledger = ledger_path.read_text(encoding="utf-8")
+        rows = self.connection.execute(
+            """
+            SELECT accepted.* FROM claim_acceptances AS accepted
+            JOIN (
+              SELECT claim_id, MAX(acceptance_number) AS acceptance_number
+              FROM claim_acceptances GROUP BY claim_id
+            ) AS latest
+              ON latest.claim_id = accepted.claim_id
+             AND latest.acceptance_number = accepted.acceptance_number
+            WHERE accepted.lineage_id = ?
+            ORDER BY accepted.claim_id
+            """,
+            (self._bound_lineage_id(),),
+        ).fetchall()
+        if not rows:
+            return ()
+        baseline_path = self.state_path.parent / "dfs-status-baselines.json"
+        try:
+            baselines = json.loads(baseline_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            baselines = {}
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise DeadlineError(f"DFS status baseline is unreadable: {error}") from error
+        if not isinstance(baselines, dict):
+            raise DeadlineError("DFS status baseline must be an object")
+        changed: list[str] = []
+        for acceptance in rows:
+            claim_id = str(acceptance["claim_id"])
+            span = _dfs_claim_status_span(dfs, claim_id)
+            if span is None:
+                raise DeadlineError(f"DFS has no implementation status block for {claim_id}")
+            start, end, current = span
+            if DFS_STATUS_BEGIN not in current:
+                baselines[claim_id] = current
+            baseline = baselines.get(claim_id)
+            if not isinstance(baseline, str) or not baseline.strip():
+                raise DeadlineError(f"DFS baseline is missing for {claim_id}")
+            if acceptance["invalidated_at"] is None:
+                ledger_block = _ledger_claim_block(ledger, claim_id)
+                receipt = (
+                    f"  - Durable acceptance: #{acceptance['acceptance_number']} via "
+                    f"`{acceptance['task_id']}`; SQLite evidence is authoritative."
+                )
+                if ledger_block is not None and ledger_block.startswith(
+                    f"- [x] {claim_id}"
+                ):
+                    projected = (
+                        f"{DFS_STATUS_BEGIN} claim={claim_id} -->\n"
+                        f"{ledger_block}\n{receipt}\n{DFS_STATUS_END}"
+                    )
+                elif (
+                    current.startswith(f"{DFS_STATUS_BEGIN} claim={claim_id} -->")
+                    and f"- [x] {claim_id}" in current
+                    and receipt in current
+                ):
+                    # The active ledger may compact accepted historical work after
+                    # the machine has already projected its durable receipt into DFS.
+                    projected = current
+                else:
+                    raise DeadlineError(
+                        f"Accepted claim {claim_id} lacks a checked work-ledger projection"
+                    )
+            else:
+                projected = baseline.rstrip()
+            if current != projected:
+                dfs = dfs[:start] + projected + dfs[end:]
+                changed.append(claim_id)
+        if changed:
+            temporary = dfs_path.with_name(f".{dfs_path.name}.{os.getpid()}.tmp")
+            temporary.write_text(dfs, encoding="utf-8")
+            os.replace(temporary, dfs_path)
+        baseline_temporary = baseline_path.with_name(
+            f".{baseline_path.name}.{os.getpid()}.tmp"
+        )
+        baseline_temporary.write_text(
+            json.dumps(baselines, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        os.replace(baseline_temporary, baseline_path)
+        return tuple(changed)
+
+    def _bound_lineage_id(self) -> str:
+        rows = self.connection.execute("SELECT lineage_id FROM lineage_binding").fetchall()
+        if len(rows) != 1:
+            raise DeadlineError("DFS status projection requires one bound lineage")
+        return str(rows[0][0])
 
     def close(self) -> None:
         self.connection.close()
@@ -4571,6 +4712,9 @@ class DeadlineHarness:
             result["basis_task_id"] = basis_task_id
             result["contradicted_premise"] = contradicted_premise
             self.connection.commit()
+            result["dfs_status_synchronized"] = list(
+                self.synchronize_dfs_statuses()
+            )
             return result
         except Exception:
             self.connection.rollback()
@@ -5074,6 +5218,9 @@ class DeadlineHarness:
                 self._claim_deadline_incident(lineage_id, claim_id) is not None
             )
             self.connection.commit()
+            result["dfs_status_synchronized"] = list(
+                self.synchronize_dfs_statuses()
+            )
             return result
         except Exception:
             self.connection.rollback()

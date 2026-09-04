@@ -23,5 +23,14 @@ The internal fresh-coordinator transition after a mutation review is not an expl
 It runs inside the existing supervisor epoch and must not invoke external-start normalization or
 erase ledger state.
 
+After the supervisor closes a coordinator or mutation-reviewer journal row, and before it opens the
+next model interval, it runs the configured product-repository checkpoint transaction. The
+transaction refuses live worker or reviewer ownership, stages tracked changes plus non-ignored new
+files, creates no empty commit, pushes only the single target in `workspace.json`, and verifies that
+remote ref. Its stable SQLite checkpoint identity is also written as a Git trailer. An unfinished
+allocation is resumed from the trailer on `HEAD`, so a crash after commit cannot duplicate the
+checkpoint. Commit, hook, push, or verification failure leaves the tree recoverable and stops the
+next model interval; a checkpoint is durability only, never DFS acceptance or proof.
+
 Use `supervisor_service.py status` and `stop` for observation and shutdown. A stopped service never
 implies that DFS or ledger work is complete.

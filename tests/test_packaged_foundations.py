@@ -9,25 +9,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackagedFoundationTests(unittest.TestCase):
-    def test_optional_alignment_audit_is_routed_and_self_contained(self) -> None:
-        router = (ROOT / "SKILL.md").read_text(encoding="utf-8")
-        audit_root = ROOT / "alignment-audit"
-        entrypoint = (audit_root / "SKILL.md").read_text(encoding="utf-8")
-
-        self.assertIn("alignment-audit/SKILL.md", router)
-        for reference in (
-            "references/alignment-manifest.md",
-            "references/reviewer-brief.md",
-        ):
-            with self.subTest(reference=reference):
-                self.assertIn(reference, entrypoint)
-                self.assertTrue((audit_root / reference).is_file())
-
-        for phase in ("de-67-1", "de-67-2", "de-67-3"):
-            with self.subTest(phase=phase):
-                phase_entrypoint = (ROOT / phase / "SKILL.md").read_text(encoding="utf-8")
-                self.assertNotIn("alignment-audit", phase_entrypoint)
-
     def test_reader_facing_brand_is_canonical(self) -> None:
         for path in ROOT.rglob("*.md"):
             if ".git" in path.parts:

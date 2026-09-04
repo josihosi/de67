@@ -818,7 +818,7 @@ def validate_random_review_mutation(
     *,
     selected_lane: str,
 ) -> tuple[str, ...]:
-    """Validate exactly the stored random lane, including a safe DFS no-op."""
+    """Validate exactly the stored random lane, including an exact no-op."""
 
     if selected_lane not in RANDOM_MUTATION_LANES:
         raise GuardError(f"Unsupported random mutation lane: {selected_lane}")
@@ -836,6 +836,8 @@ def validate_random_review_mutation(
         if baseline_files[name] != candidate_files[name]
     )
     if selected_lane in GUIDELINE_FILES:
+        if not changed:
+            return ()
         if changed != (selected_lane,):
             raise GuardError(
                 f"Random review selected {selected_lane}; no other mutable file may change"
@@ -2448,7 +2450,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 print(
-                    f"ok: random review cycle {arguments.cycle}; guarded DFS no-op"
+                    f"ok: random review cycle {arguments.cycle}; guarded no-op"
                 )
         else:
             cycle = require_universal_random_review(

@@ -343,7 +343,8 @@ def worker_helper_contract() -> str:
         "helper operates the run and returns the smallest journal-cited witness, while you judge "
         "the evidence and own any repair. You remain responsible for the whole outcome, may use or "
         "reject helper results, and must collect or stop every helper before returning. Helpers do "
-        "not own deadline tasks or write DE67 clock, ledger, DFS, or mutation state, and must avoid "
+        "not own deadline tasks or write coordinator clock, ledger, specification, or mutation "
+        "state, and must avoid "
         "overlapping source edits or shared mutable runtime state without explicit exclusive "
         "ownership. If you are Luna, do not delegate further."
     )
@@ -442,7 +443,7 @@ def unbound_worker_spawns(
                 + "repository-owned implementation, harness, fixture, or observation paths when "
                 + "necessary. "
                 + worker_outcome_contract()
-                + " Return the settled result to the coordinator; do not mutate DE67 deadline "
+                + " Return the settled result to the coordinator; do not mutate coordinator deadline "
                 + "state yourself. "
                 + worker_helper_contract()
             )
@@ -451,7 +452,7 @@ def unbound_worker_spawns(
                 workspace, task_name, message
             )
             spawn_message = (
-                f"Own DE67 task {task_id}. Read your complete task brief from {packet}. "
+                f"Own task {task_id}. Read your complete task brief from {packet}. "
                 f"Verify its SHA-256 is {packet_digest}, then follow it."
             )
             spawns.append(

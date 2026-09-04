@@ -1145,7 +1145,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn(ordinary_worker_evidence_contract(), prompt)
         ingress = worker_result_ingress_contract()
         self.assertIn(ingress, prompt)
-        self.assertLess(prompt.index(ingress), prompt.index("Before every route decision"))
+        self.assertLess(prompt.index(ingress), prompt.index("Before each coordinator routing transition"))
         self.assertIn("before executing DE67_POLICY_DECIDE_ARGV_JSON", ingress)
         self.assertIn("exactly one", ingress)
         self.assertIn("completed attempt settles only that task", ingress)

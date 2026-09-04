@@ -506,8 +506,7 @@ def worker_helper_contract() -> str:
         "helper operates the run and returns the smallest journal-cited witness, while you judge "
         "the evidence and own any repair. You remain responsible for the whole outcome, may use or "
         "reject helper results, and must collect or stop every helper before returning. Helpers do "
-        "not own deadline tasks or write coordinator clock, ledger, specification, or mutation "
-        "state, and must avoid "
+        "not own this assignment or change coordination records, and must avoid "
         "overlapping source edits or shared mutable runtime state without explicit exclusive "
         "ownership. If you are Luna, do not delegate further."
     )
@@ -637,8 +636,8 @@ def unbound_worker_spawns(
                 playtest=playtest,
             )
             message = (
-                f"Own existing {phase} deadline task {task_id} for claim {claim_id}"
-                + (f", closure gap {gap_id} revision {revision}. " if gap_id else ". ")
+                f"Own assigned {phase} work {task_id} for outcome {claim_id}"
+                + (f", focus {gap_id} revision {revision}. " if gap_id else ". ")
                 + f"Outcome: {outcome}\n"
                 + (f"Current proof frontier:\n{frontier}\n" if frontier else "")
                 + (
@@ -661,7 +660,7 @@ def unbound_worker_spawns(
                 + "material changes, tests and live actions, evidence ceiling, exact bindings, "
                 + "journal entries, artifact paths and digests, accepted no-replay work, first "
                 + "open boundary, and useful narrow follow-up queries. The coordinator records "
-                + "the durable receipt and terminal transition; do not mutate coordinator deadline state. "
+                + "the durable receipt and terminal transition; do not change coordination records. "
                 + worker_helper_contract()
             )
             task_name = "task_" + task_id.encode("utf-8").hex()

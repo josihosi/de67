@@ -83,7 +83,7 @@ class PolicyKernelTests(unittest.TestCase):
         self.assertIn("as many as the runtime permits", contract)
         self.assertIn("work or wait while they run", contract)
         self.assertIn("remain responsible for the whole outcome", contract)
-        self.assertIn("do not own deadline tasks", contract)
+        self.assertIn("do not own this assignment", contract)
         self.assertIn("avoid overlapping source edits", contract)
         self.assertIn("shared mutable runtime state", contract)
         self.assertIn("explicit exclusive ownership", contract)
@@ -821,6 +821,7 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertIn(calls[0]["dispatch_packet"]["sha256"], arguments["message"])
             self.assertNotIn("DE67", arguments["message"])
             self.assertNotIn("DE67", packet_text)
+            self.assertNotIn("deadline task", packet_text)
             self.assertNotIn("Observe the actual bandit return boundary", arguments["message"])
             self.assertIn("Observe the actual bandit return boundary", packet_text)
             self.assertIn("Add the owned scenario and portable build route", packet_text)
@@ -834,7 +835,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "Return completion evidence, a formal finding, or abandonment",
                 arguments["message"],
             )
-            self.assertIn("do not mutate coordinator deadline state", packet_text)
+            self.assertIn("do not change coordination records", packet_text)
             self.assertIn("consider an optional Luna helper", packet_text)
             self.assertIn("bounded work can return independently", packet_text)
             self.assertIn("compact charter and isolated run context", packet_text)

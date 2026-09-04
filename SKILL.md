@@ -1,6 +1,6 @@
 ---
 name: de67
-description: Route Codex work through de67 discussion, code-grounded specification, delivery, or an optional alignment audit. Use when the user says `de67 1`, `de67 2`, `de67 3`, or `de67 alignment audit`, invokes `$de67`, or asks Codex to install or integrate de67. Route to exactly one surface and never preload unrelated instructions.
+description: Route Codex work through de67 discussion, code-grounded specification, delivery, or an optional alignment audit. Use when the user says `de67 1`, `de67 2`, `de67 3`, or `de67 alignment audit`, invokes `$de67`, or asks Codex to install or integrate de67. Do not use for an ordinary worker assignment merely because its packet path or metadata mentions `.de67`. Route to exactly one surface and never preload unrelated instructions.
 ---
 
 # de67 router

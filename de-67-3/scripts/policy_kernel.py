@@ -261,6 +261,41 @@ def decision_json(decision: Decision, facts: Iterable[str]) -> dict[str, Any]:
     }
 
 
+def _compact_worker_ledger_route(route: str) -> str:
+    """Keep coordinator judgment while dropping replayable attempt archaeology."""
+    lines = route.splitlines()
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if re.match(r"^  - [^:\n]+:", line)
+    ]
+    if not starts:
+        return route.strip()
+    prefix = lines[: starts[0]]
+    segments: list[tuple[str, list[str]]] = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        segment = lines[start:end]
+        label_match = re.match(r"^  - ([^:\n]+):", segment[0])
+        if label_match is not None:
+            segments.append((label_match.group(1).strip().lower(), segment))
+    core_labels = {
+        "dfs slices",
+        "known footing",
+        "current progress",
+        "current evidence",
+        "current uncertainty",
+        "subtasks",
+    }
+    history = [segment for label, segment in segments if label not in core_labels]
+    latest_history = history[-1] if history else None
+    kept = list(prefix)
+    for label, segment in segments:
+        if label in core_labels or segment is latest_history:
+            kept.extend(segment)
+    return "\n".join(kept).strip()
+
+
 def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[str, str]:
     ledger_path = workspace / ".de67/work-ledger.md"
     dfs_path = workspace / ".de67/DFS.md"
@@ -293,7 +328,7 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
         raise PolicyError(
             f"Unbound exploration task {task_id} has no named DFS slice for {claim_id}"
         )
-    return "\n\n".join(matching), match.group("body").strip()
+    return _compact_worker_ledger_route("\n\n".join(matching)), match.group("body").strip()
 
 
 def worker_helper_contract() -> str:

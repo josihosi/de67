@@ -934,6 +934,51 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertNotIn("worker-only-evidence", coordinator_json)
             self.assertIn("worker-only-evidence", packet.read_text(encoding="utf-8"))
 
+    def test_worker_packet_keeps_current_route_and_only_latest_history_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            de67 = workspace / ".de67"
+            de67.mkdir()
+            (de67 / "work-ledger.md").write_text(
+                "- [ ] R-HISTORY — Finish the current product outcome.\n"
+                "  - DFS slices: `R-HISTORY-S001`\n"
+                "  - Known footing: The reusable foundation is already proved.\n"
+                "  - Current progress: The implementation compiles.\n"
+                "  - Current evidence: Focused test A passes.\n"
+                "  - Current uncertainty: The live boundary remains unproved.\n"
+                "  - Attempt 001: obsolete-history-one must not reach the worker.\n"
+                "  - Attempt 002: obsolete-history-two must not reach the worker.\n"
+                "  - Waiting work: Keep this newest no-replay lesson.\n"
+                "  - Subtasks:\n"
+                "    - [done] build :: Compile the implementation.\n"
+                "    - [open] witness :: Prove the live boundary.\n",
+                encoding="utf-8",
+            )
+            (de67 / "DFS.md").write_text(
+                "<!-- DE67:DFS-SLICE:BEGIN id=R-HISTORY-S001 claim=R-HISTORY -->\n"
+                "Prove the relevant mechanism and live boundary.\n"
+                "<!-- DE67:DFS-SLICE:END -->\n",
+                encoding="utf-8",
+            )
+            state = workspace / "state.sqlite3"
+            with DeadlineHarness(state) as harness:
+                harness.start_task(
+                    "project", "R-HISTORY-exploration-001", "R-HISTORY", 100, now=1
+                )
+
+            call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
+            packet_text = Path(call["dispatch_packet"]["path"]).read_text(encoding="utf-8")
+
+            self.assertIn("Finish the current product outcome", packet_text)
+            self.assertIn("Known footing", packet_text)
+            self.assertIn("Current progress", packet_text)
+            self.assertIn("Current evidence", packet_text)
+            self.assertIn("Current uncertainty", packet_text)
+            self.assertIn("Keep this newest no-replay lesson", packet_text)
+            self.assertIn("Prove the live boundary", packet_text)
+            self.assertNotIn("obsolete-history-one", packet_text)
+            self.assertNotIn("obsolete-history-two", packet_text)
+
     def test_exploration_route_does_not_match_longer_claim_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

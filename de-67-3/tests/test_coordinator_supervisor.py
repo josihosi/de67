@@ -748,7 +748,12 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.write_work_documents(red=True, active=True)
         observed_live_attempts: list[int] = []
 
-        def observe_checkpoint(_workspace: Path, state: Path, lineage: str) -> dict[str, str]:
+        def observe_checkpoint(
+            _workspace: Path,
+            state: Path,
+            lineage: str,
+            **_options: str,
+        ) -> dict[str, str]:
             with sqlite3.connect(state) as connection:
                 observed_live_attempts.append(
                     connection.execute(

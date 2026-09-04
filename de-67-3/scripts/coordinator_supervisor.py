@@ -1052,7 +1052,12 @@ def _complete_mutation_review(
                 f"Mutation reviewer failed for {gate.kind} {gate.identity}; ordinary work remains stopped"
             )
         try:
-            checkpoint_repository(workspace, state_path, lineage_id)
+            checkpoint_repository(
+                workspace,
+                state_path,
+                lineage_id,
+                supervisor_owner_id=(journal.owner_id if journal is not None else None),
+            )
         except RepositoryCheckpointError as error:
             raise SupervisorError(
                 f"Product recovery checkpoint failed after mutation review: {error}"
@@ -1410,7 +1415,12 @@ def _run_supervisor_locked(
             None if result.exit_code == 0 else f"exit code {result.exit_code}",
         )
         try:
-            checkpoint_repository(workdir, state, lineage_id)
+            checkpoint_repository(
+                workdir,
+                state,
+                lineage_id,
+                supervisor_owner_id=journal.owner_id,
+            )
         except RepositoryCheckpointError as error:
             raise SupervisorError(
                 f"Product recovery checkpoint failed after coordinator boundary: {error}"

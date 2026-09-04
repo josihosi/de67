@@ -818,7 +818,7 @@ def validate_random_review_mutation(
     *,
     selected_lane: str,
 ) -> tuple[str, ...]:
-    """Validate exactly the stored random lane, including an exact no-op."""
+    """Validate trajectory-driven local changes; the stored lane is a review seed."""
 
     if selected_lane not in RANDOM_MUTATION_LANES:
         raise GuardError(f"Unsupported random mutation lane: {selected_lane}")
@@ -835,29 +835,12 @@ def validate_random_review_mutation(
         for name in (*GUIDELINE_FILES, DFS_FILE)
         if baseline_files[name] != candidate_files[name]
     )
-    if selected_lane in GUIDELINE_FILES:
-        if not changed:
-            return ()
-        if changed != (selected_lane,):
-            raise GuardError(
-                f"Random review selected {selected_lane}; no other mutable file may change"
-            )
-        if _meaningful_markdown(baseline_files[selected_lane]) == _meaningful_markdown(
-            candidate_files[selected_lane]
-        ):
-            raise GuardError("Random guideline mutation cannot be whitespace-only")
-        return changed
-
-    if any(name in changed for name in GUIDELINE_FILES):
-        raise GuardError("A DFS random review cannot change either guideline file")
-    if not changed:
-        return ()
-    if changed != (DFS_FILE,):
-        raise GuardError("An applied DFS random review must change only DFS.md")
-    validate_random_dfs_mutation(
-        baseline_root / DFS_FILE,
-        candidate_root / DFS_FILE,
-    )
+    for name in changed:
+        if name in GUIDELINE_FILES:
+            if _meaningful_markdown(baseline_files[name]) == _meaningful_markdown(candidate_files[name]):
+                raise GuardError("Random guideline mutation cannot be whitespace-only")
+        elif name == DFS_FILE:
+            validate_random_dfs_mutation(baseline_root / DFS_FILE, candidate_root / DFS_FILE)
     return changed
 
 

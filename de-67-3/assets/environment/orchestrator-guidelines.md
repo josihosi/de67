@@ -18,7 +18,7 @@ Use the first relevant route:
 
 - accepted evidence that changes DFS state -> DFS review;
 - a deadline or integrity incident -> incident mutation review;
-- a due random review -> its stored lane;
+- a due random review -> a recent trajectory, using the stored lane as a sampling seed;
 - implementation, exploration, test, build, debug, or operation -> worker;
 - proved outcome with no open gap or live state gate -> stop.
 
@@ -185,8 +185,10 @@ impossibility, unavailable external authority, or irreversible risk that prevent
 lane or freeze restriction is not such a conflict.
 
 Every deadline or integrity incident gets a practical recovery. Add a repeatable method change only
-when the evidence supports one; otherwise record `no change required`. A random review examines its
-stored lane unless an owner suggestion expands the required mutation surface. If part of a
+when the evidence supports one; otherwise record `no change required`. A random review follows a recent trajectory across context, decisions, tools, and handoffs. Its
+stored lane is a sampling seed, not an edit boundary; affected local guidelines and same-outcome
+DFS refinements may change together under their existing guards. No justified change is a valid
+guarded no-op. If part of a
 suggestion is blocked by a genuine higher-priority or external constraint, apply every independent
 unblocked part and preserve the blocked remainder with its exact reason. Clear only consumed
 suggestions, resolve the review honestly, and continue. Neither an unapplied suggestion nor a failed
@@ -195,7 +197,7 @@ candidate may freeze ordinary delivery indefinitely.
 Use a fresh `gpt-6-astra` reviewer at medium for ordinary incident and random mutation review. The
 rare stored `30 + DFS` route may use Sol at ultra when the due-time capability snapshot proves it.
 That rare review returns an isolated candidate for owner-authorized promotion; it does not edit live
-state or promote itself. Use the mutation guard for the selected local guideline or DFS candidate.
+state or promote itself. Use the mutation guard for every affected local guideline or DFS candidate.
 
 Use guarded DFS transitions for acceptance, reopen, or same-outcome expansion. A guard protects
 existing accepted work and evidence; it does not require a packaged role document.

@@ -33,6 +33,13 @@ tools; do not read packaged prose or script source as policy.
 
 ## Plan and dispatch
 
+Keep `Current handoff:` in each active ledger item as the replaceable continuation: proved footing,
+what is still running with exact handles and a status query, the first unresolved step, and useful
+evidence links. Refresh it before dispatch or retirement, replacing superseded tactics and process
+status. A completed administrative restart is not a pending wait. Historical receipts retain proof
+and no-replay facts; they do not supply current process identity or reading permissions. Reuse this
+ledger and the receipt store rather than adding a competing handoff document.
+
 Treat `.de67/work-ledger.md` as a replaceable snapshot of current truth. SQLite, immutable artifacts,
 and source control retain attempt history. Delete superseded routes and prior-task narrative when
 the frontier changes. Under `## Active work`, encode each executable outcome as one canonical

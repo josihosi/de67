@@ -12,6 +12,10 @@ one mode:
 - `Closure` — the known strategy and proof route, stable ids and current revisions for finite frozen
   gaps, and the next action expected to close or falsify exactly one active gap.
 
+Use `  - Current handoff:` for the transient continuation: proved footing, active work with exact
+handles/status queries, the first unresolved step, and evidence links. Replace it when the frontier
+changes; historical receipts retain proof without making old process state current.
+
 Keep only the present causal frontier, active route, material boundaries, claim-level item clock,
 and current attempt id after dispatch. A retry receives a new task or attempt id without rebasing the
 lineage, claim, item start, estimate, or deadline. A finding may reopen exploration but never

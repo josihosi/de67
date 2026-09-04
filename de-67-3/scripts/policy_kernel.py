@@ -286,6 +286,7 @@ def _compact_worker_ledger_route(route: str) -> str:
         "current progress",
         "current evidence",
         "current uncertainty",
+        "current handoff",
         "first open boundary",
         "waiting work",
         "subtasks",
@@ -316,6 +317,7 @@ def _ledger_objective(route: str) -> str:
 def _selected_ledger_frontier(route: str, *, has_receipt: bool) -> str:
     labels = {
         "current uncertainty",
+        "current handoff",
         "first open boundary",
         "waiting work",
         "subtasks",
@@ -415,8 +417,6 @@ def _dfs_worker_boundary(dfs_slice: str) -> str:
             }
         if active:
             selected.append(line)
-    if status_index < len(lines):
-        selected.extend(lines[status_index:])
     return "\n".join(selected).strip()
 
 
@@ -434,7 +434,7 @@ def _worker_read_plan(
     if receipt is not None:
         plan.append({
             "source": f"worker receipt {receipt['receipt_id']}",
-            "reason": "carries the accepted no-replay boundary and exact current continuation",
+            "reason": "historical proof and no-replay evidence; retrieve only detail missing from this packet",
             "query": (
                 "python3 "
                 + str(Path(__file__).resolve().with_name("deadline_harness.py"))
@@ -619,6 +619,13 @@ def unbound_worker_spawns(
                 )
                 outcome = _ledger_objective(ledger_route)
                 proof_route = _dfs_worker_boundary(dfs_slice)
+            previous_row = connection.execute(
+                "SELECT task_id, started_at, attempt_terminal_kind, attempt_terminal_at "
+                "FROM tasks WHERE lineage_id = ? AND claim_id = ? AND task_id != ? "
+                "ORDER BY started_at DESC, task_id DESC LIMIT 1",
+                (lineage_id, claim_id, task_id),
+            ).fetchone()
+            previous_attempt = dict(previous_row) if previous_row is not None else None
             frontier = _selected_ledger_frontier(
                 ledger_route, has_receipt=latest_receipt is not None
             ) if ledger_route else ""
@@ -628,8 +635,8 @@ def unbound_worker_spawns(
                 else []
             )
             entrypoints = list(dict.fromkeys([
-                *receipt_entrypoints,
                 *_referenced_entrypoints(outcome, frontier, proof_route),
+                *receipt_entrypoints,
             ]))
             playtest = any(
                 word in " ".join((outcome, frontier, proof_route)).lower()
@@ -649,8 +656,16 @@ def unbound_worker_spawns(
                 + (f", focus {gap_id} revision {revision}. " if gap_id else ". ")
                 + f"Outcome: {outcome}\n"
                 + (f"Current proof frontier:\n{frontier}\n" if frontier else "")
+                + ("Latest other attempt for this claim (lifecycle only; may be parallel, not predecessor evidence):\n"
+                   + json.dumps(previous_attempt, ensure_ascii=False, sort_keys=True) + "\n"
+                   if previous_attempt is not None else "")
                 + (
-                    "Latest durable continuation receipt (compact projection):\n"
+                    "Historical continuation receipt from task "
+                    + str(latest_receipt.get("task_id", "unknown"))
+                    + "; current assignment is " + task_id + ". Preserve its proof and no-replay facts. "
+                    + "Its process status and proposed next steps describe that earlier attempt; "
+                    + "the current ledger handoff governs continuation. Historical routing prose "
+                    + "does not grant or restrict current policy authority.\n"
                     + json.dumps(latest_receipt, ensure_ascii=False, sort_keys=True)
                     + "\n"
                     if latest_receipt is not None else ""

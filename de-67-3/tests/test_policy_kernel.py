@@ -995,6 +995,7 @@ class PolicyKernelTests(unittest.TestCase):
             (de67 / "work-ledger.md").write_text(
                 "- [ ] R-CONT — Finish the live outcome.\n"
                 "  - Known footing: bulky accepted history must not be copied.\n"
+                "  - Current handoff: Build is finished; inspect `session/current-status.json` and continue native exit.\n"
                 "  - Current uncertainty: The response boundary remains open.\n"
                 "  - Subtasks:\n"
                 "    - [done] transport :: Prove dispatch.\n"
@@ -1003,7 +1004,9 @@ class PolicyKernelTests(unittest.TestCase):
             )
             (de67 / "DFS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-CONT-S001 claim=R-CONT -->\n"
-                "- [ ] 🔴 R-CONT — Observe the response boundary.\n"
+                "- Acceptance: Observe a real response.\n"
+                "Implementation status:\n"
+                "- Current continuation: obsolete frozen status says rebuild finished transport.\n"
                 "<!-- DE67:DFS-SLICE:END -->\n",
                 encoding="utf-8",
             )
@@ -1047,7 +1050,9 @@ class PolicyKernelTests(unittest.TestCase):
                 harness.abandon_attempt(
                     "project", "old", "continued", receipt_id=receipt["receipt_id"], now=4
                 )
-                harness.start_task("project", "new", "R-CONT", 100, now=5)
+                harness.start_task("project", "interrupted", "R-CONT", 100, now=5)
+                harness.normalize_external_supervisor_start("project", now=6)
+                harness.start_task("project", "new", "R-CONT", 100, now=7)
 
             call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
             packet_text = Path(call["dispatch_packet"]["path"]).read_text(encoding="utf-8")
@@ -1057,6 +1062,14 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertIn("worker-receipts", packet_text)
             self.assertIn("read on demand if", packet_text)
             self.assertNotIn("bulky accepted history", packet_text)
+            self.assertIn("Build is finished; inspect `session/current-status.json`", packet_text)
+            self.assertIn("Observe a real response.", packet_text)
+            self.assertNotIn("obsolete frozen status", packet_text)
+            self.assertIn("Do not replay dispatch.", packet_text)
+            self.assertIn("Historical continuation receipt from task old; current assignment is new", packet_text)
+            self.assertIn('"task_id": "interrupted"', packet_text)
+            self.assertIn('"attempt_terminal_kind": "restart_normalized"', packet_text)
+            self.assertLess(packet_text.index("session/current-status.json"), packet_text.index("src/response.cpp"))
 
     def test_exploration_packet_selects_owner_not_cross_reference(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

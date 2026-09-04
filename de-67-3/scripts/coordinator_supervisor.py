@@ -800,6 +800,12 @@ def dfs_has_open_work(workspace: Path) -> bool:
 def ordinary_worker_evidence_contract() -> str:
     """Return the reusable evidence-retrieval contract for ordinary workers."""
     return (
+        "Before dispatch or retirement, refresh the existing ledger item's Current handoff: "
+        "what is proved, what is still running with exact handles and a status query, the first "
+        "unresolved step, and useful evidence links. Replace superseded process status and tactics; "
+        "completed administrative restarts are not pending work. Historical receipts preserve proof "
+        "and no-replay facts, not current PIDs or routing permissions. Do not create another handoff "
+        "document or require a fresh read of already sufficient evidence. "
         "Brief each ordinary worker with the outcome, current proof frontier, accepted no-replay "
         "facts, first open boundary, exact bindings and artifacts, relevant entrypoints, and a "
         "small initial read plan that explains why each read matters. Do not paste available bulk "
@@ -1265,7 +1271,6 @@ def run_child(
         prompt = prompt.rstrip() + "\n" + coordinator_recovery_contract(
             decision_opportunity, workspace
         ) + "\n"
-    _write(run_dir / "prompt.txt", prompt)
     _write(run_dir / "status.txt", "STARTING\n")
 
     environment = os.environ.copy()
@@ -1338,6 +1343,22 @@ def run_child(
                 run_id,
             ]
         )
+
+    # Tool execution may use an app-server process that did not inherit this environment.
+    binding_keys = ["DE67_COORDINATOR_RUN_ID", "DE67_PROCESS_ROLE", "DE67_DEADLINE_STATE",
+                    "DE67_LINEAGE", "DE67_WORKSPACE", "DE67_SUPERVISOR_PID",
+                    "DE67_POLICY_DECIDE_ARGV_JSON", "DE67_COORDINATOR_ACK_ARGV_JSON"]
+    if role == "mutation-reviewer":
+        binding_keys.append("DE67_POLICY_GUARD_ARGV_JSON")
+    bindings = {key: json.loads(environment[key]) if key.endswith("_ARGV_JSON") else environment[key]
+                for key in binding_keys if key in environment}
+    prompt = prompt.rstrip() + (
+        "\nCurrent invocation bindings (use these values directly; tool subprocesses need not "
+        "inherit the runner environment). Missing environment variables do not require discovery "
+        "or authorize a replacement binding. Execute the supplied argument arrays without a shell.\n"
+        "```json\n" + json.dumps(bindings, ensure_ascii=False, sort_keys=True) + "\n```\n"
+    )
+    _write(run_dir / "prompt.txt", prompt)
 
     command = [*runner_command, "--cwd", str(workspace)]
     process: subprocess.Popen[str]

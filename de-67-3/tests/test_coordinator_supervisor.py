@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -1667,6 +1668,23 @@ class CoordinatorSupervisorTests(unittest.TestCase):
                 encoding="utf-8"
             )
             self.assertIn(coordinator_context_contract(), prompt)
+            bindings = json.loads(prompt.rsplit("```json\n", 1)[1].split("\n```", 1)[0])
+            self.assertEqual(bindings["DE67_POLICY_DECIDE_ARGV_JSON"], event["policy_argv"])
+            self.assertEqual(bindings["DE67_LINEAGE"], "project")
+            self.assertEqual(Path(bindings["DE67_DEADLINE_STATE"]).resolve(), self.state_path.resolve())
+            if event["generation"] is not None:
+                self.assertEqual(bindings["DE67_COORDINATOR_ACK_ARGV_JSON"], event["ack_argv"])
+        # A separate tool process can execute the supplied route without DE67 environment inheritance.
+        policy_dir = self.workspace / ".de67"
+        policy_dir.mkdir(exist_ok=True)
+        (policy_dir / "phase3-policy.d67").write_bytes(
+            (SCRIPTS.parent / "assets/environment/phase3-policy.d67").read_bytes()
+        )
+        tool_environment = {key: value for key, value in os.environ.items() if not key.startswith("DE67_")}
+        probe = subprocess.run(bindings["DE67_POLICY_DECIDE_ARGV_JSON"], env=tool_environment,
+                               cwd=self.workspace, capture_output=True, text=True)
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        self.assertIn("action", json.loads(probe.stdout))
         self.assertNotIn("Before spawning each worker", initial_prompt)
 
         with DeadlineHarness(self.state_path) as harness:

@@ -41,6 +41,14 @@ terminal disposition for the coordinator to judge and record.
 
 ## Implement and prove through the real owner
 
+Use native `send_message(target="/root", message=...)` to reach your parent coordinator when changed understanding, surprising evidence, a
+proposed route change, or a need for help can affect coordination or another worker. Share the evidence
+and implication, your intended next move, and any specific question. You may discuss uncertainty before
+a bug is proven or a long detour begins. Continue authorized unblocked work while awaiting a reply.
+Choose useful communication points; no periodic report, message quota, full receipt, or coordination
+record is required for ordinary progress and questions. These messages do not end the assignment.
+Replies arrive as native messages during your work; your final response returns the assignment result.
+
 Identify the authoritative state owner and inspect its callers, competing readers or writers, and
 owning tests only as needed for the outcome. Stop blind repetition at the first divergent production
 transition and repair the visible family of related transitions.

@@ -44,7 +44,7 @@ CASES = (
     ({"owner_reply", "blocked_ledger"}, "consume_owner_reply"),
     ({"blocked_ledger"}, "audit_blocker"),
     ({"unbound_task"}, "spawn_worker"),
-    ({"live_task"}, "wait_for_worker_event"),
+    ({"live_task"}, "coordinate_live_work"),
     ({"closure_ready", "open_gap", "executable_route"}, "dispatch_closure_worker"),
     ({"open_claim", "executable_route"}, "dispatch_exploration_worker"),
     ({"ledger_work", "executable_route"}, "dispatch_exploration_worker"),
@@ -105,7 +105,7 @@ class PolicyKernelTests(unittest.TestCase):
     def test_production_vocabulary_is_not_frozen_into_the_interpreter(self) -> None:
         interpreter = SCRIPT.read_text(encoding="utf-8")
         for word in (
-            "review_deadline_incident", "wait_for_worker_event",
+            "review_deadline_incident", "coordinate_live_work",
             "wake_no_later_than_item_deadline", "suggestions_pending",
             "claim_accepted", "task_completed",
         ):
@@ -231,7 +231,7 @@ class PolicyKernelTests(unittest.TestCase):
 
     def test_wait_rule_requires_deadline_wakeup(self) -> None:
         decision = kernel.decide(source_policy(), {"live_task"})
-        self.assertEqual(decision.action, "wait_for_worker_event")
+        self.assertEqual(decision.action, "coordinate_live_work")
         self.assertIn("wake_no_later_than_item_deadline", decision.obligations)
 
     def test_fact_only_unbound_decision_does_not_require_workspace_injection(self) -> None:
@@ -326,9 +326,9 @@ class PolicyKernelTests(unittest.TestCase):
         self.assertEqual(decision.action, "retire_for_mutation_review")
         self.assertIn("exit_to_external_supervisor", decision.obligations)
 
-    def test_live_task_prevents_second_dispatch(self) -> None:
+    def test_live_task_allows_coordinator_to_judge_independent_dispatch(self) -> None:
         facts = {"live_task", "closure_ready", "open_gap", "executable_route"}
-        self.assertEqual(kernel.decide(source_policy(), facts).action, "wait_for_worker_event")
+        self.assertEqual(kernel.decide(source_policy(), facts).action, "coordinate_live_work")
 
     def test_owner_reply_preempts_blocker_audit(self) -> None:
         decision = kernel.decide(source_policy(), {"owner_reply", "blocked_ledger"})
@@ -454,7 +454,7 @@ class PolicyKernelTests(unittest.TestCase):
         wait["obligations"].remove("wake_no_later_than_item_deadline")
         case = next(
             case for case in contracts["decision_cases"]
-            if case["name"] == "wait"
+            if case["name"] == "live-coordination"
         )
         case["required_obligations"] = []
         guarded = kernel.guard_policy_candidate(policy, contracts)
@@ -743,7 +743,7 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertNotIn("worker_finding", facts)
             self.assertEqual(
                 kernel.decide(source_policy(), facts).action,
-                "wait_for_worker_event",
+                "coordinate_live_work",
             )
 
     def test_bare_task_is_unbound_until_a_worker_claim_exists(self) -> None:
@@ -836,6 +836,7 @@ class PolicyKernelTests(unittest.TestCase):
                 arguments["message"],
             )
             self.assertIn("do not change coordination records", packet_text)
+            self.assertIn(kernel.worker_communication_contract(), packet_text)
             self.assertIn("consider an optional Luna helper", packet_text)
             self.assertIn("bounded work can return independently", packet_text)
             self.assertIn("compact charter and isolated run context", packet_text)
@@ -863,7 +864,9 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertIn("one distinct worker", injected["parallel_dispatch"])
             self.assertEqual(
                 injected["coordinator_next_action"],
-                "Spawn every listed worker, then call wait_agent for the spawned worker ids. Do not finish the coordinator turn while a worker result is outstanding.",
+                "Spawn every listed worker, then continue live coordination. Call wait_agent "
+                "when no useful coordination decision remains. Do not finish the coordinator "
+                "turn while a worker result is outstanding.",
             )
             with DeadlineHarness(state) as harness:
                 harness.claim_worker(

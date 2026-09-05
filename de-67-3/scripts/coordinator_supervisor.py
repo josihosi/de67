@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Callable, Iterator, Mapping, Sequence
@@ -97,7 +97,7 @@ class SupervisorJournal:
         self.lineage_id = lineage_id
         self.owner_id = owner_id
         self.frontier_namespace = frontier_namespace
-        with sqlite3.connect(state_path) as connection:
+        with closing(sqlite3.connect(state_path)) as connection, connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS supervisor_attempts (
@@ -120,7 +120,7 @@ class SupervisorJournal:
         if self.frontier_namespace:
             frontier = f"{self.frontier_namespace}:{frontier}"
         try:
-            with sqlite3.connect(self.state_path) as connection:
+            with closing(sqlite3.connect(self.state_path)) as connection, connection:
                 connection.execute(
                     """
                     INSERT INTO supervisor_attempts (
@@ -135,7 +135,7 @@ class SupervisorJournal:
             ) from error
 
     def finish(self, run_id: str, outcome: str, detail: str | None = None) -> None:
-        with sqlite3.connect(self.state_path) as connection:
+        with closing(sqlite3.connect(self.state_path)) as connection, connection:
             cursor = connection.execute(
                 """
                 UPDATE supervisor_attempts
@@ -452,7 +452,7 @@ def runtime_worker_owners(
     state = Path(value).expanduser().resolve() if value else Path.home() / ".codex/state_5.sqlite"
     if not state.is_file():
         return {}
-    with sqlite3.connect(f"file:{state}?mode=ro", uri=True) as connection:
+    with closing(sqlite3.connect(f"file:{state}?mode=ro", uri=True)) as connection:
         rows = connection.execute(
             """
             SELECT edge.child_thread_id, edge.parent_thread_id, child.model
@@ -879,12 +879,13 @@ def worker_handoff_contract() -> str:
         "records the durable claim automatically when the runtime spawn edge becomes visible. "
         "That visibility may arrive after the first wait begins; this is not a delegation failure. "
         "Never invoke claim-worker and never use "
-        "/root/<task-name> as a worker identity. After every listed spawn, follow the response's compact "
-        "next action and call wait_agent for the spawned worker ids; do not finish while a worker "
+        "/root/<task-name> as a worker identity. After every listed spawn, continue live coordination; "
+        "call wait_agent when no useful coordination decision remains. Do not finish while a worker "
         "result is outstanding. If no verified roster "
         "handoff exists when the coordinator process exits, the runner abandons the attempt. "
         "After a verified handoff, remain in the worker-result lifecycle: an empty or timed wait "
-        "is not completion, so wait again; record the returned terminal result before routing or exiting."
+        "is not completion. Reassess useful coordination or wait again; record a returned terminal "
+        "result before routing or exiting."
     )
 
 
@@ -904,6 +905,10 @@ def nested_worker_contract() -> str:
 def worker_result_ingress_contract() -> str:
     """Order a verified worker return before ledger-derived route selection."""
     return (
+        "Native progress messages and questions from a live worker are nonterminal conversation: "
+        "respond when useful without demanding a result receipt, pausing the task, or creating a "
+        "ledger item for each observation. Use checkpoint-worker only when evidence needs durable "
+        "continuation; a message or checkpoint does not settle the task or restart its clock. "
         "A verified ordinary-worker return is durable-state ingress, not a route decision. "
         "Treat the worker's requested disposition as evidence to judge, not as terminal authority. "
         "Before recording a formal finding, name the assigned-outcome exit that its evidence proves. "
@@ -1005,6 +1010,35 @@ def coordinator_context_contract() -> str:
     )
 
 
+def live_coordination_contract() -> str:
+    """Allow useful coordination while execution remains with cheaper workers."""
+    return (
+        "Communication channels: use native send_message(target=..., message=...) for live "
+        "questions, answers, and steering, addressing the worker by its returned agent id or "
+        "canonical task name. Workers send progress and questions to their parent at /root. "
+        "Messages are delivered during active work and wake wait_agent; they do not terminate "
+        "the task. send_message does not start an idle worker turn: use followup_task to resume "
+        "an idle bound worker with useful next work in its existing assignment. Worker final "
+        "responses enter the result lifecycle described above. "
+        "While a worker runs, choose what can advance the assigned outcomes: inspect relevant "
+        "evidence, watch an informative run, ask or answer a question through native send_message, "
+        "steer the bound worker, or revise the executable ledger route and brief as evidence changes. "
+        "Keep implementation and substantial investigation with Luna or Terra; your own inspection "
+        "should inform coordination rather than duplicate their work. You may open and dispatch "
+        "independently actionable work through the existing policy and deadline transitions while "
+        "another task stays live. Preserve one primary worker per task and exclusive ownership of "
+        "overlapping edits or mutable runtime state. A follow-up to a busy worker continues its "
+        "existing task; it does not assign an unrelated queued task. Preserve the frozen DFS "
+        "outcome and evidence boundaries when changing the route. Treat observations as evidence "
+        "to judge: keep ordinary repair inside its outcome, and create separate work only when it "
+        "needs independent ownership or a durable decision. Progress messages need no quota, "
+        "periodic report, or automatic ledger entry. When no useful coordination decision remains, "
+        "call wait_agent for worker events, waking no later than the item deadline; avoid repeated "
+        "unchanged reads and status chatter. Deadline, integrity, and mutation gates still govern "
+        "every routing transition."
+    )
+
+
 def coordinator_prompt(
     workspace: Path,
     state_path: Path,
@@ -1020,6 +1054,7 @@ def coordinator_prompt(
         "The hash-bound .de67/phase3-policy.d67 file is the machine-canonical routing policy.",
         "Before each coordinator routing transition, execute the argument array in DE67_POLICY_DECIDE_ARGV_JSON as a subprocess without a shell.",
         coordinator_context_contract(),
+        live_coordination_contract(),
         "Write every owner-facing text field rendered on the hosted dashboard in simple English. This includes ledger items, latest findings, waiting work, mutation or incident summaries, and any DFS summary that the dashboard displays. First explain what happened and why it matters in terms any reader can understand. Then preserve the necessary technical identifiers and evidence, state what remains or happens next, and use one concrete statement per sentence. If the simple explanation exposes a contradiction or a missing causal step, record that problem instead of hiding it behind technical language. Internal machine state and DFS detail that the dashboard does not display do not need this rewrite.",
         "Never review, apply, or resolve a mutation. When the compiled policy says retire_for_mutation_review, dispatch no worker, make no guidance change, and exit immediately so the external supervisor can run the exclusive reviewer.",
         "Do not infer policy from workspace guideline prose; those files are legacy differential fixtures on this branch.",
@@ -1259,6 +1294,8 @@ def run_child(
             "selection or pass coordinator or predecessor history. "
             + coordinator_context_contract()
             + " "
+            + live_coordination_contract()
+            + " "
             + coordinator_ledger_contract()
             + " "
             + ordinary_worker_evidence_contract()
@@ -1279,6 +1316,7 @@ def run_child(
         environment.update(extra_env)
     environment.update(
         {
+            "PYTHONIOENCODING": "utf-8",
             "DE67_COORDINATOR_RUN_ID": run_id,
             "DE67_PROCESS_ROLE": role,
             "DE67_DEADLINE_STATE": str(state_path),
@@ -1372,6 +1410,7 @@ def run_child(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
             close_fds=True,
         )
     except OSError as error:
@@ -1388,12 +1427,8 @@ def run_child(
         _write(run_dir / "status.txt", "RUNNING\n")
         if process.stdin is None:
             raise SupervisorError("Runner stdin pipe was not created")
-        try:
-            process.stdin.write(prompt)
-            process.stdin.close()
-        except BrokenPipeError:
-            pass
-        exit_code = process.wait()
+        process.communicate(prompt)
+        exit_code = process.returncode
     except BaseException:
         if process.poll() is None:
             process.kill()

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,6 +28,7 @@ from coordinator_supervisor import (  # noqa: E402
     coordinator_context_contract,
     coordinator_ledger_contract,
     coordinator_prompt,
+    live_coordination_contract,
     consume_supervision_event,
     blocked_ledger_audit_reason,
     ledger_has_only_blocked_work,
@@ -36,6 +38,7 @@ from coordinator_supervisor import (  # noqa: E402
     mutation_reviewer_prompt,
     ordinary_worker_evidence_contract,
     read_clock,
+    run_child,
     run_supervisor,
     supervision_fingerprint,
     terminalize_unowned_worker_windows,
@@ -663,7 +666,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("Never invoke claim-worker", contract)
         self.assertIn("never use /root/<task-name>", contract)
         self.assertIn("After every listed spawn", contract)
-        self.assertIn("do not finish while a worker result is outstanding", contract)
+        self.assertIn("Do not finish while a worker result is outstanding", contract)
 
     def test_nested_worker_contract_preserves_primary_task_ownership(self) -> None:
         contract = nested_worker_contract()
@@ -698,6 +701,27 @@ class CoordinatorSupervisorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.waiter.stop()
         self.temporary.cleanup()
+
+    def test_runner_receives_unicode_context_without_locale_loss(self) -> None:
+        self.run_root.mkdir()
+        receiver = self.root / "receive_prompt.py"
+        received = self.root / "received.txt"
+        receiver.write_text(
+            "import os, pathlib, sys\n"
+            "pathlib.Path(os.environ['RECEIVED_PROMPT']).write_text(sys.stdin.read(), encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        prompt = "Worker observation: 🔴 東京 — revised route."
+        result = run_child(
+            [sys.executable, str(receiver)], self.workspace, self.state_path,
+            "project", self.run_root, "unicode-context", None,
+            prompt_override=prompt,
+            extra_env={"RECEIVED_PROMPT": str(received), "PYTHONIOENCODING": "cp1252"},
+        )
+        self.assertEqual(result.exit_code, 0)
+        delivered = received.read_text(encoding="utf-8")
+        self.assertTrue(delivered.startswith(prompt + "\n"))
+        self.assertEqual(delivered, (result.run_dir / "prompt.txt").read_text(encoding="utf-8"))
 
     def test_coordinator_exit_preserves_claimed_worker_window(self) -> None:
         with DeadlineHarness(self.state_path) as harness:
@@ -799,7 +823,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             lineage: str,
             **_options: str,
         ) -> dict[str, str]:
-            with sqlite3.connect(state) as connection:
+            with closing(sqlite3.connect(state)) as connection:
                 observed_live_attempts.append(
                     connection.execute(
                         "SELECT COUNT(*) FROM supervisor_attempts "
@@ -1668,6 +1692,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
                 encoding="utf-8"
             )
             self.assertIn(coordinator_context_contract(), prompt)
+            self.assertIn(live_coordination_contract(), prompt)
             bindings = json.loads(prompt.rsplit("```json\n", 1)[1].split("\n```", 1)[0])
             self.assertEqual(bindings["DE67_POLICY_DECIDE_ARGV_JSON"], event["policy_argv"])
             self.assertEqual(bindings["DE67_LINEAGE"], "project")
@@ -2247,6 +2272,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.run_root / "active-ledger-continuation" / "prompt.txt"
         ).read_text(encoding="utf-8")
         self.assertNotIn("orchestrator-guidelines.md", continuation_prompt)
+        self.assertIn(live_coordination_contract(), continuation_prompt)
+        self.assertIn(worker_result_ingress_contract(), continuation_prompt)
         self.assertIn("findings are state events", continuation_prompt)
         self.assertIn("minimal action brief", continuation_prompt)
         self.assertIn("freely rewrite the active work-ledger projection", continuation_prompt)

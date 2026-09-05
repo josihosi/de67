@@ -537,6 +537,23 @@ def worker_outcome_contract() -> str:
     )
 
 
+def worker_communication_contract() -> str:
+    """Keep the coordinator informed at decisions without adding a reporting loop."""
+    return (
+        "Communication channels: use native send_message(target=\"/root\", message=...) to reach "
+        "your parent coordinator. This canonical agent path is a message address, not a durable "
+        "worker identity. Replies arrive as native messages during your work; your final response "
+        "returns the assignment result. While working, message your coordinator when changed understanding, "
+        "a surprising observation, a proposed route change, or a need for help can affect its "
+        "decisions or another worker. Give the relevant evidence and implication, your intended "
+        "next move, and any specific question. An early concise message is useful before a long "
+        "detour; you do not need a full result receipt or a proven bug to discuss uncertainty. "
+        "Continue authorized unblocked work while awaiting a reply. Choose useful communication "
+        "points rather than periodic reports or a message quota. Ordinary progress and questions "
+        "do not end your assignment or require a coordination-record entry. "
+    )
+
+
 def _write_worker_dispatch_packet(
     workspace: Path, task_name: str, message: str
 ) -> tuple[Path, str]:
@@ -685,6 +702,7 @@ def unbound_worker_spawns(
                 + "journal entries, artifact paths and digests, accepted no-replay work, first "
                 + "open boundary, and useful narrow follow-up queries. The coordinator records "
                 + "the durable receipt and terminal transition; do not change coordination records. "
+                + worker_communication_contract()
                 + worker_helper_contract()
             )
             task_name = "task_" + task_id.encode("utf-8").hex()
@@ -705,8 +723,9 @@ def unbound_worker_spawns(
                     },
                     "instruction": (
                         "Actually call spawn_agent with these arguments. Announcing an assignment "
-                        "is not delegation. After every listed spawn, call wait_agent for the "
-                        "spawned worker ids; do not finish while a worker result is outstanding."
+                        "is not delegation. Then continue live coordination; call wait_agent "
+                        "when no useful coordination decision remains. Do not finish while a "
+                        "worker result is outstanding."
                     ),
                     "example_call": {
                         "tool": "spawn_agent",
@@ -1252,7 +1271,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "Spawn one distinct worker for each listed independent task before waiting."
             )
             payload["coordinator_next_action"] = (
-                "Spawn every listed worker, then call wait_agent for the spawned worker ids. "
+                "Spawn every listed worker, then continue live coordination. Call wait_agent "
+                "when no useful coordination decision remains. "
                 "Do not finish the coordinator turn while a worker result is outstanding."
             )
         print(json.dumps(payload, sort_keys=True))

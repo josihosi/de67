@@ -83,6 +83,8 @@ class CoordinatorLoopGuard:
     def _bind(self, task_id: str, worker_id: str, *, record_claim: bool = True) -> None:
         if worker_id.startswith("/") or any(character.isspace() for character in worker_id):
             return
+        if worker_id in self._task_workers.values():
+            return
         if record_claim and self._claim_recorder is not None:
             self._claim_recorder(task_id, worker_id, self._parent_thread_id)
         del self._unbound[task_id]
@@ -173,8 +175,18 @@ class CoordinatorLoopGuard:
         tool = item.get("tool")
         receivers = item.get("receiver_thread_ids")
         worker_ids = [value for value in receivers or [] if isinstance(value, str) and value]
-        successful_delegation = (
+        self._reconcile_terminal_tasks()
+        # A follow-up may steer the worker's existing assignment. It is a new
+        # delegation only when the receiver is free of a live task. A missing
+        # receiver is ambiguous while another assignment remains live. A fresh
+        # or idle-worker handoff may still await authoritative roster visibility.
+        eligible_handoff = (
             tool in {"spawn_agent", "followup_task"}
+            and (not worker_ids or worker_ids[0] not in self._task_workers.values())
+            and (tool == "spawn_agent" or worker_ids or not self._task_workers)
+        )
+        successful_delegation = (
+            eligible_handoff
             and event.get("type") == "item.completed"
             and item.get("status") == "completed"
             and self._unbound

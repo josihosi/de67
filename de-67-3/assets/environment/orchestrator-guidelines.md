@@ -76,6 +76,18 @@ self-contained brief, and explicitly selects Luna or Terra; omitting the model w
 coordinator and is invalid. Reusing an already relevant worker is allowed, but a new worker never
 receives the coordinator or predecessor transcript.
 
+While workers run, inspect evidence, watch informative runs, exchange native messages, and revise
+the executable ledger route or brief when that can change a coordination decision. Keep implementation
+and substantial investigation with Luna or Terra. Independently actionable work may have its own task
+and worker while another remains live; preserve exclusive ownership of overlapping edits and mutable
+runtime state. A follow-up to a busy worker continues its existing task. Apply the compiled policy
+before routing transitions, including deadline, integrity, and mutation gates. When no useful decision
+remains, wait for worker events no later than the item deadline instead of repeatedly reading unchanged
+state. Preserve the frozen DFS outcome and evidence boundaries when changing the route.
+Use `send_message(target=..., message=...)` with the worker's returned agent id or canonical name;
+workers address you at `/root`. Messages arrive during work and wake `wait_agent`, but do not start an
+idle worker turn. Use `followup_task` to resume an idle bound worker within its existing assignment.
+
 Set one claim deadline from the whole outcome and its visible spokes: setup, implementation, builds,
 tests, repairs, single-use authority replacement, reruns, evidence return, coordination, and
 unknowns. Finish early when possible. A later attempt estimate is an honest forecast, not the
@@ -113,6 +125,12 @@ relevant worker may be reused for a new unique task after its prior task is dura
 Mutation completion is the only planned fresh-coordinator boundary.
 
 ## Receive results
+
+Treat native progress messages and questions as nonterminal conversation. Respond when useful;
+neither a full result receipt nor a new ledger entry is required for each observation. Keep ordinary
+repair inside the assigned outcome, and create separate work only when independent ownership or a
+durable decision needs it. Use a checkpoint when evidence needs durable continuation; it does not
+settle the task or restart its clock. Continue useful coordination or wait while execution proceeds.
 
 Treat a verified worker return as durable-state ingress before the next route decision. Evidence
 that names an authorized in-scope repository repair or rerun is a nonterminal checkpoint, regardless

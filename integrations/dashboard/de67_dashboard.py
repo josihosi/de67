@@ -184,17 +184,72 @@ def render_trajectory(report: dict[str, Any]) -> str:
 
 def render_fratbro_status(value: dict[str, Any]) -> str:
     summary = value.get("summary") if isinstance(value, dict) else None
-    if isinstance(summary, dict):
-        summary = " ".join(
-            str(summary.get(key, "")).strip()
-            for key in ("cooking", "changed", "snag", "next", "health")
-            if str(summary.get(key, "")).strip()
+    if isinstance(summary, dict) and "headline" in summary:
+        fields = "".join(
+            f'<div class="brief-field"><small>{label}</small><p>{_escape(summary.get(key, ""))}</p></div>'
+            for key, label in (("changed", "What changed"), ("next", "Next"), ("snag", "Obstacle"))
+            if summary.get(key)
         )
-    if not isinstance(summary, str) or not summary.strip():
-        return ('<section class="fratbro"><h2>Fratbro status</h2>'
-                '<p class="subtle">Luna is cooking the first summary.</p></section>')
-    return (f'<section class="fratbro"><h2>Fratbro status</h2>'
-            f'<p>{_escape(summary)}</p></section>')
+        return ('<section class="fratbro"><div class="eyebrow">BRIEFING</div>'
+                f'<h2>{_escape(summary.get("headline", ""))}</h2><div class="brief-grid">{fields}</div></section>')
+    if isinstance(summary, dict):
+        parts = [str(summary.get(key, "")).strip()
+                 for key in ("cooking", "changed", "snag", "next", "health")
+                 if str(summary.get(key, "")).strip()]
+    elif isinstance(summary, str):
+        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z])", summary.strip())
+    else:
+        parts = []
+    if not parts:
+        return '<section class="fratbro"><h2>Briefing</h2><p class="subtle">Waiting for a fresh briefing.</p></section>'
+    lead = parts[0]
+    return ('<section class="fratbro"><div class="eyebrow">BRIEFING</div>'
+            f'<h2>At a glance</h2><p class="brief-lead">{_escape(lead)}</p>'
+            f'<a class="text-link" href="/briefing">Read the full briefing ↗</a></section>')
+
+
+def render_work_digest(text: str) -> str:
+    """Extract headings without inventing status or rewriting evidence."""
+    blocks = []
+    current = None
+    for line in text.splitlines():
+        if re.match(r"^[-*]\s+", line):
+            if current is not None:
+                blocks.append(current)
+            current = [re.sub(r"^[-*]\s+", "", line)]
+        elif current is not None:
+            current.append(line[2:] if line.startswith("  ") else line)
+    if current is not None:
+        blocks.append(current)
+    if not blocks:
+        return '<p class="empty-state">Nothing listed here.</p>'
+    cards = []
+    completed_count = 0
+    for block in blocks:
+        checked = re.match(r"^\[([ xX])\]\s*(.*)", block[0])
+        title = checked.group(2) if checked else block[0]
+        complete = bool(checked and checked.group(1).lower() == "x")
+        i = 1
+        while i < len(block) and block[i].strip() and not re.match(r"^\s*[-*#]", block[i]):
+            title += " " + block[i].strip()
+            i += 1
+        match = re.match(r"(R-[\w.-]+)\s*[—–:]\s*(.*)", title)
+        identity, title = (match.group(1), match.group(2)) if match else ("", title)
+        if complete:
+            completed_count += 1
+            continue
+        title = re.split(r"(?<=[.!?])\s+|:\s+", title, maxsplit=1)[0]
+        status = "Open"
+        tone = "complete" if complete else "open"
+        cards.append(
+            f'<article class="work-card {tone}"><div class="work-meta">'
+            f'<span>{_escape(identity)}</span><span class="work-state">{status}</span></div>'
+            f'<h3>{_inline(title)}</h3>'
+            '<a class="text-link" href="/ledger">Evidence &amp; handoff ↗</a></article>'
+        )
+    if completed_count:
+        cards.append(f'<a class="completed-reference" href="/ledger">{completed_count} completed items · View the record ↗</a>')
+    return "".join(cards)
 
 
 def render_attention_spider(
@@ -1256,15 +1311,22 @@ class Dashboard:
             "green" if ledger_data["active"] and supervisor == "running" else
             "yellow" if ledger_data["active"] else "grey"
         )
-        nav = '<nav><a class="%s" href="/">Overview</a><a class="%s" href="/dfs">DFS</a><a href="?refresh=1">Refresh</a></nav>' % (
+        nav = '<nav><a class="%s" href="/">Overview</a><a class="%s" href="/dfs">DFS</a><a href="?refresh=1">Refresh snapshot ↻</a></nav>' % (
             "selected" if tab == "overview" else "", "selected" if tab == "dfs" else "")
-        meta = f'<meta http-equiv="refresh" content="{self.refresh_seconds}">' if self.refresh_seconds else ""
-        source_bits = []
+        meta = ""  # Explicit refresh keeps reading and navigation stable.
+        source_bits = ['<span>Snapshot ' + time.strftime("%H:%M:%S") + ' · refresh manually</span>']
         for label, source in (("Markdown", ledger), ("DFS", dfs), ("SQLite", clock)):
             tone = "yellow" if source.get("stale") else "red" if source.get("error") else "green"
             detail = source.get("error") or source.get("identity", {}).get("hash") or "healthy"
             source_bits.append(f'<span><i class="dot {tone}"></i>{_escape(label)} <em>{_escape(detail)}</em></span>')
-        if tab == "dfs":
+        if tab == "ledger":
+            body = '<section class="document"><div class="eyebrow">SOURCE DOCUMENT</div><h2>Work ledger</h2>' + ledger.get("html", "<p>Unavailable</p>") + '</section>'
+        elif tab == "briefing":
+            summary = fratbro.get("summary", "")
+            if isinstance(summary, dict):
+                summary = "\n\n".join(str(v) for v in summary.values())
+            body = '<section class="document"><div class="eyebrow">BRIEFING</div><h2>Full briefing</h2>' + render_markdown(str(summary)) + '</section>'
+        elif tab == "dfs":
             body = f'<section class="document">{dfs.get("html", "<p>DFS unavailable.</p>")}</section>'
         else:
             cards = "".join([
@@ -1281,24 +1343,34 @@ class Dashboard:
             ])
             worker_counts = workers.get("counts", {})
             if workers.get("available"):
-                rows = "".join(
-                    f'<tr><th>{model.title()}</th>' + "".join(
-                        f'<td class="{"active-count" if worker_counts.get(model, {}).get(effort, 0) else ""}">{_escape(worker_counts.get(model, {}).get(effort, 0))}</td>'
+                roster = []
+                for model in ("luna", "terra"):
+                    counts = worker_counts.get(model, {})
+                    total = sum(counts.values())
+                    levels = "".join(
+                        f'<span class="effort-chip{" engaged" if counts.get(effort, 0) else ""}" '
+                        f'title="{effort.title()} reasoning: {counts.get(effort, 0)} active">'
+                        f'{effort.title()} <b>{counts.get(effort, 0)}</b></span>'
                         for effort in ("low", "medium", "high", "max")
-                    ) + "</tr>" for model in ("luna", "terra", "sol")
-                )
-                worker_body = f'<table><thead><tr><th>Model</th><th>Low</th><th>Medium</th><th>High</th><th>Max</th></tr></thead><tbody>{rows}</tbody></table>'
+                    )
+                    roster.append(
+                        f'<div class="roster-member"><span class="roster-avatar">{model[0].upper()}</span>'
+                        f'<div><strong>{model.title()}</strong><div class="effort-strip">{levels}</div></div>'
+                        f'<b>{total}</b></div>'
+                    )
+                worker_body = '<div class="roster">' + "".join(roster) + '</div>'
+
             else:
                 worker_body = f'<p class="subtle">Unavailable · {_escape(workers.get("error", "unknown source"))}</p>'
             workers_html = f'<section class="workers"><h2>Active workers</h2>{worker_body}</section>'
-            active_html = render_ledger_section(ledger_data["active"])
-            upcoming_html = render_ledger_section(upcoming)
+            active_html = render_work_digest(ledger_data["active"])
+            upcoming_html = render_work_digest(upcoming)
             waiting_html = (
                 '<section><h2>Waiting on event</h2><div class="ledger-list">'
-                f'{render_ledger_section(ledger_data["waiting"])}</div></section>'
+                f'{render_work_digest(ledger_data["waiting"])}</div></section>'
                 if ledger_data["waiting"] else ""
             )
-            blocked_html = render_ledger_section(ledger_data["blocked"])
+            blocked_html = render_work_digest(ledger_data["blocked"])
             if sidecar.get("data"):
                 sidecar_html = render_trajectory(sidecar["data"])
             elif sidecar.get("error") == "not configured":
@@ -1323,7 +1395,7 @@ class Dashboard:
                     f'<em>{_escape(finding_age)}</em></div>'
                 )
             fratbro_html = render_fratbro_status(fratbro) if self.fratbro_cache else ""
-            body = f'<div class="status">{cards}</div>{workers_html}{sidecar_html}{fratbro_html}{finding_html}<section><h2>Active work ledger</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section><h2>Upcoming DFS work</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
+            body = f'<div class="status">{cards}</div>{workers_html}{sidecar_html}{fratbro_html}{finding_html}<section class="work-section"><div class="eyebrow">THE WORK / CURRENT SCOPE</div><h2>Work in focus</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section class="work-section"><div class="eyebrow">ON THE HORIZON</div><h2>Up next</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section class="work-section"><div class="eyebrow">NEEDS ATTENTION</div><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
         page = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>de67</title>
 <style>
@@ -1336,7 +1408,66 @@ class Dashboard:
 @media(max-width:1000px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}
 @media(max-width:700px){{.gap-explanations{{grid-template-columns:1fr}}.attention-heading{{align-items:flex-start;flex-direction:column}}}}
 @media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}}}
-</style></head><body><main><header><h1>de67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
+
+/* Owner overview: quiet chrome, clear type, source details on dedicated reading pages. */
+:root{{--bg:#0c1116;--panel:#121a22;--line:#2b3945;--text:#f1f3ef;--muted:#adbbc5;--blue:#7edac9;--green:#8fd6ab;--yellow:#e8bd74}}
+body{{background:radial-gradient(ellipse at 90% 0%,#16302f55,transparent 55%),var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
+main{{max-width:1200px;padding:48px 36px}}
+header{{justify-content:space-between;align-items:center;gap:20px}}
+header h1{{font-size:38px;letter-spacing:-2px;font-weight:750}}header h1 .brand-dot{{color:var(--blue);font-size:38px}}
+header>span{{font-size:12px;letter-spacing:.03em}}
+nav{{margin:26px 0 30px;gap:20px;align-items:center}}
+nav a{{padding:12px 0;font-size:13px}}
+nav a.selected{{border:0;border-bottom:2px solid var(--blue);border-radius:0;color:var(--text)}}
+.status{{grid-template-columns:repeat(6,minmax(0,1fr));gap:0;border-block:1px solid var(--line);padding:22px 0}}
+.lamp,.metric{{background:none;border:0;border-radius:0;padding:0 18px;min-height:82px;border-right:1px solid var(--line)}}
+.lamp:first-child{{padding-left:0}}.metric:last-child{{border-right:0}}
+.lamp small,.metric small{{text-transform:uppercase;font-size:10px;letter-spacing:.12em;margin-bottom:12px}}
+.lamp strong,.metric strong{{font-size:20px;font-weight:600;letter-spacing:-.03em;overflow-wrap:anywhere}}
+.lamp .dot{{width:12px;height:12px;float:right;margin:2px 0 0 5px}}
+.metric-note{{font-size:10px;white-space:normal;line-height:1.5;margin-top:8px}}
+section{{border:0;border-radius:0;background:none;padding:28px 0;margin-top:14px}}
+h2{{font-size:22px;letter-spacing:-.035em;font-weight:600;margin-bottom:20px}}
+.workers{{display:flex;align-items:center;gap:40px;padding:22px 0;border-bottom:1px solid var(--line);margin:0}}
+.workers h2{{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}}
+.roster{{display:flex;gap:42px}}.roster-member{{display:flex;gap:12px;align-items:center;min-width:175px}}
+.roster-avatar{{display:grid;place-items:center;width:34px;height:34px;border:1px solid #3b605b;border-radius:50%;color:var(--blue);font-size:13px}}
+.roster-member strong{{display:block;font-size:14px}}.roster-member div>span{{display:block;font-size:11px;color:var(--muted);margin-top:4px}}
+.roster-member b{{font-size:22px;font-weight:400;color:var(--blue);margin-left:16px}}
+.trajectory{{padding:30px 24px;background:linear-gradient(150deg,#18292c55,#121a2244);border:1px solid #2d4245;border-radius:16px;margin-top:28px}}
+.fratbro{{border-left:2px solid var(--blue);padding:6px 0 6px 25px;margin:38px 0 28px;max-width:880px}}
+.eyebrow{{font-size:10px;letter-spacing:.16em;color:var(--blue);font-weight:650;margin-bottom:10px}}
+.fratbro .eyebrow{{display:block}}.fratbro>div.brief-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;border:0;padding:0}}.brief-field small{{color:var(--blue);font-size:10px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px}}.brief-field p{{font-size:15px;line-height:1.7;margin:0}}.fratbro h2{{font-size:20px;margin-bottom:12px}}.brief-lead{{font-size:17px;line-height:1.75;color:#e0e9e8;margin:0 0 14px}}
+.text-link{{color:var(--blue);text-decoration:none;font-size:12px;font-weight:550;display:inline-block;padding:8px 0}}
+.text-link:hover{{text-decoration:underline;color:#b6ffec}}
+.activity{{border:0;border-block:1px solid var(--line);border-radius:0;background:none;padding:18px 0;grid-template-columns:105px max-content 1fr max-content}}
+.activity span{{white-space:normal;font-size:12px;line-height:1.6;color:#ccd5dc}}
+.work-section{{padding:32px 0 0}}.work-section h2{{font-size:27px;margin-bottom:12px}}
+.work-section>.subtle{{font:11px ui-monospace,monospace;margin-bottom:24px}}
+.ledger-list{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}}
+.work-card{{padding:24px;background:linear-gradient(135deg,#1b2a32,#141d25);border:1px solid #334753;border-radius:12px;display:flex;flex-direction:column;align-items:flex-start}}
+.work-meta{{display:flex;justify-content:space-between;gap:20px;width:100%;font:11px ui-monospace,monospace;color:var(--blue);margin-bottom:18px}}
+.work-state{{font:10px -apple-system,sans-serif;color:#e8bd74;letter-spacing:.03em}}
+.work-card.complete{{background:#121b22;border-color:#283640}}.complete .work-state{{color:var(--green)}}
+.work-card h3{{font-size:17px;line-height:1.6;font-weight:550;color:#f1f4f5;margin:0 0 18px}}
+.completed-reference{{grid-column:1/-1;color:var(--muted);text-decoration:none;font-size:12px;padding:12px 0}}.work-card .text-link{{margin-top:auto}}.empty-state{{font-size:14px;color:var(--muted);padding:4px 0}}
+.document{{max-width:900px;font-size:16px;line-height:1.8}}.document p,.document li{{line-height:1.85;color:#dbe4ea}}.document h2{{margin-top:34px}}.document code{{overflow-wrap:anywhere}}
+footer{{border-top:1px solid var(--line);margin-top:42px;font-size:10px;gap:15px}}
+footer em{{display:inline;color:var(--muted);overflow-wrap:anywhere}}footer span{{cursor:default}}
+a:focus-visible{{outline:2px solid var(--blue);outline-offset:5px}}
+@media(max-width:900px){{.status{{grid-template-columns:repeat(3,1fr);gap:24px 0}}.lamp:nth-child(4){{padding-left:0}}.lamp:nth-child(3){{border:0}}.ledger-list{{grid-template-columns:1fr}}}}
+@media(max-width:600px){{main{{padding:24px 20px}}.status{{grid-template-columns:repeat(2,1fr)}}.lamp,.metric{{padding:0 12px}}.workers{{align-items:flex-start;flex-direction:column;gap:18px}}.roster{{gap:20px;flex-wrap:wrap}}.roster-member{{min-width:130px}}.activity{{grid-template-columns:1fr;gap:8px}}.fratbro{{padding-left:18px}}.trajectory{{padding:20px 12px}}.work-card{{padding:20px}}.lamp strong,.metric strong{{font-size:18px}}.attention-panel{{min-width:0}}}}
+
+
+.roster{{flex:1;justify-content:space-between;gap:24px}}.roster-member{{flex:1;min-width:0}}.roster-member>b{{display:none}}
+.effort-strip{{display:flex;gap:5px;margin-top:8px;flex-wrap:wrap}}
+.effort-chip{{display:inline-flex;gap:7px;align-items:center;border:1px solid #35414a;border-radius:4px;padding:4px 7px;font-size:10px;color:#aab6c0}}
+.effort-chip b{{font-size:10px;font-weight:500;color:#aab6c0;margin:0}}
+.effort-chip.engaged{{background:#22483e;border-color:#75c8ab;color:#dcfff1}}.effort-chip.engaged b{{color:#dcfff1}}
+@media(max-width:700px){{.workers{{display:block}}.workers h2{{margin-bottom:18px}}.roster{{display:flex;flex-wrap:wrap;gap:22px}}.roster-member{{flex-basis:100%}}}}
+
+.lamp .dot.green{{background:#39e878;box-shadow:0 0 0 3px #39e87818}}.lamp .dot.yellow{{background:#ffc44d}}.lamp .dot.grey{{background:#68717a}}
+</style></head><body><main><header><h1>de67<span class="brand-dot">.</span></h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")
 
 
@@ -1360,11 +1491,11 @@ def serve(workspace: Path, bind: str, port: int, refresh_seconds: int,
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
-            if path not in ("/", "/dfs"):
+            if path not in ("/", "/dfs", "/ledger", "/briefing"):
                 self.send_error(404)
                 return
             try:
-                payload = dashboard.render("dfs" if path == "/dfs" else "overview")
+                payload = dashboard.render(path.strip("/") or "overview")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(payload)))

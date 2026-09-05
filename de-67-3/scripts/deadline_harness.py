@@ -7087,7 +7087,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         help=(
             "Evidence-derived estimate for this attempt; the first attempt also "
-            "uses it to arm the immutable claim deadline"
+            "uses it to arm each fresh immutable claim deadline generation"
         ),
     )
     start.add_argument("--phase", choices=("exploration", "closure"))
@@ -7429,9 +7429,12 @@ def main(argv: list[str] | None = None) -> int:
                             int(claim["deadline_generation"]),
                         )
                         may_advance_generation = (
-                            incident is not None
-                            and not harness._deadline_mutation_pending(
-                                arguments.lineage, arguments.claim
+                            claim["retired_at"] is not None
+                            or (
+                                incident is not None
+                                and not harness._deadline_mutation_pending(
+                                    arguments.lineage, arguments.claim
+                                )
                             )
                         )
                         if not may_advance_generation:

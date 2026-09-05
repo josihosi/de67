@@ -995,6 +995,44 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertEqual(started["estimate_seconds"], 300)
         self.assertEqual(started["deadline_at"], 403)
 
+    def test_cli_retired_generation_uses_new_estimate_without_rewriting_history(self) -> None:
+        self.harness.start_task("project", "before", "R-001", 259200, now=0)
+        self.harness.complete_task("project", "before", "preserved evidence", now=5)
+        self.harness.retire_claim_clocks_for_mutation("project", "owner review", now=6)
+        history = tuple(self.harness.connection.execute(
+            "SELECT * FROM claim_deadline_generations WHERE generation = 1"
+        ).fetchone())
+        restart = self.harness.request_coordinator_restart(
+            "project", "review complete", now=7
+        )["coordinator_restart"]
+        args = ["start", "--state", str(self.state_path), "--lineage", "project",
+                "--task", "after", "--claim", "R-001", "--estimate-seconds", "345600"]
+        with patch("deadline_harness.time.time", return_value=10), redirect_stdout(io.StringIO()):
+            self.assertEqual(main(args), 2)  # Pending restart cannot arm a generation.
+        self.harness.claim_coordinator_restart("project", restart["generation"], "fresh", now=8)
+        self.harness.acknowledge_coordinator_restart("project", restart["generation"], "fresh", now=9)
+        with patch("deadline_harness.time.time", return_value=10), redirect_stdout(io.StringIO()):
+            self.assertEqual(main(args), 0)
+            self.assertEqual(main(args), 0)  # Replay cannot create another generation.
+        claim = self.harness._claim("project", "R-001")
+        self.assertEqual(claim["deadline_generation"], 2)
+        self.assertEqual(claim["estimate_seconds"], 345600)
+        self.assertEqual(claim["deadline_at"], 345610)
+        self.assertEqual(claim["armed_by_restart_generation"], restart["generation"])
+        self.assertEqual(self.harness._task("project", "after")["deadline_generation"], 2)
+        self.assertEqual(tuple(self.harness.connection.execute(
+            "SELECT * FROM claim_deadline_generations WHERE generation = 1"
+        ).fetchone()), history)
+        # An ordinary subsequent attempt keeps the current whole-claim deadline.
+        args[args.index("after")] = "next"
+        args[-1] = "100"
+        with patch("deadline_harness.time.time", return_value=11), redirect_stdout(io.StringIO()):
+            self.assertEqual(main(args), 0)
+        self.assertEqual(self.harness._claim("project", "R-001")["deadline_at"], 345610)
+        self.assertEqual(self.harness.connection.execute(
+            "SELECT COUNT(*) FROM claim_deadline_generations"
+        ).fetchone()[0], 2)
+
     def test_mutation_clock_retirement_refuses_a_live_worker(self) -> None:
         self.harness.start_task("project", "live", "R-001", 100, now=0)
 

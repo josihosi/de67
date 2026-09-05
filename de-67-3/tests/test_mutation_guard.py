@@ -1420,6 +1420,16 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(result, 0, output)
         self.assertIn(guard.ORCHESTRATOR_GUIDELINES, output)
 
+    def test_random_trajectory_can_change_both_guidelines_and_refine_dfs(self) -> None:
+        state, cycle = self.random_review_state(0)
+        self.mutate_task()
+        self.mutate_orchestrator()
+        (self.candidate / guard.DFS_FILE).write_text(self.expansion_dfs(), encoding="utf-8")
+        result, output = self.run_random_review_cli(state, cycle)
+        self.assertEqual(result, 0, output)
+        for name in (*guard.GUIDELINE_FILES, guard.DFS_FILE):
+            self.assertIn(name, output)
+
     def test_random_guideline_review_accepts_exact_guarded_noop(self) -> None:
         for lane_index in (0, 1):
             with self.subTest(lane_index=lane_index):
@@ -1434,12 +1444,12 @@ class MutationGuardTests(unittest.TestCase):
             self.expansion_dfs(new_claim=""), encoding="utf-8"
         )
 
-    def test_random_review_rejects_wrong_lane_and_whitespace_only_change(self) -> None:
+    def test_random_review_accepts_cross_lane_but_rejects_whitespace_only_change(self) -> None:
         state, cycle = self.random_review_state(1)
         self.mutate_task()
         result, output = self.run_random_review_cli(state, cycle)
-        self.assertEqual(result, 1)
-        self.assertIn("selected orchestrator-guidelines.md", output)
+        self.assertEqual(result, 0, output)
+        self.assertIn(guard.TASK_GUIDELINES, output)
 
         self.setUp_candidate_again()
         state, cycle = self.random_review_state(0)

@@ -184,17 +184,109 @@ def render_trajectory(report: dict[str, Any]) -> str:
 
 def render_fratbro_status(value: dict[str, Any]) -> str:
     summary = value.get("summary") if isinstance(value, dict) else None
-    if isinstance(summary, dict):
-        summary = " ".join(
-            str(summary.get(key, "")).strip()
-            for key in ("cooking", "changed", "snag", "next", "health")
-            if str(summary.get(key, "")).strip()
+    if isinstance(summary, dict) and "headline" in summary:
+        fields = "".join(
+            f'<div class="brief-field"><small>{label}</small><p>{_escape(summary.get(key, ""))}</p></div>'
+            for key, label in (("changed", "What changed"), ("next", "Next"), ("snag", "Obstacle"))
+            if summary.get(key)
         )
-    if not isinstance(summary, str) or not summary.strip():
-        return ('<section class="fratbro"><h2>Fratbro status</h2>'
-                '<p class="subtle">Luna is cooking the first summary.</p></section>')
-    return (f'<section class="fratbro"><h2>Fratbro status</h2>'
-            f'<p>{_escape(summary)}</p></section>')
+        return ('<section class="fratbro"><div class="eyebrow">BRIEFING</div>'
+                f'<h2>{_escape(summary.get("headline", ""))}</h2><div class="brief-grid">{fields}</div></section>')
+    if isinstance(summary, dict):
+        parts = [str(summary.get(key, "")).strip()
+                 for key in ("cooking", "changed", "snag", "next", "health")
+                 if str(summary.get(key, "")).strip()]
+    elif isinstance(summary, str):
+        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z])", summary.strip())
+    else:
+        parts = []
+    if not parts:
+        return '<section class="fratbro"><h2>Briefing</h2><p class="subtle">Waiting for a fresh briefing.</p></section>'
+    lead = parts[0]
+    return ('<section class="fratbro"><div class="eyebrow">BRIEFING</div>'
+            f'<h2>At a glance</h2><p class="brief-lead">{_escape(lead)}</p>'
+            f'<a class="text-link" href="/briefing">Read the full briefing ↗</a></section>')
+
+
+def worker_dot_positions(count: int) -> list[tuple[float, float]]:
+    """Owner-requested display capacity: 12 dots; excess is labelled separately."""
+    visible = min(max(0, count), 12)
+    if visible == 1:
+        return [(0.0, 0.0)]
+    radius = 12 if visible <= 6 else 22
+    return [(radius * math.cos(-math.pi / 2 + 2 * math.pi * i / visible),
+             radius * math.sin(-math.pi / 2 + 2 * math.pi * i / visible))
+            for i in range(visible)]
+
+
+def render_worker_scale(model: str, counts: dict[str, int]) -> str:
+    levels = ("low", "medium", "high", "max")
+    total = sum(counts.get(level, 0) for level in levels)
+    description = ", ".join(f"{level}: {counts.get(level, 0)}" for level in levels)
+    marks = ['<line class="strength-axis" x1="48" y1="34" x2="348" y2="34"/>']
+    for index, level in enumerate(levels):
+        x = 48 + index * 100
+        count = counts.get(level, 0)
+        marks.append(f'<circle class="strength-stop" cx="{x}" cy="34" r="2"/>')
+        for dx, dy in worker_dot_positions(count):
+            marks.append(f'<circle class="worker-dot" cx="{x + dx:.3f}" cy="{34 + dy:.3f}" r="4.67"><title>{_escape(model.title())} · {level.title()} reasoning</title></circle>')
+        if count > 12:
+            marks.append(f'<text class="strength-overflow" x="{x}" y="8">+{count - 12}</text>')
+        marks.append(f'<text class="strength-label" x="{x}" y="76">{level.title()}</text>')
+    emblem = ('<path fill="#7ee6c2" d="M25 4a14 14 0 1 0 0 28A16 16 0 0 1 25 4Z"/>'
+              if model == "luna" else
+              '<circle cx="18" cy="18" r="14" fill="#a8baff"/><path fill="#344f79" d="m9 8 8-3 3 6-5 4-1 6-5-3Zm13 11 8-2-2 9-6 4-3-6Z"/>')
+    return (
+        f'<div class="worker-scale"><div class="scale-heading"><strong>{_escape(model.title())}</strong>'
+        f'<span><b>{total}</b> active</span></div>'
+        f'<svg class="model-emblem" viewBox="0 0 36 36" aria-hidden="true">{emblem}</svg>'
+        f'<svg viewBox="0 0 396 90" role="img" aria-label="{_escape(model.title() + ": " + description)}">'
+        + "".join(marks) + '</svg></div>'
+    )
+
+
+def render_work_digest(text: str) -> str:
+    """Extract headings without inventing status or rewriting evidence."""
+    blocks = []
+    current = None
+    for line in text.splitlines():
+        if re.match(r"^[-*]\s+", line):
+            if current is not None:
+                blocks.append(current)
+            current = [re.sub(r"^[-*]\s+", "", line)]
+        elif current is not None:
+            current.append(line[2:] if line.startswith("  ") else line)
+    if current is not None:
+        blocks.append(current)
+    if not blocks:
+        return '<p class="empty-state">Nothing listed here.</p>'
+    cards = []
+    completed_count = 0
+    for block in blocks:
+        checked = re.match(r"^\[([ xX])\]\s*(.*)", block[0])
+        title = checked.group(2) if checked else block[0]
+        complete = bool(checked and checked.group(1).lower() == "x")
+        i = 1
+        while i < len(block) and block[i].strip() and not re.match(r"^\s*[-*#]", block[i]):
+            title += " " + block[i].strip()
+            i += 1
+        match = re.match(r"(R-[\w.-]+)\s*[—–:]\s*(.*)", title)
+        identity, title = (match.group(1), match.group(2)) if match else ("", title)
+        if complete:
+            completed_count += 1
+            continue
+        title = re.split(r"(?<=[.!?])\s+|:\s+", title, maxsplit=1)[0]
+        status = "Open"
+        tone = "complete" if complete else "open"
+        cards.append(
+            f'<article class="work-card {tone}"><div class="work-meta">'
+            f'<span>{_escape(identity)}</span><span class="work-state">{status}</span></div>'
+            f'<h3>{_inline(title)}</h3>'
+            '<a class="text-link" href="/ledger">Evidence &amp; handoff ↗</a></article>'
+        )
+    if completed_count:
+        cards.append(f'<a class="completed-reference" href="/ledger">{completed_count} completed items · View the record ↗</a>')
+    return "".join(cards)
 
 
 def render_attention_spider(
@@ -553,8 +645,16 @@ def _completed_mutation_counts(connection: sqlite3.Connection) -> tuple[int, int
                         terminal_where = " OR ".join(
                             f'"{name}" IS NOT NULL' for name in terminal_columns
                         )
+                        parameters = []
+                        if "attempt_terminal_at" in task_columns:
+                            terminal_where = '"attempt_terminal_at" IS NOT NULL'
+                        if {"attempt_terminal_kind", "abandonment_reason"}.issubset(task_columns):
+                            terminal_where = f"({terminal_where}) AND NOT (attempt_terminal_kind = 'restart_normalized' OR (attempt_terminal_kind = 'abandoned' AND abandonment_reason = 'external_supervisor_restart_normalization'))"
+                        if "lineage_id" in task_columns and "lineage_id" in columns:
+                            terminal_where = f"({terminal_where}) AND lineage_id = ?"
+                            parameters.append(row["lineage_id"])
                         terminal_windows = int(connection.execute(
-                            f'SELECT COUNT(*) FROM "tasks" WHERE {terminal_where}'
+                            f'SELECT COUNT(*) FROM "tasks" WHERE {terminal_where}', parameters
                         ).fetchone()[0])
                     next_random = dict(row)
                     next_random["terminal_windows"] = terminal_windows
@@ -853,7 +953,35 @@ def _active_coordinator_id(workspace: Path) -> str | None:
     except (OSError, ValueError, IndexError, subprocess.SubprocessError):
         pass
     active_sessions: set[str] = set()
-    for status_path in status_root.glob("**/status.txt"):
+    status_paths = status_root.glob("**/status.txt")
+    # Modern supervisors already index unfinished runs. Avoid rereading all
+    # historical artifacts merely to discover the live session.
+    config_path = workspace / ".de67/state/workspace.json"
+    if config_path.is_file():
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        clock = config["clock"]
+        state = Path(clock["state"]).expanduser()
+        if not state.is_absolute():
+            state = workspace / state
+        uri = f"file:{quote(str(state.resolve()), safe='/:')}?mode=ro"
+        connection = sqlite3.connect(uri, uri=True, timeout=0)
+        try:
+            tables = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if "supervisor_attempts" in tables:
+                runs = connection.execute(
+                    "SELECT run_id FROM supervisor_attempts "
+                    "WHERE lineage_id=? AND finished_at IS NULL",
+                    (clock["lineage"],),
+                ).fetchall()
+                status_paths = [
+                    workspace / ".de67/state/coordinator-runs" / row[0] / "status.txt"
+                    for row in runs
+                ]
+        finally:
+            connection.close()
+    for status_path in status_paths:
         try:
             if status_path.read_text(encoding="ascii").strip() != "RUNNING":
                 continue
@@ -903,7 +1031,29 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     """Project active roster subagents from Codex's existing read-only session records."""
     counts = {model: {effort: 0 for effort in ("low", "medium", "high", "max")}
               for model in ("luna", "terra", "sol")}
-    paths = sorted(sessions_root.glob("**/rollout-*.jsonl"), reverse=True)
+    active_claims = _active_worker_claims(workspace)
+    if active_claims == {}:
+        return {"counts": counts, "available": True}
+    index = sessions_root.parent / "state_5.sqlite"
+    if active_claims and index.is_file():
+        owners = set(active_claims.values())
+        if len(owners) != 1:
+            raise ValueError("active worker ownership is ambiguous")
+        uri = f"file:{quote(str(index), safe='/:')}?mode=ro"
+        connection = sqlite3.connect(uri, uri=True, timeout=0)
+        try:
+            rows = connection.execute(
+                "WITH RECURSIVE tree(id) AS (SELECT ? UNION "
+                "SELECT child_thread_id FROM thread_spawn_edges JOIN tree "
+                "ON parent_thread_id=tree.id) "
+                "SELECT rollout_path FROM threads JOIN tree ON threads.id=tree.id",
+                (next(iter(owners)),),
+            ).fetchall()
+            paths = [Path(row[0]) for row in rows]
+        finally:
+            connection.close()
+    else:
+        paths = sorted(sessions_root.glob("**/rollout-*.jsonl"), reverse=True)
     root_path: Path | None = None
     root: dict[str, Any] = {}
     target = workspace.resolve()
@@ -1206,15 +1356,22 @@ class Dashboard:
             "green" if ledger_data["active"] and supervisor == "running" else
             "yellow" if ledger_data["active"] else "grey"
         )
-        nav = '<nav><a class="%s" href="/">Overview</a><a class="%s" href="/dfs">DFS</a><a href="?refresh=1">Refresh</a></nav>' % (
+        nav = '<nav><a class="%s" href="/">Overview</a><a class="%s" href="/dfs">DFS</a><a href="?refresh=1">Refresh snapshot ↻</a></nav>' % (
             "selected" if tab == "overview" else "", "selected" if tab == "dfs" else "")
-        meta = f'<meta http-equiv="refresh" content="{self.refresh_seconds}">' if self.refresh_seconds else ""
-        source_bits = []
+        meta = ""  # Explicit refresh keeps reading and navigation stable.
+        source_bits = ['<span>Snapshot ' + time.strftime("%H:%M:%S") + ' · refresh manually</span>']
         for label, source in (("Markdown", ledger), ("DFS", dfs), ("SQLite", clock)):
             tone = "yellow" if source.get("stale") else "red" if source.get("error") else "green"
             detail = source.get("error") or source.get("identity", {}).get("hash") or "healthy"
             source_bits.append(f'<span><i class="dot {tone}"></i>{_escape(label)} <em>{_escape(detail)}</em></span>')
-        if tab == "dfs":
+        if tab == "ledger":
+            body = '<section class="document"><div class="eyebrow">SOURCE DOCUMENT</div><h2>Work ledger</h2>' + ledger.get("html", "<p>Unavailable</p>") + '</section>'
+        elif tab == "briefing":
+            summary = fratbro.get("summary", "")
+            if isinstance(summary, dict):
+                summary = "\n\n".join(str(v) for v in summary.values())
+            body = '<section class="document"><div class="eyebrow">BRIEFING</div><h2>Full briefing</h2>' + render_markdown(str(summary)) + '</section>'
+        elif tab == "dfs":
             body = f'<section class="document">{dfs.get("html", "<p>DFS unavailable.</p>")}</section>'
         else:
             cards = "".join([
@@ -1231,24 +1388,22 @@ class Dashboard:
             ])
             worker_counts = workers.get("counts", {})
             if workers.get("available"):
-                rows = "".join(
-                    f'<tr><th>{model.title()}</th>' + "".join(
-                        f'<td class="{"active-count" if worker_counts.get(model, {}).get(effort, 0) else ""}">{_escape(worker_counts.get(model, {}).get(effort, 0))}</td>'
-                        for effort in ("low", "medium", "high", "max")
-                    ) + "</tr>" for model in ("luna", "terra", "sol")
-                )
-                worker_body = f'<table><thead><tr><th>Model</th><th>Low</th><th>Medium</th><th>High</th><th>Max</th></tr></thead><tbody>{rows}</tbody></table>'
+                worker_body = '<div class="roster-scales">' + "".join(
+                    render_worker_scale(model, worker_counts.get(model, {}))
+                    for model in ("luna", "terra")
+                ) + '</div>'
+
             else:
                 worker_body = f'<p class="subtle">Unavailable · {_escape(workers.get("error", "unknown source"))}</p>'
             workers_html = f'<section class="workers"><h2>Active workers</h2>{worker_body}</section>'
-            active_html = render_ledger_section(ledger_data["active"])
-            upcoming_html = render_ledger_section(upcoming)
+            active_html = render_work_digest(ledger_data["active"])
+            upcoming_html = render_work_digest(upcoming)
             waiting_html = (
                 '<section><h2>Waiting on event</h2><div class="ledger-list">'
-                f'{render_ledger_section(ledger_data["waiting"])}</div></section>'
+                f'{render_work_digest(ledger_data["waiting"])}</div></section>'
                 if ledger_data["waiting"] else ""
             )
-            blocked_html = render_ledger_section(ledger_data["blocked"])
+            blocked_html = render_work_digest(ledger_data["blocked"])
             if sidecar.get("data"):
                 sidecar_html = render_trajectory(sidecar["data"])
             elif sidecar.get("error") == "not configured":
@@ -1273,7 +1428,7 @@ class Dashboard:
                     f'<em>{_escape(finding_age)}</em></div>'
                 )
             fratbro_html = render_fratbro_status(fratbro) if self.fratbro_cache else ""
-            body = f'<div class="status">{cards}</div>{workers_html}{sidecar_html}{fratbro_html}{finding_html}<section><h2>Active work ledger</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section><h2>Upcoming DFS work</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
+            body = f'<div class="status">{cards}</div>{workers_html}{sidecar_html}{fratbro_html}{finding_html}<section class="work-section"><div class="eyebrow">THE WORK / CURRENT SCOPE</div><h2>Work in focus</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section class="work-section"><div class="eyebrow">ON THE HORIZON</div><h2>Up next</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section class="work-section"><div class="eyebrow">NEEDS ATTENTION</div><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
         page = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>de67</title>
 <style>
@@ -1286,7 +1441,81 @@ class Dashboard:
 @media(max-width:1000px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}
 @media(max-width:700px){{.gap-explanations{{grid-template-columns:1fr}}.attention-heading{{align-items:flex-start;flex-direction:column}}}}
 @media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}}}
-</style></head><body><main><header><h1>de67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
+
+/* Owner overview: quiet chrome, clear type, source details on dedicated reading pages. */
+:root{{--bg:#0c1116;--panel:#121a22;--line:#2b3945;--text:#f1f3ef;--muted:#adbbc5;--blue:#7edac9;--green:#8fd6ab;--yellow:#e8bd74}}
+body{{background:radial-gradient(ellipse at 90% 0%,#16302f55,transparent 55%),var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
+main{{max-width:1200px;padding:48px 36px}}
+header{{justify-content:space-between;align-items:center;gap:20px}}
+header h1{{font-size:38px;letter-spacing:-2px;font-weight:750}}header h1 .brand-dot{{color:var(--blue);font-size:38px}}
+header>span{{font-size:12px;letter-spacing:.03em}}
+nav{{margin:26px 0 30px;gap:20px;align-items:center}}
+nav a{{padding:12px 0;font-size:13px}}
+nav a.selected{{border:0;border-bottom:2px solid var(--blue);border-radius:0;color:var(--text)}}
+.status{{grid-template-columns:repeat(6,minmax(0,1fr));gap:0;border-block:1px solid var(--line);padding:22px 0}}
+.lamp,.metric{{background:none;border:0;border-radius:0;padding:0 18px;min-height:82px;border-right:1px solid var(--line)}}
+.lamp:first-child{{padding-left:0}}.metric:last-child{{border-right:0}}
+.lamp small,.metric small{{text-transform:uppercase;font-size:10px;letter-spacing:.12em;margin-bottom:12px}}
+.lamp strong,.metric strong{{font-size:20px;font-weight:600;letter-spacing:-.03em;overflow-wrap:anywhere}}
+.lamp .dot{{width:12px;height:12px;float:right;margin:2px 0 0 5px}}
+.metric-note{{font-size:10px;white-space:normal;line-height:1.5;margin-top:8px}}
+section{{border:0;border-radius:0;background:none;padding:28px 0;margin-top:14px}}
+h2{{font-size:22px;letter-spacing:-.035em;font-weight:600;margin-bottom:20px}}
+.workers{{display:flex;align-items:center;gap:40px;padding:22px 0;border-bottom:1px solid var(--line);margin:0}}
+.workers h2{{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}}
+.roster{{display:flex;gap:42px}}.roster-member{{display:flex;gap:12px;align-items:center;min-width:175px}}
+.roster-avatar{{display:grid;place-items:center;width:34px;height:34px;border:1px solid #3b605b;border-radius:50%;color:var(--blue);font-size:13px}}
+.roster-member strong{{display:block;font-size:14px}}.roster-member div>span{{display:block;font-size:11px;color:var(--muted);margin-top:4px}}
+.roster-member b{{font-size:22px;font-weight:400;color:var(--blue);margin-left:16px}}
+.trajectory{{padding:30px 24px;background:linear-gradient(150deg,#18292c55,#121a2244);border:1px solid #2d4245;border-radius:16px;margin-top:28px}}
+.fratbro{{border-left:2px solid var(--blue);padding:6px 0 6px 25px;margin:38px 0 28px;max-width:880px}}
+.eyebrow{{font-size:10px;letter-spacing:.16em;color:var(--blue);font-weight:650;margin-bottom:10px}}
+.fratbro .eyebrow{{display:block}}.fratbro>div.brief-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;border:0;padding:0}}.brief-field small{{color:var(--blue);font-size:10px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px}}.brief-field p{{font-size:15px;line-height:1.7;margin:0}}.fratbro h2{{font-size:20px;margin-bottom:12px}}.brief-lead{{font-size:17px;line-height:1.75;color:#e0e9e8;margin:0 0 14px}}
+.text-link{{color:var(--blue);text-decoration:none;font-size:12px;font-weight:550;display:inline-block;padding:8px 0}}
+.text-link:hover{{text-decoration:underline;color:#b6ffec}}
+.activity{{border:0;border-block:1px solid var(--line);border-radius:0;background:none;padding:18px 0;grid-template-columns:105px max-content 1fr max-content}}
+.activity span{{white-space:normal;font-size:12px;line-height:1.6;color:#ccd5dc}}
+.work-section{{padding:32px 0 0}}.work-section h2{{font-size:27px;margin-bottom:12px}}
+.work-section>.subtle{{font:11px ui-monospace,monospace;margin-bottom:24px}}
+.ledger-list{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}}
+.work-card{{padding:24px;background:linear-gradient(135deg,#1b2a32,#141d25);border:1px solid #334753;border-radius:12px;display:flex;flex-direction:column;align-items:flex-start}}
+.work-meta{{display:flex;justify-content:space-between;gap:20px;width:100%;font:11px ui-monospace,monospace;color:var(--blue);margin-bottom:18px}}
+.work-state{{font:10px -apple-system,sans-serif;color:#e8bd74;letter-spacing:.03em}}
+.work-card.complete{{background:#121b22;border-color:#283640}}.complete .work-state{{color:var(--green)}}
+.work-card h3{{font-size:17px;line-height:1.6;font-weight:550;color:#f1f4f5;margin:0 0 18px}}
+.completed-reference{{grid-column:1/-1;color:var(--muted);text-decoration:none;font-size:12px;padding:12px 0}}.work-card .text-link{{margin-top:auto}}.empty-state{{font-size:14px;color:var(--muted);padding:4px 0}}
+.document{{max-width:900px;font-size:16px;line-height:1.8}}.document p,.document li{{line-height:1.85;color:#dbe4ea}}.document h2{{margin-top:34px}}.document code{{overflow-wrap:anywhere}}
+footer{{border-top:1px solid var(--line);margin-top:42px;font-size:10px;gap:15px}}
+footer em{{display:inline;color:var(--muted);overflow-wrap:anywhere}}footer span{{cursor:default}}
+a:focus-visible{{outline:2px solid var(--blue);outline-offset:5px}}
+@media(max-width:900px){{.status{{grid-template-columns:repeat(3,1fr);gap:24px 0}}.lamp:nth-child(4){{padding-left:0}}.lamp:nth-child(3){{border:0}}.ledger-list{{grid-template-columns:1fr}}}}
+@media(max-width:600px){{main{{padding:24px 20px}}.status{{grid-template-columns:repeat(2,1fr)}}.lamp,.metric{{padding:0 12px}}.workers{{align-items:flex-start;flex-direction:column;gap:18px}}.roster{{gap:20px;flex-wrap:wrap}}.roster-member{{min-width:130px}}.activity{{grid-template-columns:1fr;gap:8px}}.fratbro{{padding-left:18px}}.trajectory{{padding:20px 12px}}.work-card{{padding:20px}}.lamp strong,.metric strong{{font-size:18px}}.attention-panel{{min-width:0}}}}
+
+
+.roster{{flex:1;justify-content:space-between;gap:24px}}.roster-member{{flex:1;min-width:0}}.roster-member>b{{display:none}}
+.effort-strip{{display:flex;gap:5px;margin-top:8px;flex-wrap:wrap}}
+.effort-chip{{display:inline-flex;gap:7px;align-items:center;border:1px solid #35414a;border-radius:4px;padding:4px 7px;font-size:10px;color:#aab6c0}}
+.effort-chip b{{font-size:10px;font-weight:500;color:#aab6c0;margin:0}}
+.effort-chip.engaged{{background:#22483e;border-color:#75c8ab;color:#dcfff1}}.effort-chip.engaged b{{color:#dcfff1}}
+@media(max-width:700px){{.workers{{display:block}}.workers h2{{margin-bottom:18px}}.roster{{display:flex;flex-wrap:wrap;gap:22px}}.roster-member{{flex-basis:100%}}}}
+
+.lamp .dot.green{{background:#39e878;box-shadow:0 0 0 3px #39e87818}}.lamp .dot.yellow{{background:#ffc44d}}.lamp .dot.grey{{background:#68717a}}
+
+.workers{{display:block;padding:24px 0 16px}}.workers h2{{margin-bottom:20px}}
+.roster-scales{{display:grid;grid-template-columns:1fr 1fr;gap:48px}}
+.scale-heading{{display:flex;justify-content:space-between;align-items:baseline;padding:0 10px}}
+.scale-heading strong{{font-size:15px}}.scale-heading span{{font-size:11px;color:var(--muted)}}
+.scale-heading b{{font-size:23px;font-weight:500;color:var(--text);margin-right:5px}}
+.worker-scale svg{{display:block;width:100%;overflow:visible}}
+.worker-scale svg.model-emblem{{width:36px;height:36px;margin:8px 10px 0}}
+.strength-axis{{stroke:#36464e;stroke-width:1}}.strength-stop{{fill:#68777f}}
+.worker-dot{{fill:#7ee6c2;stroke:var(--bg);stroke-width:1}}
+.worker-scale:nth-child(2) .worker-dot{{fill:#a8baff}}
+.strength-label{{fill:#aebdc6;font:11px -apple-system,sans-serif;text-anchor:middle}}
+.strength-overflow{{fill:var(--text);font:10px -apple-system,sans-serif;text-anchor:middle}}
+@media(max-width:650px){{.roster-scales{{grid-template-columns:1fr;gap:20px}}.worker-scale svg{{max-height:125px}}}}
+
+</style></head><body><main><header><h1>de67<span class="brand-dot">.</span></h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")
 
 
@@ -1310,11 +1539,11 @@ def serve(workspace: Path, bind: str, port: int, refresh_seconds: int,
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
-            if path not in ("/", "/dfs"):
+            if path not in ("/", "/dfs", "/ledger", "/briefing"):
                 self.send_error(404)
                 return
             try:
-                payload = dashboard.render("dfs" if path == "/dfs" else "overview")
+                payload = dashboard.render(path.strip("/") or "overview")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(payload)))

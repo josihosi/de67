@@ -713,7 +713,7 @@ class DashboardTests(unittest.TestCase):
             self.workspace, sessions_root=self.sessions
         ).render("overview").decode()
         self.assertIn("<h2>Active workers</h2>", page)
-        self.assertIn('title="Medium reasoning: 1 active"', page)
+        self.assertIn('aria-label="Luna: low: 0, medium: 1, high: 0, max: 0"', page)
         self.assertIn("<strong>Terra</strong>", page)
         self.assertNotIn("<strong>Sol</strong>", page)
         self.assertNotIn("Unavailable", page)
@@ -1108,3 +1108,20 @@ class OverviewDesignTests(unittest.TestCase):
         self.assertIn("What changed", result)
         self.assertIn("Next", result)
         self.assertNotIn("Obstacle", result)
+
+class WorkerScaleTests(unittest.TestCase):
+    def test_dots_do_not_overlap_at_each_supported_count(self):
+        import math
+        for count in range(13):
+            points = dashboard_module.worker_dot_positions(count)
+            self.assertEqual(len(points), count)
+            for i, left in enumerate(points):
+                for right in points[i+1:]:
+                    self.assertGreater(math.dist(left, right), 8)
+
+    def test_overflow_is_explicit_and_total_remains_exact(self):
+        result = dashboard_module.render_worker_scale("terra", {"max": 15})
+        self.assertEqual(result.count('class="worker-dot"'), 12)
+        self.assertIn("+3", result)
+        self.assertIn("<b>15</b> active", result)
+        self.assertIn("max: 15", result)

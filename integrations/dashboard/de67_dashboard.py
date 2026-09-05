@@ -208,6 +208,39 @@ def render_fratbro_status(value: dict[str, Any]) -> str:
             f'<a class="text-link" href="/briefing">Read the full briefing ↗</a></section>')
 
 
+def worker_dot_positions(count: int) -> list[tuple[float, float]]:
+    """Owner-requested display capacity: 12 dots; excess is labelled separately."""
+    visible = min(max(0, count), 12)
+    if visible == 1:
+        return [(0.0, 0.0)]
+    radius = 10 if visible <= 6 else 18
+    return [(radius * math.cos(-math.pi / 2 + 2 * math.pi * i / visible),
+             radius * math.sin(-math.pi / 2 + 2 * math.pi * i / visible))
+            for i in range(visible)]
+
+
+def render_worker_scale(model: str, counts: dict[str, int]) -> str:
+    levels = ("low", "medium", "high", "max")
+    total = sum(counts.get(level, 0) for level in levels)
+    description = ", ".join(f"{level}: {counts.get(level, 0)}" for level in levels)
+    marks = ['<line class="strength-axis" x1="48" y1="34" x2="348" y2="34"/>']
+    for index, level in enumerate(levels):
+        x = 48 + index * 100
+        count = counts.get(level, 0)
+        marks.append(f'<circle class="strength-stop" cx="{x}" cy="34" r="2"/>')
+        for dx, dy in worker_dot_positions(count):
+            marks.append(f'<circle class="worker-dot" cx="{x + dx:.3f}" cy="{34 + dy:.3f}" r="3.5"><title>{_escape(model.title())} · {level.title()} reasoning</title></circle>')
+        if count > 12:
+            marks.append(f'<text class="strength-overflow" x="{x}" y="8">+{count - 12}</text>')
+        marks.append(f'<text class="strength-label" x="{x}" y="76">{level.title()}</text>')
+    return (
+        f'<div class="worker-scale"><div class="scale-heading"><strong>{_escape(model.title())}</strong>'
+        f'<span><b>{total}</b> active</span></div>'
+        f'<svg viewBox="0 0 396 90" role="img" aria-label="{_escape(model.title() + ": " + description)}">'
+        + "".join(marks) + '</svg></div>'
+    )
+
+
 def render_work_digest(text: str) -> str:
     """Extract headings without inventing status or rewriting evidence."""
     blocks = []
@@ -1343,22 +1376,10 @@ class Dashboard:
             ])
             worker_counts = workers.get("counts", {})
             if workers.get("available"):
-                roster = []
-                for model in ("luna", "terra"):
-                    counts = worker_counts.get(model, {})
-                    total = sum(counts.values())
-                    levels = "".join(
-                        f'<span class="effort-chip{" engaged" if counts.get(effort, 0) else ""}" '
-                        f'title="{effort.title()} reasoning: {counts.get(effort, 0)} active">'
-                        f'{effort.title()} <b>{counts.get(effort, 0)}</b></span>'
-                        for effort in ("low", "medium", "high", "max")
-                    )
-                    roster.append(
-                        f'<div class="roster-member"><span class="roster-avatar">{model[0].upper()}</span>'
-                        f'<div><strong>{model.title()}</strong><div class="effort-strip">{levels}</div></div>'
-                        f'<b>{total}</b></div>'
-                    )
-                worker_body = '<div class="roster">' + "".join(roster) + '</div>'
+                worker_body = '<div class="roster-scales">' + "".join(
+                    render_worker_scale(model, worker_counts.get(model, {}))
+                    for model in ("luna", "terra")
+                ) + '</div>'
 
             else:
                 worker_body = f'<p class="subtle">Unavailable · {_escape(workers.get("error", "unknown source"))}</p>'
@@ -1467,6 +1488,20 @@ a:focus-visible{{outline:2px solid var(--blue);outline-offset:5px}}
 @media(max-width:700px){{.workers{{display:block}}.workers h2{{margin-bottom:18px}}.roster{{display:flex;flex-wrap:wrap;gap:22px}}.roster-member{{flex-basis:100%}}}}
 
 .lamp .dot.green{{background:#39e878;box-shadow:0 0 0 3px #39e87818}}.lamp .dot.yellow{{background:#ffc44d}}.lamp .dot.grey{{background:#68717a}}
+
+.workers{{display:block;padding:24px 0 16px}}.workers h2{{margin-bottom:20px}}
+.roster-scales{{display:grid;grid-template-columns:1fr 1fr;gap:48px}}
+.scale-heading{{display:flex;justify-content:space-between;align-items:baseline;padding:0 10px}}
+.scale-heading strong{{font-size:15px}}.scale-heading span{{font-size:11px;color:var(--muted)}}
+.scale-heading b{{font-size:23px;font-weight:500;color:var(--text);margin-right:5px}}
+.worker-scale svg{{display:block;width:100%;overflow:visible}}
+.strength-axis{{stroke:#36464e;stroke-width:1}}.strength-stop{{fill:#68777f}}
+.worker-dot{{fill:#7ee6c2;stroke:var(--bg);stroke-width:1}}
+.worker-scale:nth-child(2) .worker-dot{{fill:#a8baff}}
+.strength-label{{fill:#aebdc6;font:11px -apple-system,sans-serif;text-anchor:middle}}
+.strength-overflow{{fill:var(--text);font:10px -apple-system,sans-serif;text-anchor:middle}}
+@media(max-width:650px){{.roster-scales{{grid-template-columns:1fr;gap:20px}}.worker-scale svg{{max-height:125px}}}}
+
 </style></head><body><main><header><h1>de67<span class="brand-dot">.</span></h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")
 

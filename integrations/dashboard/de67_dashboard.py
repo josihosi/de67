@@ -213,7 +213,7 @@ def worker_dot_positions(count: int) -> list[tuple[float, float]]:
     visible = min(max(0, count), 12)
     if visible == 1:
         return [(0.0, 0.0)]
-    radius = 10 if visible <= 6 else 18
+    radius = 12 if visible <= 6 else 22
     return [(radius * math.cos(-math.pi / 2 + 2 * math.pi * i / visible),
              radius * math.sin(-math.pi / 2 + 2 * math.pi * i / visible))
             for i in range(visible)]
@@ -229,13 +229,17 @@ def render_worker_scale(model: str, counts: dict[str, int]) -> str:
         count = counts.get(level, 0)
         marks.append(f'<circle class="strength-stop" cx="{x}" cy="34" r="2"/>')
         for dx, dy in worker_dot_positions(count):
-            marks.append(f'<circle class="worker-dot" cx="{x + dx:.3f}" cy="{34 + dy:.3f}" r="3.5"><title>{_escape(model.title())} · {level.title()} reasoning</title></circle>')
+            marks.append(f'<circle class="worker-dot" cx="{x + dx:.3f}" cy="{34 + dy:.3f}" r="4.67"><title>{_escape(model.title())} · {level.title()} reasoning</title></circle>')
         if count > 12:
             marks.append(f'<text class="strength-overflow" x="{x}" y="8">+{count - 12}</text>')
         marks.append(f'<text class="strength-label" x="{x}" y="76">{level.title()}</text>')
+    emblem = ('<path fill="#7ee6c2" d="M25 4a14 14 0 1 0 0 28A16 16 0 0 1 25 4Z"/>'
+              if model == "luna" else
+              '<circle cx="18" cy="18" r="14" fill="#a8baff"/><path fill="#344f79" d="m9 8 8-3 3 6-5 4-1 6-5-3Zm13 11 8-2-2 9-6 4-3-6Z"/>')
     return (
         f'<div class="worker-scale"><div class="scale-heading"><strong>{_escape(model.title())}</strong>'
         f'<span><b>{total}</b> active</span></div>'
+        f'<svg class="model-emblem" viewBox="0 0 36 36" aria-hidden="true">{emblem}</svg>'
         f'<svg viewBox="0 0 396 90" role="img" aria-label="{_escape(model.title() + ": " + description)}">'
         + "".join(marks) + '</svg></div>'
     )
@@ -641,8 +645,16 @@ def _completed_mutation_counts(connection: sqlite3.Connection) -> tuple[int, int
                         terminal_where = " OR ".join(
                             f'"{name}" IS NOT NULL' for name in terminal_columns
                         )
+                        parameters = []
+                        if "attempt_terminal_at" in task_columns:
+                            terminal_where = '"attempt_terminal_at" IS NOT NULL'
+                        if {"attempt_terminal_kind", "abandonment_reason"}.issubset(task_columns):
+                            terminal_where = f"({terminal_where}) AND NOT (attempt_terminal_kind = 'restart_normalized' OR (attempt_terminal_kind = 'abandoned' AND abandonment_reason = 'external_supervisor_restart_normalization'))"
+                        if "lineage_id" in task_columns and "lineage_id" in columns:
+                            terminal_where = f"({terminal_where}) AND lineage_id = ?"
+                            parameters.append(row["lineage_id"])
                         terminal_windows = int(connection.execute(
-                            f'SELECT COUNT(*) FROM "tasks" WHERE {terminal_where}'
+                            f'SELECT COUNT(*) FROM "tasks" WHERE {terminal_where}', parameters
                         ).fetchone()[0])
                     next_random = dict(row)
                     next_random["terminal_windows"] = terminal_windows
@@ -1495,6 +1507,7 @@ a:focus-visible{{outline:2px solid var(--blue);outline-offset:5px}}
 .scale-heading strong{{font-size:15px}}.scale-heading span{{font-size:11px;color:var(--muted)}}
 .scale-heading b{{font-size:23px;font-weight:500;color:var(--text);margin-right:5px}}
 .worker-scale svg{{display:block;width:100%;overflow:visible}}
+.worker-scale svg.model-emblem{{width:36px;height:36px;margin:8px 10px 0}}
 .strength-axis{{stroke:#36464e;stroke-width:1}}.strength-stop{{fill:#68777f}}
 .worker-dot{{fill:#7ee6c2;stroke:var(--bg);stroke-width:1}}
 .worker-scale:nth-child(2) .worker-dot{{fill:#a8baff}}

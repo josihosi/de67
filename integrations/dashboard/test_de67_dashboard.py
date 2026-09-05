@@ -84,6 +84,25 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn("<script>", page)
         self.assertEqual(before, [path.read_bytes() for path in paths])
 
+    def test_random_count_excludes_restart_cleanup_and_other_lineages(self):
+        connection = sqlite3.connect(self.workspace / ".de67/state/deadlines.sqlite3")
+        connection.row_factory = sqlite3.Row
+        connection.executescript("""
+            ALTER TABLE tasks ADD COLUMN lineage_id TEXT;
+            ALTER TABLE tasks ADD COLUMN attempt_terminal_at REAL;
+            ALTER TABLE tasks ADD COLUMN attempt_terminal_kind TEXT;
+            ALTER TABLE tasks ADD COLUMN abandonment_reason TEXT;
+            ALTER TABLE random_mutation_cycles ADD COLUMN lineage_id TEXT;
+            UPDATE random_mutation_cycles SET lineage_id='current';
+            UPDATE tasks SET lineage_id='current', attempt_terminal_at=1, attempt_terminal_kind='completed';
+            INSERT INTO tasks (lineage_id,attempt_terminal_at,attempt_terminal_kind) VALUES ('current',2,'restart_normalized'),('other',3,'completed');
+            INSERT INTO tasks (lineage_id,attempt_terminal_at,attempt_terminal_kind,abandonment_reason) VALUES ('current',4,'abandoned','external_supervisor_restart_normalization');
+        """)
+        _, _, cycle = dashboard_module._completed_mutation_counts(connection)
+        self.assertEqual(cycle["terminal_windows"], 1)
+        self.assertEqual(cycle["remaining_windows"], 1)
+        connection.close()
+
     def test_overview_uses_real_ledger_and_clock_state(self) -> None:
         page = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).render("overview").decode()
         self.assertIn("R009-M1", page)
@@ -1117,7 +1136,7 @@ class WorkerScaleTests(unittest.TestCase):
             self.assertEqual(len(points), count)
             for i, left in enumerate(points):
                 for right in points[i+1:]:
-                    self.assertGreater(math.dist(left, right), 8)
+                    self.assertGreater(math.dist(left, right), 10.34)
 
     def test_overflow_is_explicit_and_total_remains_exact(self):
         result = dashboard_module.render_worker_scale("terra", {"max": 15})

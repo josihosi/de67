@@ -120,7 +120,7 @@ class DashboardTests(unittest.TestCase):
             connection.executescript("CREATE TABLE threads(id TEXT, rollout_path TEXT); CREATE TABLE thread_spawn_edges(parent_thread_id TEXT, child_thread_id TEXT);")
             for session, total in (("coord",100), ("worker",200), ("nested",300), ("review",400), ("unrelated",999)):
                 path = self.sessions / (session + ".jsonl")
-                path.write_text(json.dumps({"type":"event_msg", "timestamp":datetime.now(timezone.utc).isoformat(),
+                path.write_text(json.dumps({"type":"turn_context", "payload":{"model":"gpt-5.6-luna" if session == "nested" else "gpt-5.6-terra"}}) + "\n" + json.dumps({"type":"event_msg", "timestamp":datetime.now(timezone.utc).isoformat(),
                     "payload":{"type":"token_count", "info":{"total_token_usage":{
                     "input_tokens":total,"cached_input_tokens":10,"output_tokens":5},
                     "last_token_usage":{"input_tokens":total,"cached_input_tokens":10,"output_tokens":5}}}}) + "\n")
@@ -130,7 +130,10 @@ class DashboardTests(unittest.TestCase):
         paths = [p for p in self.workspace.rglob("*") if p.is_file()]
         before = [p.read_bytes() for p in paths]
         fuel = dashboard_module.fuel_state(self.workspace, self.sessions)
-        self.assertEqual(fuel["totals"], {"coordinator":95,"workers":490,"astra":395})
+        self.assertEqual(fuel["totals"], {"coordinator":95,"terra":195,"luna":295,"astra":395,"other":0})
+        self.assertEqual(sum(fuel["bins"]), sum(fuel["totals"].values()))
+        for role in fuel["totals"]:
+            self.assertEqual(sum(fuel["series"][role]), fuel["totals"][role])
         self.assertFalse(fuel["partial"])
         self.assertEqual(fuel["sessions"], 4)
         self.assertEqual(before, [p.read_bytes() for p in paths])
@@ -139,13 +142,18 @@ class DashboardTests(unittest.TestCase):
 
     def test_fuel_labels_and_dynamic_axis(self) -> None:
         for peak, label in ((0,"1"),(1800,"2k"),(9000000,"10m")):
-            page = dashboard_module.render_fuel({"available":True,"totals":{"coordinator":1,"workers":2,"astra":3},
-                "bins":[peak] + [0]*31,"partial":True})
+            page = dashboard_module.render_fuel({"available":True,"totals":{"coordinator":1,"terra":2,"luna":4,"astra":3,"other":0},
+                "bins":[peak] + [0]*23,"series":{role:[peak if role == "terra" else 0]+[0]*23 for role in ("astra","coordinator","terra","luna","other")},"partial":True})
             self.assertIn("coordinator<b>1", page)
+            self.assertIn("worker Terra<b>2", page)
+            self.assertIn("worker Luna<b>4", page)
+            self.assertEqual(page.count('class="fuel-series"'), 4)
+            self.assertLess(page.index("<svg"), page.index('class="fuel-total"'))
             self.assertIn("mutator<b>3", page)
+            self.assertIn("role totals · log scale", page)
             self.assertIn("campaign · partial", page)
-            self.assertIn("0 to " + label + " tokens per fifteen minutes", page)
-            self.assertIn("last 8h", page)
+            self.assertIn("0 to " + label + " tokens per hour", page)
+            self.assertIn("last 24h", page)
 
     def test_refresh_interval_and_local_script_are_explicit(self) -> None:
         for interval in (0, 30, 900):

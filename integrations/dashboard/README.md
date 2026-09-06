@@ -82,9 +82,12 @@ python3 -m unittest integrations/dashboard/test_de67_dashboard.py
 ## Token use
 
 The token panel counts observed campaign usage: input minus cached input plus output.
-It includes coordinator, worker, and mutator sessions, including completed workers.
-Missing session records make the total explicitly partial. The graph shows fifteen-minute
-bins across the last eight hours, with a scale that follows observed use. Narrator and
+It includes coordinator, mutator, Terra-worker, and Luna-worker sessions, including completed
+workers. Other or unknown worker models remain separately accounted for when present.
+Missing session records make the total explicitly partial. The graph stacks the four roles into their combined total in one-hour
+bins across the last 24 hours, with a linear scale that follows observed use.
+Below it, logarithmic bars compare campaign totals by role, largest first; hover for exact
+counts. The combined campaign total sits at the bottom. Narrator and
 unrelated sessions are excluded. Accounting uses the local Codex session index and logs;
 unavailable accounting leaves only this panel unavailable.
 

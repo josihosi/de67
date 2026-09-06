@@ -1187,7 +1187,7 @@ def _trace_fuel(path: Path) -> dict[str, Any]:
                 cached["fresh"] = fresh
             except (ValueError, TypeError, KeyError):
                 continue
-    cached["points"] = [(t, n) for t, n in cached["points"] if t >= time.time() - 28800]
+    cached["points"] = [(t, n) for t, n in cached["points"] if t >= time.time() - 86400]
     return cached
 
 
@@ -1230,26 +1230,32 @@ def fuel_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
                 sessions[session] = (roots.get(session, "astra" if role == "astra" else "workers"), Path(path))
     finally:
         connection.close()
-    totals = {"coordinator": 0, "workers": 0, "astra": 0}
+    totals = {"astra": 0, "coordinator": 0, "terra": 0, "luna": 0, "other": 0}
     known = 0
     now = time.time()
-    bins = [0] * 32  # Fifteen-minute display bins over the last eight hours.
+    bins = [0] * 24  # One-hour display bins over the last twenty-four hours.
+    series = {role: [0] * len(bins) for role in totals}
     for role, path in sessions.values():
         try:
             usage = _trace_fuel(path)
             if usage["fresh"] is None:
                 missing += 1
                 continue
+            if role == "workers":
+                if "worker_model" not in usage:
+                    usage["worker_model"] = str(_session_header(path).get("model", "")).lower().rsplit("-", 1)[-1]
+                role = usage["worker_model"] if usage["worker_model"] in ("terra", "luna") else "other"
             known += 1
             totals[role] += usage["observed"]
             missing += bool(usage["partial"])
             for stamp, delta in usage["points"]:
-                bucket = int((stamp - (now - 28800)) / 900)
+                bucket = int((stamp - (now - 86400)) / 3600)
                 if 0 <= bucket < len(bins):
                     bins[bucket] += delta
+                    series[role][bucket] += delta
         except OSError:
             missing += 1
-    return {"available": bool(known), "totals": totals, "bins": bins,
+    return {"available": bool(known), "totals": totals, "bins": bins, "series": series,
             "partial": bool(missing), "sessions": known, "lineage": config["lineage"]}
 
 
@@ -1271,20 +1277,40 @@ def render_fuel(fuel: dict[str, Any]) -> str:
     ceiling = next(step * magnitude for step in (1, 2, 2.5, 5, 10) if step * magnitude >= peak)
     def axis_label(value: float) -> str:
         return f"{value / 1000000:g}m" if value >= 1000000 else f"{value / 1000:g}k" if value >= 1000 else f"{value:g}"
-    points = " ".join(f"{4 + i * 136 / max(1, len(bins)-1):.1f},{49 - value / ceiling * 42:.1f}" for i, value in enumerate(bins))
+    roles = [("astra", "mutator", "#c49bd4"), ("coordinator", "coordinator", "#eabd69"),
+             ("terra", "worker Terra", "#77accb"), ("luna", "worker Luna", "#82dfbd")]
+    if totals.get("other", 0):
+        roles.append(("other", "other workers", "#9997a0"))
+    cumulative = [0] * len(bins)
+    layers = []
+    def coordinates(values: list[int]) -> list[str]:
+        return [f"{4 + i * 136 / max(1, len(values)-1):.1f},{115 - value / ceiling * 108:.1f}"
+                for i, value in enumerate(values)]
+    for role, label, color in roles:
+        baseline = coordinates(cumulative)
+        cumulative = [a + b for a, b in zip(cumulative, fuel["series"][role])]
+        upper = coordinates(cumulative)
+        layers.append(f'<g class="fuel-series" data-role="{role}" style="color:{color}">'
+                      f'<title>{label}</title><polygon points="{" ".join(upper + baseline[::-1])}" '
+                      f'fill="currentColor" fill-opacity=".12"/>'
+                      f'<polyline points="{" ".join(upper)}" fill="none" stroke="currentColor" stroke-width="1.4"/></g>')
     ticks = "".join(
         f'<path d="M144 {y}h3" stroke="currentColor" opacity=".35"/>'
         f'<text x="152" y="{y}" dominant-baseline="middle">{axis_label(value)}</text>'
-        for value, y in ((ceiling, 7), (ceiling / 2, 28), (0, 49))
+        for value, y in ((ceiling, 7), (ceiling / 2, 61), (0, 115))
     )
-    rows = "".join(f'<span>{label}<b>{compact(totals[role])}</b></span>'
-                   for role, label in (("coordinator", "coordinator"), ("workers", "workers"), ("astra", "mutator")))
-    return (f'<aside class="fuel" title="{_escape(title)}"><small>fresh tokens</small>'
-            f'<strong>{compact(total)}{"<sup>~</sup>" if fuel["partial"] else ""}</strong>'
-            f'<span class="fuel-scope">campaign{" · partial" if fuel["partial"] else ""}</span>'
-            f'<svg viewBox="0 0 188 56" role="img" aria-label="Fresh-token burn over the last eight hours. Linear right axis: 0 to {axis_label(ceiling)} tokens per fifteen minutes.">'
-            f'<polyline points="{points}" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M144 7V49" stroke="currentColor" opacity=".2"/>{ticks}</svg>'
-            f'<span class="fuel-period">tokens / 15 min · last 8h</span><div>{rows}</div></aside>')
+    log_maximum = math.log10(1 + max(totals.values())) or 1
+    rows = "".join(
+        f'<span title="{_escape(label)}: {totals[role]:,} fresh tokens"><i style="background:{color}"></i>'
+        f'{label}<b>{compact(totals[role])}</b><em style="width:{100 * math.log10(1 + totals[role]) / log_maximum:.2f}%;background:{color}"></em></span>'
+        for role, label, color in sorted(roles, key=lambda item: totals[item[0]], reverse=True))
+    return (f'<aside class="fuel" title="{_escape(title)}">'
+            f'<svg viewBox="0 0 188 122" role="img" aria-label="Stacked fresh-token use over the last twenty-four hours; top line is the total. Linear right axis: 0 to {axis_label(ceiling)} tokens per hour.">'
+            f'{"".join(layers)}<path d="M144 7V115" stroke="currentColor" opacity=".2"/>{ticks}</svg>'
+            f'<span class="fuel-period">tokens / hour · last 24h</span><div class="fuel-legend" title="Bar lengths use log10(1 + fresh tokens); tooltips show exact role totals."><small>role totals · log scale</small>{rows}</div>'
+            f'<strong class="fuel-total"><span>total</span>{compact(total)}{"<sup>~</sup>" if fuel["partial"] else ""}</strong>'
+            f'<span class="fuel-scope">campaign{" · partial" if fuel["partial"] else ""}</span></aside>')
+
 
 
 class Dashboard:
@@ -1788,23 +1814,22 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 
 .cosmos-deck{{grid-template-columns:32% minmax(0,1fr) 160px;gap:24px}}
 .fuel{{align-self:center;color:#b8accb;min-width:0;padding-left:6px}}
-.fuel>small{{font-size:9px;letter-spacing:.1em;color:#96909f}}
-.fuel>strong{{display:block;font-size:34px;font-weight:400;letter-spacing:-.06em;margin:9px 0 3px;color:#d9cbe4}}
-.fuel sup{{font-size:13px;vertical-align:top;letter-spacing:0;margin-left:3px}}
-.fuel>span{{display:block;font-size:9px;color:#777480}}
-.fuel svg{{display:block;width:100%;height:56px;margin:19px 0 4px;opacity:.7}}
-.fuel .fuel-period{{font-size:8px;color:#777480}}
-.fuel>div{{display:grid;gap:9px;margin-top:22px}}
-.fuel>div>span{{display:flex;justify-content:space-between;font-size:9px;color:#96909f}}
-.fuel b{{font-size:10px;font-weight:400;color:#bdb3ca}}
-@media(max-width:900px) and (min-width:651px){{.cosmos-deck{{grid-template-columns:28% minmax(0,1fr) 125px;gap:14px}}.fuel>strong{{font-size:28px}}}}
-@media(max-width:650px){{.cosmos-deck{{grid-template-columns:1fr}}.fuel{{width:100%;padding:14px 0 0;display:grid;grid-template-columns:1fr 1fr;column-gap:24px;align-items:center}}.fuel>small,.fuel>strong,.fuel-scope{{grid-column:1}}.fuel svg{{grid-column:2;grid-row:1/4;margin:0;height:48px}}.fuel .fuel-period{{grid-column:2;text-align:right}}.fuel>div{{grid-column:1/-1;display:flex;gap:24px;margin-top:16px}}.fuel>div>span{{gap:10px}}}}
-
-
+.fuel svg{{display:block;width:100%;height:150px;margin:0 0 5px}}
 .fuel svg text{{fill:currentColor;font-size:8px;opacity:.85}}
-@media(min-width:901px){{.cosmos-deck{{grid-template-columns:32% minmax(0,1fr) 180px;padding-right:12px}}}}
-@media(max-width:900px) and (min-width:651px){{.cosmos-deck{{grid-template-columns:28% minmax(0,1fr) 150px}}}}
-@media(max-width:650px){{.fuel svg{{height:56px}}.fuel .fuel-period{{font-size:7px;white-space:nowrap}}}}
+.fuel>span{{display:block;font-size:9px;color:#777480}}
+.fuel .fuel-period{{font-size:8px;color:#96909f}}
+.fuel .fuel-legend{{display:grid;gap:10px;margin-top:17px}}
+.fuel-legend>small{{font-size:8px;color:#96909f;margin:0}}
+.fuel-legend>span{{display:grid;grid-template-columns:10px 1fr auto;align-items:center;column-gap:6px;row-gap:5px;font-size:9px;color:#b1a9bb}}
+.fuel-legend em{{grid-column:1/-1;display:block;height:3px;opacity:.75}}
+.fuel-legend i{{display:inline-block;width:10px;height:2px;flex-shrink:0}}
+.fuel-legend b{{margin-left:auto;font-size:10px;font-weight:400;color:#c9bfd4}}
+.fuel .fuel-total{{display:flex;align-items:baseline;gap:5px;font-size:17px;font-weight:700;letter-spacing:0;margin:17px 0 4px;padding-top:10px;border-top:1px solid #35303e;color:#dfd4e7}}
+.fuel-total>span{{margin-right:auto;font-size:10px;font-weight:700}}
+.fuel sup{{font-size:10px;vertical-align:top}}
+@media(max-width:900px) and (min-width:651px){{.cosmos-deck{{grid-template-columns:24% minmax(0,1fr) 155px;gap:14px}}}}
+@media(max-width:650px){{.cosmos-deck{{grid-template-columns:1fr}}.fuel{{width:100%;padding:14px 0 0;display:block}}.fuel svg{{height:190px}}.fuel .fuel-legend{{gap:10px}}.fuel-legend>span{{font-size:11px}}.fuel .fuel-period{{font-size:9px}}}}
+
 
 
 .sun>span{{display:inline-block;transform:translateY(7px);font-size:14px}}

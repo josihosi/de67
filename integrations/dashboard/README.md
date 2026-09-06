@@ -90,7 +90,8 @@ It includes coordinator, mutator, Terra-worker, and Luna-worker sessions, includ
 workers. Other or unknown worker models remain separately accounted for when present.
 Missing session records make the total explicitly partial. The graph stacks the four roles into their combined total in one-hour
 bins across the last 24 hours, with a linear scale that follows observed use.
-Below it, logarithmic bars compare campaign totals by role, largest first; hover for exact
+Between the plots, a shared color legend identifies each role. Separate logarithmic bars
+compare campaign totals, largest first, on an axis that rounds up as totals grow; hover for exact
 counts. The combined campaign total sits at the bottom. Narrator and
 unrelated sessions are excluded. Accounting uses the local Codex session index and logs;
 unavailable accounting leaves only this panel unavailable.

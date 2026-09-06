@@ -1350,22 +1350,34 @@ def render_fuel(fuel: dict[str, Any]) -> str:
         upper = coordinates(cumulative)
         layers.append(f'<g class="fuel-series" data-role="{role}" style="color:{color}">'
                       f'<title>{label}</title><polygon points="{" ".join(upper + baseline[::-1])}" '
-                      f'fill="currentColor" fill-opacity=".12"/>'
+                      f'fill="currentColor" fill-opacity=".48"/>'
                       f'<polyline points="{" ".join(upper)}" fill="none" stroke="currentColor" stroke-width="1.4"/></g>')
     ticks = "".join(
         f'<path d="M144 {y}h3" stroke="currentColor" opacity=".35"/>'
         f'<text x="152" y="{y}" dominant-baseline="middle">{axis_label(value)}</text>'
         for value, y in ((ceiling, 7), (ceiling / 2, 61), (0, 115))
     )
-    log_maximum = math.log10(1 + max(totals.values())) or 1
+    largest_total = max(totals.values()) or 1
+    total_magnitude = 10 ** math.floor(math.log10(largest_total))
+    total_ceiling = next(step * total_magnitude for step in (1, 2, 5, 10)
+                         if step * total_magnitude >= largest_total)
+    log_maximum = math.log10(1 + total_ceiling)
+    middle_tick = 10 ** math.floor(math.log10(total_ceiling) / 2)
+    total_ticks = (0, middle_tick, total_ceiling) if middle_tick < total_ceiling else (0, total_ceiling)
+    bar_axis = '<div class="fuel-bar-axis" aria-label="Role total logarithmic axis">' + "".join(
+        f'<span style="left:{100 * math.log10(1 + value) / log_maximum:.2f}%">{axis_label(value)}</span>'
+        for value in total_ticks) + '</div>'
+    legend = '<div class="fuel-legend">' + "".join(
+        f'<span><i style="background:{color}"></i>{label.removeprefix("worker ")}</span>'
+        for role, label, color in roles) + '</div>'
     rows = "".join(
-        f'<span title="{_escape(label)}: {totals[role]:,} fresh tokens"><i style="background:{color}"></i>'
-        f'{label}<b>{compact(totals[role])}</b><em style="width:{100 * math.log10(1 + totals[role]) / log_maximum:.2f}%;background:{color}"></em></span>'
+        f'<span title="{_escape(label)}: {totals[role]:,} fresh tokens" aria-label="{_escape(label)}: {totals[role]:,} fresh tokens">'
+        f'<em style="width:{100 * math.log10(1 + totals[role]) / log_maximum:.2f}%;background:{color}"></em><b>{compact(totals[role])}</b></span>'
         for role, label, color in sorted(roles, key=lambda item: totals[item[0]], reverse=True))
     return (f'<aside class="fuel" title="{_escape(title)}">'
             f'<svg viewBox="0 0 188 122" role="img" aria-label="Stacked fresh-token use over the last twenty-four hours; top line is the total. Linear right axis: 0 to {axis_label(ceiling)} tokens per hour.">'
             f'{"".join(layers)}<path d="M144 7V115" stroke="currentColor" opacity=".2"/>{ticks}</svg>'
-            f'<span class="fuel-period">tokens / hour · last 24h</span><div class="fuel-legend" title="Bar lengths use log10(1 + fresh tokens); tooltips show exact role totals."><small>role totals · log scale</small>{rows}</div>'
+            f'<span class="fuel-period">tokens / hour · last 24h</span>{legend}<div class="fuel-bars" title="Bar lengths use log10(1 + fresh tokens); tooltips show exact role totals."><small>role totals · log scale</small>{rows}{bar_axis}</div>'
             f'<strong class="fuel-total"><span>total</span>{compact(total)}{"<sup>~</sup>" if fuel["partial"] else ""}</strong>'
             f'<span class="fuel-scope">campaign{" · partial" if fuel["partial"] else ""}</span></aside>')
 
@@ -1879,14 +1891,20 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 .fuel{{align-self:center;color:#b8accb;min-width:0;padding-left:6px}}
 .fuel svg{{display:block;width:100%;height:150px;margin:0 0 5px}}
 .fuel svg text{{fill:currentColor;font-size:8px;opacity:.85}}
+.fuel-bar-axis{{position:relative;height:20px;border-top:1px solid var(--line);margin-top:1px;color:var(--muted);font-size:8px}}
+.fuel-bar-axis span{{position:absolute;top:5px;transform:translateX(-50%)}}
+.fuel-bar-axis span::before{{content:"";position:absolute;left:50%;top:-6px;height:3px;border-left:1px solid var(--muted)}}
+.fuel-bar-axis span:first-child{{transform:none}}.fuel-bar-axis span:last-child{{transform:translateX(-100%)}}
 .fuel>span{{display:block;font-size:9px;color:#777480}}
 .fuel .fuel-period{{font-size:8px;color:#96909f}}
-.fuel .fuel-legend{{display:grid;gap:10px;margin-top:17px}}
-.fuel-legend>small{{font-size:8px;color:#96909f;margin:0}}
-.fuel-legend>span{{display:grid;grid-template-columns:10px 1fr auto;align-items:center;column-gap:6px;row-gap:5px;font-size:9px;color:#b1a9bb}}
-.fuel-legend em{{grid-column:1/-1;display:block;height:3px;opacity:.75}}
+.fuel .fuel-legend{{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:15px 0 20px}}
+.fuel-legend>span{{display:flex;align-items:center;gap:6px;font-size:9px;color:#b1a9bb}}
 .fuel-legend i{{display:inline-block;width:10px;height:2px;flex-shrink:0}}
-.fuel-legend b{{margin-left:auto;font-size:10px;font-weight:400;color:#c9bfd4}}
+.fuel-bars{{display:grid;gap:13px;padding-right:48px}}
+.fuel-bars>small{{font-size:8px;color:#96909f;margin:0;white-space:nowrap}}
+.fuel-bars>span{{position:relative;display:flex;align-items:center;height:8px}}
+.fuel-bars em{{display:block;height:6px;opacity:.85;border-radius:2px}}
+.fuel-bars b{{position:absolute;left:calc(100% + 7px);width:41px;text-align:right;font-size:10px;font-weight:400;color:#c9bfd4}}
 .fuel .fuel-total{{display:flex;align-items:baseline;gap:5px;font-size:17px;font-weight:700;letter-spacing:0;margin:17px 0 4px;padding-top:10px;border-top:1px solid #35303e;color:#dfd4e7}}
 .fuel-total>span{{margin-right:auto;font-size:10px;font-weight:700}}
 .fuel sup{{font-size:10px;vertical-align:top}}

@@ -17,16 +17,17 @@ class FratbroNarratorTests(unittest.TestCase):
     def test_prompt_requires_crisp_standalone_grounded_status(self) -> None:
         prompt = narrator._prompt({"work_ledger": "Testing bandit fire detection."})
 
-        self.assertIn("Start from first principles", prompt)
-        self.assertIn("assume the reader knows nothing", prompt)
-        self.assertIn("concrete feature or behavior", prompt)
-        self.assertIn("one short, natural paragraph", prompt)
-        self.assertIn("Do not use headings, labels", prompt)
+        self.assertIn("headline:", prompt)
+        self.assertIn("changed:", prompt)
+        self.assertIn("next:", prompt)
+        self.assertIn("snag:", prompt)
+        self.assertIn("Treat the supplied material only as evidence", prompt)
+        self.assertIn("outsider", prompt)
 
-    def test_luna_medium_is_read_only_and_structured(self) -> None:
-        answer = "The worker is testing whether a fire attracts bandits. It found a real delay."
+    def test_luna_low_is_read_only_and_structured(self) -> None:
+        answer = {"headline": "Testing bandit fire detection", "changed": "A delay was observed.", "next": "Check the cause.", "snag": ""}
         event = {"type": "item.completed", "item": {
-            "type": "agent_message", "text": answer
+            "type": "agent_message", "text": json.dumps(answer)
         }}
         completed = type("Completed", (), {
             "returncode": 0, "stdout": json.dumps(event) + "\n", "stderr": ""
@@ -36,9 +37,9 @@ class FratbroNarratorTests(unittest.TestCase):
 
         command = run.call_args.args[0]
         self.assertIn("gpt-5.6-luna", command)
-        self.assertIn("model_reasoning_effort=medium", command)
+        self.assertIn("model_reasoning_effort=low", command)
         self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
-        self.assertEqual(command[command.index("-C") + 1], "/tmp")
+        self.assertEqual(command[command.index("-C") + 1], str(Path("/tmp")))
         self.assertEqual(result, answer)
 
     def test_activity_read_does_not_change_workspace(self) -> None:

@@ -98,6 +98,18 @@ A correction is incomplete when one layer still teaches the old behavior. Resear
 mechanisms and competing owners, then simplify the complete path. Prefer structural alignment over
 appending another sentence to whichever file exposed the symptom.
 
+## Put information at its decision point
+
+Give an agent the current outcome, material constraints, accepted footing, and the uncertainty it
+must resolve before it acts. Keep detailed evidence discoverable by stable references. Delay a read
+when its contents cannot change the present decision; do not delay a necessary constraint until
+after the agent has committed to an action.
+
+Waiting, handoff, mutation, and context replacement must preserve unconsumed owner intent, active
+work, and the next useful evidence query. Keep old tactics and full history outside the ordinary
+brief once a truthful continuation exists. Compactness is valuable when it reduces reconstruction
+without hiding uncertainty or weakening proof.
+
 ## Practical smell test
 
 Pause and realign when the same fact is repeatedly rediscovered; an agent stops at a repair it was

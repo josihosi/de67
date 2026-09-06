@@ -1,62 +1,84 @@
 # de67
 
-> Don't let your vibe coding project turn 67. Stop aura farming and start building. You need to **de67**.
+> Don't let your vibe coding project turn 67. Stop aura farming and start building.
+> You need to **de67**.
 
-de67 is a **skill**, an **autonomous delivery loop**, and—where reality gets sharp—just enough
-**harness** to cover the whole software-building stack.
+de67 orchestrates a team of agents in **OpenAI Codex**. Discuss the idea, freeze a specification
+grounded in the code, then let **Sol coordinate Terra and Luna workers** to investigate, build,
+test, and repair. **Astra steps in at review points to correct the trajectory and improve the
+delivery method.**
 
-It turns an idea into a code-grounded specification, gives implementation to agents, keeps proof
-attached to progress, and repairs its working method when evidence says the method—not the
-product—is failing.
+The coordinator keeps the work moving, the workers do the work, and the ledger carries progress
+across handoffs. You set the direction and can steer the run as it goes.
 
-Built natively for [OpenAI Codex](https://openai.com/codex/). The method could be adapted to other
-frontier models, and possibly strong local models, when their agent runtime provides equivalent
-tools, subagents, durable state, and reasoning control. Those ports are not shipped today.
+[Get started](#get-started) · [The three phases](#three-phases) ·
+[Watch the work](#watch-it-work) · [Steer a run](#steer-phase-3-while-it-runs)
 
-## Use de67
+[![de67 dashboard with worker activity, token usage, and a populated trajectory plot.](docs/assets/dashboard-overview.png)](integrations/dashboard/README.md)
 
-Install or link this complete repository as a folder named `de67` in your Codex skills directory.
+*Dashboard overview: worker activity, token usage, and the trajectory sidecar.*
+
+## Why de67?
+
+Long agent runs need more than a longer prompt. They need a clear outcome, a record of what
+actually happened, and a way to continue when a worker finishes, a process disappears, or the
+current approach stops working.
+
+- **Intent stays visible.** Discussion produces a WEC; repository inspection turns it into a
+  frozen functional specification. Implementation has something concrete to answer to.
+- **Progress has evidence.** Workers return findings and test results. The coordinator decides
+  what they establish and what remains unproved.
+- **Work survives handoffs.** A SQLite clock and ledger preserve tasks, deadlines, findings,
+  and restart generations across coordinator and worker replacement.
+- **The method can improve.** An independent mutation reviewer can repair the delivery method
+  when evidence or an owner suggestion calls for it.
+
+The aim is working software with inspectable proof. Starting a process, producing a patch, or
+passing a compile check is evidence for that particular step—not automatic proof of the outcome.
+
+## Get started
+
+You need the **OpenAI Codex CLI**, **Python 3.10+**, and the model capabilities specified in the
+[skill router](SKILL.md#install-or-integrate). Git is needed for repository work.
+
+Install or link the **complete repository** as a folder named `de67` in your Codex skills directory.
 Keep the router, phase folders, scripts, references, assets, integrations, and agent metadata
-together.
+together. Follow the router's [installation checks](SKILL.md#install-or-integrate) before starting.
 
-Then invoke one phase at a time from your project:
+From the project you want to work on, invoke one phase at a time:
 
 ```text
 de67 1   discuss the idea
 de67 2   inspect the code and freeze the specification
-de67 3   build and prove it autonomously
+de67 3   build, test, and repair against it
 ```
 
-Each phase ends with a durable artifact. You decide when to begin the next phase.
+**You start each phase explicitly.** Review its durable artifact before moving to the next phase.
 
 ## Three phases
 
-- **[de67 1 — Discuss](de-67-1/SKILL.md)**
-  Focused questions preserve the requested experience, language, and owner choices in `WEC.md`.
-  Phase 1 does not design or implement the solution.
+| Phase | What happens | What carries forward |
+| --- | --- | --- |
+| **[1 · Discuss](de-67-1/SKILL.md)** | Focused questions clarify the experience, language, and owner choices. | `WEC.md`: intent, before implementation choices take over. |
+| **[2 · Specify](de-67-2/SKILL.md)** | A fresh owner inspects the repository and resolves the functional contract. | Frozen `.de67/DFS.md` and initialized clock state. |
+| **[3 · Deliver](de-67-3/SKILL.md)** | A coordinator assigns workers, interprets results, and continues through investigation, implementation, and repair. | Durable findings and evidence for the requested outcome. |
 
-- **[de67 2 — Specify](de-67-2/SKILL.md)**
-  A fresh specification owner inspects the actual repository and turns the WEC into a frozen,
-  code-grounded `.de67/DFS.md`.
-
-- **[de67 3 — Deliver](de-67-3/SKILL.md)**
-  Coordinators and workers autonomously implement the frozen DFS, test production routes, preserve
-  evidence, and continue until the requested outcome is proved.
-
-**[See the complete de67 lifecycle and diagrams →](docs/how-de67-works.md)**
+**[See the complete lifecycle and diagrams →](docs/how-de67-works.md)**
 
 ## Structure, not a prison
 
-The coordinator owns the trajectory. Workers implement, investigate, test, and repair. A
-deterministic clock and SQLite ledger preserve deadlines, attempts, evidence, and handovers without
-spending model tokens while nothing is happening.
+The **supervisor** owns process lifetime. The **coordinator** owns the trajectory.
+**Workers** investigate, implement, test, and repair. The clock and ledger preserve what happened
+without spending model tokens while nothing is happening.
 
-The machinery gives capable agents durable structure. It does not try to replace their judgment with
-a maze of administrative rules.
+Independent work can run in parallel. Ordinary failures return to the coordinator as work to
+understand and resolve. Accepted progress stays in durable state when an agent is replaced.
 
-Accepted progress survives worker or coordinator replacement. Ordinary failures remain ordinary
-work. Independent mutation review changes the delivery method only when evidence or a scheduled
-review justifies it.
+When mutation review is due, new dispatch pauses and active workers can finish. A fresh,
+independent reviewer examines the method at a quiet junction. Guarded changes and receipts
+preserve the handoff, then a fresh coordinator resumes from the ledger.
+
+The machinery gives agents durable structure and leaves semantic judgment with the agents.
 
 ## Steer Phase 3 while it runs
 
@@ -68,49 +90,65 @@ Autonomous does not mean unsteerable. Add plain-English guidance to
 - Owner-authorized [defer]: Keep this for the next regularly due mutation review.
 ```
 
-A **trigger** is the forcing mode: it makes mutation review due without killing work already in
-flight. A **defer** is the non-forcing mode: ordinary delivery continues, and the next scheduled
-review must consume the suggestion. The independent reviewer reads the complete ledger, applies
-the owner-authorized outcome through guarded changes, and then returns control to a fresh
-coordinator. This is the main steering wheel for Phase 3.
+**Trigger** makes review due without killing work in flight. **Defer** keeps ordinary delivery
+moving and supplies the suggestion to the next scheduled review. Both let you name the outcome
+you want the reviewer to address.
+
+The independent reviewer reads the complete ledger, applies owner-authorized changes through the
+guarded review route, and returns control to a fresh coordinator.
 
 **[See mutation steering and the review lifecycle →](docs/how-de67-works.md#mutation-without-losing-the-work)**
 
 ## Watch it work
 
-Phase 3 includes an optional passive website showing the live DFS, ledger, clock, workers,
-coordinator, mutation state, and recent evidence. The dashboard cannot control or stop delivery.
+The optional dashboard provides a read-only view of the live DFS, work ledger, deadline clock,
+coordinator, workers, mutation state, and recent evidence. It cannot control or stop delivery.
 
-[![de67 dashboard overview](integrations/dashboard/dashboard.png)](integrations/dashboard/README.md)
+Run the dashboard from this checkout:
 
-- **[Host the dashboard](integrations/dashboard/README.md)** locally or through authenticated
-  [Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve).
-- **[Contact the owner through OpenClaw](integrations/openclaw_discord/README.md)** when no
-  executable route remains and one human answer is genuinely required.
+```sh
+python3 integrations/dashboard/de67_dashboard.py --workspace /path/to/project
+```
+
+Open `http://127.0.0.1:8767`. The default is manual refresh. The dashboard uses Python's standard
+library; the optional narrator makes model calls only when configured.
+
+- **[Dashboard guide](integrations/dashboard/README.md):** setup, trajectory sidecar, optional
+  narrator, session sources, and network exposure.
+- **[OpenClaw owner contact](integrations/openclaw_discord/README.md):** a separate, optional route
+  for one human answer when no executable route remains.
 
 ## Go deeper
 
-| Topic | Read |
+| Looking for… | Start here |
 | --- | --- |
-| Complete lifecycle and diagrams | [How de67 works](docs/how-de67-works.md) |
-| Installation and skill routing | [Skill router](SKILL.md) |
+| Installation, requirements, and routing | [Skill router](SKILL.md) |
+| The complete delivery and mutation lifecycle | [How de67 works](docs/how-de67-works.md) |
 | Discussion and the WEC | [de67 1](de-67-1/SKILL.md) |
 | Repository inspection and frozen DFS | [de67 2](de-67-2/SKILL.md) |
 | Autonomous delivery and mutation | [de67 3](de-67-3/SKILL.md) |
-| Steering a live Phase 3 run | [Mutation review](docs/how-de67-works.md#mutation-without-losing-the-work) |
+| A manual review of workflow friction | [Alignment audit](alignment-audit/SKILL.md) |
 | Minimal-work reasoning | [MSW kernel](references/msw-kernel.md) |
-| Writing clear, auditable artifacts | [Writing guideline](references/controlled-english.md) |
+| Clear, auditable artifacts | [Writing guideline](references/controlled-english.md) |
 | Live progress website | [Dashboard](integrations/dashboard/README.md) |
 | Optional owner contact | [OpenClaw adapter](integrations/openclaw_discord/README.md) |
-| Moving lab work into a release | [Release promotion](RELEASE_PROMOTION.md) |
+| Moving tested lab work into a release | [Release promotion](RELEASE_PROMOTION.md) |
 
-## Lab and release
+## Lab now. Release when proven.
 
-Use a writable fork or private `de67-lab` to observe and evolve the method against real work.
-Accepted mutations become reviewable Git history there.
+**de67-lab is the active development repository.** This README prepares the next release;
+it does not declare stability testing complete.
 
-Promote stable changes deliberately into the public release. Never overwrite the release repository
-with a lab worktree. See [release promotion](RELEASE_PROMOTION.md).
+Local delivery and method mutation do not require a writable method checkout or network access.
+A writable lab is useful when you want to generalize and publish an improvement. Stable changes
+are promoted deliberately into the release repository, preserving its history and release review.
+
+[The promotion procedure](RELEASE_PROMOTION.md) covers clean-checkout installation, package tests,
+optional-integration isolation, and final release approval. Never overwrite the release repository
+with a lab worktree.
+
+Built natively for [OpenAI Codex](https://openai.com/codex/). Other agent runtimes would need
+equivalent tools, subagents, durable state, and reasoning control; those ports are not shipped.
 
 ## Credits
 

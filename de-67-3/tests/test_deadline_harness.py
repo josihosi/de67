@@ -4,6 +4,7 @@ import io
 import hashlib
 import json
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -35,6 +36,51 @@ class DeadlineHarnessTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.harness.close()
         self.temporary.cleanup()
+
+    def worker_receipt(
+        self,
+        task_id: str,
+        claim_id: str,
+        worker_id: str,
+        disposition: str,
+    ) -> dict[str, object]:
+        return {
+            "schema": "de67.worker-result-receipt.v1",
+            "lineage_id": "project",
+            "task_id": task_id,
+            "claim_id": claim_id,
+            "worker_id": worker_id,
+            "disposition": disposition,
+            "verdict": "continuation preserved",
+            "outcome": "Prove the owned route.",
+            "summary": "The prior footing is durable and the next boundary is explicit.",
+            "material_changes": [],
+            "tests": ["Focused contract check passed."],
+            "live_actions": [],
+            "evidence_ceiling": ["No product closure is claimed."],
+            "bindings": {"run_id": "run-1", "scenario_id": "scenario-1"},
+            "journal_entries": [
+                {
+                    "id": "event-1",
+                    "sequence": 1,
+                    "event_type": "dispatch",
+                    "evidence_class": "transport",
+                    "action_id": "action-1",
+                    "summary": "The first dispatch crossed the owned boundary.",
+                }
+            ],
+            "artifacts": [],
+            "first_divergence": {
+                "class": "next-boundary",
+                "summary": "The live witness remains open.",
+            },
+            "accepted_no_replay": ["Do not repeat the accepted transport check."],
+            "active_work": ["Capture the live witness."],
+            "first_open_boundary": "Capture the live witness.",
+            "narrow_queries": ["query by run_id=run-1"],
+            "entrypoints": ["src/route.cpp"],
+            "context_metrics": {"replaced_checkpoints": 3},
+        }
 
     def test_worker_claim_is_durable_idempotent_and_exclusive(self) -> None:
         self.harness.start_task("project", "route-a", "R-1", 60, now=0)
@@ -79,13 +125,54 @@ class DeadlineHarnessTests(unittest.TestCase):
             "project", "route-a", "worker-a", "coordinator-a", "supervisor-a", now=1
         )
 
-        self.harness.abandon_attempt("project", "route-a", "owner lost", now=2)
+        receipt = self.harness.record_worker_result_receipt(
+            "project",
+            "route-a",
+            "worker-a",
+            self.worker_receipt("route-a", "R-1", "worker-a", "abandoned"),
+            now=2,
+        )
+        self.harness.abandon_attempt(
+            "project", "route-a", "owner lost", receipt_id=receipt["receipt_id"], now=3
+        )
 
         claim = self.harness.connection.execute(
             "SELECT * FROM worker_claims WHERE lineage_id = 'project' AND task_id = 'route-a'"
         ).fetchone()
-        self.assertEqual(claim["released_at"], 2)
+        self.assertEqual(claim["released_at"], 3)
         self.assertEqual(claim["release_reason"], "task_abandoned")
+
+    def test_worker_owned_terminal_requires_indexed_receipt_and_queries_narrowly(self) -> None:
+        self.harness.start_task("project", "route-a", "R-1", 60, now=0)
+        self.harness.claim_worker(
+            "project", "route-a", "worker-a", "coordinator-a", "supervisor-a", now=1
+        )
+        with self.assertRaisesRegex(DeadlineError, "requires its worker result receipt"):
+            self.harness.abandon_attempt("project", "route-a", "owner lost", now=2)
+
+        receipt = self.harness.record_worker_result_receipt(
+            "project",
+            "route-a",
+            "worker-a",
+            self.worker_receipt("route-a", "R-1", "worker-a", "abandoned"),
+            now=3,
+        )
+        compact = self.harness.query_worker_result_receipts(
+            "project", filters={"action_id": "action-1"}
+        )
+        self.assertEqual(len(compact["matches"]), 1)
+        self.assertNotIn("journal_entries", compact["matches"][0])
+        self.assertEqual(compact["matches"][0]["receipt_id"], receipt["receipt_id"])
+        full = self.harness.query_worker_result_receipts(
+            "project", filters={"run_id": "run-1"}, full=True
+        )
+        self.assertEqual(
+            full["matches"][0]["receipt"]["journal_entries"][0]["id"],
+            "event-1",
+        )
+        self.harness.abandon_attempt(
+            "project", "route-a", "owner lost", receipt_id=receipt["receipt_id"], now=4
+        )
 
     def test_parallel_tasks_keep_independent_worker_claims(self) -> None:
         for task, worker in (("route-a", "worker-a"), ("route-b", "worker-b")):
@@ -907,6 +994,44 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertEqual(started["deadline_generation"], 2)
         self.assertEqual(started["estimate_seconds"], 300)
         self.assertEqual(started["deadline_at"], 403)
+
+    def test_cli_retired_generation_uses_new_estimate_without_rewriting_history(self) -> None:
+        self.harness.start_task("project", "before", "R-001", 259200, now=0)
+        self.harness.complete_task("project", "before", "preserved evidence", now=5)
+        self.harness.retire_claim_clocks_for_mutation("project", "owner review", now=6)
+        history = tuple(self.harness.connection.execute(
+            "SELECT * FROM claim_deadline_generations WHERE generation = 1"
+        ).fetchone())
+        restart = self.harness.request_coordinator_restart(
+            "project", "review complete", now=7
+        )["coordinator_restart"]
+        args = ["start", "--state", str(self.state_path), "--lineage", "project",
+                "--task", "after", "--claim", "R-001", "--estimate-seconds", "345600"]
+        with patch("deadline_harness.time.time", return_value=10), redirect_stdout(io.StringIO()):
+            self.assertEqual(main(args), 2)  # Pending restart cannot arm a generation.
+        self.harness.claim_coordinator_restart("project", restart["generation"], "fresh", now=8)
+        self.harness.acknowledge_coordinator_restart("project", restart["generation"], "fresh", now=9)
+        with patch("deadline_harness.time.time", return_value=10), redirect_stdout(io.StringIO()):
+            self.assertEqual(main(args), 0)
+            self.assertEqual(main(args), 0)  # Replay cannot create another generation.
+        claim = self.harness._claim("project", "R-001")
+        self.assertEqual(claim["deadline_generation"], 2)
+        self.assertEqual(claim["estimate_seconds"], 345600)
+        self.assertEqual(claim["deadline_at"], 345610)
+        self.assertEqual(claim["armed_by_restart_generation"], restart["generation"])
+        self.assertEqual(self.harness._task("project", "after")["deadline_generation"], 2)
+        self.assertEqual(tuple(self.harness.connection.execute(
+            "SELECT * FROM claim_deadline_generations WHERE generation = 1"
+        ).fetchone()), history)
+        # An ordinary subsequent attempt keeps the current whole-claim deadline.
+        args[args.index("after")] = "next"
+        args[-1] = "100"
+        with patch("deadline_harness.time.time", return_value=11), redirect_stdout(io.StringIO()):
+            self.assertEqual(main(args), 0)
+        self.assertEqual(self.harness._claim("project", "R-001")["deadline_at"], 345610)
+        self.assertEqual(self.harness.connection.execute(
+            "SELECT COUNT(*) FROM claim_deadline_generations"
+        ).fetchone()[0], 2)
 
     def test_mutation_clock_retirement_refuses_a_live_worker(self) -> None:
         self.harness.start_task("project", "live", "R-001", 100, now=0)
@@ -2202,6 +2327,118 @@ class DeadlineHarnessTests(unittest.TestCase):
             "project", "R-001", "winner", "accepted proof", now=7
         )
         self.assertTrue(accepted["recorded"])
+
+    def projected_acceptance_workspace(self, *, commit_red_baseline: bool) -> tuple[Path, str]:
+        self.harness.close()
+        workspace = Path(self.temporary.name) / "workspace"
+        environment = workspace / ".de67"
+        environment.mkdir(parents=True)
+        red_status = "- [ ] 🔴 R-001 — Proof remains open."
+        receipt = (
+            "  - Durable acceptance: #1 via `closure`; "
+            "SQLite evidence is authoritative."
+        )
+        checked_ledger = (
+            "- [x] R-001 — Proof is accepted.\n"
+            "  - DFS slices: `R-001-S001`\n"
+            f"{receipt} Existing projection failure note."
+        )
+        red_dfs = (
+            "# Frozen DFS\n\n"
+            "<!-- DE67:DFS-SLICE:BEGIN id=R-001-S001 claim=R-001 -->\n"
+            "Implementation status:\n\n"
+            "<!-- DE67:DELIVERY-STATUS:BEGIN claim=R-001 -->\n"
+            f"{red_status}\n"
+            "<!-- DE67:DELIVERY-STATUS:END -->\n"
+            "<!-- DE67:DFS-SLICE:END id=R-001-S001 claim=R-001 -->\n"
+        )
+        (environment / "DFS.md").write_text(red_dfs, encoding="utf-8")
+        (environment / "work-ledger.md").write_text(
+            checked_ledger + "\n", encoding="utf-8"
+        )
+        if commit_red_baseline:
+            subprocess.run(["git", "init", "--quiet", str(workspace)], check=True)
+            subprocess.run(
+                ["git", "-C", str(workspace), "config", "user.email", "test@example.invalid"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(workspace), "config", "user.name", "Harness Test"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(workspace), "add", ".de67/DFS.md"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(workspace), "commit", "--quiet", "-m", "red baseline"],
+                check=True,
+            )
+        projected = (
+            "# Frozen DFS\n\n"
+            "<!-- DE67:DFS-SLICE:BEGIN id=R-001-S001 claim=R-001 -->\n"
+            "Implementation status:\n\n"
+            "<!-- DE67:DELIVERY-STATUS:BEGIN claim=R-001 -->\n"
+            "- [x] 🟢 R-001 — Earlier accepted projection.\n"
+            f"{receipt}\n"
+            "<!-- DE67:DELIVERY-STATUS:END -->\n"
+            "<!-- DE67:DFS-SLICE:END id=R-001-S001 claim=R-001 -->\n"
+        )
+        (environment / "DFS.md").write_text(projected, encoding="utf-8")
+        self.state_path = environment / "state" / "deadlines.sqlite3"
+        self.state_path.parent.mkdir()
+        self.harness = DeadlineHarness(self.state_path)
+        self.harness.start_task("project", "explore", "R-001", 100, now=0)
+        self.harness.complete_task("project", "explore", "route proved", now=1)
+        self.harness.transition_claim_to_closure(
+            "project", "R-001", "explore", "Close it.", "Run it.",
+            "One proof remains.", now=2,
+        )
+        self.harness.start_task(
+            "project", "closure", "R-001", 100, phase="closure", now=3
+        )
+        self.harness.complete_task("project", "closure", "proof complete", now=4)
+        return workspace, red_status
+
+    def test_acceptance_recovers_missing_baseline_from_committed_dfs(self) -> None:
+        workspace, red_status = self.projected_acceptance_workspace(
+            commit_red_baseline=True
+        )
+
+        accepted = self.harness.accept_claim(
+            "project", "R-001", "closure", "accepted proof", now=5
+        )
+
+        baselines = json.loads(
+            (workspace / ".de67/state/dfs-status-baselines.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertTrue(accepted["recorded"])
+        self.assertEqual(baselines["R-001"], red_status)
+        projected = (workspace / ".de67/DFS.md").read_text(encoding="utf-8")
+        self.assertEqual(
+            projected.count(
+                "Durable acceptance: #1 via `closure`; SQLite evidence is authoritative."
+            ),
+            1,
+        )
+
+    def test_projection_failure_does_not_partially_accept_claim(self) -> None:
+        self.projected_acceptance_workspace(commit_red_baseline=False)
+
+        with self.assertRaisesRegex(DeadlineError, "DFS baseline is missing"):
+            self.harness.accept_claim(
+                "project", "R-001", "closure", "accepted proof", now=5
+            )
+
+        acceptance = self.harness.connection.execute(
+            "SELECT 1 FROM claim_acceptances WHERE claim_id = 'R-001'"
+        ).fetchone()
+        gap = self.harness.connection.execute(
+            "SELECT closed_at FROM closure_gaps WHERE claim_id = 'R-001'"
+        ).fetchone()
+        self.assertIsNone(acceptance)
+        self.assertIsNone(gap["closed_at"])
 
     def test_failed_late_acceptance_preserves_the_new_deadline_miss(self) -> None:
         self.harness.start_task("project", "explore", "R-LATE", 5, now=0)

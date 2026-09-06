@@ -1420,18 +1420,36 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(result, 0, output)
         self.assertIn(guard.ORCHESTRATOR_GUIDELINES, output)
 
+    def test_random_trajectory_can_change_both_guidelines_and_refine_dfs(self) -> None:
+        state, cycle = self.random_review_state(0)
+        self.mutate_task()
+        self.mutate_orchestrator()
+        (self.candidate / guard.DFS_FILE).write_text(self.expansion_dfs(), encoding="utf-8")
+        result, output = self.run_random_review_cli(state, cycle)
+        self.assertEqual(result, 0, output)
+        for name in (*guard.GUIDELINE_FILES, guard.DFS_FILE):
+            self.assertIn(name, output)
+
+    def test_random_guideline_review_accepts_exact_guarded_noop(self) -> None:
+        for lane_index in (0, 1):
+            with self.subTest(lane_index=lane_index):
+                state, cycle = self.random_review_state(lane_index)
+                result, output = self.run_random_review_cli(state, cycle)
+                self.assertEqual(result, 0, output)
+                self.assertIn("guarded no-op", output)
+
     def setUp_candidate_again(self) -> None:
         self.write_guidelines(self.candidate, TASK_GUIDANCE, ORCHESTRATOR_GUIDANCE)
         (self.candidate / guard.DFS_FILE).write_text(
             self.expansion_dfs(new_claim=""), encoding="utf-8"
         )
 
-    def test_random_review_rejects_wrong_lane_and_whitespace_only_change(self) -> None:
+    def test_random_review_accepts_cross_lane_but_rejects_whitespace_only_change(self) -> None:
         state, cycle = self.random_review_state(1)
         self.mutate_task()
         result, output = self.run_random_review_cli(state, cycle)
-        self.assertEqual(result, 1)
-        self.assertIn("selected orchestrator-guidelines.md", output)
+        self.assertEqual(result, 0, output)
+        self.assertIn(guard.TASK_GUIDELINES, output)
 
         self.setUp_candidate_again()
         state, cycle = self.random_review_state(0)
@@ -1457,7 +1475,7 @@ class MutationGuardTests(unittest.TestCase):
         state, cycle = self.random_review_state(2)
         result, output = self.run_random_review_cli(state, cycle)
         self.assertEqual(result, 0, output)
-        self.assertIn("guarded DFS no-op", output)
+        self.assertIn("guarded no-op", output)
 
     def test_random_dfs_review_preserves_frozen_contract(self) -> None:
         state, cycle = self.random_review_state(2)
@@ -1901,7 +1919,7 @@ class MutationGuardTests(unittest.TestCase):
         self.assertIn("Terra for debugging/discovery", ORCHESTRATOR_GUIDANCE)
         self.assertIn("lowest sufficient", ORCHESTRATOR_GUIDANCE)
         self.assertIn("complexity/research", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("reviewer at high", ORCHESTRATOR_GUIDANCE)
+        self.assertIn("`gpt-6-astra` reviewer at medium", ORCHESTRATOR_GUIDANCE)
         self.assertIn('`fork_turns="none"`', ORCHESTRATOR_GUIDANCE)
         self.assertIn("explicitly selects Luna or Terra", ORCHESTRATOR_GUIDANCE)
         self.assertIn("new worker never", ORCHESTRATOR_GUIDANCE)

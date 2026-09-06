@@ -1,61 +1,53 @@
 ---
 name: de67-alignment-audit
-description: Manually audit an agentic workflow for contradictory instructions, misleading machine output, and tests that constrain model judgment. Use only when the user asks for an alignment audit or an equivalent review; this is not a de67 phase or a runtime gate.
+description: Audit an agentic workflow for contradictory context, misleading machine output, unnecessary reading, and rules or tests that obstruct agent judgment. A manual review, not a de67 phase or runtime gate.
 ---
 
 # de67 alignment audit
 
-This is a manual, read-only review surface. It asks whether the complete context presented to an
-agent supports the intended outcome. It does not run de67, change a live loop, or authorize fixes.
+Use the [alignment manifest](references/alignment-manifest.md) as a review lens. The requested outcome
+owns the audit's scope; the manifest does not create extra work or runtime authority. An audit is
+read-only unless correction work is already authorized in the current task. Keep findings and
+implemented corrections distinct.
 
-Before auditing, read:
+## Follow the context an agent actually receives
 
-- [Alignment manifest](references/alignment-manifest.md) for the review principles.
-- [Reviewer brief](references/reviewer-brief.md) for scope, delegation, evidence, and reporting.
+Bind the repository or installed skill, workflow, live-runtime scope, and explicit exclusions.
+Start from active routing: applicable host/repository guidance, the selected entrypoint and its
+necessary references, generated coordinator/worker briefs, current state, machine responses, and
+consumer code or tests. Follow historical material only when an active path exposes it as relevant
+or authoritative. Do not inventory unrelated documentation or `.de67/no-go-zone/`.
 
-## Bind the audit
+Trace a suspected defect from producer through emitted context to the consuming decision. Inspect
+what the agent receives before it acts, what it can retrieve, and what survives waiting, handoff,
+mutation, or restart. Check whether necessary information is deferred until too late, dropped
+before consumption, repeatedly rediscovered, or displaced by old history. A compact response is
+useful only if it preserves the next decision and makes its full evidence reachable.
 
-Identify the repository or installed skill, the workflow being reviewed, and whether a live agent
-machine is in scope. Preserve explicit exclusions. If a live loop exists, inspect it without
-launching, stopping, consuming one-use authority, or changing durable state.
+Distinguish active authority, useful reference, and legacy residue. File size, a strict phrase, a
+symbol name, or a stale test is not a finding by itself. Use a focused reproduction when behavior is
+uncertain; a direct instruction contradiction may be established from the exact emitted text and
+its applicable authority. Do not claim a runtime failure from static inspection alone. Narrow or
+withdraw a finding when the actual route contradicts it.
 
-Start from active routing, not a repository-wide Markdown reading exercise. Trace the path a real
-agent receives today:
+For a large workflow, independent reviewers may inspect separate owners concurrently. Give each
+reviewer the manifest, exact roots and entrypoints, exclusions, and its producer/consumer boundary.
+Choose a model and effort appropriate to that question. Do not duplicate the same broad read across
+reviewers. Reviewers do not launch scenarios, consume authority, wake or stop agents, or mutate live
+state. The lead resolves disagreements against the actual route.
 
-1. applicable `AGENTS.md` or equivalent host/repository policy;
-2. selected skill entrypoint and only the references it routes into;
-3. active coordinator and worker briefs, ledgers, contracts, or charters;
-4. generated prompts, descriptors, action menus, errors, status, and dashboard/TUI output;
-5. tests that enforce those active paths.
+## Judge structure by what it enables
 
-Classify a discoverable surface as active authority, useful non-authoritative reference, or legacy
-residue. Ignore unrelated product documentation. Legacy material matters only when active routing,
-search instructions, examples, or ordinary discovery can realistically present it as current
-guidance; recommend deletion, relocation, or an unmistakable non-authoritative marker when it can.
+Preserve mechanical truth: identity, ownership, single-use transitions, durable evidence, honest
+cleanup, and contradictions. Strategy, retrieval depth, task order, wording, and repair choice belong
+to agents unless a real product or safety constraint requires otherwise. Examine tests for the same
+boundary; a test can preserve an accidental process just as prose can.
 
-## Audit the joined workflow
+Report the necessary corrections with enough evidence to connect the active surface, affected
+outcome, demonstrated failure or uncertainty, and smallest remedy. Do not fill a fixed finding form
+when a short explanation proves the point. Include important rejected concerns when they change the
+conclusion. End with what should remain strict and what judgment should return to agents.
 
-Compare prose, runtime affordances, machine responses, and executable tests as one instruction
-system. Separate mechanical invariants from model judgment. Durable identity, ownership, leases,
-single-use transitions, immutable evidence, cleanup, and truthful process state may be strict.
-Strategy, wording, task order, proof presentation, and repair choice normally belong to capable
-agents unless the requested outcome establishes a real constraint.
-
-Trace every suspected contradiction through the exact active runtime branch before reporting it.
-A flag, phrase, historical test, or similarly named mode is not proof that the live workflow uses
-it. Identify the step type, caller, inputs, emitted output, consumer, and resulting behavior. When
-observed behavior contradicts a static-code inference, investigate the discrepancy and narrow or
-withdraw the finding.
-
-Report only findings whose removal or correction is necessary to align the audited workflow with
-the manifest and requested outcome. Each finding must identify:
-
-- the active instruction or machine output;
-- the concrete conflicting surface or behavior;
-- the manifest principle affected;
-- a reproducible failure scenario;
-- the smallest structural correction;
-- the evidence and any remaining uncertainty.
-
-Do not implement corrections unless the user separately asks. End with what should remain strict,
-what should become agent judgment, and which apparent concerns were rejected after tracing them.
+Do not promote the audit or manifest into an automatic approval gate, recurring runtime read, or
+another coordinator. Apply authorized corrections only within their scope; otherwise present them
+for the user's decision.

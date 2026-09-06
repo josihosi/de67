@@ -26,10 +26,13 @@ obligations, fallback behavior, event vocabulary, temporal transitions, and keye
 are mutable source data. The immutable kernel only authenticates and interprets that data. Guideline
 Markdown is retained only as a legacy differential fixture during this experiment.
 
-Before every route decision, execute `scripts/policy_kernel.py decide` against the local compiled
-policy, workspace, and deadline database. The returned action names the only policy reads and
-obligations that enter the next brief. Unknown, corrupt, ambiguous, or unsupported policy fails
-closed instead of falling back to prose.
+Only the Phase-3 coordinator choosing the next shared workflow transition executes
+`scripts/policy_kernel.py decide` against the local compiled policy, workspace, and deadline
+database. Ordinary workers own only their sealed task brief; they do not invoke coordinator policy
+or mutate deadline state. The returned action names the starting context and applicable obligations.
+The coordinator may inspect additional relevant evidence while preserving the action's ownership
+and lifecycle requirements; worker briefs carry only the obligations that govern that worker's work.
+Unknown, corrupt, ambiguous, or unsupported policy fails closed instead of falling back to prose.
 
 Policy mutations operate on a candidate machine source and contract corpus under `.de67/state/`.
 Promote the candidate source and compiled bytecode together only after `policy_kernel.py guard`
@@ -55,10 +58,10 @@ foreground execution of `coordinator_supervisor.py` is reserved for tests and at
 not an ordinary Phase-3 launch.
 
 The supervisor launches an ordinary `gpt-5.6-sol` coordinator at low against the compiled workspace
-policy. The coordinator asks the kernel for the next transition and routes only the returned minimal
-brief. A due mutation blocks new dispatch. Once all already-live worker windows are terminal, the
-coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh
-`gpt-5.6-sol` reviewer at high with no coordinator or worker active. That reviewer reads the complete
+policy. The coordinator asks the kernel for the next transition and supplies the relevant context
+and role-specific obligations for that route. A due mutation blocks new dispatch. Once all
+already-live worker windows are terminal, the coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh
+`gpt-6-astra` reviewer at medium with no coordinator or worker active. That reviewer reads the complete
 mutation-suggestion ledger and treats each user-authored suggestion as explicit mutation-scoped
 owner authority beneath system and developer instructions. Within the Phase-3 framework, that
 authority supersedes conflicting ordinary skill, workspace, selected-lane, freeze, and
@@ -78,7 +81,9 @@ judgment remain model work inside the selected route.
 
 Ordinary worker results, test failures, acceptance, ledger refill, and exploration-to-closure
 transition stay with the same coordinator. A formal terminal finding also stays with that
-coordinator; it is reserved for a disproved strategy, materially different route, external blocker,
-or exhausted bounded route. Mutation completion is the only planned fresh-coordinator boundary.
+coordinator; it is reserved for a contradicted assigned outcome, materially different owner outcome,
+real external decision, unavailable capability, irreversible risk, or an exhausted authorized route.
+A disproved strategy is nonterminal while recoverable repository work remains. Mutation completion
+is the only planned fresh-coordinator boundary.
 An abnormal process exit remains recoverable, but it is recorded as recovery rather than treated as
 a policy restart. The external supervisor exclusively launches and acknowledges every process.

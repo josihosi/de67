@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import secrets
 import sqlite3
 import subprocess
@@ -15,6 +16,16 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+
+SCRIPT_ROOT = str(Path(__file__).resolve().parent)
+if SCRIPT_ROOT not in sys.path:
+    sys.path.insert(0, SCRIPT_ROOT)
+from worker_receipt import (
+    WorkerReceiptError,
+    compact_worker_receipt,
+    normalize_worker_receipt,
+    receipt_envelope,
+)
 
 
 RANDOM_INTERVAL_MIN = 20
@@ -40,6 +51,90 @@ WORKSPACE_METHOD_GUIDELINE_FILES = (
     "test-and-task-guidelines.md",
 )
 ACTIVE_SKILL_ROOT = Path(__file__).resolve().parents[1]
+
+DFS_STATUS_BEGIN = "<!-- DE67:DELIVERY-STATUS:BEGIN"
+DFS_STATUS_END = "<!-- DE67:DELIVERY-STATUS:END -->"
+
+
+def _workspace_for_state(state_path: Path | None) -> Path | None:
+    if (
+        state_path is None
+        or state_path.parent.name != "state"
+        or state_path.parent.parent.name != ".de67"
+    ):
+        return None
+    return state_path.parent.parent.parent
+
+
+def _ledger_claim_block(ledger: str, claim_id: str) -> str | None:
+    pattern = re.compile(
+        r"(?ms)^- \[[ x]\] " + re.escape(claim_id)
+        + r"(?=[ \t]+—|[ \t]*$).*?(?=^- \[[ x]\] R-|^## |\Z)"
+    )
+    match = pattern.search(ledger)
+    return match.group(0).rstrip() if match else None
+
+
+def _dfs_claim_status_span(dfs: str, claim_id: str) -> tuple[int, int, str] | None:
+    slice_pattern = re.compile(
+        r"<!-- DE67:DFS-SLICE:BEGIN[^>]*claim=" + re.escape(claim_id)
+        + r"(?=\s|-->)[^>]*-->\n(?P<body>.*?)\n"
+        r"<!-- DE67:DFS-SLICE:END[^>]*-->",
+        re.DOTALL,
+    )
+    slice_match = slice_pattern.search(dfs)
+    if slice_match is None:
+        return None
+    body = slice_match.group("body")
+    heading = re.search(r"(?m)^Implementation status:\s*$", body)
+    if heading is None:
+        return None
+    start = slice_match.start("body") + heading.end()
+    while start < len(dfs) and dfs[start] == "\n":
+        start += 1
+    end = slice_match.end("body")
+    return start, end, dfs[start:end].rstrip()
+
+
+def _open_dfs_status_baseline(status: str, claim_id: str) -> str | None:
+    """Return the red claim content, unwrapping a phase-authored status marker."""
+    content = status
+    if DFS_STATUS_BEGIN in status or DFS_STATUS_END in status:
+        marker = re.fullmatch(
+            re.escape(f"{DFS_STATUS_BEGIN} claim={claim_id} -->")
+            + r"\n(?P<body>.*?)\n"
+            + re.escape(DFS_STATUS_END),
+            status,
+            re.DOTALL,
+        )
+        if marker is None:
+            return None
+        content = marker.group("body").rstrip()
+    open_claim = re.search(
+        r"(?m)^- \[ \] 🔴 " + re.escape(claim_id) + r"(?=[ \t]+—|[ \t]*$)",
+        content,
+    )
+    return content if open_claim is not None and content.strip() else None
+
+
+def _committed_dfs_claim_baseline(workspace: Path, claim_id: str) -> str | None:
+    """Recover an unprojected claim block from the current committed DFS."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(workspace), "show", "HEAD:.de67/DFS.md"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+    except (OSError, UnicodeError):
+        return None
+    if result.returncode != 0:
+        return None
+    span = _dfs_claim_status_span(result.stdout, claim_id)
+    if span is None:
+        return None
+    return _open_dfs_status_baseline(span[2], claim_id)
 
 
 def _method_files(root: Path) -> dict[str, bytes]:
@@ -1433,6 +1528,115 @@ class DeadlineHarness:
                         *key,
                     ),
                 )
+
+    def synchronize_dfs_statuses(self, *, persist: bool = True) -> tuple[str, ...]:
+        """Project durable claim acceptance into agent-facing DFS status blocks."""
+        workspace = _workspace_for_state(self.state_path)
+        if workspace is None:
+            return ()
+        dfs_path = workspace / ".de67" / "DFS.md"
+        ledger_path = workspace / ".de67" / "work-ledger.md"
+        if not dfs_path.is_file() or not ledger_path.is_file():
+            raise DeadlineError("DFS status projection requires DFS.md and work-ledger.md")
+        dfs = dfs_path.read_text(encoding="utf-8")
+        ledger = ledger_path.read_text(encoding="utf-8")
+        rows = self.connection.execute(
+            """
+            SELECT accepted.* FROM claim_acceptances AS accepted
+            JOIN (
+              SELECT claim_id, MAX(acceptance_number) AS acceptance_number
+              FROM claim_acceptances GROUP BY claim_id
+            ) AS latest
+              ON latest.claim_id = accepted.claim_id
+             AND latest.acceptance_number = accepted.acceptance_number
+            WHERE accepted.lineage_id = ?
+            ORDER BY accepted.claim_id
+            """,
+            (self._bound_lineage_id(),),
+        ).fetchall()
+        if not rows:
+            return ()
+        baseline_path = self.state_path.parent / "dfs-status-baselines.json"
+        try:
+            baselines = json.loads(baseline_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            baselines = {}
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise DeadlineError(f"DFS status baseline is unreadable: {error}") from error
+        if not isinstance(baselines, dict):
+            raise DeadlineError("DFS status baseline must be an object")
+        changed: list[str] = []
+        for acceptance in rows:
+            claim_id = str(acceptance["claim_id"])
+            span = _dfs_claim_status_span(dfs, claim_id)
+            if span is None:
+                raise DeadlineError(f"DFS has no implementation status block for {claim_id}")
+            start, end, current = span
+            if DFS_STATUS_BEGIN not in current:
+                open_baseline = _open_dfs_status_baseline(current, claim_id)
+                if open_baseline is not None:
+                    baselines[claim_id] = open_baseline
+            baseline = baselines.get(claim_id)
+            if not isinstance(baseline, str) or not baseline.strip():
+                recovered = _committed_dfs_claim_baseline(workspace, claim_id)
+                if recovered is not None:
+                    baselines[claim_id] = recovered
+                    baseline = recovered
+            if not isinstance(baseline, str) or not baseline.strip():
+                raise DeadlineError(f"DFS baseline is missing for {claim_id}")
+            if acceptance["invalidated_at"] is None:
+                ledger_block = _ledger_claim_block(ledger, claim_id)
+                receipt = (
+                    f"  - Durable acceptance: #{acceptance['acceptance_number']} via "
+                    f"`{acceptance['task_id']}`; SQLite evidence is authoritative."
+                )
+                if ledger_block is not None and ledger_block.startswith(
+                    f"- [x] {claim_id}"
+                ):
+                    projected_body = ledger_block
+                    if receipt not in projected_body:
+                        projected_body += f"\n{receipt}"
+                    projected = (
+                        f"{DFS_STATUS_BEGIN} claim={claim_id} -->\n"
+                        f"{projected_body}\n{DFS_STATUS_END}"
+                    )
+                elif (
+                    current.startswith(f"{DFS_STATUS_BEGIN} claim={claim_id} -->")
+                    and f"- [x] {claim_id}" in current
+                    and receipt in current
+                ):
+                    # The active ledger may compact accepted historical work after
+                    # the machine has already projected its durable receipt into DFS.
+                    projected = current
+                else:
+                    raise DeadlineError(
+                        f"Accepted claim {claim_id} lacks a checked work-ledger projection"
+                    )
+            else:
+                projected = baseline.rstrip()
+            if current != projected:
+                dfs = dfs[:start] + projected + dfs[end:]
+                changed.append(claim_id)
+        if not persist:
+            return tuple(changed)
+        if changed:
+            temporary = dfs_path.with_name(f".{dfs_path.name}.{os.getpid()}.tmp")
+            temporary.write_text(dfs, encoding="utf-8")
+            os.replace(temporary, dfs_path)
+        baseline_temporary = baseline_path.with_name(
+            f".{baseline_path.name}.{os.getpid()}.tmp"
+        )
+        baseline_temporary.write_text(
+            json.dumps(baselines, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        os.replace(baseline_temporary, baseline_path)
+        return tuple(changed)
+
+    def _bound_lineage_id(self) -> str:
+        rows = self.connection.execute("SELECT lineage_id FROM lineage_binding").fetchall()
+        if len(rows) != 1:
+            raise DeadlineError("DFS status projection requires one bound lineage")
+        return str(rows[0][0])
 
     def close(self) -> None:
         self.connection.close()
@@ -3434,6 +3638,268 @@ class DeadlineHarness:
             self.connection.rollback()
             raise
 
+    @staticmethod
+    def _decode_worker_receipt(row: sqlite3.Row) -> dict[str, Any]:
+        try:
+            envelope = json.loads(str(row["evidence"]))
+        except json.JSONDecodeError as error:
+            raise DeadlineError("Stored worker result receipt is corrupt") from error
+        if not isinstance(envelope, dict) or not isinstance(
+            envelope.get("receipt"), dict
+        ):
+            raise DeadlineError("Stored worker result receipt envelope is corrupt")
+        receipt = dict(envelope["receipt"])
+        expected_id = receipt_envelope(receipt)["receipt_id"]
+        if envelope.get("receipt_id") != expected_id:
+            raise DeadlineError("Stored worker result receipt digest is corrupt")
+        return {
+            "receipt_id": expected_id,
+            "receipt": receipt,
+            "sequence": int(row["sequence"]),
+            "recorded_at": float(row["recorded_at"]),
+        }
+
+    def _worker_result_receipts(
+        self, lineage_id: str, task_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        parameters: list[Any] = [lineage_id]
+        task_clause = ""
+        if task_id is not None:
+            task_clause = " AND checkpoint.task_id = ?"
+            parameters.append(task_id)
+        rows = self.connection.execute(
+            """
+            SELECT checkpoint.task_id, checkpoint.sequence, checkpoint.worker_id,
+                   checkpoint.evidence, checkpoint.recorded_at
+            FROM worker_checkpoints AS checkpoint
+            WHERE checkpoint.lineage_id = ?
+              AND checkpoint.kind = 'result-receipt-v1'
+            """ + task_clause + " ORDER BY checkpoint.recorded_at, checkpoint.task_id, checkpoint.sequence",
+            parameters,
+        ).fetchall()
+        return [self._decode_worker_receipt(row) for row in rows]
+
+    def record_worker_result_receipt(
+        self,
+        lineage_id: str,
+        task_id: str,
+        worker_id: str,
+        value: Any,
+        *,
+        workspace: Path | None = None,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Persist one compact, identity-bound result or continuation receipt."""
+
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        task_id = self._identity(task_id, "Task id")
+        worker_id = self._identity(worker_id, "Worker id")
+        recorded_at = self._now(now)
+        self._begin()
+        try:
+            task = self._task(lineage_id, task_id)
+            claim = self.connection.execute(
+                """
+                SELECT * FROM worker_claims
+                WHERE lineage_id = ? AND task_id = ?
+                """,
+                (lineage_id, task_id),
+            ).fetchone()
+            if claim is None or claim["worker_id"] != worker_id:
+                raise DeadlineError("Worker result receipt does not match task ownership")
+            try:
+                receipt = normalize_worker_receipt(
+                    value,
+                    lineage_id=lineage_id,
+                    task_id=task_id,
+                    claim_id=str(task["claim_id"]),
+                    worker_id=worker_id,
+                    workspace=workspace,
+                )
+            except WorkerReceiptError as error:
+                raise DeadlineError(str(error)) from error
+            envelope = receipt_envelope(receipt)
+            receipt_id = str(envelope["receipt_id"])
+            existing = self._worker_result_receipts(lineage_id, task_id)
+            same = next(
+                (item for item in existing if item["receipt_id"] == receipt_id), None
+            )
+            if same is not None:
+                result = compact_worker_receipt(
+                    same["receipt"], recorded_at=same["recorded_at"]
+                )
+                result.update({"recorded": False, "sequence": same["sequence"]})
+                self.connection.commit()
+                return result
+            disposition = str(receipt["disposition"])
+            terminal_receipts = [
+                item
+                for item in existing
+                if item["receipt"].get("disposition") != "checkpoint"
+            ]
+            if terminal_receipts and disposition != "checkpoint":
+                raise DeadlineError("Worker attempt already has a terminal result receipt")
+            terminal_kind = task["attempt_terminal_kind"]
+            if terminal_kind is not None and disposition not in {
+                str(terminal_kind), "checkpoint"
+            }:
+                raise DeadlineError(
+                    "Worker result receipt disposition does not match terminal task state"
+                )
+            sequence = int(
+                self.connection.execute(
+                    """
+                    SELECT COUNT(*) FROM worker_checkpoints
+                    WHERE lineage_id = ? AND task_id = ?
+                    """,
+                    (lineage_id, task_id),
+                ).fetchone()[0]
+            ) + 1
+            self.connection.execute(
+                """
+                INSERT INTO worker_checkpoints
+                (lineage_id, task_id, sequence, worker_id, kind, evidence, recorded_at)
+                VALUES (?, ?, ?, ?, 'result-receipt-v1', ?, ?)
+                """,
+                (
+                    lineage_id,
+                    task_id,
+                    sequence,
+                    worker_id,
+                    json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    recorded_at,
+                ),
+            )
+            if claim["released_at"] is None:
+                self.connection.execute(
+                    """
+                    UPDATE worker_claims SET last_checkpoint_at = ?
+                    WHERE lineage_id = ? AND task_id = ?
+                    """,
+                    (recorded_at, lineage_id, task_id),
+                )
+            self.connection.commit()
+            result = compact_worker_receipt(receipt, recorded_at=recorded_at)
+            result.update({"recorded": True, "sequence": sequence})
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def require_worker_result_receipt(
+        self,
+        lineage_id: str,
+        task_id: str,
+        receipt_id: str,
+        disposition: str,
+    ) -> dict[str, Any]:
+        """Return the exact receipt that permits one terminal transition."""
+
+        receipt_id = self._identity(receipt_id, "Worker result receipt id")
+        receipts = self._worker_result_receipts(lineage_id, task_id)
+        match = next(
+            (item for item in receipts if item["receipt_id"] == receipt_id), None
+        )
+        if match is None:
+            raise DeadlineError("Terminal transition requires its worker result receipt")
+        if match["receipt"].get("disposition") != disposition:
+            raise DeadlineError(
+                f"Worker result receipt must have disposition {disposition}"
+            )
+        return match
+
+    def _require_terminal_worker_receipt(
+        self,
+        lineage_id: str,
+        task_id: str,
+        receipt_id: str | None,
+        disposition: str,
+    ) -> None:
+        ownership = self.connection.execute(
+            "SELECT 1 FROM worker_claims WHERE lineage_id = ? AND task_id = ?",
+            (lineage_id, task_id),
+        ).fetchone()
+        if ownership is None:
+            return
+        if receipt_id is None:
+            raise DeadlineError(
+                "A worker-owned terminal transition requires its worker result receipt"
+            )
+        self.require_worker_result_receipt(
+            lineage_id, task_id, receipt_id, disposition
+        )
+
+    def query_worker_result_receipts(
+        self,
+        lineage_id: str,
+        *,
+        filters: dict[str, str],
+        latest: bool = False,
+        full: bool = False,
+    ) -> dict[str, Any]:
+        """Return only receipts matching explicit continuation/evidence identities."""
+
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        if not filters and not latest:
+            raise DeadlineError("Worker receipt query requires a filter or --latest")
+        task_id = filters.get("task_id")
+        rows = self._worker_result_receipts(lineage_id, task_id)
+
+        def matches(item: dict[str, Any]) -> bool:
+            receipt = item["receipt"]
+            direct = {
+                "receipt_id": item["receipt_id"],
+                "task_id": receipt.get("task_id"),
+                "claim_id": receipt.get("claim_id"),
+                "worker_id": receipt.get("worker_id"),
+                "disposition": receipt.get("disposition"),
+                "verdict": receipt.get("verdict"),
+                "run_id": receipt.get("bindings", {}).get("run_id"),
+                "scenario_id": receipt.get("bindings", {}).get("scenario_id"),
+                "binding_id": receipt.get("bindings", {}).get("binding_id"),
+                "first_divergence_class": (
+                    receipt.get("first_divergence") or {}
+                ).get("class"),
+            }
+            for key, expected in filters.items():
+                if key in direct:
+                    if str(direct.get(key) or "") != expected:
+                        return False
+                    continue
+                entry_field = {
+                    "event_type": "event_type",
+                    "evidence_class": "evidence_class",
+                    "actor_id": "actor_id",
+                    "action_id": "action_id",
+                    "native_receipt_id": "receipt_id",
+                }.get(key)
+                if entry_field is None or not any(
+                    str(entry.get(entry_field, "")) == expected
+                    for entry in receipt.get("journal_entries", [])
+                ):
+                    return False
+            return True
+
+        selected = [item for item in rows if matches(item)]
+        if latest and selected:
+            selected = [selected[-1]]
+        results = []
+        for item in selected:
+            if full:
+                value = {
+                    "receipt_id": item["receipt_id"],
+                    "sequence": item["sequence"],
+                    "recorded_at": item["recorded_at"],
+                    "receipt": item["receipt"],
+                }
+            else:
+                value = compact_worker_receipt(
+                    item["receipt"], recorded_at=item["recorded_at"]
+                )
+                value["sequence"] = item["sequence"]
+            results.append(value)
+        return {"lineage_id": lineage_id, "matches": results}
+
     def release_worker_claim(
         self,
         lineage_id: str,
@@ -4148,6 +4614,7 @@ class DeadlineHarness:
         task_id: str,
         evidence: str,
         *,
+        receipt_id: str | None = None,
         now: float | None = None,
     ) -> dict[str, Any]:
         lineage_id = self._identity(lineage_id, "Lineage id")
@@ -4157,6 +4624,9 @@ class DeadlineHarness:
         self._begin()
         try:
             task = self._task(lineage_id, task_id)
+            self._require_terminal_worker_receipt(
+                lineage_id, task_id, receipt_id, "completed"
+            )
             if task["integrity_breached_at"] is not None:
                 raise DeadlineError("An integrity breach invalidates task completion")
             if self._worker_finding(lineage_id, task_id) is not None:
@@ -4570,7 +5040,11 @@ class DeadlineHarness:
             result = dict(self._claim(lineage_id, claim_id))
             result["basis_task_id"] = basis_task_id
             result["contradicted_premise"] = contradicted_premise
+            self.synchronize_dfs_statuses(persist=False)
             self.connection.commit()
+            result["dfs_status_synchronized"] = list(
+                self.synchronize_dfs_statuses()
+            )
             return result
         except Exception:
             self.connection.rollback()
@@ -4582,6 +5056,7 @@ class DeadlineHarness:
         task_id: str,
         reason: str,
         *,
+        receipt_id: str | None = None,
         now: float | None = None,
     ) -> dict[str, Any]:
         lineage_id = self._identity(lineage_id, "Lineage id")
@@ -4591,6 +5066,9 @@ class DeadlineHarness:
         self._begin()
         try:
             task = self._task(lineage_id, task_id)
+            self._require_terminal_worker_receipt(
+                lineage_id, task_id, receipt_id, "abandoned"
+            )
             if task["attempt_terminal_at"] is None:
                 self._record_miss_if_due(task, abandoned_at)
                 self.connection.execute(
@@ -5073,7 +5551,11 @@ class DeadlineHarness:
             result["deadline_missed"] = (
                 self._claim_deadline_incident(lineage_id, claim_id) is not None
             )
+            self.synchronize_dfs_statuses(persist=False)
             self.connection.commit()
+            result["dfs_status_synchronized"] = list(
+                self.synchronize_dfs_statuses()
+            )
             return result
         except Exception:
             self.connection.rollback()
@@ -5086,6 +5568,7 @@ class DeadlineHarness:
         kind: str,
         evidence: str,
         *,
+        receipt_id: str | None = None,
         short_verdict: str | None = None,
         now: float | None = None,
     ) -> dict[str, Any]:
@@ -5103,6 +5586,9 @@ class DeadlineHarness:
         self._begin()
         try:
             task = self._task(lineage_id, task_id)
+            self._require_terminal_worker_receipt(
+                lineage_id, task_id, receipt_id, "finding"
+            )
             if task["integrity_breached_at"] is not None:
                 raise DeadlineError(
                     "An integrity breach prevents a worker finding from being recorded"
@@ -6601,7 +7087,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         help=(
             "Evidence-derived estimate for this attempt; the first attempt also "
-            "uses it to arm the immutable claim deadline"
+            "uses it to arm each fresh immutable claim deadline generation"
         ),
     )
     start.add_argument("--phase", choices=("exploration", "closure"))
@@ -6629,6 +7115,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_task_identity_flags(complete)
     complete.add_argument("--evidence", required=True)
+    complete.add_argument(
+        "--receipt",
+        help="Exact durable worker result receipt permitting completion",
+    )
 
     finding = commands.add_parser(
         "finding", help="Record one terminal worker blocker or unexpected result"
@@ -6637,6 +7127,10 @@ def build_parser() -> argparse.ArgumentParser:
     finding.add_argument("--kind", choices=("blocker", "unexpected"), required=True)
     finding.add_argument("--short-verdict")
     finding.add_argument("--evidence", required=True)
+    finding.add_argument(
+        "--receipt",
+        help="Exact durable worker result receipt permitting the finding",
+    )
 
     diagnose = commands.add_parser(
         "diagnose",
@@ -6720,6 +7214,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_task_identity_flags(abandon)
     abandon.add_argument("--reason", required=True)
+    abandon.add_argument(
+        "--receipt",
+        help="Exact durable worker result receipt permitting abandonment",
+    )
 
     checkpoint_worker = commands.add_parser(
         "checkpoint-worker", help="Record durable progress for the owning worker"
@@ -6728,6 +7226,45 @@ def build_parser() -> argparse.ArgumentParser:
     checkpoint_worker.add_argument("--worker", required=True)
     checkpoint_worker.add_argument("--kind", required=True)
     checkpoint_worker.add_argument("--evidence", required=True)
+
+    worker_receipt = commands.add_parser(
+        "record-worker-receipt",
+        help="Validate and persist one compact worker result or continuation receipt",
+    )
+    add_task_identity_flags(worker_receipt)
+    worker_receipt.add_argument("--worker", required=True)
+    worker_receipt.add_argument("--receipt-file", required=True)
+    worker_receipt.add_argument("--workspace", required=True)
+
+    receipt_query = commands.add_parser(
+        "worker-receipts",
+        help="Query compact worker receipts by exact continuation or evidence identity",
+    )
+    receipt_query.add_argument("--state", dest="command_state")
+    receipt_query.add_argument("--lineage", required=True)
+    for flag, destination in (
+        ("--receipt", "receipt_id"),
+        ("--task", "task_id"),
+        ("--claim", "claim_id"),
+        ("--worker", "worker_id"),
+        ("--run", "run_id"),
+        ("--scenario", "scenario_id"),
+        ("--binding", "binding_id"),
+        ("--disposition", "disposition"),
+        ("--verdict", "verdict"),
+        ("--first-divergence-class", "first_divergence_class"),
+        ("--event-type", "event_type"),
+        ("--evidence-class", "evidence_class"),
+        ("--actor", "actor_id"),
+        ("--action", "action_id"),
+        ("--native-receipt", "native_receipt_id"),
+    ):
+        receipt_query.add_argument(flag, dest=destination)
+    receipt_query.add_argument("--latest", action="store_true")
+    receipt_query.add_argument(
+        "--full", action="store_true",
+        help="Explicitly retrieve complete matching receipts instead of compact projections",
+    )
 
     release_worker = commands.add_parser(
         "release-worker", help="Release one durable worker ownership claim"
@@ -6892,9 +7429,12 @@ def main(argv: list[str] | None = None) -> int:
                             int(claim["deadline_generation"]),
                         )
                         may_advance_generation = (
-                            incident is not None
-                            and not harness._deadline_mutation_pending(
-                                arguments.lineage, arguments.claim
+                            claim["retired_at"] is not None
+                            or (
+                                incident is not None
+                                and not harness._deadline_mutation_pending(
+                                    arguments.lineage, arguments.claim
+                                )
                             )
                         )
                         if not may_advance_generation:
@@ -6922,7 +7462,8 @@ def main(argv: list[str] | None = None) -> int:
                     result = harness.coordinator_view(include_recent_verdicts=True)
                 elif arguments.command == "complete":
                     result = harness.complete_task(
-                        arguments.lineage, arguments.task, arguments.evidence
+                        arguments.lineage, arguments.task, arguments.evidence,
+                        receipt_id=arguments.receipt,
                     )
                 elif arguments.command == "transition-closure":
                     named_gaps = None
@@ -6979,12 +7520,48 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 elif arguments.command == "abandon-attempt":
                     result = harness.abandon_attempt(
-                        arguments.lineage, arguments.task, arguments.reason
+                        arguments.lineage, arguments.task, arguments.reason,
+                        receipt_id=arguments.receipt,
                     )
                 elif arguments.command == "checkpoint-worker":
                     result = harness.checkpoint_worker(
                         arguments.lineage, arguments.task, arguments.worker,
                         arguments.kind, arguments.evidence,
+                    )
+                elif arguments.command == "record-worker-receipt":
+                    try:
+                        receipt = json.loads(
+                            Path(arguments.receipt_file).read_text(encoding="utf-8")
+                        )
+                    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                        raise DeadlineError(
+                            f"Worker result receipt file is unreadable: {error}"
+                        ) from error
+                    result = harness.record_worker_result_receipt(
+                        arguments.lineage,
+                        arguments.task,
+                        arguments.worker,
+                        receipt,
+                        workspace=Path(arguments.workspace),
+                    )
+                elif arguments.command == "worker-receipts":
+                    filters = {
+                        name: str(value)
+                        for name, value in vars(arguments).items()
+                        if name in {
+                            "receipt_id", "task_id", "claim_id", "worker_id",
+                            "run_id", "scenario_id", "binding_id", "disposition",
+                            "verdict", "first_divergence_class", "event_type",
+                            "evidence_class", "actor_id", "action_id",
+                            "native_receipt_id",
+                        }
+                        and value is not None
+                    }
+                    result = harness.query_worker_result_receipts(
+                        arguments.lineage,
+                        filters=filters,
+                        latest=bool(arguments.latest),
+                        full=bool(arguments.full),
                     )
                 elif arguments.command == "release-worker":
                     result = harness.release_worker_claim(
@@ -6997,6 +7574,7 @@ def main(argv: list[str] | None = None) -> int:
                         arguments.task,
                         arguments.kind,
                         arguments.evidence,
+                        receipt_id=arguments.receipt,
                         short_verdict=arguments.short_verdict,
                     )
                 elif arguments.command == "diagnose":
@@ -7088,6 +7666,8 @@ def main(argv: list[str] | None = None) -> int:
                 "startup-view",
                 "clock-migration-details",
                 "claim-invalidation-details",
+                "record-worker-receipt",
+                "worker-receipts",
             }:
                 result = quiet_result(result)
         print(json.dumps(result, sort_keys=True))

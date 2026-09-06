@@ -7,14 +7,13 @@ description: "Create and freeze a code-grounded functional specification (DFS) f
 
 Run only after an explicit `de67 2` invocation.
 
-Read `../references/msw-kernel.md` and `../references/controlled-english.md` completely. Execute the
-MSW kernel exactly as written. It is a verbatim foundation; do not paraphrase, summarize, refactor,
-or replace its wording. Apply the controlled-English guideline when writing the DFS.
+Use the shared [MSW decision rule](../references/msw-kernel.md) when it is not already in context.
+Consult the [writing guidance](../references/controlled-english.md) when preparing the DFS.
 
 ## Phase owner
 
 The invocation agent delegates this whole phase once to a fresh owner using
-`fork_turns="none"`, `model="gpt-5.6-sol"`, and `reasoning_effort="high"`. Give it only the
+`fork_turns="none"`, `model="gpt-6-astra"`, and `reasoning_effort="high"`. Give it only the
 workspace, the WEC source or exact WEC text, and this phase's `SKILL.md` path. Mark it as the phase
 owner so it does not delegate ownership again. That owner inspects, specifies, freezes, prepares
 the workspace, and checkpoints the result; the invocation agent does not duplicate its work.
@@ -42,14 +41,23 @@ gate and create no coordination artifact unless it is named here.
    input is an attachment or chat artifact. If the destination already exists, reuse it when
    identical and stop for user resolution when it differs. Never overwrite it silently.
 3. Read `.de67/WEC.md` completely.
-4. Audit only active workflow or specification documents at the repository root or directly named
-   by authoritative agent guidance. Preserve `AGENTS.md`/`Agents.md`, contributing and licence
-   files, `README.md`, technical/design documentation, product code, tests, and unrecognized docs.
-   Carry still-binding product requirements into WEC/DFS when they preserve the user's intent;
-   ask when they would change it. Move only competing plan/specification/coordination history to
-   tracked `.de67/no-go-zone/<original-relative-path>`. If authoritative guidance directly points
-   to a moved plan, reconcile that reference with the current WEC/DFS flow. Do not broadly delete
-   or archive documents.
+4. Audit the active context surfaces that can steer repository agents: root instruction files such
+   as `AGENTS.md`/`Agents.md`, and any prompt, policy, configuration, specification, coordination,
+   or machine-response system directly named by authoritative guidance. Do not inventory generated
+   trees, unrelated documentation, or `.de67/no-go-zone/`. For each surface, determine its scope,
+   authority, current use, and whether it supplies useful repository facts or conflicts with the
+   WEC and de67 phase boundaries. Different terminology, style, or tooling is not by itself a
+   conflict.
+
+   Preserve contributing and licence files, `README.md`, technical/design documentation, product
+   code, tests, and unrecognized documents. Carry still-binding product requirements into WEC/DFS
+   when they preserve the user's intent; ask when they would change it. When an active context
+   surface duplicates or contradicts the de67 workflow, show the user the exact conflict and propose
+   the smallest remedy: retain it, narrow and route its useful facts, or move the competing surface
+   to tracked `.de67/no-go-zone/<original-relative-path>`. Edit or move it only after the user
+   approves. Until then, continue obeying it and stop for resolution only when the conflict prevents
+   a valid DFS. After approval, reconcile direct references to anything moved. Never silently
+   neutralize authoritative guidance or broadly archive documents.
 5. Inspect the real implementation before specifying changes:
    entrypoints, declarations, call sites, readers, writers, persistence, schedulers, tests, and
    relevant configuration.
@@ -61,7 +69,12 @@ gate and create no coordination artifact unless it is named here.
    Decide and document the authoritative owner, precedence, yield/override rules, and atomic or
    idempotent boundaries. Ask the user when a decision would alter product intent or vocabulary;
    otherwise make the smallest code-grounded design decision that satisfies the WEC.
-9. Write `.de67/DFS.md` mechanistically. Name concrete files, symbols, functions, parameters,
+9. Preserve the reasoning needed by later agents in the DFS: the causal model, why the chosen
+   mechanism satisfies the WEC, the meaningful alternative or counterexample it excludes, and the
+   observations that would require revisiting the design. Separate contract constraints from
+   replaceable implementation tactics. Put claim-specific rationale beside its claim and reference
+   shared reasoning once so a worker can retrieve a coherent slice without reading the whole DFS.
+   Write `.de67/DFS.md` mechanistically. Name concrete files, symbols, functions, parameters,
    inputs, outputs, preconditions, transitions, postconditions, failure behavior, and persistence
    effects. Mark every absent, wrong, or unproved requirement with a stable line beginning
    `- [ ] 🔴 R-...`. Define the outcome test and production proof that closes each red item.
@@ -107,7 +120,7 @@ gate and create no coordination artifact unless it is named here.
    commit. Git setup is outside the DFS and does not add dispatch policy to it.
    The machine-only configuration records the successful worker pairs; it is an availability roster,
    not a worker profile or dispatch policy.
-12. Checkpoint only `.de67/WEC.md`, `.de67/DFS.md`, the four prepared Phase-3 runtime files, the
+13. Checkpoint only `.de67/WEC.md`, `.de67/DFS.md`, the four prepared Phase-3 runtime files, the
    proved `.codex/config.toml` agent default, required no-go-zone moves and direct reference
    reconciliation, and a required ignore-rule change; preserve every unrelated dirty path. The
    installed hook pushes that commit, so do not run a second routine push.

@@ -59,6 +59,13 @@ Mechanism:
 - Failure behavior: `<safe rejection, retry, or retained state>`
 - Persistence/compatibility: `<save, migration, API, concurrency, or platform effects>`
 
+Design reasoning, when material:
+
+<Explain why this mechanism satisfies the WEC, the competing explanation or shortcut it excludes,
+and the evidence that would invalidate the design. Distinguish binding constraints from a
+replaceable starting tactic. Link shared rationale once instead of repeating it. Omit this block
+when the mechanism is already clear.>
+
 Implementation status:
 
 - [x] <Implemented production behavior and evidence.>
@@ -99,6 +106,8 @@ preconditions -> authoritative owner -> transition -> observable outcome -> arti
 After freeze, automation may only close existing red items after named proof and remove their red
 markers; make an evidence-implied nonmaterial clarification; or append a uniquely implied
 same-contract mechanism, ownership/proof detail, and necessary new stable red claim after a verified
-phase-3 worker finding. Existing claim identities, text, status, accepted work, and acceptance
-strength remain fixed. Refreeze immediately. Product intent, project language, permissions,
-user-visible behavior, balance, and materially different design choices remain user-owned.
+phase-3 worker finding. Append-only expansion preserves existing claim text and status; the
+closure and clarification routes above remain available. All routes preserve stable claim
+identities, accepted work, and acceptance strength. Refreeze immediately. Product intent, project
+language, permissions, user-visible behavior, balance, and materially different design choices
+remain user-owned.

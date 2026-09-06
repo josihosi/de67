@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Callable, Iterator, Mapping, Sequence
@@ -26,6 +26,10 @@ from blocker_adapter import (
     safe_wait_for_reply,
 )
 from deadline_harness import DeadlineError, DeadlineHarness
+from repository_checkpoint import (
+    RepositoryCheckpointError,
+    checkpoint_repository,
+)
 
 
 RED_DFS_CLAIM = re.compile(r"^- \[ \] \N{LARGE RED CIRCLE} ", re.MULTILINE)
@@ -93,7 +97,7 @@ class SupervisorJournal:
         self.lineage_id = lineage_id
         self.owner_id = owner_id
         self.frontier_namespace = frontier_namespace
-        with sqlite3.connect(state_path) as connection:
+        with closing(sqlite3.connect(state_path)) as connection, connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS supervisor_attempts (
@@ -116,7 +120,7 @@ class SupervisorJournal:
         if self.frontier_namespace:
             frontier = f"{self.frontier_namespace}:{frontier}"
         try:
-            with sqlite3.connect(self.state_path) as connection:
+            with closing(sqlite3.connect(self.state_path)) as connection, connection:
                 connection.execute(
                     """
                     INSERT INTO supervisor_attempts (
@@ -131,7 +135,7 @@ class SupervisorJournal:
             ) from error
 
     def finish(self, run_id: str, outcome: str, detail: str | None = None) -> None:
-        with sqlite3.connect(self.state_path) as connection:
+        with closing(sqlite3.connect(self.state_path)) as connection, connection:
             cursor = connection.execute(
                 """
                 UPDATE supervisor_attempts
@@ -281,7 +285,8 @@ def terminalize_unowned_worker_windows(
     with DeadlineHarness(state_path) as harness:
         rows = harness.connection.execute(
                 """
-                SELECT task.task_id, claim.worker_id, claim.coordinator_session_id
+                SELECT task.task_id, task.claim_id, claim.worker_id,
+                       claim.coordinator_session_id, claim.supervisor_id
                 FROM tasks AS task
                 LEFT JOIN worker_claims AS claim
                   ON claim.lineage_id = task.lineage_id
@@ -292,22 +297,117 @@ def terminalize_unowned_worker_windows(
                 """,
                 (lineage_id,),
             ).fetchall()
-        task_ids = tuple(
-            str(row["task_id"])
-            for row in rows
-            if (
+        terminal_rows = tuple(
+            row for row in rows if (
                 (row["worker_id"] is not None or include_unclaimed)
                 and recoverable.get(str(row["worker_id"] or ""))
                 != str(row["coordinator_session_id"] or "")
             )
         )
-        for task_id in task_ids:
+        for row in terminal_rows:
+            task_id = str(row["task_id"])
+            receipt_id = None
+            if row["worker_id"] is not None:
+                existing_receipts = harness._worker_result_receipts(lineage_id, task_id)
+                terminal_receipt = next(
+                    (
+                        item for item in reversed(existing_receipts)
+                        if item["receipt"].get("disposition") != "checkpoint"
+                    ),
+                    None,
+                )
+                if terminal_receipt is not None:
+                    receipt_id = str(terminal_receipt["receipt_id"])
+                    receipt_value = terminal_receipt["receipt"]
+                    disposition = str(receipt_value["disposition"])
+                    if disposition == "completed":
+                        harness.complete_task(
+                            lineage_id,
+                            task_id,
+                            str(receipt_value["summary"]),
+                            receipt_id=receipt_id,
+                        )
+                    elif disposition == "finding":
+                        harness.report_worker_finding(
+                            lineage_id,
+                            task_id,
+                            str(receipt_value["finding_kind"]),
+                            str(receipt_value["summary"]),
+                            receipt_id=receipt_id,
+                            short_verdict=str(receipt_value["verdict"]),
+                        )
+                    else:
+                        harness.abandon_attempt(
+                            lineage_id,
+                            task_id,
+                            WORKER_OWNER_LOST_REASON,
+                            receipt_id=receipt_id,
+                        )
+                    continue
+                checkpoints = harness.connection.execute(
+                    """
+                    SELECT kind, evidence FROM worker_checkpoints
+                    WHERE lineage_id = ? AND task_id = ?
+                      AND kind != 'result-receipt-v1'
+                    ORDER BY sequence DESC
+                    """,
+                    (lineage_id, task_id),
+                ).fetchall()
+                latest = str(checkpoints[0]["evidence"]) if checkpoints else (
+                    "No worker checkpoint was recorded before ownership was lost."
+                )
+                receipt = harness.record_worker_result_receipt(
+                    lineage_id,
+                    task_id,
+                    str(row["worker_id"]),
+                    {
+                        "schema": "de67.worker-result-receipt.v1",
+                        "lineage_id": lineage_id,
+                        "task_id": task_id,
+                        "claim_id": str(row["claim_id"]),
+                        "worker_id": str(row["worker_id"]),
+                        "disposition": "abandoned",
+                        "verdict": "worker ownership lost; outcome remains open",
+                        "outcome": f"Continue claim {row['claim_id']} from durable evidence.",
+                        "summary": latest,
+                        "material_changes": [],
+                        "tests": [],
+                        "live_actions": [],
+                        "evidence_ceiling": [
+                            "The supervisor receipt preserves only durable checkpoints; it does not infer unreturned worker work."
+                        ],
+                        "bindings": {
+                            "coordinator_session_id": str(row["coordinator_session_id"]),
+                            "supervisor_id": str(row["supervisor_id"]),
+                        },
+                        "journal_entries": [],
+                        "artifacts": [],
+                        "first_divergence": {
+                            "class": "worker-ownership-lost",
+                            "summary": "The owning worker was not recoverable from the successor coordinator session.",
+                        },
+                        "accepted_no_replay": [],
+                        "active_work": [
+                            "Resume the claim from its latest durable checkpoint and current ledger frontier."
+                        ],
+                        "first_open_boundary": (
+                            "Resume from the latest durable checkpoint; treat unreturned work as unknown."
+                        ),
+                        "narrow_queries": [f"task_id={task_id}"],
+                        "entrypoints": [],
+                        "context_metrics": {
+                            "durable_checkpoint_count": len(checkpoints)
+                        },
+                    },
+                )
+                receipt_id = str(receipt["receipt_id"])
             harness.abandon_attempt(
                 lineage_id,
                 task_id,
                 WORKER_OWNER_LOST_REASON,
+                receipt_id=receipt_id,
             )
-    return task_ids
+    return tuple(str(row["task_id"]) for row in terminal_rows)
 
 
 def active_worker_coordinator_session(
@@ -352,7 +452,7 @@ def runtime_worker_owners(
     state = Path(value).expanduser().resolve() if value else Path.home() / ".codex/state_5.sqlite"
     if not state.is_file():
         return {}
-    with sqlite3.connect(f"file:{state}?mode=ro", uri=True) as connection:
+    with closing(sqlite3.connect(f"file:{state}?mode=ro", uri=True)) as connection:
         rows = connection.execute(
             """
             SELECT edge.child_thread_id, edge.parent_thread_id, child.model
@@ -433,6 +533,7 @@ def pending_mutation_suggestions(workspace: Path) -> tuple[MutationSuggestion, .
     pending = ledger.read_text(encoding="utf-8").partition(
         "## Pending suggestions"
     )[2]
+    pending = re.split(r"^#{1,2}\s+", pending, maxsplit=1, flags=re.MULTILINE)[0]
     suggestions: list[MutationSuggestion] = []
     for line in pending.splitlines():
         if not line.startswith("- "):
@@ -699,14 +800,28 @@ def dfs_has_open_work(workspace: Path) -> bool:
 def ordinary_worker_evidence_contract() -> str:
     """Return the reusable evidence-retrieval contract for ordinary workers."""
     return (
-        "Make each ordinary worker responsible for retrieving only the evidence needed for its "
-        "next causal decision. Brief the outcome, proof route, known facts, and evidence locations; "
-        "do not paste available bulk. The worker searches narrowly before reading, selects exact "
-        "fields or slices from structured artifacts, keeps verbose command output in artifacts, "
-        "and returns the first relevant divergence. Evidence bounds come from the current claim, "
+        "Before dispatch or retirement, refresh the existing ledger item's Current handoff: "
+        "what is proved, what is still running with exact handles and a status query, the first "
+        "unresolved step, and useful evidence links. Replace superseded process status and tactics; "
+        "completed administrative restarts are not pending work. Historical receipts preserve proof "
+        "and no-replay facts, not current PIDs or routing permissions. Do not create another handoff "
+        "document or require a fresh read of already sufficient evidence. "
+        "Brief each ordinary worker with the outcome, current proof frontier, accepted no-replay "
+        "facts, first open boundary, exact bindings and artifacts, relevant entrypoints, and a "
+        "small initial read plan that explains why each read matters. Do not paste available bulk "
+        "or require blanket WEC, DFS, ledger, registry, report, or repository reading. The worker "
+        "inspects metadata such as source, size, freshness, repetition, and role before contents, "
+        "uses indexed narrow queries and compact operational receipts by default, keeps complete "
+        "audit output in digest-bound artifacts, "
+        "and preserves the first relevant divergence as a diagnostic anchor while continuing "
+        "diagnosis, repair, or a changed tactic inside the assigned outcome. Evidence bounds come "
+        "from the current claim, "
         "never a fixed quota. A larger read remains available when deleting it would leave that "
-        "claim unproved. When accumulated context no longer helps close the assigned gap, the "
-        "worker uses the durable terminal result or handoff lifecycle instead of replaying it."
+        "claim unproved. When the execution context cannot carry the next necessary act, the worker "
+        "returns the structured compact handoff needed for a durable continuation receipt. That "
+        "receipt names exact evidence and bindings, material changes, tests and live actions, the "
+        "first open causal boundary, narrow follow-up queries, and work that must not be replayed. "
+        "That ends only the worker attempt, not the outcome."
     )
 
 
@@ -723,11 +838,14 @@ def coordinator_ledger_contract() -> str:
         "the implementation, harness, fixtures, or observation path when that is the shortest honest "
         "route to proof. Trust the agent coordinating the claim to retire a failed strategy and invent "
         "a materially different implementation route; a retry fuse ends a strategy, not recoverable "
-        "work. Under every genuinely non-atomic active ledger item, write a nested line exactly "
-        "`  - Subtasks:` followed by rows exactly `    - [STATE] ID :: DESCRIPTION`. STATE is "
-        "open, active, done, or finding; ID is a stable lowercase hyphenated identifier. Usually "
-        "write four to seven meaningful rows, update them in place, and use fewer only for an "
-        "honestly smaller outcome. Never invent filler. These rows are progress subdivisions, not "
+        "work. Choose whether and how to decompose an outcome; expose subdivisions when they "
+        "help execution or explain progress. For the progress plot, prefer four to seven meaningful "
+        "spokes by grouping related steps when useful; this is a presentation preference, not a "
+        "task-count or execution constraint. Do not invent work to fill the plot. When using structured "
+        "subtasks, write a nested line exactly `  - Subtasks:` followed by rows exactly "
+        "`    - [STATE] ID :: DESCRIPTION`. STATE is open, active, done, or finding; ID is a "
+        "stable lowercase hyphenated identifier. Revise the breakdown as evidence changes, "
+        "preserving durable completed work. These rows are progress subdivisions, not "
         "separate workers, deadline tasks, closure gaps, or acceptance gates. A proof prerequisite "
         "that depends on its own eventual output must be split into a "
         "non-credit observation/bootstrap step followed by independent validation; do not query the "
@@ -745,8 +863,10 @@ def worker_handoff_contract() -> str:
         "(for example, R-008-closure-108 becomes task_522d3030382d636c6f737572652d313038). "
         "Do not simplify or humanize this label. It is injective correlation metadata; "
         "the runtime thread UUID remains the worker identity. When policy detects an unbound task, "
-        "its spawn_worker response injects the exact task_name and a concrete self-contained "
-        "spawn_agent call for that opened task; use that call rather than reconstructing it from memory. "
+        "its spawn_worker response injects the exact task_name and a compact spawn_agent call for "
+        "that opened task. The full self-contained worker brief is an immutable hash-bound dispatch "
+        "packet named by that call; it is worker input, not coordinator context. Use the injected call "
+        "rather than reconstructing it from memory. "
         "Actually call spawn_agent; announcing that you are assigning a worker is not delegation. "
         "When several independently actionable deadline tasks are unbound, policy lists one call per "
         "task and you may spawn one "
@@ -759,24 +879,63 @@ def worker_handoff_contract() -> str:
         "records the durable claim automatically when the runtime spawn edge becomes visible. "
         "That visibility may arrive after the first wait begins; this is not a delegation failure. "
         "Never invoke claim-worker and never use "
-        "/root/<task-name> as a worker identity. Proceed to the normal wait; if no verified roster "
+        "/root/<task-name> as a worker identity. After every listed spawn, continue live coordination; "
+        "call wait_agent when no useful coordination decision remains. Do not finish while a worker "
+        "result is outstanding. If no verified roster "
         "handoff exists when the coordinator process exits, the runner abandons the attempt. "
         "After a verified handoff, remain in the worker-result lifecycle: an empty or timed wait "
-        "is not completion, so wait again; record the returned terminal result before routing or exiting."
+        "is not completion. Reassess useful coordination or wait again; record a returned terminal "
+        "result before routing or exiting."
+    )
+
+
+def nested_worker_contract() -> str:
+    """Keep optional primary-worker helpers native and outside durable task ownership."""
+    return (
+        "A primary Luna or Terra worker may optionally spawn Luna-only native helpers for independent "
+        "work with "
+        "fork_turns=\"none\", self-contained briefs, and worker-selected reasoning effort. "
+        "Do not open deadline tasks, ledger entries, or claims for helpers. The primary worker "
+        "retains the assigned outcome, may work or wait while helpers run, judges their results, "
+        "and collects or stops them before returning. Give helpers explicit exclusive ownership before "
+        "overlapping edits or shared mutable runtime operations."
     )
 
 
 def worker_result_ingress_contract() -> str:
     """Order a verified worker return before ledger-derived route selection."""
     return (
+        "Native progress messages and questions from a live worker are nonterminal conversation: "
+        "respond when useful without demanding a result receipt, pausing the task, or creating a "
+        "ledger item for each observation. Use checkpoint-worker only when evidence needs durable "
+        "continuation; a message or checkpoint does not settle the task or restart its clock. "
         "A verified ordinary-worker return is durable-state ingress, not a route decision. "
-        "When a worker message returns completion evidence, a formal finding, or abandonment, "
-        "judge it and record exactly one matching deadline-harness terminal transition before "
-        "executing DE67_POLICY_DECIDE_ARGV_JSON again. This is the only pre-decision transition: "
+        "Treat the worker's requested disposition as evidence to judge, not as terminal authority. "
+        "Before recording a formal finding, name the assigned-outcome exit that its evidence proves. "
+        "A return that only disproves the current strategy is nonterminal even when the worker names "
+        "no successor. If the assigned outcome still has an authorized repository repair, rerun, "
+        "observation, or materially different implementation route, preserve the returned evidence "
+        "and choose the next route. Use checkpoint-worker and keep the same task live only while the "
+        "next turn supplies new "
+        "evidence, a new affordance, or a materially different strategy that the bound worker can "
+        "execute. If its execution context is exhausted or the next message would repeat an unchanged "
+        "request, preserve a compact no-replay handoff, abandon only that attempt, keep the unfinished "
+        "ledger outcome visible, and project its remaining frontier to a fresh task after any required "
+        "incident review. Context exhaustion is not a formal finding or an assigned-outcome exit. "
+        "Before every terminal transition, persist one identity-bound worker result receipt through "
+        "record-worker-receipt. It preserves the achieved outcome or first divergence, material "
+        "repository/runtime changes, journal entries, tests and live actions, evidence ceilings, "
+        "exact continuation bindings and artifacts, accepted no-replay work, first remaining "
+        "boundary, and narrow queries. Then cite that receipt in exactly one matching deadline-harness "
+        "terminal transition before executing DE67_POLICY_DECIDE_ARGV_JSON again. "
+        "A completed attempt settles only that task; "
+        "when it is bound to a closure gap, close that gap and preserve its proof while any sibling "
+        "gaps remain open. Accept the whole claim only through the separate claim-acceptance "
+        "transition after every required gap is closed. This is the only pre-decision transition: "
         "the policy kernel derives worker result facts from that committed state. Do not wait for "
         "the live task to terminalize itself, do not ask the worker to mutate DE67 state, and do "
         "not record a second terminal transition when the task is already terminal. Ordinary test "
-        "failure remains inside the worker task unless the returned evidence meets the formal "
+        "failure remains inside the worker task unless the returned evidence meets the assigned-outcome "
         "finding boundary."
     )
 
@@ -838,6 +997,48 @@ def coordinator_recovery_contract(opportunity: int, workspace: Path) -> str:
     )
 
 
+def coordinator_context_contract() -> str:
+    """Separate routing obligations from the coordinator's evidence choices."""
+    return (
+        "Follow the policy's action and preserve its ownership and lifecycle requirements. "
+        "Start with its named sources; inspect additional in-scope evidence when it can change "
+        "the current decision. The read list is a starting point, not a whitelist. "
+        "A relevant read does not authorize dispatch, mutation, or a shared-state transition. "
+        "Apply each emitted obligation to the role and transition it governs. Give workers "
+        "their outcome, material constraints, useful evidence, and handoff requirements; keep "
+        "coordinator-only routing instructions out of worker briefs."
+    )
+
+
+def live_coordination_contract() -> str:
+    """Allow useful coordination while execution remains with cheaper workers."""
+    return (
+        "Communication channels: use native send_message(target=..., message=...) for live "
+        "questions, answers, and steering, addressing the worker by its returned agent id or "
+        "canonical task name. Workers send progress and questions to their parent at /root. "
+        "Messages are delivered during active work and wake wait_agent; they do not terminate "
+        "the task. send_message does not start an idle worker turn: use followup_task to resume "
+        "an idle bound worker with useful next work in its existing assignment. Worker final "
+        "responses enter the result lifecycle described above. "
+        "While a worker runs, choose what can advance the assigned outcomes: inspect relevant "
+        "evidence, watch an informative run, ask or answer a question through native send_message, "
+        "steer the bound worker, or revise the executable ledger route and brief as evidence changes. "
+        "Keep implementation and substantial investigation with Luna or Terra; your own inspection "
+        "should inform coordination rather than duplicate their work. You may open and dispatch "
+        "independently actionable work through the existing policy and deadline transitions while "
+        "another task stays live. Preserve one primary worker per task and exclusive ownership of "
+        "overlapping edits or mutable runtime state. A follow-up to a busy worker continues its "
+        "existing task; it does not assign an unrelated queued task. Preserve the frozen DFS "
+        "outcome and evidence boundaries when changing the route. Treat observations as evidence "
+        "to judge: keep ordinary repair inside its outcome, and create separate work only when it "
+        "needs independent ownership or a durable decision. Progress messages need no quota, "
+        "periodic report, or automatic ledger entry. When no useful coordination decision remains, "
+        "call wait_agent for worker events, waking no later than the item deadline; avoid repeated "
+        "unchanged reads and status chatter. Deadline, integrity, and mutation gates still govern "
+        "every routing transition."
+    )
+
+
 def coordinator_prompt(
     workspace: Path,
     state_path: Path,
@@ -851,17 +1052,18 @@ def coordinator_prompt(
         worker_result_ingress_contract(),
         "Do not read packaged DE-67 SKILL.md, kernel, role, reference, or guideline prose during delivery.",
         "The hash-bound .de67/phase3-policy.d67 file is the machine-canonical routing policy.",
-        "Before every route decision, execute the argument array in DE67_POLICY_DECIDE_ARGV_JSON as a subprocess without a shell.",
-        "Obey its action, read only its named sources, and preserve every emitted obligation in worker or reviewer briefs.",
+        "Before each coordinator routing transition, execute the argument array in DE67_POLICY_DECIDE_ARGV_JSON as a subprocess without a shell.",
+        coordinator_context_contract(),
+        live_coordination_contract(),
         "Write every owner-facing text field rendered on the hosted dashboard in simple English. This includes ledger items, latest findings, waiting work, mutation or incident summaries, and any DFS summary that the dashboard displays. First explain what happened and why it matters in terms any reader can understand. Then preserve the necessary technical identifiers and evidence, state what remains or happens next, and use one concrete statement per sentence. If the simple explanation exposes a contradiction or a missing causal step, record that problem instead of hiding it behind technical language. Internal machine state and DFS detail that the dashboard does not display do not need this rewrite.",
         "Never review, apply, or resolve a mutation. When the compiled policy says retire_for_mutation_review, dispatch no worker, make no guidance change, and exit immediately so the external supervisor can run the exclusive reviewer.",
         "Do not infer policy from workspace guideline prose; those files are legacy differential fixtures on this branch.",
-        "Read current code or DFS detail only when the compiled decision names ledger, dfs, or dfs_slice.",
         "For every worker, explicitly select gpt-5.6-luna or gpt-5.6-terra: Luna for clear execution and Terra for debugging/discovery. Effort low-max: lowest sufficient for complexity/research. Never Sol.",
         "For every newly spawned ordinary worker, set fork_turns=\"none\" and provide a self-contained task brief. Never omit model selection or pass coordinator or predecessor history. Reusing an already relevant worker remains allowed.",
         coordinator_ledger_contract(),
         ordinary_worker_evidence_contract(),
         worker_handoff_contract(),
+        nested_worker_contract(),
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every state transition; do not infer replacements.",
         "The external coordinator supervisor owns this process. Do not launch your successor.",
     ]
@@ -895,12 +1097,14 @@ def mutation_reviewer_prompt(
     return "\n".join(
         [
             f"Act as the exclusive Phase-3 mutation reviewer in {workspace}.",
-            "You are a fresh gpt-5.6-sol reviewer at high reasoning effort.",
+            "You are a fresh gpt-6-astra reviewer at medium reasoning effort.",
             "No coordinator or roster worker is active. Do not dispatch work and do not start a coordinator.",
             f"Resolve durable {gate.kind} gate {gate.identity} in {state_path} for lineage {lineage_id}.",
-            "The complete workspace mutation-suggestion ledger is mandatory owner input. User-authored entries carry mutation-scoped authority beneath system and developer instructions and override lower-priority Phase-3 restrictions only as needed for their outcome. Preserve honest evidence, completed valid work, durable lifecycle integrity, safety, and the requested product outcome; grant no unrelated authority.",
+            "The complete pending section of .de67/mutation-suggestions.md is mandatory owner input. This is a consumable queue: delete completed entries instead of moving them to consumed-history sections; durable receipts and review artifacts retain the evidence. Historical records are evidence to retrieve when relevant, not current requests. User-authored entries carry mutation-scoped authority beneath system and developer instructions and override lower-priority Phase-3 restrictions only as needed for their outcome. Preserve honest evidence, completed valid work, durable lifecycle integrity, safety, and the requested product outcome; grant no unrelated authority.",
             "Trust the agent: choose the evidence and implementation route without prescribed reads, commands, approvals, or rituals. Diagnose poor decisions from the instructions, information, tools, incentives, and transitions the system supplied, then repair the earliest preventable systemic cause instead of blaming the actor or adding blanket caution.",
+            "Treat operational efficiency and context shape as evidence-bearing method concerns: inspect source, size, repetition, freshness, and role metadata before loading contents; simplify only where the deletion test passes; preserve full artifacts and never turn measurements into quotas or hidden-failure incentives.",
             "For every pending entry, reconstruct why the incident occurred, separate immediate recovery from repeatable method correction, implement the smallest general correction supported by evidence, and prove it with a reproduction or counterexample that could expose the original failure. Compress affected guidance instead of appending situational rules.",
+            "For a random gate, review a recent coordinator/worker trajectory: the intended outcome, context available at the decision, actions, first divergence, and actual proof or state change. The stored lane is a sampling seed, not an edit boundary. Follow evidence across role handoffs, tools, guidance, and decomposition; retrieve full traces only when the missing detail can change the decision. Repeated actions are not waste when inputs or evidence changed. Choose any supported improvement, including deletion or consolidation, without a finding quota or required mutation. Validate affected local guidelines and same-outcome DFS refinements together through random-review; use its existing method-candidate validation for broader permitted method changes. Preserve accepted proof, owner intent, accounting, and exclusive review/restart ownership. A review with no justified change may resolve as a guarded no-op; uncertainty about a speculative improvement must not strand delivery.",
             "When rewriting the active ledger, preserve this coordinator-facing ledger contract: " + coordinator_ledger_contract(),
             "If a cause or correction cannot be proved, preserve the gate and state the exact remaining uncertainty. Otherwise disposition every pending entry, durably resolve the gate, request one fresh coordinator restart, and exit. The external supervisor alone launches the successor.",
         ]
@@ -940,8 +1144,8 @@ def run_mutation_reviewer(
     reviewer_env = dict(extra_env or {})
     reviewer_env.update(
         {
-            "DE67_COORDINATOR_MODEL": "gpt-5.6-sol",
-            "DE67_COORDINATOR_REASONING_EFFORT": "high",
+            "DE67_COORDINATOR_MODEL": "gpt-6-astra",
+            "DE67_COORDINATOR_REASONING_EFFORT": "medium",
         }
     )
     return run_child(
@@ -1012,10 +1216,23 @@ def _complete_mutation_review(
             raise SupervisorError(
                 f"Mutation reviewer failed for {gate.kind} {gate.identity}; ordinary work remains stopped"
             )
+        try:
+            checkpoint_repository(
+                workspace,
+                state_path,
+                lineage_id,
+                supervisor_owner_id=(journal.owner_id if journal is not None else None),
+            )
+        except RepositoryCheckpointError as error:
+            raise SupervisorError(
+                f"Product recovery checkpoint failed after mutation review: {error}"
+            ) from error
         remaining = mutation_gate(state_path, lineage_id, workspace)
         if remaining is not None:
             gate = remaining
             continue
+        with DeadlineHarness(state_path) as harness:
+            harness.synchronize_dfs_statuses()
         restart = read_clock(state_path, lineage_id)
         if not restart.required or restart.generation is None:
             _mark_protocol_failure(
@@ -1075,18 +1292,23 @@ def run_child(
             "lowest sufficient for complexity/research. Never Sol. Every newly spawned ordinary "
             "worker must use fork_turns=\"none\" and a self-contained brief; never omit model "
             "selection or pass coordinator or predecessor history. "
+            + coordinator_context_contract()
+            + " "
+            + live_coordination_contract()
+            + " "
             + coordinator_ledger_contract()
             + " "
             + ordinary_worker_evidence_contract()
             + " "
             + worker_handoff_contract()
+            + " "
+            + nested_worker_contract()
             + "\n"
         )
     if decision_opportunity > 1:
         prompt = prompt.rstrip() + "\n" + coordinator_recovery_contract(
             decision_opportunity, workspace
         ) + "\n"
-    _write(run_dir / "prompt.txt", prompt)
     _write(run_dir / "status.txt", "STARTING\n")
 
     environment = os.environ.copy()
@@ -1094,6 +1316,7 @@ def run_child(
         environment.update(extra_env)
     environment.update(
         {
+            "PYTHONIOENCODING": "utf-8",
             "DE67_COORDINATOR_RUN_ID": run_id,
             "DE67_PROCESS_ROLE": role,
             "DE67_DEADLINE_STATE": str(state_path),
@@ -1160,6 +1383,22 @@ def run_child(
             ]
         )
 
+    # Tool execution may use an app-server process that did not inherit this environment.
+    binding_keys = ["DE67_COORDINATOR_RUN_ID", "DE67_PROCESS_ROLE", "DE67_DEADLINE_STATE",
+                    "DE67_LINEAGE", "DE67_WORKSPACE", "DE67_SUPERVISOR_PID",
+                    "DE67_POLICY_DECIDE_ARGV_JSON", "DE67_COORDINATOR_ACK_ARGV_JSON"]
+    if role == "mutation-reviewer":
+        binding_keys.append("DE67_POLICY_GUARD_ARGV_JSON")
+    bindings = {key: json.loads(environment[key]) if key.endswith("_ARGV_JSON") else environment[key]
+                for key in binding_keys if key in environment}
+    prompt = prompt.rstrip() + (
+        "\nCurrent invocation bindings (use these values directly; tool subprocesses need not "
+        "inherit the runner environment). Missing environment variables do not require discovery "
+        "or authorize a replacement binding. Execute the supplied argument arrays without a shell.\n"
+        "```json\n" + json.dumps(bindings, ensure_ascii=False, sort_keys=True) + "\n```\n"
+    )
+    _write(run_dir / "prompt.txt", prompt)
+
     command = [*runner_command, "--cwd", str(workspace)]
     process: subprocess.Popen[str]
     try:
@@ -1171,6 +1410,7 @@ def run_child(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
             close_fds=True,
         )
     except OSError as error:
@@ -1187,12 +1427,8 @@ def run_child(
         _write(run_dir / "status.txt", "RUNNING\n")
         if process.stdin is None:
             raise SupervisorError("Runner stdin pipe was not created")
-        try:
-            process.stdin.write(prompt)
-            process.stdin.close()
-        except BrokenPipeError:
-            pass
-        exit_code = process.wait()
+        process.communicate(prompt)
+        exit_code = process.returncode
     except BaseException:
         if process.poll() is None:
             process.kill()
@@ -1282,6 +1518,17 @@ def _run_supervisor_locked(
         f"supervisor-{os.getpid()}-{uuid.uuid4().hex}",
         os.environ.get("DE67_SUPERVISOR_START_TOKEN"),
     )
+    try:
+        checkpoint_repository(
+            workdir,
+            state,
+            lineage_id,
+            supervisor_owner_id=journal.owner_id,
+        )
+    except RepositoryCheckpointError as error:
+        raise SupervisorError(
+            f"Product recovery checkpoint failed at supervisor startup: {error}"
+        ) from error
     reviewed_gates: set[tuple[str, str]] = set()
     consumed_events: set[str] = set()
     gate = mutation_gate(state, lineage_id, workdir)
@@ -1360,6 +1607,17 @@ def _run_supervisor_locked(
             ),
             None if result.exit_code == 0 else f"exit code {result.exit_code}",
         )
+        try:
+            checkpoint_repository(
+                workdir,
+                state,
+                lineage_id,
+                supervisor_owner_id=journal.owner_id,
+            )
+        except RepositoryCheckpointError as error:
+            raise SupervisorError(
+                f"Product recovery checkpoint failed after coordinator boundary: {error}"
+            ) from error
 
         # This is the only clock read after this child exits. There is no polling loop.
         after = read_clock(state, lineage_id)

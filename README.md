@@ -1,5 +1,7 @@
 # de67
 
+**2.0.0 — Welcome, Astra.** [What is in this release](docs/releases/v2.0.0.md)
+
 > Don't let your vibe coding project turn 67. Stop aura farming and start building.
 > You need to **de67**.
 
@@ -134,10 +136,10 @@ library; the optional narrator makes model calls only when configured.
 | Optional owner contact | [OpenClaw adapter](integrations/openclaw_discord/README.md) |
 | Moving tested lab work into a release | [Release promotion](RELEASE_PROMOTION.md) |
 
-## Lab now. Release when proven.
+## Built in the lab. Released here.
 
-**de67-lab is the active development repository.** This README prepares the next release;
-it does not declare stability testing complete.
+This is the **de67 2.0.0** release. [de67-lab](https://github.com/josihosi/de67-lab) is
+the active development repository; reviewed changes are merged here for release.
 
 Local delivery and method mutation do not require a writable method checkout or network access.
 A writable lab is useful when you want to generalize and publish an improvement. Stable changes

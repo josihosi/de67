@@ -15,6 +15,39 @@ SPEC.loader.exec_module(dashboard_module)
 
 
 class DashboardTests(unittest.TestCase):
+    def test_coordinator_activity_tracks_wait_and_resume(self) -> None:
+        trace = self.sessions / "activity.jsonl"
+        records = []
+
+        def append(record_type, **payload):
+            records.append({"type": record_type, "payload": payload})
+            trace.write_text("\n".join(json.dumps(row) for row in records), encoding="utf-8")
+
+        append("event_msg", type="task_started")
+        self.assertEqual(dashboard_module._session_activity(trace), "working")
+        append("response_item", type="function_call", name="wait_agent", call_id="wait-1")
+        append("event_msg", type="token_count")
+        append("response_item", type="agent_message")
+        append("response_item", type="agent_message", content="incoming " * 70000)
+        self.assertEqual(dashboard_module._session_activity(trace), "waiting")
+        append("response_item", type="function_call_output", call_id="wait-1", output="agent finished")
+        self.assertEqual(dashboard_module._session_activity(trace), "working")
+        append("response_item", type="custom_tool_call", name="exec", input="do work")
+        self.assertEqual(dashboard_module._session_activity(trace), "working")
+        append("event_msg", type="task_complete")
+        self.assertEqual(dashboard_module._session_activity(trace), "waiting")
+        with trace.open("a", encoding="utf-8") as stream:
+            stream.write('\n{"type":')
+        self.assertEqual(dashboard_module._session_activity(trace), "waiting")
+
+        index = self.sessions.parent / "state_5.sqlite"
+        with sqlite3.connect(index) as connection:
+            connection.execute("CREATE TABLE threads (id TEXT, rollout_path TEXT)")
+            connection.execute("INSERT INTO threads VALUES (?, ?)", ("live", str(trace)))
+        connection.close()
+        with patch.object(dashboard_module, "_active_coordinator_id", return_value="live"):
+            self.assertEqual(dashboard_module.coordinator_activity(self.workspace, self.sessions), "waiting")
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.workspace = Path(self.temporary.name)

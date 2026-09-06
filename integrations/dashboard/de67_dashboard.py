@@ -1028,6 +1028,64 @@ def _active_coordinator_id(workspace: Path) -> str | None:
     return None
 
 
+def _reverse_session_lines(path: Path):
+    """Read complete lines backward without a fixed activity-history cutoff."""
+    with path.open("rb") as source:
+        position = source.seek(0, os.SEEK_END)
+        pending = b""
+        while position:
+            size = min(position, 65536)
+            position -= size
+            source.seek(position)
+            lines = (source.read(size) + pending).split(b"\n")
+            pending = lines[0]
+            for line in reversed(lines[1:]):
+                yield line.decode("utf-8", errors="replace")
+        if pending:
+            yield pending.decode("utf-8", errors="replace")
+
+
+def _session_activity(path: Path) -> str:
+    """Project the latest execution signal, ignoring accounting and incoming mail."""
+    for line in _reverse_session_lines(path):
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        payload = record.get("payload", {})
+        kind = payload.get("type")
+        if record.get("type") == "event_msg":
+            if kind in ("task_complete", "turn_aborted"):
+                return "waiting"
+            if kind == "task_started":
+                return "working"
+        if record.get("type") != "response_item":
+            continue
+        if kind in ("function_call", "custom_tool_call"):
+            name = str(payload.get("name", "")).rsplit(".", 1)[-1]
+            return "waiting" if name in ("wait_agent", "wait_threads", "sleep",
+                                           "request_user_input") else "working"
+        if kind in ("function_call_output", "custom_tool_call_output", "reasoning"):
+            return "working"
+        if kind == "message" and payload.get("role") == "assistant":
+            return "waiting" if payload.get("phase") == "final" else "working"
+    return "unknown"
+
+
+def coordinator_activity(workspace: Path, sessions_root: Path) -> str:
+    session = _active_coordinator_id(workspace)
+    if not session:
+        return "unknown"
+    index = sessions_root.parent / "state_5.sqlite"
+    uri = f"file:{quote(str(index), safe='/:')}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, timeout=0)
+    try:
+        row = connection.execute("SELECT rollout_path FROM threads WHERE id=?", (session,)).fetchone()
+    finally:
+        connection.close()
+    return _session_activity(Path(row[0])) if row else "unknown"
+
+
 def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     """Project active roster subagents from Codex's existing read-only session records."""
     counts = {model: {effort: 0 for effort in ("low", "medium", "high", "max")}
@@ -1467,6 +1525,10 @@ class Dashboard:
             except Exception as error:
                 process, process_error = {}, str(error)
             try:
+                process["activity"] = coordinator_activity(self.workspace, self.sessions_root)
+            except Exception:
+                process["activity"] = "unknown"
+            try:
                 workers = worker_state(self.workspace, self.sessions_root)
             except Exception as error:
                 workers = {"counts": {}, "available": False, "error": str(error)}
@@ -1575,6 +1637,7 @@ class Dashboard:
                          "waiting" if coordinator == "waiting" else
                          "unknown" if coordinator == "unknown" else "off")
             astra_state = "on" if mutation_running else "unknown" if clock.get("error") else "off"
+            sun_activity = process.get("activity", "unknown") if sun_state == "on" else sun_state
             import random
             rng = random.Random(67)
             stars = []
@@ -1631,7 +1694,7 @@ class Dashboard:
                 '</g>'
                 '<g fill="currentColor">' + "".join(stars) + '</g></svg></div>'
                 '<div class="cosmos-deck">'
-                f'<div class="sun {sun_state}" title="Coordinator: {sun_state}" role="img" aria-label="Coordinator: {sun_state}">'
+                f'<div class="sun {sun_state} activity-{_escape(sun_activity)}" title="Coordinator: {_escape(sun_activity)}" role="img" aria-label="Coordinator: {_escape(sun_activity)}">'
                 '<span>coordinator</span><svg viewBox="0 0 320 320" aria-hidden="true">'
                 '<defs><radialGradient id="sun-glow"><stop stop-color="currentColor" stop-opacity=".18"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></radialGradient>'
                 '<linearGradient id="sun-face" x2="0" y2="1"><stop stop-color="currentColor"/><stop offset="1" stop-color="currentColor" stop-opacity=".58"/></linearGradient></defs>'
@@ -1892,7 +1955,10 @@ header h1{{font-family:var(--terminal)!important;font-weight:400;letter-spacing:
 code,pre{{background:#15111b}}
 
 
-.sun .sun-corona{{opacity:0}}.sun.on .sun-corona{{opacity:1}}
+.sun .sun-corona{{opacity:0;transform-origin:160px 160px;transform:scale(.89);transition:transform 1.8s ease,opacity 1.8s ease}}
+.sun.on .sun-corona,.sun.waiting .sun-corona{{opacity:.35}}
+.sun.on.activity-working .sun-corona{{opacity:1;transform:scale(1.07)}}
+@media(prefers-reduced-motion:reduce){{.sun .sun-corona{{transition:none}}}}
 
 </style><script src="/live_refresh.js" defer></script></head><body><main data-dashboard data-refresh-seconds="{self.refresh_seconds}"><header id="dashboard-header"><h1 class="supervisor-{_escape(supervisor)}" title="Supervisor: {_escape(supervisor)}" aria-label="de67 · supervisor {_escape(supervisor)}">de67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}<div id="refresh-status" class="subtle" role="status">{refresh_label}</div><div id="dashboard-content">{body}</div><footer id="dashboard-sources">{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")

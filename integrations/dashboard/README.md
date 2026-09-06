@@ -15,6 +15,10 @@ the tab is hidden or text is selected. The last good view stays visible if the c
 Use **Refresh snapshot** for an immediate update; `--refresh-seconds 0` disables automatic
 updates. Set another interval, such as `--refresh-seconds 900`, for fifteen-minute updates.
 
+The coordinator sun's corona settles close while it waits and expands gently while it
+works, using its current session's execution signals at the same refresh interval.
+Unavailable activity leaves the corona quiet; reduced-motion preferences disable the transition.
+
 Home-network exposure is explicit:
 
 ```sh

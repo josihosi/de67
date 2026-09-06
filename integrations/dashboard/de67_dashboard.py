@@ -1288,7 +1288,7 @@ def render_fuel(fuel: dict[str, Any]) -> str:
 
 
 class Dashboard:
-    def __init__(self, workspace: Path, refresh_seconds: int = 0,
+    def __init__(self, workspace: Path, refresh_seconds: int = 30,
                  sessions_root: Path | None = None,
                  sidecar_script: Path | None = None,
                  fratbro_script: Path | None = None,
@@ -1517,10 +1517,11 @@ class Dashboard:
             "green" if ledger_data["active"] and supervisor == "running" else
             "yellow" if ledger_data["active"] else "grey"
         )
-        nav = '<nav><a class="%s" href="/">Overview</a><a class="%s" href="/dfs">DFS</a><a href="?refresh=1">Refresh snapshot ↻</a></nav>' % (
+        nav = '<nav><a class="%s" href="/">Overview</a><a class="%s" href="/dfs">DFS</a><a data-refresh href="?refresh=1">Refresh snapshot ↻</a></nav>' % (
             "selected" if tab == "overview" else "", "selected" if tab == "dfs" else "")
         meta = ""  # Explicit refresh keeps reading and navigation stable.
-        source_bits = ['<span>Snapshot ' + time.strftime("%H:%M:%S") + ' · refresh manually</span>']
+        refresh_label = f'Live · every {self.refresh_seconds}s' if self.refresh_seconds else 'Manual refresh'
+        source_bits = ['<span>Snapshot ' + time.strftime("%H:%M:%S") + '</span>']
         for label, source in (("Markdown", ledger), ("DFS", dfs), ("SQLite", clock)):
             tone = "yellow" if source.get("stale") else "red" if source.get("error") else "green"
             detail = source.get("error") or source.get("identity", {}).get("hash") or "healthy"
@@ -1646,9 +1647,21 @@ class Dashboard:
                 )
             fratbro_html = render_fratbro_status(fratbro) if self.fratbro_cache else ""
             body = f'{cosmos_html}{sidecar_html}{fratbro_html}{finding_html}<section class="work-section"><div class="eyebrow">THE WORK / CURRENT SCOPE</div><h2>Work in focus</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section class="work-section"><div class="eyebrow">ON THE HORIZON</div><h2>Up next</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section class="work-section"><div class="eyebrow">NEEDS ATTENTION</div><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
+        # Stable region IDs let the browser update optional panels in place.
+        for css, key in (("cosmos", "campaign"), ("trajectory", "trajectory"),
+                         ("fratbro", "briefing"), ("activity", "finding"),
+                         ("document", "document")):
+            body = body.replace(f'class="{css}"', f'id="panel-{key}" data-panel class="{css}"', 1)
+        for heading, key in (("THE WORK / CURRENT SCOPE", "focus"),
+                             ("ON THE HORIZON", "upcoming"), ("NEEDS ATTENTION", "blocked")):
+            body = body.replace(f'<section class="work-section"><div class="eyebrow">{heading}',
+                                f'<section id="panel-{key}" data-panel class="work-section"><div class="eyebrow">{heading}')
+        body = body.replace('<section><h2>Waiting on event', '<section id="panel-waiting" data-panel><h2>Waiting on event')
         page = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>de67</title>
 <style>
+html{{overflow-anchor:none}}
+#refresh-status{{font-size:11px;min-height:16px}}
 :root{{--bg:#101318;--panel:#1a1e24;--line:#343a43;--text:#eee9df;--muted:#9ca3ad;--green:#75c84c;--yellow:#f0bc28;--red:#e05248;--blue:#75a7d8}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}}main{{max-width:1180px;margin:auto;padding:24px}}header{{display:flex;align-items:baseline;gap:22px}}h1{{font-size:25px;margin:0}}header span,.subtle{{color:var(--muted)}}nav{{display:flex;margin:18px 0;border-bottom:1px solid var(--line)}}nav a{{color:var(--muted);text-decoration:none;padding:10px 16px}}nav a.selected{{color:var(--text);border:1px solid var(--line);border-bottom-color:var(--bg);border-radius:6px 6px 0 0;margin-bottom:-1px}}nav a:last-child{{margin-left:auto}}.status{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}}.lamp,.metric,section,.activity{{background:var(--panel);border:1px solid var(--line);border-radius:7px}}.lamp,.metric{{padding:13px 14px;min-height:82px}}small{{display:block;color:var(--muted);margin-bottom:10px}}strong{{font-size:18px}}.metric-note{{display:block;color:var(--muted);font-size:11px;margin-top:5px;white-space:nowrap}}.workers{{padding:12px 16px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:7px 12px;text-align:center;border-top:1px solid var(--line)}}thead th{{border-top:0;color:var(--muted);font-size:12px;font-weight:500}}tbody th{{text-align:left}}td{{font-variant-numeric:tabular-nums;color:var(--muted)}}td.active-count{{color:var(--green);font-weight:700}}.activity{{display:grid;grid-template-columns:100px max-content 1fr max-content;align-items:center;gap:12px;margin-top:10px;padding:10px 14px}}.activity small{{margin:0}}.activity strong{{font-size:13px}}.activity span{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.activity em{{color:var(--muted);font-style:normal;font-size:12px}}.dot{{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:8px}}.green{{background:var(--green)}}.yellow{{background:var(--yellow)}}.red{{background:var(--red)}}.grey{{background:#737983}}section{{margin-top:12px;padding:16px}}h2{{font-size:16px;margin:0 0 12px}}h3{{font-size:15px}}p,li{{line-height:1.55}}code{{background:#11151a;padding:2px 4px;border-radius:3px}}pre{{overflow:auto;background:#11151a;padding:12px;border-radius:5px}}.ledger-list{{margin-top:12px}}.ledger-item{{position:relative;margin:10px 0 0;padding:12px 16px 12px 22px;border:0;border-radius:0;background:linear-gradient(90deg,rgba(117,167,216,.08),transparent 68%)}}.ledger-item::before{{content:"";position:absolute;left:0;top:6px;bottom:6px;width:4px;border-radius:4px;background:linear-gradient(180deg,var(--blue),#536c86)}}.ledger-title{{font-weight:650;line-height:1.45}}.ledger-item ul{{list-style:none;margin:8px 0 0;padding-left:0;color:var(--muted)}}.ledger-item li{{padding:4px 0}}.ledger-item p{{margin:8px 0 0;color:var(--muted)}}.trajectory{{padding-bottom:12px}}.trajectory-scroll{{overflow:auto;display:flex;justify-content:center}}.trajectory svg{{display:block;width:min(100%,560px);height:auto;min-width:500px}}.trajectory-lines line{{stroke:var(--line);stroke-width:2}}.trajectory-node rect{{fill:#20252c;stroke:var(--line);stroke-width:2}}.trajectory-node.open rect{{stroke:var(--yellow)}}.trajectory-node.proved rect{{stroke:var(--green)}}.trajectory-node.active rect{{fill:#202b35;stroke:var(--blue);stroke-width:3}}.trajectory-node text,.trajectory-center text{{fill:var(--text);font:600 13px system-ui,sans-serif;text-anchor:middle}}.trajectory-node .node-state,.trajectory-center .node-state{{fill:var(--muted);font-size:10px;font-weight:500}}.trajectory-center rect{{fill:#111820;stroke:var(--blue);stroke-width:3}}.trajectory-note{{color:var(--muted);font-size:11px;text-align:center;line-height:1.5;padding:0 8px 4px}}footer{{display:flex;gap:25px;flex-wrap:wrap;color:var(--muted);padding:14px 4px}}footer em{{font-style:normal;color:#747c87;margin-left:5px}}.document{{padding:22px}}@media(max-width:900px){{.status{{grid-template-columns:1fr 1fr 1fr}}}}@media(max-width:600px){{.status{{grid-template-columns:1fr 1fr}}header span{{display:none}}.activity{{grid-template-columns:1fr}}.activity span{{white-space:normal}}.trajectory svg{{min-width:460px}}}}
 .status{{grid-template-columns:repeat(6,1fr)}}
@@ -1856,7 +1869,7 @@ code,pre{{background:#15111b}}
 
 .sun .sun-corona{{opacity:0}}.sun.on .sun-corona{{opacity:1}}
 
-</style></head><body><main><header><h1 class="supervisor-{_escape(supervisor)}" title="Supervisor: {_escape(supervisor)}" aria-label="de67 · supervisor {_escape(supervisor)}">de67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
+</style><script src="/live_refresh.js" defer></script></head><body><main data-dashboard data-refresh-seconds="{self.refresh_seconds}"><header id="dashboard-header"><h1 class="supervisor-{_escape(supervisor)}" title="Supervisor: {_escape(supervisor)}" aria-label="de67 · supervisor {_escape(supervisor)}">de67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}<div id="refresh-status" class="subtle" role="status">{refresh_label}</div><div id="dashboard-content">{body}</div><footer id="dashboard-sources">{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")
 
 
@@ -1880,16 +1893,18 @@ def serve(workspace: Path, bind: str, port: int, refresh_seconds: int,
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
-            if path not in ("/", "/dfs", "/ledger", "/briefing"):
+            if path not in ("/", "/dfs", "/ledger", "/briefing", "/live_refresh.js"):
                 self.send_error(404)
                 return
             try:
-                payload = dashboard.render(path.strip("/") or "overview")
+                is_script = path == "/live_refresh.js"
+                payload = (Path(__file__).with_name("live_refresh.js").read_bytes() if is_script
+                           else dashboard.render(path.strip("/") or "overview"))
                 self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Type", "text/javascript; charset=utf-8" if is_script else "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(payload)))
                 self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+                self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.end_headers()
                 self.wfile.write(payload)
@@ -1914,7 +1929,8 @@ def main() -> None:
     parser.add_argument("--workspace", required=True, type=Path)
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8767)
-    parser.add_argument("--refresh-seconds", type=int, default=0)
+    parser.add_argument("--refresh-seconds", type=int, default=30,
+                        help="Background refresh interval; 0 disables automatic updates")
     parser.add_argument("--codex-sessions", type=Path, default=None,
                         help="Codex session root used for optional active-worker counts")
     parser.add_argument("--sidecar-script", type=Path, default=None,

@@ -16,8 +16,7 @@ across handoffs. You set the direction and can steer the run as it goes.
 
 [![de67 dashboard with worker activity, token usage, and a populated trajectory plot.](docs/assets/dashboard-overview.png)](integrations/dashboard/README.md)
 
-*Dashboard overview: worker activity, token usage, and the trajectory sidecar.
-The visual refresh shown here is running in the lab; packaging it is part of release preparation.*
+*Dashboard overview: worker activity, token usage, and the trajectory sidecar.*
 
 ## Why de67?
 

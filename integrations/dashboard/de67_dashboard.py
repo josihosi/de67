@@ -223,24 +223,25 @@ def render_worker_scale(model: str, counts: dict[str, int]) -> str:
     levels = ("low", "medium", "high", "max")
     total = sum(counts.get(level, 0) for level in levels)
     description = ", ".join(f"{level}: {counts.get(level, 0)}" for level in levels)
-    marks = ['<line class="strength-axis" x1="48" y1="34" x2="348" y2="34"/>']
+    # Leave room for worker clusters to float above the reasoning axis.
+    marks = ['<line class="strength-axis" x1="48" y1="114" x2="348" y2="114"/>']
     for index, level in enumerate(levels):
         x = 48 + index * 100
         count = counts.get(level, 0)
-        marks.append(f'<circle class="strength-stop" cx="{x}" cy="34" r="2"/>')
+        marks.append(f'<circle class="strength-stop" cx="{x}" cy="114" r="2"/>')
         for dx, dy in worker_dot_positions(count):
             marks.append(f'<circle class="worker-dot" cx="{x + dx:.3f}" cy="{34 + dy:.3f}" r="4.67"><title>{_escape(model.title())} · {level.title()} reasoning</title></circle>')
         if count > 12:
             marks.append(f'<text class="strength-overflow" x="{x}" y="8">+{count - 12}</text>')
-        marks.append(f'<text class="strength-label" x="{x}" y="76">{level.title()}</text>')
+        marks.append(f'<text class="strength-label" x="{x}" y="156">{level.title()}</text>')
     emblem = ('<path fill="#7ee6c2" d="M25 4a14 14 0 1 0 0 28A16 16 0 0 1 25 4Z"/>'
               if model == "luna" else
-              '<circle cx="18" cy="18" r="14" fill="#a8baff"/><path fill="#344f79" d="m9 8 8-3 3 6-5 4-1 6-5-3Zm13 11 8-2-2 9-6 4-3-6Z"/>')
+              '<circle cx="18" cy="18" r="14" fill="#77accb"/><path fill="#cee2e7" d="M9 8Q13 4 18 4L20 7 17 10 18 12 15 14 14 18 11 17 10 13 7 12ZM18 19Q22 17 25 20L25 24 22 27 21 30 19 28 19 24 16 22Z"/><path d="M6 16A12 12 0 0 1 13 7" fill="none" stroke="#e2f1f3" stroke-opacity=".45" stroke-width=".8" stroke-linecap="round"/>')
     return (
-        f'<div class="worker-scale"><div class="scale-heading"><strong>{_escape(model.title())}</strong>'
+        f'<div class="worker-scale" data-model="{model}"><div class="scale-heading"><strong>{_escape(model.title())}</strong>'
         f'<span><b>{total}</b> active</span></div>'
         f'<svg class="model-emblem" viewBox="0 0 36 36" aria-hidden="true">{emblem}</svg>'
-        f'<svg viewBox="0 0 396 90" role="img" aria-label="{_escape(model.title() + ": " + description)}">'
+        f'<svg viewBox="0 0 396 170" role="img" aria-label="{_escape(model.title() + ": " + description)}">'
         + "".join(marks) + '</svg></div>'
     )
 
@@ -1130,6 +1131,162 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     return {"counts": counts, "available": True, "error": None}
 
 
+
+_TOKEN_TRACES: dict[str, dict[str, Any]] = {}
+
+
+def _trace_fuel(path: Path) -> dict[str, Any]:
+    """Read complete appended token events; never treat absent accounting as zero."""
+    from datetime import datetime
+    key = str(path)
+    stat = path.stat()
+    cached = _TOKEN_TRACES.get(key)
+    if cached is None or stat.st_size < cached["offset"]:
+        cached = {"offset": 0, "fresh": None, "observed": 0, "partial": False, "points": []}
+        _TOKEN_TRACES[key] = cached
+    with path.open("rb") as stream:
+        stream.seek(cached["offset"])
+        while True:
+            line = stream.readline()
+            if not line or not line.endswith(b"\n"):
+                break
+            cached["offset"] = stream.tell()
+            if b'"token_count"' not in line:
+                continue
+            try:
+                item = json.loads(line)
+                payload = item.get("payload", {})
+                if item.get("type") != "event_msg" or payload.get("type") != "token_count":
+                    continue
+                usage = (payload.get("info") or {}).get("total_token_usage") or {}
+                fresh = int(usage["input_tokens"]) - int(usage["cached_input_tokens"]) + int(usage["output_tokens"])
+                if fresh < 0:
+                    continue
+                timestamp = datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")).timestamp()
+                previous = cached["fresh"]
+                if previous is None or fresh < previous:
+                    # Resuming after compaction can reset cumulative counters.
+                    # The latest turn is new use; an inherited baseline is not.
+                    last = (payload.get("info") or {}).get("last_token_usage") or {}
+                    if all(key in last for key in ("input_tokens", "cached_input_tokens", "output_tokens")):
+                        delta = int(last["input_tokens"]) - int(last["cached_input_tokens"]) + int(last["output_tokens"])
+                        if delta < 0:
+                            continue
+                        cached["observed"] += delta
+                        cached["points"].append((timestamp, delta))
+                        cached["partial"] |= fresh != delta
+                    else:
+                        # Only a cumulative observation is available. Keep it in
+                        # the partial total, without inventing an instant burst.
+                        cached["observed"] += fresh
+                        cached["partial"] = True
+                else:
+                    delta = fresh - previous
+                    cached["observed"] += delta
+                    cached["points"].append((timestamp, delta))
+                cached["fresh"] = fresh
+            except (ValueError, TypeError, KeyError):
+                continue
+    cached["points"] = [(t, n) for t, n in cached["points"] if t >= time.time() - 28800]
+    return cached
+
+
+def fuel_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
+    config = json.loads((workspace / ".de67/state/workspace.json").read_text())["clock"]
+    clock_path = Path(config["state"]).expanduser()
+    if not clock_path.is_absolute():
+        clock_path = workspace / clock_path
+    connection = sqlite3.connect(f"file:{quote(str(clock_path), safe='/:')}?mode=ro", uri=True, timeout=0)
+    try:
+        attempts = connection.execute(
+            "SELECT role,run_id FROM supervisor_attempts WHERE lineage_id=?",
+            (config["lineage"],)).fetchall()
+    finally:
+        connection.close()
+    roots = {}
+    missing = 0
+    for role, run_id in attempts:
+        try:
+            session = (workspace / ".de67/state/coordinator-runs" / run_id / "session_id.txt").read_text().strip()
+            if session:
+                roots[session] = "astra" if role == "mutation-reviewer" else "coordinator"
+            else:
+                missing += 1
+        except OSError:
+            missing += 1
+    index = sessions_root.parent / "state_5.sqlite"
+    connection = sqlite3.connect(f"file:{quote(str(index), safe='/:')}?mode=ro", uri=True, timeout=0)
+    sessions = {}
+    try:
+        for root, role in roots.items():
+            rows = connection.execute(
+                "WITH RECURSIVE tree(id) AS (SELECT ? UNION SELECT child_thread_id "
+                "FROM thread_spawn_edges JOIN tree ON parent_thread_id=tree.id) "
+                "SELECT threads.id,rollout_path FROM threads JOIN tree ON threads.id=tree.id",
+                (root,)).fetchall()
+            if not rows:
+                missing += 1
+            for session, path in rows:
+                sessions[session] = (roots.get(session, "astra" if role == "astra" else "workers"), Path(path))
+    finally:
+        connection.close()
+    totals = {"coordinator": 0, "workers": 0, "astra": 0}
+    known = 0
+    now = time.time()
+    bins = [0] * 32  # Fifteen-minute display bins over the last eight hours.
+    for role, path in sessions.values():
+        try:
+            usage = _trace_fuel(path)
+            if usage["fresh"] is None:
+                missing += 1
+                continue
+            known += 1
+            totals[role] += usage["observed"]
+            missing += bool(usage["partial"])
+            for stamp, delta in usage["points"]:
+                bucket = int((stamp - (now - 28800)) / 900)
+                if 0 <= bucket < len(bins):
+                    bins[bucket] += delta
+        except OSError:
+            missing += 1
+    return {"available": bool(known), "totals": totals, "bins": bins,
+            "partial": bool(missing), "sessions": known, "lineage": config["lineage"]}
+
+
+def render_fuel(fuel: dict[str, Any]) -> str:
+    def compact(value: int) -> str:
+        return f"{value / 1000000:.2f}m" if value >= 1000000 else f"{value / 1000:.1f}k" if value >= 1000 else str(value)
+    if not fuel.get("available"):
+        return '<aside class="fuel"><small>fresh tokens</small><strong>—</strong><span>usage unavailable</span></aside>'
+    totals = fuel["totals"]
+    total = sum(totals.values())
+    title = ("Indexed campaign sessions and descendants; input − cached input + output. "
+             "Includes completed workers and Astra reviews; excludes narrator and unrelated sessions. "
+             + ("Some session accounting is unavailable; shown total is partial." if fuel["partial"] else "")
+             + f" Exact observed total: {total:,}.")
+    bins = fuel["bins"]
+    peak = max(bins) or 1
+    # Round the scale upward to readable steps; keep zero honest during idle periods.
+    magnitude = 10 ** math.floor(math.log10(peak))
+    ceiling = next(step * magnitude for step in (1, 2, 2.5, 5, 10) if step * magnitude >= peak)
+    def axis_label(value: float) -> str:
+        return f"{value / 1000000:g}m" if value >= 1000000 else f"{value / 1000:g}k" if value >= 1000 else f"{value:g}"
+    points = " ".join(f"{4 + i * 136 / max(1, len(bins)-1):.1f},{49 - value / ceiling * 42:.1f}" for i, value in enumerate(bins))
+    ticks = "".join(
+        f'<path d="M144 {y}h3" stroke="currentColor" opacity=".35"/>'
+        f'<text x="152" y="{y}" dominant-baseline="middle">{axis_label(value)}</text>'
+        for value, y in ((ceiling, 7), (ceiling / 2, 28), (0, 49))
+    )
+    rows = "".join(f'<span>{label}<b>{compact(totals[role])}</b></span>'
+                   for role, label in (("coordinator", "coordinator"), ("workers", "workers"), ("astra", "mutator")))
+    return (f'<aside class="fuel" title="{_escape(title)}"><small>fresh tokens</small>'
+            f'<strong>{compact(total)}{"<sup>~</sup>" if fuel["partial"] else ""}</strong>'
+            f'<span class="fuel-scope">campaign{" · partial" if fuel["partial"] else ""}</span>'
+            f'<svg viewBox="0 0 188 56" role="img" aria-label="Fresh-token burn over the last eight hours. Linear right axis: 0 to {axis_label(ceiling)} tokens per fifteen minutes.">'
+            f'<polyline points="{points}" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M144 7V49" stroke="currentColor" opacity=".2"/>{ticks}</svg>'
+            f'<span class="fuel-period">tokens / 15 min · last 8h</span><div>{rows}</div></aside>')
+
+
 class Dashboard:
     def __init__(self, workspace: Path, refresh_seconds: int = 0,
                  sessions_root: Path | None = None,
@@ -1287,9 +1444,13 @@ class Dashboard:
                 workers = worker_state(self.workspace, self.sessions_root)
             except Exception as error:
                 workers = {"counts": {}, "available": False, "error": str(error)}
+            try:
+                fuel = fuel_state(self.workspace, self.sessions_root)
+            except Exception as error:
+                fuel = {"available": False, "error": str(error)}
             fratbro = self._fratbro_source(ledger, clock)
             return {"dfs": dfs, "ledger": ledger, "clock": clock, "sidecar": sidecar,
-                    "fratbro": fratbro,
+                    "fratbro": fratbro, "fuel": fuel,
                     "process": process,
                     "workers": workers, "process_error": process_error, "observed": time.time()}
 
@@ -1374,28 +1535,84 @@ class Dashboard:
         elif tab == "dfs":
             body = f'<section class="document">{dfs.get("html", "<p>DFS unavailable.</p>")}</section>'
         else:
-            cards = "".join([
-                lamp("Supervisor", supervisor.title(), "green" if supervisor == "running" else "grey"),
-                lamp("Coordinator", (
-                    "Mutation reviewer" if process_role == "mutation-reviewer"
-                    else coordinator.title()
-                ), "yellow" if process_role == "mutation-reviewer" else "green" if coordinator == "running" else "yellow" if coordinator == "waiting" else "grey"),
-                lamp("Work", work_value, work_tone),
-                lamp("Mutation review", "Running" if mutation_running else "Off",
-                     "yellow" if mutation_running else "grey"),
-                f'<div class="metric"><small>Deadline</small><strong>{remaining}</strong></div>',
-                f'<div class="metric"><small>Mutations</small><strong>{_escape((clock_data.get("mutations", 0) + clock_data.get("random_mutations", 0)) if clock_data else "—")}</strong><span class="metric-note">{_escape(random_note)}</span></div>',
-            ])
             worker_counts = workers.get("counts", {})
-            if workers.get("available"):
-                worker_body = '<div class="roster-scales">' + "".join(
+            worker_body = (
+                '<div class="roster-scales">' + "".join(
                     render_worker_scale(model, worker_counts.get(model, {}))
-                    for model in ("luna", "terra")
-                ) + '</div>'
-
-            else:
-                worker_body = f'<p class="subtle">Unavailable · {_escape(workers.get("error", "unknown source"))}</p>'
-            workers_html = f'<section class="workers"><h2>Active workers</h2>{worker_body}</section>'
+                    for model in ("terra", "luna")) + '</div>'
+                if workers.get("available") else
+                f'<p class="subtle">Workers unavailable · {_escape(workers.get("error", "unknown source"))}</p>'
+            )
+            sun_state = ("off" if process_role == "mutation-reviewer" else
+                         "on" if coordinator == "running" else
+                         "waiting" if coordinator == "waiting" else
+                         "unknown" if coordinator == "unknown" else "off")
+            astra_state = "on" if mutation_running else "unknown" if clock.get("error") else "off"
+            import random
+            rng = random.Random(67)
+            stars = []
+            # A stable, irregular field: clustered arms, a broken dust lane, and
+            # sparse foreground stars. Refreshing state does not reshuffle the sky.
+            for i in range(3600):
+                x = rng.uniform(0, 1100)
+                center = 222 - .13 * x + 15 * math.sin(x / 125) + 6 * math.sin(x / 39)
+                width = 19 + 22 * math.exp(-((x - 400) / 230) ** 2) + 7 * math.sin(x / 83) ** 2
+                if i < 2750:
+                    arm = -16 if rng.random() < .58 else 19
+                    y = center + arm + rng.gauss(0, width)
+                    rift = center + 5 * math.sin(x / 51)
+                    if abs(y - rift) < 6 + 4 * math.sin(x / 67) ** 2 and rng.random() < .86:
+                        continue
+                    radius = rng.uniform(.25, .70)
+                    opacity = rng.uniform(.22, .70)
+                else:
+                    y = rng.uniform(8, 312)
+                    radius = rng.uniform(.35, 1.05)
+                    opacity = rng.uniform(.16, .68)
+                if not 5 < y < 315:
+                    continue
+                if i % 131 == 0:
+                    radius, opacity = 1.25, .95
+                # Fade the band into the sparse outer field, including at the
+                # SVG edges, rather than ending the foreground stars in a strip.
+                distance = abs(y - center)
+                envelope = .12 + .88 * math.exp(-(distance / (width * 1.8)) ** 2)
+                edge = min(1.0, y / 45, (320 - y) / 70, x / 45, (1100 - x) / 45)
+                edge = max(0.0, edge)
+                opacity *= envelope * edge * edge * (3 - 2 * edge)
+                stars.append(f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{radius:.2f}" opacity="{opacity:.2f}"/>')
+            mutations = ((clock_data.get("mutations", 0) + clock_data.get("random_mutations", 0))
+                         if clock_data else "—")
+            due = ("due now" if random_remaining == 0 else
+                   f"due in {random_remaining} results" if random_remaining is not None else "")
+            cosmos_html = (
+                '<section class="cosmos" aria-label="Live campaign">'
+                f'<svg class="outer-stars {astra_state}" viewBox="0 0 1100 600" preserveAspectRatio="none" aria-hidden="true">'
+                + "".join(
+                    f'<circle cx="{rng.uniform(8, 1092):.2f}" cy="{rng.uniform(210, 588):.2f}" r="{rng.uniform(.3, .85):.2f}" opacity="{rng.uniform(.16, .48):.2f}"/>'
+                    for _ in range(125)
+                ) + '</svg>'
+                f'<div class="cosmos-meta"><div class="work-clock">'
+                f'<strong>work: {_escape(work_value)}</strong><span>deadline: {remaining}</span></div>'
+                f'<div class="mutation-total"><small>mutations</small><strong>{_escape(mutations)}</strong>'
+                f'<span title="{_escape(random_note)}">{_escape(due)}</span></div></div>'
+                f'<div class="galaxy {astra_state}" title="Astra mutation reviewer: {astra_state}" role="img" aria-label="Astra mutation reviewer: {astra_state}">'
+                '<svg viewBox="0 0 1100 320" preserveAspectRatio="none" aria-hidden="true"><defs><filter id="dust"><feGaussianBlur stdDeviation="10"/></filter></defs>'
+                '<g fill="none" stroke="currentColor" filter="url(#dust)">'
+                '<path d="M-20 207Q100 213 205 179T385 158T570 129T785 97T1120 66" stroke-width="20" opacity=".055"/>'
+                '<path d="M-20 246Q100 262 225 218T405 216T595 166T805 142T1120 110" stroke-width="15" opacity=".045"/>'
+                '</g>'
+                '<g fill="currentColor">' + "".join(stars) + '</g></svg></div>'
+                '<div class="cosmos-deck">'
+                f'<div class="sun {sun_state}" title="Coordinator: {sun_state}" role="img" aria-label="Coordinator: {sun_state}">'
+                '<span>coordinator</span><svg viewBox="0 0 320 320" aria-hidden="true">'
+                '<defs><radialGradient id="sun-glow"><stop stop-color="currentColor" stop-opacity=".18"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></radialGradient>'
+                '<linearGradient id="sun-face" x2="0" y2="1"><stop stop-color="currentColor"/><stop offset="1" stop-color="currentColor" stop-opacity=".58"/></linearGradient></defs>'
+                '<circle cx="160" cy="160" r="160" fill="url(#sun-glow)"/><g class="sun-corona" fill="none" stroke="currentColor"><circle cx="160" cy="160" r="127" stroke-width="9" opacity=".12"/><circle cx="160" cy="160" r="135" stroke-width="7" opacity=".055"/><path d="M160 18V29M225 37L220 46M272 83L262 89M301 158L290 158M276 224L265 218M230 274L224 264M158 301V289M91 277L97 266M42 232L53 225M18 164H30M37 96L48 101M86 42L93 53" stroke-width="2" stroke-linecap="round" opacity=".28"/></g>'
+                '<circle cx="160" cy="160" r="122" fill="url(#sun-face)"/>'
+                '</svg></div>'
+                f'<div class="cosmos-workers">{worker_body}</div>{render_fuel(state.get("fuel", {}))}</div></section>'
+            )
             active_html = render_work_digest(ledger_data["active"])
             upcoming_html = render_work_digest(upcoming)
             waiting_html = (
@@ -1428,7 +1645,7 @@ class Dashboard:
                     f'<em>{_escape(finding_age)}</em></div>'
                 )
             fratbro_html = render_fratbro_status(fratbro) if self.fratbro_cache else ""
-            body = f'<div class="status">{cards}</div>{workers_html}{sidecar_html}{fratbro_html}{finding_html}<section class="work-section"><div class="eyebrow">THE WORK / CURRENT SCOPE</div><h2>Work in focus</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section class="work-section"><div class="eyebrow">ON THE HORIZON</div><h2>Up next</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section class="work-section"><div class="eyebrow">NEEDS ATTENTION</div><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
+            body = f'{cosmos_html}{sidecar_html}{fratbro_html}{finding_html}<section class="work-section"><div class="eyebrow">THE WORK / CURRENT SCOPE</div><h2>Work in focus</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section class="work-section"><div class="eyebrow">ON THE HORIZON</div><h2>Up next</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section class="work-section"><div class="eyebrow">NEEDS ATTENTION</div><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
         page = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>de67</title>
 <style>
@@ -1468,7 +1685,7 @@ h2{{font-size:22px;letter-spacing:-.035em;font-weight:600;margin-bottom:20px}}
 .roster-member strong{{display:block;font-size:14px}}.roster-member div>span{{display:block;font-size:11px;color:var(--muted);margin-top:4px}}
 .roster-member b{{font-size:22px;font-weight:400;color:var(--blue);margin-left:16px}}
 .trajectory{{padding:30px 24px;background:linear-gradient(150deg,#18292c55,#121a2244);border:1px solid #2d4245;border-radius:16px;margin-top:28px}}
-.fratbro{{border-left:2px solid var(--blue);padding:6px 0 6px 25px;margin:38px 0 28px;max-width:880px}}
+.fratbro{{border-left:2px solid var(--blue);padding:6px 0 6px 25px;margin:38px 0 28px;max-width:none;width:100%}}
 .eyebrow{{font-size:10px;letter-spacing:.16em;color:var(--blue);font-weight:650;margin-bottom:10px}}
 .fratbro .eyebrow{{display:block}}.fratbro>div.brief-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;border:0;padding:0}}.brief-field small{{color:var(--blue);font-size:10px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px}}.brief-field p{{font-size:15px;line-height:1.7;margin:0}}.fratbro h2{{font-size:20px;margin-bottom:12px}}.brief-lead{{font-size:17px;line-height:1.75;color:#e0e9e8;margin:0 0 14px}}
 .text-link{{color:var(--blue);text-decoration:none;font-size:12px;font-weight:550;display:inline-block;padding:8px 0}}
@@ -1513,9 +1730,133 @@ a:focus-visible{{outline:2px solid var(--blue);outline-offset:5px}}
 .worker-scale:nth-child(2) .worker-dot{{fill:#a8baff}}
 .strength-label{{fill:#aebdc6;font:11px -apple-system,sans-serif;text-anchor:middle}}
 .strength-overflow{{fill:var(--text);font:10px -apple-system,sans-serif;text-anchor:middle}}
-@media(max-width:650px){{.roster-scales{{grid-template-columns:1fr;gap:20px}}.worker-scale svg{{max-height:125px}}}}
+@media(max-width:650px){{.roster-scales{{grid-template-columns:1fr;gap:20px}}.worker-scale svg{{max-height:none}}}}
 
-</style></head><body><main><header><h1>de67<span class="brand-dot">.</span></h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
+
+:root{{--terminal:"Cascadia Code","SFMono-Regular",Consolas,"Liberation Mono",monospace;--bg:#101117;--muted:#989ba9}}
+body{{background:radial-gradient(ellipse at 30% 0%,#30213b30,transparent 48%),var(--bg)}}
+body,body *{{font-family:var(--terminal)!important}}
+header h1{{font-size:48px;letter-spacing:-3px;color:#626370}}
+header h1.supervisor-running{{color:#cf9bdc;text-shadow:0 0 30px #bc80cf25}}
+header>span{{font-size:10px;max-width:60%;overflow-wrap:anywhere;text-align:right}}
+nav{{margin:16px 0 24px;border-color:#30303b}}nav a{{font-size:11px}}
+.cosmos{{margin:0;padding:0 0 28px;border-bottom:1px solid #30303b}}
+.cosmos-meta{{display:flex;justify-content:space-between;gap:28px;align-items:flex-start;position:relative;z-index:1}}
+.work-clock{{border:1px solid #76598066;border-radius:5px;padding:14px 18px;max-width:72%;display:grid;gap:9px}}
+.cosmos small{{font-size:10px;letter-spacing:.08em;margin:0;color:#9893a5}}
+.work-clock strong{{font-size:13px;color:#d7bfdf;overflow-wrap:anywhere;font-weight:400}}
+.work-clock>span{{font-size:22px;color:#dedbe6;letter-spacing:.06em}}
+.mutation-total{{text-align:right;padding-top:5px;display:grid;gap:8px;flex-shrink:0}}
+.mutation-total strong{{font-size:30px;font-weight:400;color:#d2c7da}}
+.mutation-total>span{{font-size:10px;color:var(--muted)}}
+.galaxy{{color:#686976;position:relative;margin:-55px -12px -30px;opacity:.40;pointer-events:auto}}
+.galaxy.on{{color:#fff0d6;opacity:1}}.galaxy.unknown{{opacity:.22}}
+.galaxy svg{{display:block;width:100%;height:180px}}.galaxy>span{{position:absolute;right:5%;top:32%;font-size:10px;letter-spacing:.2em}}
+.cosmos-deck{{display:grid;grid-template-columns:32% minmax(0,1fr);gap:24px;align-items:end}}
+.sun{{color:#555761;padding:0 0 28px;text-align:center}}.sun.on{{color:#e9bc70}}.sun.waiting{{color:#a78e66}}.sun.unknown{{color:#41434c}}
+.sun>span{{font-size:12px;letter-spacing:.1em}}.sun svg{{display:block;width:100%;height:auto;margin-top:16px}}
+.cosmos .roster-scales{{grid-template-columns:1fr;gap:4px}}
+.cosmos .worker-scale{{width:min(100%,469px);display:grid;grid-template-columns:minmax(0,1fr) 65px;column-gap:8px;align-items:center}}
+.cosmos .worker-scale>svg:not(.model-emblem){{grid-column:1;grid-row:1/3;height:170px;justify-self:start;width:auto;max-width:100%}}
+.cosmos .scale-heading{{grid-column:2;grid-row:1;align-self:end;padding:0;display:block}}
+.cosmos .scale-heading strong{{font-size:13px;font-weight:400;color:#c7ccd7}}
+.cosmos .scale-heading span{{display:none}}
+.cosmos .model-emblem{{grid-column:2;grid-row:2;align-self:start;width:30px;height:30px;margin:9px 0 0}}
+.cosmos .worker-scale[data-model="terra"] .worker-dot{{fill:#8abbd6}}
+.cosmos .worker-scale[data-model="luna"] .worker-dot{{fill:#7ee6c2}}
+.cosmos .strength-label{{font-size:10px;fill:#9597a5}}.cosmos .strength-axis{{stroke:#42434e}}
+@media(max-width:650px){{
+main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.work-clock{{max-width:68%;padding:12px}}.work-clock strong{{font-size:11px}}.work-clock>span{{font-size:19px}}.mutation-total>span{{max-width:86px;line-height:1.5}}
+.cosmos-deck{{grid-template-columns:1fr;gap:12px}}.sun{{width:180px;padding:0;margin:0 auto 12px}}.sun>span{{font-size:10px}}.sun svg{{margin-top:0}}
+.galaxy{{margin:-14px -10px -8px}}.galaxy svg{{height:auto}}.cosmos .worker-scale>svg:not(.model-emblem){{height:auto;width:100%}}.galaxy>span{{font-size:8px;top:40%}}
+.cosmos .roster-scales{{gap:20px}}.cosmos .worker-scale{{grid-template-columns:minmax(0,1fr) 48px;gap:4px}}.cosmos .scale-heading strong{{font-size:11px}}
+}}
+
+
+.cosmos-deck{{grid-template-columns:32% minmax(0,1fr) 160px;gap:24px}}
+.fuel{{align-self:center;color:#b8accb;min-width:0;padding-left:6px}}
+.fuel>small{{font-size:9px;letter-spacing:.1em;color:#96909f}}
+.fuel>strong{{display:block;font-size:34px;font-weight:400;letter-spacing:-.06em;margin:9px 0 3px;color:#d9cbe4}}
+.fuel sup{{font-size:13px;vertical-align:top;letter-spacing:0;margin-left:3px}}
+.fuel>span{{display:block;font-size:9px;color:#777480}}
+.fuel svg{{display:block;width:100%;height:56px;margin:19px 0 4px;opacity:.7}}
+.fuel .fuel-period{{font-size:8px;color:#777480}}
+.fuel>div{{display:grid;gap:9px;margin-top:22px}}
+.fuel>div>span{{display:flex;justify-content:space-between;font-size:9px;color:#96909f}}
+.fuel b{{font-size:10px;font-weight:400;color:#bdb3ca}}
+@media(max-width:900px) and (min-width:651px){{.cosmos-deck{{grid-template-columns:28% minmax(0,1fr) 125px;gap:14px}}.fuel>strong{{font-size:28px}}}}
+@media(max-width:650px){{.cosmos-deck{{grid-template-columns:1fr}}.fuel{{width:100%;padding:14px 0 0;display:grid;grid-template-columns:1fr 1fr;column-gap:24px;align-items:center}}.fuel>small,.fuel>strong,.fuel-scope{{grid-column:1}}.fuel svg{{grid-column:2;grid-row:1/4;margin:0;height:48px}}.fuel .fuel-period{{grid-column:2;text-align:right}}.fuel>div{{grid-column:1/-1;display:flex;gap:24px;margin-top:16px}}.fuel>div>span{{gap:10px}}}}
+
+
+.fuel svg text{{fill:currentColor;font-size:8px;opacity:.85}}
+@media(min-width:901px){{.cosmos-deck{{grid-template-columns:32% minmax(0,1fr) 180px;padding-right:12px}}}}
+@media(max-width:900px) and (min-width:651px){{.cosmos-deck{{grid-template-columns:28% minmax(0,1fr) 150px}}}}
+@media(max-width:650px){{.fuel svg{{height:56px}}.fuel .fuel-period{{font-size:7px;white-space:nowrap}}}}
+
+
+.sun>span{{display:inline-block;transform:translateY(7px);font-size:14px}}
+.work-clock{{position:relative;z-index:2;background:#14131c}}
+.work-clock>strong,.work-clock>span{{font-size:14px;font-weight:400;letter-spacing:.015em;line-height:1.55;overflow-wrap:anywhere}}
+@media(max-width:650px){{.sun>span{{font-size:12px}}.work-clock>strong,.work-clock>span{{font-size:12px}}.work-clock{{max-width:74%}}}}
+
+
+.cosmos{{isolation:isolate}}
+.galaxy{{margin:-90px -12px -75px;color:#8f8998;opacity:.62;z-index:0}}
+.galaxy.on{{color:#fff0d6;opacity:1}}.galaxy.unknown{{opacity:.30}}
+.galaxy svg{{height:260px}}
+.cosmos-deck{{position:relative;z-index:1}}
+.galaxy>span{{top:40%;right:5%}}
+@media(max-width:650px){{.galaxy{{margin:-45px -10px -35px}}.galaxy svg{{height:145px}}.galaxy>span{{top:52%}}}}
+
+
+.mutation-total{{position:relative;z-index:2;background:#14131c;border:1px solid #76598066;border-radius:5px;padding:14px 18px}}
+@media(max-width:650px){{.mutation-total{{padding:12px}}}}
+
+
+.cosmos{{position:relative}}
+.outer-stars{{position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;fill:#8f8998;opacity:.62}}
+.outer-stars.on{{fill:#fff0d6;opacity:1}}.outer-stars.unknown{{opacity:.30}}
+
+
+.sun svg{{width:240px;max-width:100%;margin:16px auto 0}}
+@media(max-width:650px){{.sun svg{{width:180px;margin-top:8px}}}}
+
+
+.sun{{align-self:center}}
+.sun svg{{width:160px}}
+@media(min-width:651px){{.cosmos-deck{{grid-template-columns:minmax(0,1fr) minmax(0,1.618fr) minmax(0,.618fr)}}}}
+@media(max-width:650px){{.sun svg{{width:120px}}}}
+
+
+@media(min-width:651px){{.sun{{align-self:end;padding-bottom:0;transform:translateY(-28px)}}}}
+
+
+header h1{{font-family:var(--terminal)!important;font-weight:400;letter-spacing:0;font-style:normal}}
+
+
+/* Carry the header's violet palette through the reading panels. */
+:root{{--panel:#191620;--line:#39313f;--blue:#c49bd4}}
+.trajectory{{background:linear-gradient(150deg,#241c2b88,#17141d88);border-color:#483750}}
+.attention-panel{{background:#19161f;border-color:#3d3245}}
+.attention-grid polygon,.attention-grid line{{stroke:#39313f}}
+.trajectory-node rect{{fill:#211c29;stroke:#4b3b57}}
+.trajectory-node.active rect{{fill:#30233a;stroke:var(--blue)}}
+.trajectory-center rect{{fill:#211927;stroke:var(--blue)}}
+.gap-explanation{{background:#1c1722;border-color:#3b3045}}
+.gap-explanation.active{{background:#2a2033}}
+.work-card{{background:linear-gradient(135deg,#282031,#1b1622);border-color:#493952}}
+.work-card.complete{{background:#1a161f;border-color:#352c3e}}
+.work-card h3,.document p,.document li{{color:#e1d9e8}}
+.brief-lead{{color:#e5d9ec}}
+.text-link:hover{{color:#ead1f5}}
+.ledger-item{{background:linear-gradient(90deg,#c49bd411,transparent 68%)}}
+.ledger-item::before{{background:linear-gradient(180deg,var(--blue),#715681)}}
+code,pre{{background:#15111b}}
+
+
+.sun .sun-corona{{opacity:0}}.sun.on .sun-corona{{opacity:1}}
+
+</style></head><body><main><header><h1 class="supervisor-{_escape(supervisor)}" title="Supervisor: {_escape(supervisor)}" aria-label="de67 · supervisor {_escape(supervisor)}">de67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}{body}<footer>{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")
 
 
@@ -1579,7 +1920,7 @@ def main() -> None:
     parser.add_argument("--sidecar-script", type=Path, default=None,
                         help="Optional de67 trajectory_sidecar.py path")
     parser.add_argument("--fratbro-script", type=Path, default=None,
-                        help="Optional Luna-medium fratbro_narrator.py path")
+                        help="Optional Luna-low fratbro_narrator.py path")
     parser.add_argument("--fratbro-cache", type=Path, default=None,
                         help="Optional narrator cache outside the configured workspace")
     parser.add_argument("--fratbro-codex", default="codex",

@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+from contextlib import closing
 import sqlite3
 import subprocess
 import time
@@ -258,7 +259,7 @@ def checkpoint_repository(
         return {"status": "disabled", "reason": "workspace target is not configured"}
     _validate_git_target(workdir, target)
 
-    with sqlite3.connect(state) as connection:
+    with closing(sqlite3.connect(state)) as connection, connection:
         connection.row_factory = sqlite3.Row
         _initialize(connection)
         _assert_quiescent(connection, lineage, supervisor_owner_id)

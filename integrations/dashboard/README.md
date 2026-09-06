@@ -10,14 +10,13 @@ Run on loopback:
 python3 integrations/dashboard/de67_dashboard.py --workspace /path/to/project
 ```
 
-Open `http://127.0.0.1:8767`. Add `--refresh-seconds 5` for browser-driven live refresh. The
-default is manual refresh, so an idle browser causes no filesystem or database reads.
+Open `http://127.0.0.1:8767`. Use **Refresh snapshot** to update the view. Refresh is manual, so an idle browser causes no filesystem or database reads.
 
 Home-network exposure is explicit:
 
 ```sh
 python3 integrations/dashboard/de67_dashboard.py \
-  --workspace /path/to/project --bind 0.0.0.0 --port 8767 --refresh-seconds 5
+  --workspace /path/to/project --bind 0.0.0.0 --port 8767
 ```
 
 Direct LAN binding has no authentication or TLS. Prefer loopback behind an authenticated Tailscale
@@ -48,7 +47,7 @@ along each spoke, and shows the sidecar's categorical trajectory observations wi
 
 ## Optional Fratbro status
 
-The dashboard can ask a read-only Luna-medium narrator to translate current agent activity into one
+The dashboard can ask a read-only Luna-low narrator to translate current agent activity into one
 short, natural paragraph directly below the trajectory plot. Each update starts from first
 principles, assumes no prior project knowledge, and plainly explains the concrete work, observed
 result, whether it is progress or churn, and what happens next.
@@ -68,7 +67,7 @@ python3 integrations/dashboard/de67_dashboard.py \
 The dashboard starts one narrator when a worker becomes durably active and once more when that
 worker finishes. Tool calls, commentary, ledger edits, and page refreshes reuse the cached summary
 instead of spending another model call. The narrator reads the workspace and session records, runs
-Luna medium in a read-only sandbox, and writes only the configured external cache. It cannot steer
+Luna low in a read-only sandbox, and writes only the configured external cache. It cannot steer
 the coordinator, supervisor, ledger, or delivery loop.
 
 Run focused tests:
@@ -76,3 +75,12 @@ Run focused tests:
 ```sh
 python3 -m unittest integrations/dashboard/test_de67_dashboard.py
 ```
+
+## Token use
+
+The token panel counts observed campaign usage: input minus cached input plus output.
+It includes coordinator, worker, and mutator sessions, including completed workers.
+Missing session records make the total explicitly partial. The graph shows fifteen-minute
+bins across the last eight hours, with a scale that follows observed use. Narrator and
+unrelated sessions are excluded. Accounting uses the local Codex session index and logs;
+unavailable accounting leaves only this panel unavailable.

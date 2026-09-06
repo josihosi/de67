@@ -3,6 +3,8 @@ import json, os, shlex, shutil, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"; sys.path.insert(0, str(SCRIPTS))
+if sys.platform == "win32":
+    raise unittest.SkipTest("The macOS supervisor service requires POSIX process and locking APIs")
 import supervisor_service  # noqa: E402
 from deadline_harness import DeadlineHarness  # noqa: E402
 from policy_kernel import workspace_facts  # noqa: E402

@@ -1,13 +1,15 @@
 # de67
 
-### From “I want this” to “here's the evidence.”
-
-de67 is a three-phase skill and autonomous delivery loop for **OpenAI Codex**.
-Discuss the idea, freeze a specification grounded in the code, then let agents build,
-test, and repair against it—with durable state you can inspect and guidance you can change.
-
 > Don't let your vibe coding project turn 67. Stop aura farming and start building.
 > You need to **de67**.
+
+de67 orchestrates a team of agents in **OpenAI Codex**. Discuss the idea, freeze a specification
+grounded in the code, then let **Sol coordinate Terra and Luna workers** to investigate, build,
+test, and repair. **Astra steps in at review points to correct the trajectory and improve the
+delivery method.**
+
+The coordinator keeps the work moving, the workers do the work, and the ledger carries progress
+across handoffs. You set the direction and can steer the run as it goes.
 
 [Get started](#get-started) · [The three phases](#three-phases) ·
 [Watch the work](#watch-it-work) · [Steer a run](#steer-phase-3-while-it-runs)

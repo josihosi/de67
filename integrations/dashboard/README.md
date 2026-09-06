@@ -10,7 +10,10 @@ Run on loopback:
 python3 integrations/dashboard/de67_dashboard.py --workspace /path/to/project
 ```
 
-Open `http://127.0.0.1:8767`. Use **Refresh snapshot** to update the view. Refresh is manual, so an idle browser causes no filesystem or database reads.
+Open `http://127.0.0.1:8767`. The visible tab updates in place every 30 seconds without a page reload. Updates pause while
+the tab is hidden or text is selected. The last good view stays visible if the connection fails.
+Use **Refresh snapshot** for an immediate update; `--refresh-seconds 0` disables automatic
+updates. Set another interval, such as `--refresh-seconds 900`, for fifteen-minute updates.
 
 Home-network exposure is explicit:
 
@@ -84,3 +87,9 @@ Missing session records make the total explicitly partial. The graph shows fifte
 bins across the last eight hours, with a scale that follows observed use. Narrator and
 unrelated sessions are excluded. Accounting uses the local Codex session index and logs;
 unavailable accounting leaves only this panel unavailable.
+
+The refresh script is bundled locally and only fetches this dashboard's own pages. No remote
+JavaScript or new model calls are introduced. Narration remains tied to worker lifecycle changes.
+For browser integration checks, install `playwright-core` in a test environment and run
+`node integrations/dashboard/test_live_refresh.mjs`. Set `DE67_CHROMIUM` to an installed Chromium
+executable and, if needed, `DE67_PLAYWRIGHT` to the local playwright-core module directory.

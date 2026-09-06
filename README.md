@@ -112,7 +112,7 @@ Run the dashboard from this checkout:
 python3 integrations/dashboard/de67_dashboard.py --workspace /path/to/project
 ```
 
-Open `http://127.0.0.1:8767`. The default is manual refresh. The dashboard uses Python's standard
+Open `http://127.0.0.1:8767`. The visible tab updates in place every 30 seconds. The dashboard uses Python's standard
 library; the optional narrator makes model calls only when configured.
 
 - **[Dashboard guide](integrations/dashboard/README.md):** setup, trajectory sidecar, optional

@@ -147,6 +147,16 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("0 to " + label + " tokens per fifteen minutes", page)
             self.assertIn("last 8h", page)
 
+    def test_refresh_interval_and_local_script_are_explicit(self) -> None:
+        for interval in (0, 30, 900):
+            page = dashboard_module.Dashboard(self.workspace, refresh_seconds=interval,
+                sessions_root=self.sessions).render("overview").decode()
+            self.assertIn(f'data-refresh-seconds="{interval}"', page)
+            self.assertIn('<script src="/live_refresh.js" defer></script>', page)
+            self.assertIn('id="dashboard-content"', page)
+            self.assertNotIn('http-equiv="refresh"', page)
+            self.assertIn("Manual refresh" if not interval else f"Live · every {interval}s", page)
+
     def test_projection_is_read_only_and_escapes_workspace_html(self) -> None:
         paths = [self.workspace / ".de67/DFS.md", self.workspace / ".de67/work-ledger.md",
                  self.workspace / ".de67/state/deadlines.sqlite3"]

@@ -12,9 +12,9 @@ test, and repair against it—with durable state you can inspect and guidance yo
 [Get started](#get-started) · [The three phases](#three-phases) ·
 [Watch the work](#watch-it-work) · [Steer a run](#steer-phase-3-while-it-runs)
 
-[![Simulated de67 dashboard with active visual states, nine workers, token usage, and a populated trajectory plot.](docs/assets/dashboard-overview.png)](integrations/dashboard/README.md)
+[![de67 dashboard with worker activity, token usage, and a populated trajectory plot.](docs/assets/dashboard-overview.png)](integrations/dashboard/README.md)
 
-*Simulated dashboard showcase: illustrative activity states, workers, and trajectory data.
+*Dashboard overview: worker activity, token usage, and the trajectory sidecar.
 The visual refresh shown here is running in the lab; packaging it is part of release preparation.*
 
 ## Why de67?

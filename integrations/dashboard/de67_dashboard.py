@@ -219,6 +219,21 @@ def worker_dot_positions(count: int) -> list[tuple[float, float]]:
             for i in range(visible)]
 
 
+def solar_filaments() -> str:
+    """A stable magnetic field; activity changes its visibility, not its geometry."""
+    import random
+    rng = random.Random(6701)
+    paths = []
+    def point(radius: float, angle: float) -> str:
+        return f"{160 + radius * math.cos(angle):.2f} {160 + radius * math.sin(angle):.2f}"
+    for index in range(64):
+        angle = math.radians(index * 360 / 64 + rng.uniform(-3, 3))
+        spread = rng.uniform(.025, .12)
+        height = rng.uniform(138, 178)
+        paths.append(f'<path d="M{point(121, angle - spread)} C{point(height, angle - spread * 2)} {point(height, angle + spread * 2)} {point(122, angle + spread)}" stroke-width="{rng.uniform(.6, 1.6):.2f}" opacity="{rng.uniform(.18, .65):.2f}"/>')
+    return ''.join(paths)
+
+
 def render_worker_scale(model: str, counts: dict[str, int]) -> str:
     levels = ("low", "medium", "high", "max")
     total = sum(counts.get(level, 0) for level in levels)
@@ -1763,10 +1778,20 @@ class Dashboard:
                 '<div class="cosmos-deck">'
                 f'<div class="sun {sun_state} activity-{_escape(sun_activity)}" title="Coordinator: {_escape(sun_activity)}" role="img" aria-label="Coordinator: {_escape(sun_activity)}">'
                 '<span>coordinator</span><svg viewBox="0 0 320 320" aria-hidden="true">'
-                '<defs><radialGradient id="sun-glow"><stop stop-color="currentColor" stop-opacity=".18"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></radialGradient>'
-                '<linearGradient id="sun-face" x2="0" y2="1"><stop stop-color="currentColor"/><stop offset="1" stop-color="currentColor" stop-opacity=".58"/></linearGradient></defs>'
-                '<circle cx="160" cy="160" r="160" fill="url(#sun-glow)"/><g class="sun-corona" fill="none" stroke="currentColor"><circle cx="160" cy="160" r="127" stroke-width="9" opacity=".12"/><circle cx="160" cy="160" r="135" stroke-width="7" opacity=".055"/><path d="M160 18V29M225 37L220 46M272 83L262 89M301 158L290 158M276 224L265 218M230 274L224 264M158 301V289M91 277L97 266M42 232L53 225M18 164H30M37 96L48 101M86 42L93 53" stroke-width="2" stroke-linecap="round" opacity=".28"/></g>'
+                '<defs><radialGradient id="sun-glow"><stop offset=".55" stop-color="currentColor" stop-opacity=".65"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></radialGradient>'
+                '<radialGradient id="sun-face" cx="38%" cy="32%" r="75%"><stop stop-color="currentColor"/><stop offset=".72" stop-color="currentColor" stop-opacity=".85"/><stop offset="1" stop-color="currentColor" stop-opacity=".5"/></radialGradient>'
+                '<filter id="solar-grain"><feTurbulence type="fractalNoise" baseFrequency=".18" numOctaves="3" seed="67"/><feColorMatrix type="matrix" values="0 0 0 0 .38 0 0 0 0 .18 0 0 0 0 .025 0 0 0 2 -.65"/><feComposite in2="SourceGraphic" operator="in"/></filter>'
+                '<clipPath id="sun-disc"><circle cx="160" cy="160" r="121"/></clipPath></defs>'
+                '<circle class="sun-aura" cx="160" cy="160" r="174" fill="url(#sun-glow)"/>'
+                '<circle class="sun-rim" cx="160" cy="160" r="126" fill="none" stroke="currentColor" stroke-width="2"/>'
+                '<g class="sun-corona" fill="none" stroke="currentColor" stroke-linecap="round">'
+                '<circle cx="160" cy="160" r="131" stroke-width="12" opacity=".14"/>'
+                + solar_filaments()
+                + ''.join(f'<path d="M149 42 C130 24 143 {tip} 163 {tip - 3} C149 13 178 20 172 42" transform="rotate({angle} 160 160)" stroke-width="{width}" opacity="{opacity}"/>'
+                          for angle, tip, width, opacity in ((0, 0, 2.5, .8), (43, 13, 2, .55), (88, -5, 3, .85), (130, 10, 2, .6), (180, 2, 2.5, .75), (229, 15, 2, .55), (273, -2, 3, .9), (319, 9, 2, .65))) + '</g>'
                 '<circle cx="160" cy="160" r="122" fill="url(#sun-face)"/>'
+                '<g class="sun-surface" clip-path="url(#sun-disc)"><circle cx="160" cy="160" r="122" filter="url(#solar-grain)"/>'
+                '<g fill="none" stroke="#fff0c5" opacity=".75"><path d="M74 197C43 168 122 154 88 207M74 197C50 167 105 168 88 207M207 96C188 56 247 87 220 116M207 96C195 74 235 90 220 116" stroke-width="1.5"/></g></g>'
                 '</svg></div>'
                 f'<div class="cosmos-workers">{worker_body}</div>{render_fuel(state.get("fuel", {}))}</div></section>'
             )
@@ -2010,7 +2035,7 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 @media(max-width:650px){{.sun svg{{width:120px}}}}
 
 
-@media(min-width:651px){{.cosmos-deck{{transform:translateY(-1cm)}}.sun{{position:relative;display:flex;align-items:center;justify-content:center;width:min(100%,180px);height:160px;justify-self:end;align-self:center;padding:0}}.sun>span{{position:absolute;bottom:calc(100% + 16px);left:0;width:100%;transform:none}}.sun svg{{width:min(100%,160px);margin:0}}}}
+@media(min-width:651px){{.cosmos-deck{{transform:translateY(-1cm)}}.sun{{display:flex;flex-direction:column;align-items:center;width:min(100%,180px);justify-self:end;align-self:center;padding:0}}.sun>span{{width:100%;margin-bottom:16px;transform:none}}.sun svg{{width:min(100%,160px);margin:0}}}}
 
 
 header h1{{font-family:var(--terminal)!important;font-weight:400;letter-spacing:0;font-style:normal}}
@@ -2036,10 +2061,18 @@ header h1{{font-family:var(--terminal)!important;font-weight:400;letter-spacing:
 code,pre{{background:#15111b}}
 
 
-.sun .sun-corona{{opacity:0;transform-origin:160px 160px;transform:scale(.89);transition:transform 1.8s ease,opacity 1.8s ease}}
-.sun.on .sun-corona,.sun.waiting .sun-corona{{opacity:.35}}
-.sun.on.activity-working .sun-corona{{opacity:1;transform:scale(1.07)}}
-@media(prefers-reduced-motion:reduce){{.sun .sun-corona{{transition:none}}}}
+.sun svg{{overflow:visible}}.sun{{transition:color 1.8s ease}}
+.sun .sun-corona{{opacity:0;transform-origin:160px 160px;transform:scale(.78);transition:transform 1.8s ease,opacity 1.8s ease}}
+.sun-aura,.sun-rim{{opacity:0;transition:opacity 1.8s ease}}
+.sun-surface{{opacity:0;transition:opacity 1.8s ease}}.sun.on .sun-surface,.sun.waiting .sun-surface{{opacity:.18}}
+.sun.on.activity-working .sun-surface{{opacity:.7}}
+.sun.on,.sun.waiting{{color:#bf985e}}.sun.on .sun-rim,.sun.waiting .sun-rim{{opacity:.4}}
+.sun.on .sun-aura,.sun.waiting .sun-aura{{opacity:.18}}
+.sun.on.activity-working{{color:#ffd58c}}
+.sun.on.activity-working .sun-corona{{opacity:1;transform:scale(1);animation:solar-breath 7s ease-in-out infinite}}
+.sun.on.activity-working .sun-aura{{opacity:.85}}.sun.on.activity-working .sun-rim{{opacity:.9}}
+@keyframes solar-breath{{0%,100%{{transform:scale(1)}}50%{{transform:scale(1.035)}}}}
+@media(prefers-reduced-motion:reduce){{.sun,.sun .sun-corona,.sun-aura,.sun-rim,.sun-surface{{transition:none;animation:none}}}}
 
 </style><script src="/live_refresh.js" defer></script></head><body><main data-dashboard data-refresh-seconds="{self.refresh_seconds}"><header id="dashboard-header"><h1 class="supervisor-{_escape(supervisor)}" title="Supervisor: {_escape(supervisor)}" aria-label="de67 · supervisor {_escape(supervisor)}">de67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}<div id="refresh-status" class="subtle" role="status">{refresh_label}</div><div id="dashboard-content">{body}</div><footer id="dashboard-sources">{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")

@@ -1409,9 +1409,14 @@ def render_fuel(fuel: dict[str, Any]) -> str:
     legend = '<div class="fuel-legend">' + "".join(
         f'<span><i style="background:{color}"></i>{label.removeprefix("worker ")}</span>'
         for role, label, color in roles) + '</div>'
+    rocket = ('<svg viewBox="0 0 24 16" aria-hidden="true">'
+              '<path d="M7 5L7 1L13 4M7 11L7 15L13 12" fill="currentColor"/>'
+              '<path d="M6 5Q14 2 22 8Q14 14 6 11Z" fill="currentColor"/>'
+              '<circle cx="15" cy="8" r="2" fill="#101318"/>'
+              '<path d="M5 6L0 8L5 10Z" fill="currentColor" opacity=".55"/></svg>')
     rows = "".join(
         f'<span title="{_escape(label)}: {totals[role]:,} fresh tokens" aria-label="{_escape(label)}: {totals[role]:,} fresh tokens">'
-        + (f'<em style="left:{total_position(totals[role]):.2f}%;background:{color}"></em>' if totals[role] > 0 else '')
+        + (f'<em style="left:{total_position(totals[role]):.2f}%;color:{color}">{rocket}</em>' if totals[role] > 0 else '')
         + f'<b>{compact(totals[role])}</b></span>'
         for role, label, color in roles)
     return (f'<aside class="fuel" title="{_escape(title)}">'
@@ -1955,7 +1960,8 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 .fuel-bars{{display:grid;gap:13px;padding-right:48px}}
 .fuel-bars>small{{font-size:8px;color:#96909f;margin:0;white-space:nowrap}}
 .fuel-bars>span{{position:relative;display:flex;align-items:center;height:8px}}
-.fuel-bars em{{position:absolute;width:7px;height:7px;transform:translateX(-50%);border-radius:50%}}
+.fuel-bars em{{position:absolute;width:24px;height:16px;transform:translateX(-50%)}}
+.fuel-bars em svg{{width:24px;height:16px;margin:0;overflow:visible}}
 .fuel-bars b{{position:absolute;left:calc(100% + 7px);width:41px;text-align:right;font-size:10px;font-weight:400;color:#c9bfd4}}
 .fuel .fuel-total{{display:flex;align-items:baseline;gap:5px;font-size:17px;font-weight:700;letter-spacing:0;margin:17px 0 4px;padding-top:10px;border-top:1px solid #35303e;color:#dfd4e7}}
 .fuel-total>span{{margin-right:auto;font-size:10px;font-weight:700}}

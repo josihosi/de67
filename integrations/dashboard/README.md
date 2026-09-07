@@ -19,6 +19,15 @@ The coordinator sun's corona settles close while it waits and expands gently whi
 works, using its current session's execution signals at the same refresh interval.
 Unavailable activity leaves the corona quiet; reduced-motion preferences disable the transition.
 
+For the optional OpenClaw mutator conversation, add
+`--mutator-activity-db /path/to/agents/MUTATOR/agent/openclaw-agent.sqlite`, pointing to the
+dedicated mutator agent's store. The galaxy glows during mutation reviews, queued messages,
+and conversation work, then fades when activity ends. Quick replies remain visible for one
+refresh interval. The tooltip distinguishes reviewing, queued, working, and replied states.
+This reads only current session activity metadata; it neither sends messages nor changes
+OpenClaw, and message contents stay private. Archived sessions and old session windows do
+not count. A missing or unavailable store leaves normal mutation-review indication intact.
+
 Home-network exposure is explicit:
 
 ```sh

@@ -15,6 +15,45 @@ SPEC.loader.exec_module(dashboard_module)
 
 
 class DashboardTests(unittest.TestCase):
+    def test_mutator_message_lights_galaxy_until_reply(self) -> None:
+        database = self.workspace / "openclaw-agent.sqlite"
+        connection = sqlite3.connect(database)
+        connection.executescript("""
+            CREATE TABLE session_nodes (current_session_id TEXT, archived_at INTEGER);
+            CREATE TABLE session_windows (session_id TEXT, status TEXT, ended_at INTEGER);
+            CREATE TABLE session_pending_inputs (session_id TEXT, state TEXT, consumed_event_id TEXT);
+            INSERT INTO session_nodes VALUES ('live', NULL), ('archived', 1);
+            INSERT INTO session_windows VALUES ('live', 'running', NULL), ('archived', 'running', NULL), ('old', 'running', NULL);
+        """)
+        connection.close()
+
+        def change(sql):
+            connection = sqlite3.connect(database)
+            connection.executescript(sql)
+            connection.close()
+
+        dashboard = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions,
+                                               mutator_activity_db=database)
+        before = database.read_bytes()
+        self.assertIn('class="galaxy on"', dashboard.render("overview").decode())
+        self.assertEqual(before, database.read_bytes())
+        change("UPDATE session_windows SET status='done', ended_at=100000 WHERE session_id='live'")
+        with patch.object(dashboard_module.time, "time", return_value=101):
+            self.assertEqual(dashboard_module.openclaw_mutator_state(database, 30),
+                             {"glowing": True, "status": "replied"})
+        with patch.object(dashboard_module.time, "time", return_value=131):
+            self.assertIn('class="galaxy off"', dashboard.render("overview").decode())
+        change("INSERT INTO session_pending_inputs VALUES ('live', 'queued', NULL)")
+        self.assertEqual(dashboard_module.openclaw_mutator_state(database, 30),
+                         {"glowing": True, "status": "queued"})
+        change("UPDATE session_pending_inputs SET consumed_event_id='consumed'")
+        for status in ("failed", "killed", "timeout"):
+            change(f"UPDATE session_windows SET status='{status}' WHERE session_id='live'")
+            self.assertIn('class="galaxy off"', dashboard.render("overview").decode())
+        database.unlink()
+        self.assertIn('class="galaxy off"', dashboard.render("overview").decode())
+        self.assertEqual(dashboard.snapshot()["mutator_activity"]["status"], "unavailable")
+
     def test_coordinator_activity_tracks_wait_and_resume(self) -> None:
         trace = self.sessions / "activity.jsonl"
         records = []
@@ -246,7 +285,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("<h2>Waiting on event</h2>", page)
         self.assertIn("waiting work", page)
         self.assertIn("<small>mutations</small><strong>3</strong>", page)
-        self.assertIn('aria-label="Astra mutation reviewer: off"', page)
+        self.assertIn('aria-label="Astra mutator: idle"', page)
         self.assertNotIn("<small>Random mutations</small>", page)
         self.assertIn("due in 2 results", page)
         self.assertIn('class="cosmos-workers"', page)
@@ -509,7 +548,7 @@ class DashboardTests(unittest.TestCase):
 
         dashboard = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions)
         running = dashboard.render("overview").decode()
-        self.assertIn('aria-label="Astra mutation reviewer: on"', running)
+        self.assertIn('aria-label="Astra mutator: reviewing"', running)
 
         connection = sqlite3.connect(database)
         connection.execute(
@@ -518,7 +557,7 @@ class DashboardTests(unittest.TestCase):
         connection.commit()
         connection.close()
         reviewed = dashboard.render("overview").decode()
-        self.assertIn('aria-label="Astra mutation reviewer: off"', reviewed)
+        self.assertIn('aria-label="Astra mutator: idle"', reviewed)
 
         connection = sqlite3.connect(database)
         connection.execute(
@@ -531,7 +570,7 @@ class DashboardTests(unittest.TestCase):
         connection.commit()
         connection.close()
         off = dashboard.render("overview").decode()
-        self.assertIn('aria-label="Astra mutation reviewer: off"', off)
+        self.assertIn('aria-label="Astra mutator: idle"', off)
 
     def test_terminal_attempt_is_not_shown_as_running_work(self) -> None:
         database = self.workspace / ".de67/state/deadlines.sqlite3"

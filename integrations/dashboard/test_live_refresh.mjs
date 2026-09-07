@@ -1,6 +1,6 @@
 // Browser integration proof. Requires playwright-core and an installed Chromium.
 import assert from "node:assert/strict";
-import {spawn} from "node:child_process";
+import {spawn, execFileSync} from "node:child_process";
 import {mkdtemp, mkdir, writeFile, readFile, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join, dirname} from "node:path";
@@ -12,6 +12,15 @@ const root = await mkdtemp(join(tmpdir(), "de67-refresh-"));
 const de67 = join(root, ".de67");
 await mkdir(de67);
 await mkdir(join(root, "sessions"));
+const activityDb = join(root, "openclaw-agent.sqlite");
+function updateActivity(sql) {
+  execFileSync(process.env.PYTHON || "python3", ["-c",
+    "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.executescript(sys.argv[2]); c.close()", activityDb, sql]);
+}
+updateActivity("CREATE TABLE session_nodes (current_session_id TEXT, archived_at INTEGER); " +
+  "CREATE TABLE session_windows (session_id TEXT, status TEXT, ended_at INTEGER); " +
+  "CREATE TABLE session_pending_inputs (session_id TEXT, state TEXT, consumed_event_id TEXT); " +
+  "INSERT INTO session_nodes VALUES ('live', NULL); INSERT INTO session_windows VALUES ('live', 'done', 0);");
 await writeFile(join(de67, "DFS.md"), "# DFS\nStatus: Frozen\n");
 const ledger = join(de67, "work-ledger.md");
 const content = title => "# Ledger\n\n## Active work\n\n- [ ] R-1 — " + title +
@@ -21,7 +30,7 @@ await writeFile(ledger, content("Original work"));
 const server = spawn(process.env.PYTHON || "python3", ["-u",
   join(dirname(fileURLToPath(import.meta.url)), "de67_dashboard.py"),
   "--workspace", root, "--port", "0", "--refresh-seconds", "1",
-  "--codex-sessions", join(root, "sessions")], {stdio: ["ignore", "pipe", "pipe"]});
+  "--codex-sessions", join(root, "sessions"), "--mutator-activity-db", activityDb], {stdio: ["ignore", "pipe", "pipe"]});
 let browser;
 try {
   const url = await new Promise((resolve, reject) => {
@@ -105,6 +114,14 @@ try {
   await writeFile(ledger, content("New overview work"));
   await page.waitForFunction(() => !document.getElementById("panel-waiting"));
   assert(await page.evaluate(() => originalFocus === document.getElementById("panel-focus")));
+  updateActivity("UPDATE session_windows SET status='running' WHERE session_id='live'");
+  await page.waitForFunction(() => document.querySelector(".galaxy").classList.contains("on"));
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".galaxy")).opacity === "1");
+  assert(await page.evaluate(() => originalStars === document.querySelector(".galaxy svg")));
+  updateActivity("UPDATE session_windows SET status='done', ended_at=0 WHERE session_id='live'");
+  const beforeRead = await readFile(activityDb);
+  await page.waitForFunction(() => !document.querySelector(".galaxy").classList.contains("on"));
+  assert.deepEqual(await readFile(activityDb), beforeRead);
   assert.equal(navigations, 2);
   assert.deepEqual(errors, []);
   console.log("PASS: real HTTP/CSP, automatic updates, stable DOM and scroll, text-selection/hidden-tab pauses, failure retention, recovery and manual refresh without navigation");

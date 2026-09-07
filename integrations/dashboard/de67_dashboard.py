@@ -1028,6 +1028,35 @@ def _active_coordinator_id(workspace: Path) -> str | None:
     return None
 
 
+def openclaw_mutator_state(database: Path, refresh_seconds: int) -> dict[str, Any]:
+    """Read the dedicated mutator agent's activity, never its message contents."""
+    uri = f"file:{quote(str(database.resolve()), safe='/:')}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, timeout=0)
+    try:
+        rows = connection.execute(
+            "SELECT windows.status, windows.ended_at FROM session_nodes AS nodes "
+            "JOIN session_windows AS windows ON windows.session_id=nodes.current_session_id "
+            "WHERE nodes.archived_at IS NULL"
+        ).fetchall()
+        queued = connection.execute(
+            "SELECT 1 FROM session_pending_inputs AS inputs "
+            "JOIN session_nodes AS nodes ON inputs.session_id=nodes.current_session_id "
+            "WHERE nodes.archived_at IS NULL AND inputs.state='queued' "
+            "AND inputs.consumed_event_id IS NULL LIMIT 1"
+        ).fetchone()
+    finally:
+        connection.close()
+    if any(status == "running" for status, _ in rows):
+        return {"glowing": True, "status": "working"}
+    if queued:
+        return {"glowing": True, "status": "queued"}
+    # Keep quick replies visible for one normal refresh interval as well.
+    if any(status == "done" and ended is not None
+           and 0 <= time.time() - ended / 1000 <= refresh_seconds for status, ended in rows):
+        return {"glowing": True, "status": "replied"}
+    return {"glowing": False, "status": "idle"}
+
+
 def _reverse_session_lines(path: Path):
     """Read complete lines backward without a fixed activity-history cutoff."""
     with path.open("rb") as source:
@@ -1389,7 +1418,8 @@ class Dashboard:
                  sidecar_script: Path | None = None,
                  fratbro_script: Path | None = None,
                  fratbro_cache: Path | None = None,
-                 fratbro_codex: str = "codex") -> None:
+                 fratbro_codex: str = "codex",
+                 mutator_activity_db: Path | None = None) -> None:
         self.workspace = workspace
         self.refresh_seconds = refresh_seconds
         self.sessions_root = sessions_root or Path.home() / ".codex/sessions"
@@ -1397,6 +1427,7 @@ class Dashboard:
         self.fratbro_script = fratbro_script
         self.fratbro_cache = fratbro_cache
         self.fratbro_codex = fratbro_codex
+        self.mutator_activity_db = mutator_activity_db
         self._lock = threading.Lock()
         self._good: dict[str, dict[str, Any]] = {}
         self._sidecar_signature: tuple[Any, ...] | None = None
@@ -1549,8 +1580,14 @@ class Dashboard:
             except Exception as error:
                 fuel = {"available": False, "error": str(error)}
             fratbro = self._fratbro_source(ledger, clock)
+            mutator_activity = {"glowing": False, "status": "disabled"}
+            if self.mutator_activity_db is not None:
+                try:
+                    mutator_activity = openclaw_mutator_state(self.mutator_activity_db, self.refresh_seconds)
+                except Exception:
+                    mutator_activity = {"glowing": False, "status": "unavailable"}
             return {"dfs": dfs, "ledger": ledger, "clock": clock, "sidecar": sidecar,
-                    "fratbro": fratbro, "fuel": fuel,
+                    "fratbro": fratbro, "fuel": fuel, "mutator_activity": mutator_activity,
                     "process": process,
                     "workers": workers, "process_error": process_error, "observed": time.time()}
 
@@ -1648,7 +1685,11 @@ class Dashboard:
                          "on" if coordinator == "running" else
                          "waiting" if coordinator == "waiting" else
                          "unknown" if coordinator == "unknown" else "off")
-            astra_state = "on" if mutation_running else "unknown" if clock.get("error") else "off"
+            mutator_activity = state.get("mutator_activity", {})
+            astra_state = "on" if mutation_running or mutator_activity.get("glowing") else "unknown" if clock.get("error") else "off"
+            astra_label = "Astra mutator: " + ("reviewing" if mutation_running else "idle")
+            if mutator_activity.get("status") not in (None, "disabled", "idle"):
+                astra_label += " · conversation " + mutator_activity["status"]
             sun_activity = process.get("activity", "unknown") if sun_state == "on" else sun_state
             import random
             rng = random.Random(67)
@@ -1698,7 +1739,7 @@ class Dashboard:
                 f'<strong>work: {_escape(work_value)}</strong><span>deadline: {remaining}</span></div>'
                 f'<div class="mutation-total"><small>mutations</small><strong>{_escape(mutations)}</strong>'
                 f'<span title="{_escape(random_note)}">{_escape(due)}</span></div></div>'
-                f'<div class="galaxy {astra_state}" title="Astra mutation reviewer: {astra_state}" role="img" aria-label="Astra mutation reviewer: {astra_state}">'
+                f'<div class="galaxy {astra_state}" title="{_escape(astra_label)}" role="img" aria-label="{_escape(astra_label)}">'
                 '<svg viewBox="0 0 1100 320" preserveAspectRatio="none" aria-hidden="true"><defs><filter id="dust"><feGaussianBlur stdDeviation="10"/></filter></defs>'
                 '<g fill="none" stroke="currentColor" filter="url(#dust)">'
                 '<path d="M-20 207Q100 213 205 179T385 158T570 129T785 97T1120 66" stroke-width="20" opacity=".055"/>'
@@ -1922,6 +1963,8 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 .cosmos{{isolation:isolate}}
 .galaxy{{margin:-90px -12px -75px;color:#8f8998;opacity:.62;z-index:0}}
 .galaxy.on{{color:#fff0d6;opacity:1}}.galaxy.unknown{{opacity:.30}}
+.galaxy,.outer-stars{{transition:color 1.8s ease,opacity 1.8s ease}}
+@media(prefers-reduced-motion:reduce){{.galaxy,.outer-stars{{transition:none}}}}
 .galaxy svg{{height:260px}}
 .cosmos-deck{{position:relative;z-index:1}}
 .galaxy>span{{top:40%;right:5%}}
@@ -1987,9 +2030,10 @@ def serve(workspace: Path, bind: str, port: int, refresh_seconds: int,
           sidecar_script: Path | None = None,
           fratbro_script: Path | None = None,
           fratbro_cache: Path | None = None,
-          fratbro_codex: str = "codex") -> None:
+          fratbro_codex: str = "codex",
+          mutator_activity_db: Path | None = None) -> None:
     dashboard = Dashboard(workspace.resolve(), refresh_seconds, sessions_root, sidecar_script,
-                          fratbro_script, fratbro_cache, fratbro_codex)
+                          fratbro_script, fratbro_cache, fratbro_codex, mutator_activity_db)
 
     class Server(ThreadingHTTPServer):
         def server_bind(self) -> None:
@@ -2050,6 +2094,8 @@ def main() -> None:
                         help="Optional narrator cache outside the configured workspace")
     parser.add_argument("--fratbro-codex", default="codex",
                         help="Codex executable used only by the optional narrator")
+    parser.add_argument("--mutator-activity-db", type=Path, default=None,
+                        help="Optional dedicated OpenClaw mutator agent SQLite store; activity lights the galaxy")
     args = parser.parse_args()
     if args.refresh_seconds < 0:
         parser.error("--refresh-seconds cannot be negative")
@@ -2057,7 +2103,7 @@ def main() -> None:
         parser.error("--fratbro-script and --fratbro-cache must be configured together")
     serve(args.workspace, args.bind, args.port, args.refresh_seconds,
           args.codex_sessions, args.sidecar_script, args.fratbro_script, args.fratbro_cache,
-          args.fratbro_codex)
+          args.fratbro_codex, args.mutator_activity_db)
 
 
 if __name__ == "__main__":

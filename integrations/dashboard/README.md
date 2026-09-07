@@ -99,9 +99,11 @@ It includes coordinator, mutator, Terra-worker, and Luna-worker sessions, includ
 workers. Other or unknown worker models remain separately accounted for when present.
 Missing session records make the total explicitly partial. The graph stacks the four roles into their combined total in one-hour
 bins across the last 24 hours, with a linear scale that follows observed use.
-Between the plots, a shared color legend identifies each role. Separate logarithmic bars
-compare campaign totals, largest first, on an axis that rounds up as totals grow; hover for exact
-counts. The combined campaign total sits at the bottom. Narrator and
+Between the plots, a shared color legend identifies each role. A logarithmic dot plot
+compares campaign totals in fixed mutator, coordinator, Terra, Luna order. Its axis rounds
+around the lowest and highest positive totals, omitting the unused low end; zero totals
+retain their numeric label without a dot. Hover for exact counts. The mutator uses the
+lit galaxy's star color throughout both plots. The combined total sits at the bottom. Narrator and
 unrelated sessions are excluded. Accounting uses the local Codex session index and logs;
 unavailable accounting leaves only this panel unavailable.
 

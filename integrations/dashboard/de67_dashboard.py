@@ -1364,7 +1364,7 @@ def render_fuel(fuel: dict[str, Any]) -> str:
     ceiling = next(step * magnitude for step in (1, 2, 2.5, 5, 10) if step * magnitude >= peak)
     def axis_label(value: float) -> str:
         return f"{value / 1000000:g}m" if value >= 1000000 else f"{value / 1000:g}k" if value >= 1000 else f"{value:g}"
-    roles = [("astra", "mutator", "#c49bd4"), ("coordinator", "coordinator", "#eabd69"),
+    roles = [("astra", "mutator", "#fff0d6"), ("coordinator", "coordinator", "#eabd69"),
              ("terra", "worker Terra", "#77accb"), ("luna", "worker Luna", "#82dfbd")]
     if totals.get("other", 0):
         roles.append(("other", "other workers", "#9997a0"))
@@ -1386,27 +1386,38 @@ def render_fuel(fuel: dict[str, Any]) -> str:
         f'<text x="152" y="{y}" dominant-baseline="middle">{axis_label(value)}</text>'
         for value, y in ((ceiling, 7), (ceiling / 2, 61), (0, 115))
     )
-    largest_total = max(totals.values()) or 1
-    total_magnitude = 10 ** math.floor(math.log10(largest_total))
-    total_ceiling = next(step * total_magnitude for step in (1, 2, 5, 10)
-                         if step * total_magnitude >= largest_total)
-    log_maximum = math.log10(1 + total_ceiling)
-    middle_tick = 10 ** math.floor(math.log10(total_ceiling) / 2)
-    total_ticks = (0, middle_tick, total_ceiling) if middle_tick < total_ceiling else (0, total_ceiling)
+    positive_totals = [totals[role] for role, _, _ in roles if totals[role] > 0]
+    smallest, largest = (min(positive_totals), max(positive_totals)) if positive_totals else (1, 10)
+    nice_ticks = [step * 10 ** exponent
+                  for exponent in range(math.floor(math.log10(smallest)) - 1,
+                                        math.ceil(math.log10(largest)) + 2)
+                  for step in (1, 2, 5)]
+    lower = max(value for value in nice_ticks if value <= smallest)
+    upper = min(value for value in nice_ticks if value >= largest)
+    if lower == upper:
+        lower = max(value for value in nice_ticks if value < smallest)
+        upper = min(value for value in nice_ticks if value > largest)
+    log_minimum, log_span = math.log10(lower), math.log10(upper / lower)
+    def total_position(value: float) -> float:
+        return 100 * (math.log10(value) - log_minimum) / log_span
+    interior = [value for value in nice_ticks if lower < value < upper]
+    middle = min(interior, key=lambda value: abs(total_position(value) - 50)) if interior else None
+    total_ticks = (lower, middle, upper) if middle is not None else (lower, upper)
     bar_axis = '<div class="fuel-bar-axis" aria-label="Role total logarithmic axis">' + "".join(
-        f'<span style="left:{100 * math.log10(1 + value) / log_maximum:.2f}%">{axis_label(value)}</span>'
-        for value in total_ticks) + '</div>'
+        f'<span style="left:{total_position(value):.2f}%">{axis_label(value)}</span>'
+        for value in total_ticks) + '</div>' if positive_totals else ''
     legend = '<div class="fuel-legend">' + "".join(
         f'<span><i style="background:{color}"></i>{label.removeprefix("worker ")}</span>'
         for role, label, color in roles) + '</div>'
     rows = "".join(
         f'<span title="{_escape(label)}: {totals[role]:,} fresh tokens" aria-label="{_escape(label)}: {totals[role]:,} fresh tokens">'
-        f'<em style="width:{100 * math.log10(1 + totals[role]) / log_maximum:.2f}%;background:{color}"></em><b>{compact(totals[role])}</b></span>'
-        for role, label, color in sorted(roles, key=lambda item: totals[item[0]], reverse=True))
+        + (f'<em style="left:{total_position(totals[role]):.2f}%;background:{color}"></em>' if totals[role] > 0 else '')
+        + f'<b>{compact(totals[role])}</b></span>'
+        for role, label, color in roles)
     return (f'<aside class="fuel" title="{_escape(title)}">'
             f'<svg viewBox="0 0 188 122" role="img" aria-label="Stacked fresh-token use over the last twenty-four hours; top line is the total. Linear right axis: 0 to {axis_label(ceiling)} tokens per hour.">'
             f'{"".join(layers)}<path d="M144 7V115" stroke="currentColor" opacity=".2"/>{ticks}</svg>'
-            f'<span class="fuel-period">tokens / hour · last 24h</span>{legend}<div class="fuel-bars" title="Bar lengths use log10(1 + fresh tokens); tooltips show exact role totals."><small>role totals · log scale</small>{rows}{bar_axis}</div>'
+            f'<span class="fuel-period">tokens / hour · last 24h</span>{legend}<div class="fuel-bars" title="Dot positions use a logarithmic axis spanning the positive role totals. Zero totals have no dot. Tooltips show exact totals."><small>role totals · log scale</small>{rows}{bar_axis}</div>'
             f'<strong class="fuel-total"><span>total</span>{compact(total)}{"<sup>~</sup>" if fuel["partial"] else ""}</strong>'
             f'<span class="fuel-scope">campaign{" · partial" if fuel["partial"] else ""}</span></aside>')
 
@@ -1944,7 +1955,7 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 .fuel-bars{{display:grid;gap:13px;padding-right:48px}}
 .fuel-bars>small{{font-size:8px;color:#96909f;margin:0;white-space:nowrap}}
 .fuel-bars>span{{position:relative;display:flex;align-items:center;height:8px}}
-.fuel-bars em{{display:block;height:6px;opacity:.85;border-radius:2px}}
+.fuel-bars em{{position:absolute;width:7px;height:7px;transform:translateX(-50%);border-radius:50%}}
 .fuel-bars b{{position:absolute;left:calc(100% + 7px);width:41px;text-align:right;font-size:10px;font-weight:400;color:#c9bfd4}}
 .fuel .fuel-total{{display:flex;align-items:baseline;gap:5px;font-size:17px;font-weight:700;letter-spacing:0;margin:17px 0 4px;padding-top:10px;border-top:1px solid #35303e;color:#dfd4e7}}
 .fuel-total>span{{margin-right:auto;font-size:10px;font-weight:700}}

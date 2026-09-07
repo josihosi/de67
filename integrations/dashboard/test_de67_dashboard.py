@@ -230,6 +230,26 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("0 to " + label + " tokens per hour", page)
             self.assertIn("last 24h", page)
 
+    def test_role_dot_axis_crops_unused_range_and_keeps_role_order(self) -> None:
+        import re
+        roles = ("astra", "coordinator", "terra", "luna")
+        for values in ((13000000, 12000000, 102000000, 5000000), (10, 10, 10, 10), (0, 0, 0, 0)):
+            page = dashboard_module.render_fuel({"available": True,
+                "totals": dict(zip(roles, values)), "bins": [0] * 24,
+                "series": {role: [0] * 24 for role in roles}, "partial": False})
+            plot = page.split('class="fuel-bars"', 1)[1]
+            labels = re.findall(r'aria-label="([^":]+):', plot)
+            self.assertEqual(labels, ["mutator", "coordinator", "worker Terra", "worker Luna"])
+            positions = [float(value) for value in re.findall(r'<em style="left:([0-9.]+)%', plot)]
+            self.assertEqual(len(positions), sum(value > 0 for value in values))
+            self.assertTrue(all(0 <= value <= 100 for value in positions))
+            self.assertIn('data-role="astra" style="color:#fff0d6"', page)
+            if values[0] == 13000000:
+                self.assertIn('left:0.00%">5m</span>', plot)
+                self.assertIn('left:100.00%">200m</span>', plot)
+            if not any(values):
+                self.assertNotIn('class="fuel-bar-axis"', plot)
+
     def test_refresh_interval_and_local_script_are_explicit(self) -> None:
         for interval in (0, 30, 900):
             page = dashboard_module.Dashboard(self.workspace, refresh_seconds=interval,

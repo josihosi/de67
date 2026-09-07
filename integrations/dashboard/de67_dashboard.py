@@ -1371,7 +1371,7 @@ def render_fuel(fuel: dict[str, Any]) -> str:
     cumulative = [0] * len(bins)
     layers = []
     def coordinates(values: list[int]) -> list[str]:
-        return [f"{4 + i * 136 / max(1, len(values)-1):.1f},{115 - value / ceiling * 108:.1f}"
+        return [f"{i * 140 / max(1, len(values)-1):.1f},{115 - value / ceiling * 108:.1f}"
                 for i, value in enumerate(values)]
     for role, label, color in roles:
         baseline = coordinates(cumulative)
@@ -1381,9 +1381,8 @@ def render_fuel(fuel: dict[str, Any]) -> str:
                       f'<title>{label}</title><polygon points="{" ".join(upper + baseline[::-1])}" '
                       f'fill="currentColor" fill-opacity=".72"/></g>')
     ticks = "".join(
-        f'<path d="M144 {y}h3" stroke="currentColor" stroke-width="1.2" opacity=".65"/>'
-        f'<text x="152" y="{y}" dominant-baseline="middle">{axis_label(value)}</text>'
-        for value, y in ((ceiling, 7), (ceiling / 2, 61), (0, 115))
+        f'<span style="top:{position}%">{axis_label(value)}</span>'
+        for value, position in ((ceiling, 0), (ceiling / 2, 50), (0, 100))
     )
     positive_totals = [totals[role] for role, _, _ in roles if totals[role] > 0]
     smallest, largest = (min(positive_totals), max(positive_totals)) if positive_totals else (1, 10)
@@ -1419,8 +1418,8 @@ def render_fuel(fuel: dict[str, Any]) -> str:
         + f'<b>{compact(totals[role])}</b></span>'
         for role, label, color in roles)
     return (f'<aside class="fuel" title="{_escape(title)}">'
-            f'<svg viewBox="0 0 188 122" role="img" aria-label="Stacked fresh-token use over the last twenty-four hours; upper edge is the total. Linear right axis: 0 to {axis_label(ceiling)} tokens per hour.">'
-            f'{"".join(layers)}<path d="M144 7V115" stroke="currentColor" stroke-width="1.2" opacity=".65"/>{ticks}</svg>'
+            f'<div class="fuel-spark" role="img" aria-label="Stacked fresh-token use over the last twenty-four hours; upper edge is the total. Linear right axis: 0 to {axis_label(ceiling)} tokens per hour.">'
+            f'<svg viewBox="0 0 140 122" preserveAspectRatio="none" aria-hidden="true">{"".join(layers)}</svg><div class="fuel-spark-axis">{ticks}</div></div>'
             f'<span class="fuel-period">tokens / hour · last 24h</span>{legend}<div class="fuel-bars" title="Dot positions use a logarithmic axis spanning the positive role totals. Zero totals have no dot. Tooltips show exact totals."><small>role totals · log scale</small>{rows}{bar_axis}</div>'
             f'<strong class="fuel-total"><span>total</span>{compact(total)}{"<sup>~</sup>" if fuel["partial"] else ""}</strong>'
             f'<span class="fuel-scope">campaign{" · partial" if fuel["partial"] else ""}</span></aside>')
@@ -1931,6 +1930,7 @@ nav{{margin:16px 0 24px;border-color:#30303b}}nav a{{font-size:11px}}
 .cosmos .scale-heading{{grid-column:2;grid-row:1;align-self:end;padding:0;display:block}}
 .cosmos .scale-heading strong{{font-size:13px;font-weight:400;color:#c7ccd7}}
 .cosmos .scale-heading span{{display:none}}
+.cosmos .scale-heading,.cosmos .model-emblem{{transform:translateX(-.5in)}}
 .cosmos .model-emblem{{grid-column:2;grid-row:2;align-self:start;width:30px;height:30px;margin:9px 0 0}}
 .cosmos .worker-scale[data-model="terra"] .worker-dot{{fill:#8abbd6}}
 .cosmos .worker-scale[data-model="luna"] .worker-dot{{fill:#7ee6c2}}
@@ -1946,7 +1946,12 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 .cosmos-deck{{grid-template-columns:32% minmax(0,1fr) 160px;gap:24px}}
 .fuel{{align-self:center;color:#b8accb;min-width:0;padding-left:6px}}
 .fuel svg{{display:block;width:100%;height:150px;margin:0 0 5px}}
-.fuel svg text{{fill:currentColor;font-size:8px;opacity:.85}}
+.fuel-spark{{position:relative;width:calc(100% - 48px);height:150px;margin-bottom:5px}}
+.fuel .fuel-spark svg{{width:100%;height:100%;margin:0}}
+.fuel-spark-axis{{position:absolute;left:100%;top:calc(100% * 7 / 122);bottom:calc(100% * 7 / 122);border-left:1.5px solid #686976;font-size:10px;color:var(--muted)}}
+.fuel-spark-axis span{{position:absolute;left:7px;transform:translateY(-50%);white-space:nowrap}}
+.fuel-spark-axis span::before{{content:"";position:absolute;left:-8px;top:50%;width:3px;border-top:1.5px solid var(--muted)}}
+@media(max-width:650px){{.fuel-spark{{height:190px}}.fuel-spark-axis{{font-size:12px}}}}
 .fuel-bar-axis{{position:relative;height:20px;border-top:1.5px solid #686976;margin-top:1px;color:var(--muted);font-size:10px}}
 .fuel-bar-axis span{{position:absolute;top:5px;transform:translateX(-50%)}}
 .fuel-bar-axis span::before{{content:"";position:absolute;left:50%;top:-6px;height:3px;border-left:1.5px solid var(--muted)}}

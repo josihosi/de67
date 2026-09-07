@@ -230,7 +230,7 @@ def render_worker_scale(model: str, counts: dict[str, int]) -> str:
         count = counts.get(level, 0)
         marks.append(f'<circle class="strength-stop" cx="{x}" cy="114" r="2"/>')
         for dx, dy in worker_dot_positions(count):
-            marks.append(f'<circle class="worker-dot" cx="{x + dx:.3f}" cy="{34 + dy:.3f}" r="4.67"><title>{_escape(model.title())} · {level.title()} reasoning</title></circle>')
+            marks.append(f'<circle class="worker-dot" cx="{x + dx:.3f}" cy="{58 + dy:.3f}" r="4.67"><title>{_escape(model.title())} · {level.title()} reasoning</title></circle>')
         if count > 12:
             marks.append(f'<text class="strength-overflow" x="{x}" y="8">+{count - 12}</text>')
         marks.append(f'<text class="strength-label" x="{x}" y="156">{level.title()}</text>')
@@ -1990,7 +1990,8 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 @media(max-width:650px){{.sun svg{{width:120px}}}}
 
 
-@media(min-width:651px){{.sun{{align-self:end;padding-bottom:0;transform:translateY(-28px)}}}}
+@media(min-width:651px){{.cosmos-deck{{transform:translateY(-1cm)}}.sun{{align-self:end;padding-bottom:0;transform:translateY(-28px)}}.fuel{{margin-left:-12px}}}}
+@media(min-width:901px){{.fuel{{margin-left:-48px}}}}
 
 
 header h1{{font-family:var(--terminal)!important;font-weight:400;letter-spacing:0;font-style:normal}}

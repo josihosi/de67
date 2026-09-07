@@ -1921,16 +1921,15 @@ nav{{margin:16px 0 24px;border-color:#30303b}}nav a{{font-size:11px}}
 .galaxy{{color:#686976;position:relative;margin:-55px -12px -30px;opacity:.40;pointer-events:auto}}
 .galaxy.on{{color:#fff0d6;opacity:1}}.galaxy.unknown{{opacity:.22}}
 .galaxy svg{{display:block;width:100%;height:180px}}.galaxy>span{{position:absolute;right:5%;top:32%;font-size:10px;letter-spacing:.2em}}
-.cosmos-deck{{display:grid;grid-template-columns:32% minmax(0,1fr);gap:24px;align-items:end}}
+.cosmos-deck{{display:grid;grid-template-columns:minmax(0,.21fr) minmax(0,.49fr) minmax(0,.30fr);gap:32px;align-items:center}}
 .sun{{color:#555761;padding:0 0 28px;text-align:center}}.sun.on{{color:#e9bc70}}.sun.waiting{{color:#a78e66}}.sun.unknown{{color:#41434c}}
 .sun>span{{font-size:12px;letter-spacing:.1em}}.sun svg{{display:block;width:100%;height:auto;margin-top:16px}}
 .cosmos .roster-scales{{grid-template-columns:1fr;gap:4px}}
-.cosmos .worker-scale{{width:min(100%,469px);display:grid;grid-template-columns:minmax(0,1fr) 65px;column-gap:8px;align-items:center}}
+.cosmos .worker-scale{{width:min(100%,469px);justify-self:center;display:grid;grid-template-columns:minmax(0,1fr) 65px;column-gap:8px;align-items:center}}
 .cosmos .worker-scale>svg:not(.model-emblem){{grid-column:1;grid-row:1/3;height:170px;justify-self:start;width:auto;max-width:100%}}
 .cosmos .scale-heading{{grid-column:2;grid-row:1;align-self:end;padding:0;display:block}}
 .cosmos .scale-heading strong{{font-size:13px;font-weight:400;color:#c7ccd7}}
 .cosmos .scale-heading span{{display:none}}
-.cosmos .scale-heading,.cosmos .model-emblem{{transform:translateX(-.5in)}}
 .cosmos .model-emblem{{grid-column:2;grid-row:2;align-self:start;width:30px;height:30px;margin:9px 0 0}}
 .cosmos .worker-scale[data-model="terra"] .worker-dot{{fill:#8abbd6}}
 .cosmos .worker-scale[data-model="luna"] .worker-dot{{fill:#7ee6c2}}
@@ -1943,8 +1942,7 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 }}
 
 
-.cosmos-deck{{grid-template-columns:32% minmax(0,1fr) 160px;gap:24px}}
-.fuel{{align-self:center;color:#b8accb;min-width:0;padding-left:6px}}
+.fuel{{align-self:center;color:#b8accb;min-width:0;padding:0}}
 .fuel svg{{display:block;width:100%;height:150px;margin:0 0 5px}}
 .fuel-spark{{position:relative;width:calc(100% - 48px);height:150px;margin-bottom:5px}}
 .fuel .fuel-spark svg{{width:100%;height:100%;margin:0}}
@@ -1972,7 +1970,7 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 .fuel .fuel-total{{display:flex;align-items:baseline;gap:5px;font-size:17px;font-weight:700;letter-spacing:0;margin:17px 0 4px;padding-top:10px;border-top:1px solid #35303e;color:#dfd4e7}}
 .fuel-total>span{{margin-right:auto;font-size:10px;font-weight:700}}
 .fuel sup{{font-size:10px;vertical-align:top}}
-@media(max-width:900px) and (min-width:651px){{.cosmos-deck{{grid-template-columns:24% minmax(0,1fr) 155px;gap:14px}}}}
+@media(max-width:900px) and (min-width:651px){{.cosmos-deck{{grid-template-columns:140px minmax(0,1fr) minmax(180px,.85fr);gap:20px}}}}
 @media(max-width:650px){{.cosmos-deck{{grid-template-columns:1fr}}.fuel{{width:100%;padding:14px 0 0;display:block}}.fuel svg{{height:190px}}.fuel .fuel-legend{{gap:10px}}.fuel-legend>span{{font-size:11px}}.fuel .fuel-period{{font-size:9px}}}}
 
 
@@ -2009,12 +2007,10 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 
 .sun{{align-self:center}}
 .sun svg{{width:160px}}
-@media(min-width:651px){{.cosmos-deck{{grid-template-columns:minmax(0,1fr) minmax(0,1.618fr) minmax(0,.618fr)}}}}
 @media(max-width:650px){{.sun svg{{width:120px}}}}
 
 
-@media(min-width:651px){{.cosmos-deck{{transform:translateY(-1cm)}}.sun{{align-self:end;padding-bottom:0;transform:translateY(-28px)}}.fuel{{margin-left:-12px}}}}
-@media(min-width:901px){{.fuel{{margin-left:-48px}}}}
+@media(min-width:651px){{.cosmos-deck{{transform:translateY(-1cm)}}.sun{{position:relative;display:flex;align-items:center;justify-content:center;width:min(100%,180px);height:160px;justify-self:end;align-self:center;padding:0}}.sun>span{{position:absolute;bottom:calc(100% + 16px);left:0;width:100%;transform:none}}.sun svg{{width:min(100%,160px);margin:0}}}}
 
 
 header h1{{font-family:var(--terminal)!important;font-weight:400;letter-spacing:0;font-style:normal}}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import itertools
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -26,6 +27,21 @@ from deadline_harness import DeadlineHarness  # noqa: E402
 
 def source_policy() -> dict:
     return json.loads(SOURCE.read_text(encoding="utf-8"))
+
+
+class WorkerCapabilityTests(unittest.TestCase):
+    def test_dispatch_preserves_setup_recorded_efforts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            config = workspace / '.de67/state/workspace.json'
+            config.parent.mkdir(parents=True)
+            choices = [
+                {'model': 'gpt-5.6-luna', 'reasoning_effort': 'low'},
+                {'model': 'gpt-5.6-terra', 'reasoning_effort': 'xhigh'},
+                {'model': 'gpt-5.6-terra', 'reasoning_effort': 'max'},
+            ]
+            config.write_text(json.dumps({'worker_capabilities': choices}), encoding='utf-8')
+            self.assertEqual(kernel.worker_model_choices(workspace), choices)
 
 
 CASES = (
@@ -58,36 +74,15 @@ class PolicyKernelTests(unittest.TestCase):
     def test_worker_outcome_contract_keeps_bootstrap_and_validation_in_one_outcome(self) -> None:
         contract = kernel.worker_outcome_contract()
 
-        self.assertIn("repository-owned implementation", contract)
-        self.assertIn("inside this task", contract)
+        self.assertIn("Repository-owned implementation", contract)
+        self.assertIn("ask Sol to decide its ownership", contract)
         self.assertIn("non-credit bootstrap", contract)
         self.assertIn("validate the fresh output independently", contract)
-        self.assertIn("do not query the unchanged prerequisite again", contract)
+        self.assertNotIn("do not query the unchanged prerequisite again", contract)
         self.assertIn("A disproved strategy is progress, not a task exit", contract)
         self.assertIn("contradicted assigned outcome", contract)
         self.assertIn("authorized route you have genuinely exhausted", contract)
         self.assertNotIn("formal finding only for a disproved strategy", contract)
-
-    def test_worker_helper_contract_keeps_one_owner_and_native_freedom(self) -> None:
-        contract = kernel.worker_helper_contract()
-
-        self.assertIn("primary Luna or Terra worker", contract)
-        self.assertIn("consider an optional Luna helper", contract)
-        self.assertIn("bounded work can return independently", contract)
-        self.assertIn("isolated live playtest witness", contract)
-        self.assertIn("focused test run", contract)
-        self.assertIn("compact charter and isolated run context", contract)
-        self.assertIn("smallest journal-cited witness", contract)
-        self.assertIn("own any repair", contract)
-        self.assertIn('fork_turns="none"', contract)
-        self.assertIn("as many as the runtime permits", contract)
-        self.assertIn("work or wait while they run", contract)
-        self.assertIn("remain responsible for the whole outcome", contract)
-        self.assertIn("do not own this assignment", contract)
-        self.assertIn("avoid overlapping source edits", contract)
-        self.assertIn("shared mutable runtime state", contract)
-        self.assertIn("explicit exclusive ownership", contract)
-        self.assertNotIn("must delegate", contract)
 
     def test_source_policy_covers_legacy_decision_corpus(self) -> None:
         policy = source_policy()
@@ -770,6 +765,29 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertIn("unbound_task", facts)
             self.assertNotIn("live_task", facts)
 
+    def test_unclaimed_abandoned_task_has_no_worker_result_to_receive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            state = workspace / "state.sqlite3"
+            connection = sqlite3.connect(state)
+            connection.executescript(
+                """
+                CREATE TABLE tasks (
+                    lineage_id TEXT, task_id TEXT, started_at REAL,
+                    attempt_terminal_at REAL, attempt_terminal_kind TEXT
+                );
+                CREATE TABLE worker_claims (
+                    lineage_id TEXT, task_id TEXT, released_at REAL
+                );
+                INSERT INTO tasks VALUES ('project', 'never-claimed', 1, 2, 'abandoned');
+                """
+            )
+            connection.close()
+
+            facts = kernel.workspace_facts(workspace, state, "project", now=3)
+
+            self.assertNotIn("worker_abandoned", facts)
+
 
     def test_opened_tasks_inject_exact_parallel_spawn_calls_before_wait(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -799,9 +817,21 @@ class PolicyKernelTests(unittest.TestCase):
                     phase="closure", gap_id="G-CANNIBAL", now=4,
                 )
 
+            (workspace / ".de67").mkdir(exist_ok=True)
+            (workspace / ".de67/DFS.md").write_text(
+                "<!-- DE67:DFS-SLICE:BEGIN id=R-008-S001 claim=R-008 -->\n"
+                "- [ ] R-008 — Complete the outcome,\n  including both profiles.\n"
+                "  - Proof: every branch has independent evidence.\n"
+                "<!-- DE67:DFS-SLICE:END -->\n")
+            (workspace / ".de67/WEC.md").write_text("Only owner promotion authorizes gameplay repair.")
             facts = kernel.workspace_facts(workspace, state, "project", now=5)
             decision = kernel.decide(source_policy(), facts)
             calls = kernel.unbound_worker_spawns(workspace, state, "project")
+            for call in calls:
+                packet = Path(call["dispatch_packet"]["path"]).read_text()
+                self.assertIn("including both profiles.", next((workspace / ".de67/state/worker-dispatch").glob("*-context-*.md")).read_text())
+                self.assertIn("every branch has independent evidence.", next((workspace / ".de67/state/worker-dispatch").glob("*-context-*.md")).read_text())
+                self.assertIn("Only owner promotion authorizes gameplay repair.", packet)
 
             self.assertEqual(decision.action, "spawn_worker")
             self.assertEqual([call["task_id"] for call in calls], [
@@ -813,7 +843,14 @@ class PolicyKernelTests(unittest.TestCase):
             )
             arguments = calls[0]["example_call"]["arguments"]
             self.assertEqual(arguments["fork_turns"], "none")
-            self.assertEqual(arguments["model"], "gpt-5.6-terra")
+            self.assertNotIn("model", arguments)
+            self.assertEqual({c['model'] for c in calls[0]['model_choices']}, {'gpt-5.6-luna','gpt-5.6-terra'})
+            for choice in calls[0]['model_choices']:
+                completed_call = {**arguments, **choice}
+                self.assertEqual(completed_call['task_name'], calls[0]['task_name'])
+                self.assertEqual(completed_call['message'], arguments['message'])
+                self.assertEqual(completed_call['fork_turns'], 'none')
+                self.assertIn('reasoning_effort', completed_call)
             packet = Path(calls[0]["dispatch_packet"]["path"])
             packet_text = packet.read_text(encoding="utf-8")
             self.assertIn("Read your complete task brief", arguments["message"])
@@ -825,7 +862,7 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertNotIn("Observe the actual bandit return boundary", arguments["message"])
             self.assertIn("Observe the actual bandit return boundary", packet_text)
             self.assertIn("Add the owned scenario and portable build route", packet_text)
-            self.assertIn("Keep repository-owned implementation", packet_text)
+            self.assertIn("Repository-owned implementation", packet_text)
             self.assertIn("non-credit bootstrap", packet_text)
             self.assertIn("validate the fresh output independently", packet_text)
             self.assertIn("A disproved strategy is progress, not a task exit", packet_text)
@@ -836,16 +873,10 @@ class PolicyKernelTests(unittest.TestCase):
                 arguments["message"],
             )
             self.assertIn("do not change coordination records", packet_text)
-            self.assertIn(kernel.worker_communication_contract(), packet_text)
-            self.assertIn("consider an optional Luna helper", packet_text)
-            self.assertIn("bounded work can return independently", packet_text)
-            self.assertIn("compact charter and isolated run context", packet_text)
-            self.assertIn("smallest journal-cited witness", packet_text)
-            self.assertIn("as many as the runtime permits", packet_text)
-            self.assertIn("must collect or stop every helper", packet_text)
-            self.assertIn("avoid overlapping source edits", packet_text)
+            self.assertIn(kernel.worker_communication_contract().rstrip(), packet_text)
+            self.assertIn(kernel.worker_helper_contract().rstrip(), packet_text)
             self.assertNotIn("must delegate", packet_text)
-            self.assertIn("Announcing an assignment is not delegation", calls[0]["instruction"])
+            self.assertIn("then call spawn_agent", calls[0]["instruction"])
             self.assertIn("wait_agent", calls[0]["instruction"])
             self.assertNotEqual(calls[0]["task_name"], calls[1]["task_name"])
             result = subprocess.run(
@@ -910,8 +941,58 @@ class PolicyKernelTests(unittest.TestCase):
             packet_text = packet.read_text(encoding="utf-8")
             self.assertNotIn("Repair the native launch boundary", message)
             self.assertIn("Repair the native launch boundary", packet_text)
-            self.assertIn("Native launch must reach gameplay", packet_text)
+            self.assertIn("Native launch must reach gameplay", next((de67 / "state/worker-dispatch").glob("*-context-*.md")).read_text())
             self.assertNotIn("Unrelated work", packet_text)
+
+    def test_prepared_context_is_selected_and_worker_packet_remains_immutable(self) -> None:
+        from context_library import put, prepare
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            de67 = workspace / ".de67"
+            de67.mkdir()
+            (de67 / "work-ledger.md").write_text(
+                "- [ ] R-CAMP — Prove native establishment using `skill.md`.\n"
+                "  - Current handoff: OLD INVESTIGATION JOURNEY\n")
+            (de67 / "DFS.md").write_text(
+                "<!-- DE67:DFS-SLICE:BEGIN id=R-CAMP-S001 claim=R-CAMP -->\n"
+                "- [ ] 🔴 R-CAMP — Native establishment, independent of mission.\n"
+                "<!-- DE67:DFS-SLICE:END id=R-CAMP-S001 claim=R-CAMP -->\n")
+            (de67 / "WEC.md").write_text("Preserve independent accepted mission proof.")
+            state = workspace / "state.sqlite3"
+            task = "R-CAMP-001"
+            with DeadlineHarness(state) as harness:
+                harness.start_task("project", task, "R-CAMP", 100, now=1)
+            source = workspace / "skill.md"
+            source.write_text("Use the exact semantic run binding.")
+            digest = put(workspace, task, "harness", source, "skill")
+            unused = workspace / "irrelevant.md"
+            unused.write_text("UNRELATED HISTORY")
+            put(workspace, task, "unrelated", unused)
+            prepare(workspace, task, "Observe a native camp record; preparation earns no credit.",
+                    ["harness"], "Mission proof remains accepted: mission.json. Camp is unproved.")
+            call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
+            path = Path(call["dispatch_packet"]["path"])
+            first = path.read_bytes()
+            packet = first.decode()
+            self.assertIn("preparation earns no credit", packet)
+            self.assertIn(digest, packet)
+            self.assertIn("Use the exact semantic run binding", packet)
+            self.assertIn("Preserve independent accepted mission proof", packet)
+            self.assertIn(kernel.worker_helper_contract(), packet)
+            self.assertIn("Mission proof remains accepted: mission.json", packet)
+            self.assertNotIn("UNRELATED HISTORY", packet)
+            self.assertNotIn("OLD INVESTIGATION JOURNEY", packet)
+            self.assertNotIn('"source": "skill.md"', packet)
+            self.assertEqual(call["example_call"]["arguments"]["fork_turns"], "none")
+            self.assertNotIn("Observe a native camp record", json.dumps(call))
+            self.assertEqual(hashlib.sha256(first).hexdigest(), call["dispatch_packet"]["sha256"])
+            source.write_text("Corrected binding premise.")
+            with self.assertRaisesRegex(kernel.PolicyError, "Stale context"):
+                kernel.unbound_worker_spawns(workspace, state, "project")
+            put(workspace, task, "harness", source, "skill")
+            second = kernel.unbound_worker_spawns(workspace, state, "project")[0]
+            self.assertNotEqual(second["dispatch_packet"]["sha256"], call["dispatch_packet"]["sha256"])
+            self.assertEqual(path.read_bytes(), first)
 
     def test_large_worker_brief_is_not_echoed_to_coordinator(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -938,11 +1019,16 @@ class PolicyKernelTests(unittest.TestCase):
             coordinator_json = json.dumps(call, sort_keys=True)
             packet = Path(call["dispatch_packet"]["path"])
 
-            self.assertLess(len(coordinator_json), 2000)
+            # Growing private worker evidence must not grow the coordinator response.
+            (de67 / "work-ledger.md").write_text(
+                f"- [ ] R-LARGE — {large_route * 2}\n", encoding="utf-8"
+            )
+            larger_call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
+            self.assertEqual(len(json.dumps(larger_call, sort_keys=True)), len(coordinator_json))
             self.assertNotIn("worker-only-evidence", coordinator_json)
             self.assertIn("worker-only-evidence", packet.read_text(encoding="utf-8"))
 
-    def test_worker_packet_keeps_current_route_and_only_latest_history_summary(self) -> None:
+    def test_worker_packet_preserves_independent_coordinator_frontiers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             de67 = workspace / ".de67"
@@ -954,11 +1040,11 @@ class PolicyKernelTests(unittest.TestCase):
                 "  - Current progress: The implementation compiles.\n"
                 "  - Current evidence: Focused test A passes.\n"
                 "  - Current uncertainty: The live boundary remains unproved.\n"
-                "  - Attempt 001: obsolete-history-one must not reach the worker.\n"
-                "  - Attempt 002: obsolete-history-two must not reach the worker.\n"
+                "  - Smoke continuation: independent-smoke-evidence remains actionable.\n"
+                "  - Sound continuation: independent-sound-evidence remains actionable.\n"
                 "  - Waiting work: Keep this newest no-replay lesson.\n"
                 "  - First open boundary: Preserve the unconsumed observation.\n"
-                "  - Attempt 003: Latest historical summary follows active obligations.\n"
+                "  - Recovery evidence: A later note does not supersede independent evidence.\n"
                 "  - Subtasks:\n"
                 "    - [done] build :: Compile the implementation.\n"
                 "    - [open] witness :: Prove the live boundary.\n",
@@ -987,8 +1073,56 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertIn("Keep this newest no-replay lesson", packet_text)
             self.assertIn("Preserve the unconsumed observation", packet_text)
             self.assertIn("Prove the live boundary", packet_text)
-            self.assertNotIn("obsolete-history-one", packet_text)
-            self.assertNotIn("obsolete-history-two", packet_text)
+            self.assertIn("independent-smoke-evidence", packet_text)
+            self.assertIn("independent-sound-evidence", packet_text)
+            self.assertIn("[done] build", packet_text)
+
+    def test_automatic_frontier_omits_assignment_repetition_but_keeps_evidence(self):
+        route = ("- [ ] R-TEST — Broad outcome.\n"
+                 "  - Assignment R-TEST-a: Test the active actor.\n"
+                 "    Preserve task-specific authority.\n"
+                 "  - Assignment R-TEST-b: Independent sibling route.\n"
+                 "  - Current handoff: Active actor and proof are in `facts.json`.\n"
+                 "  - Current uncertainty: Generation 1 remains open.\n"
+                 "  - Subtasks:\n    - [done] save :: Generation 0 proved.\n")
+        frontier = kernel._selected_ledger_frontier(route)
+        self.assertNotIn("Assignment R-TEST", frontier)
+        self.assertIn("Active actor and proof", frontier)
+        self.assertIn("Generation 1 remains open", frontier)
+        self.assertIn("[done] save", frontier)
+        outcome, scope = kernel.exploration_assignment(route, "R-TEST-a", "R-TEST")
+        self.assertIn("Test the active actor", outcome)
+        self.assertIn("Preserve task-specific authority", outcome)
+        self.assertNotIn("Independent sibling route", outcome)
+
+    def test_multiline_outcome_and_nested_proof_are_lossless(self) -> None:
+        source = (
+            "Current mechanism and zero-credit preparation.\n"
+            "- [ ] 🔴 R-026 — First outcome line,\n"
+            "  second outcome line.\n"
+            "  - Proof: every branch passes,\n"
+            "    owner-pending is not a pass.\n"
+            "Implementation status:\nobsolete route\n"
+        )
+        self.assertEqual(kernel._dfs_worker_boundary(source),
+                         source.split("Implementation status:")[0].strip())
+
+    def test_current_owner_contract_uses_current_marked_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / ".de67").mkdir()
+            source = workspace / ".de67/WEC.md"
+            source.write_text("old phase instructions\n<!-- DE67:OWNER-CONTRACT:BEGIN -->\n"
+                              "Fresh testing; only owner promotion permits gameplay repair.\n"
+                              "<!-- DE67:OWNER-CONTRACT:END -->\nold launch instructions")
+            first = kernel.current_owner_contract(workspace)
+            self.assertIn("Fresh testing; only owner promotion", first)
+            self.assertNotIn("old launch instructions", first)
+            source.write_text(source.read_text().replace("Fresh testing", "Revised fresh testing"))
+            self.assertNotEqual(first, kernel.current_owner_contract(workspace))
+            source.write_text("<!-- DE67:OWNER-CONTRACT:BEGIN -->\nincomplete")
+            with self.assertRaises(kernel.PolicyError):
+                kernel.current_owner_contract(workspace)
 
     def test_successor_packet_uses_compact_receipt_and_reasoned_read_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1000,6 +1134,8 @@ class PolicyKernelTests(unittest.TestCase):
                 "  - Known footing: bulky accepted history must not be copied.\n"
                 "  - Current handoff: Build is finished; inspect `session/current-status.json` and continue native exit.\n"
                 "  - Current uncertainty: The response boundary remains open.\n"
+                "  - Addressed-craft retest: Recover the parser-to-durable-state boundary.\n"
+                "  - Retesting handoff: Establish actual actor and game-time opportunity.\n"
                 "  - Subtasks:\n"
                 "    - [done] transport :: Prove dispatch.\n"
                 "    - [open] response :: Observe response.\n",
@@ -1013,6 +1149,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "<!-- DE67:DFS-SLICE:END -->\n",
                 encoding="utf-8",
             )
+            (de67 / "WEC.md").write_text("<!-- DE67:OWNER-CONTRACT:BEGIN -->\nPending correction: establish calculation completion, then advance a native turn; acknowledge and return applied evidence.\n<!-- DE67:OWNER-CONTRACT:END -->")
             state = workspace / "state.sqlite3"
             with DeadlineHarness(state) as harness:
                 harness.start_task("project", "old", "R-CONT", 100, now=1)
@@ -1060,16 +1197,32 @@ class PolicyKernelTests(unittest.TestCase):
             call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
             packet_text = Path(call["dispatch_packet"]["path"]).read_text(encoding="utf-8")
             self.assertIn(receipt["receipt_id"], packet_text)
+            references = list((de67 / "state/worker-dispatch").glob("*-context-*.md"))
+            self.assertEqual(len(references), 1)
+            reference = references[0]
+            self.assertIn(str(reference.resolve()), packet_text)
+            self.assertIn(hashlib.sha256(reference.read_bytes()).hexdigest(), packet_text)
+            self.assertIn("Directly related evidence", reference.read_text())
+            self.assertNotIn("Directly related evidence", packet_text)
+            self.assertLess(packet_text.index(kernel.worker_helper_contract()), packet_text.index("Current proof frontier"))
+            self.assertIn('model="gpt-5.6-luna", fork_turns="none"', packet_text)
+            self.assertIn("Recover the parser-to-durable-state boundary.", packet_text)
+            self.assertIn("Establish actual actor and game-time opportunity.", packet_text)
             self.assertIn("Observe response.", packet_text)
             self.assertIn("src/response.cpp", packet_text)
-            self.assertIn("worker-receipts", packet_text)
+            self.assertIn("work_context.py", packet_text)
             self.assertIn("read on demand if", packet_text)
-            self.assertNotIn("bulky accepted history", packet_text)
+            self.assertIn("bulky accepted history", reference.read_text())  # Receipt existence cannot erase ledger evidence.
             self.assertIn("Build is finished; inspect `session/current-status.json`", packet_text)
-            self.assertIn("Observe a real response.", packet_text)
+            self.assertIn("Observe a real response.", reference.read_text())
+            self.assertIn("Pending correction: establish calculation completion", packet_text)
+            self.assertIn("response not observed", reference.read_text())
+            self.assertLess(packet_text.index("Current proof frontier"), packet_text.index("Current owner contract"))
+            self.assertNotIn("Pending correction", (de67 / "work-ledger.md").read_text())
             self.assertNotIn("obsolete frozen status", packet_text)
             self.assertIn("Do not replay dispatch.", packet_text)
-            self.assertIn("Historical continuation receipt from task old; current assignment is new", packet_text)
+            self.assertIn("apply only where still relevant to the current assignment", packet_text)
+            self.assertIn("not current instructions; independent contributions", packet_text)
             self.assertIn('"task_id": "interrupted"', packet_text)
             self.assertIn('"attempt_terminal_kind": "restart_normalized"', packet_text)
             self.assertLess(packet_text.index("session/current-status.json"), packet_text.index("src/response.cpp"))
@@ -1103,10 +1256,10 @@ class PolicyKernelTests(unittest.TestCase):
             call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
             packet = Path(call["dispatch_packet"]["path"]).read_text(encoding="utf-8")
 
-            self.assertIn("Outcome: - [ ] R-029 — Prove the assigned hostile response.", packet)
+            self.assertIn("Assignment outcome: - [ ] R-029 — Prove the assigned hostile response.", packet)
             self.assertIn("Keep this claim's open boundary.", packet)
-            self.assertIn("Prove the same claim on the second platform.", packet)
-            self.assertIn("Preserve the other platform boundary.", packet)
+            self.assertIn("Prove the same claim on the second platform.", next((de67 / "state/worker-dispatch").glob("*-context-*.md")).read_text())
+            self.assertIn("Preserve the other platform boundary.", next((de67 / "state/worker-dispatch").glob("*-context-*.md")).read_text())
             self.assertNotIn("Unrelated accepted outcome", packet)
             self.assertNotIn("Another unrelated outcome", packet)
 
@@ -1154,3 +1307,33 @@ class PolicyKernelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class AssignmentTests(unittest.TestCase):
+    def test_focused_recovery_and_broad_claim_are_distinct(self):
+        route = "- [ ] R-029 — Prove natural discovery through return.\n  - Assignment recovery: Restore runnable Fight test; exit when native Fight and ordinary turns are verified.\n  - Next: Observe scout/report connection."
+        outcome,scope = kernel.exploration_assignment(route,'recovery','R-029')
+        self.assertIn('native Fight and ordinary turns',outcome)
+        self.assertNotIn('scout/report',outcome)
+        self.assertEqual(scope,'task-specific ledger assignment')
+        broad,broad_scope = kernel.exploration_assignment(route,'whole','R-029')
+        self.assertIn('natural discovery through return',broad)
+        self.assertIn('whole-claim',broad_scope)
+        self.assertIn('- [ ] R-029',route)
+
+    def test_focused_packet_completion_does_not_accept_whole_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace=Path(directory);de67=workspace/'.de67';de67.mkdir()
+            ledger='- [ ] R-029 — Prove natural discovery through return.\n  - Assignment recovery: Restore runnable Fight test; exit after verified native Fight and ordinary turns.\n  - Current uncertainty: Scout/report connection remains unproved.\n'
+            (de67/'work-ledger.md').write_text(ledger)
+            (de67/'DFS.md').write_text('<!-- DE67:DFS-SLICE:BEGIN id=R-029-S001 claim=R-029 -->\nProve discovery, dispatch and return.\n<!-- DE67:DFS-SLICE:END -->\n')
+            state=workspace/'state.sqlite3'
+            with DeadlineHarness(state) as h:h.start_task('project','recovery','R-029',100,now=1)
+            call=kernel.unbound_worker_spawns(workspace,state,'project')[0]
+            packet=Path(call['dispatch_packet']['path']).read_text()
+            self.assertIn('Assignment outcome: Restore runnable Fight test;',packet)
+            self.assertIn('Scope: task-specific ledger assignment',packet)
+            with DeadlineHarness(state) as h:
+                status=h.complete_task('project','recovery','Test fixture: native Fight and ordinary turns verified',now=2)
+                self.assertEqual(status['attempt_terminal_kind'],'completed')
+                self.assertEqual(h.connection.execute('SELECT COUNT(*) FROM claim_acceptances').fetchone()[0],0)
+            self.assertEqual((de67/'work-ledger.md').read_text(),ledger)

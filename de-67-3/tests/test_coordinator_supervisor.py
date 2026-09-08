@@ -647,36 +647,24 @@ class CoordinatorSupervisorTests(unittest.TestCase):
 
     def test_worker_handoff_contract_explains_runtime_owned_claim(self) -> None:
         contract = worker_handoff_contract()
-        self.assertIn("do not require receiver_thread_ids", contract)
-        self.assertIn("do not abandon solely because that field is absent", contract)
-        self.assertIn("records the durable claim automatically", contract)
-        self.assertIn(
-            "R-008-closure-108 becomes task_522d3030382d636c6f737572652d313038",
-            contract,
-        )
-        self.assertIn("correlation metadata", contract)
-        self.assertIn("spawn_worker response injects the exact task_name", contract)
-        self.assertIn("compact spawn_agent call", contract)
-        self.assertIn("immutable hash-bound dispatch packet", contract)
-        self.assertIn("worker input, not coordinator context", contract)
-        self.assertIn("call wait_agent", contract)
-        self.assertIn("announcing that you are assigning a worker is not delegation", contract)
-        self.assertIn("spawn one distinct worker for each task before waiting", contract)
-        self.assertIn("do not serialize independent work", contract)
-        self.assertIn("Never invoke claim-worker", contract)
-        self.assertIn("never use /root/<task-name>", contract)
-        self.assertIn("After every listed spawn", contract)
-        self.assertIn("Do not finish while a worker result is outstanding", contract)
+        for requirement in ('exact task_name, fork_turns and hash-bound packet', 'model_choices',
+                            'outcome and exit condition', 'Assignment TASK-ID',
+                            'worker input, not coordinator context', 'Actually call spawn_agent',
+                            'one distinct worker each before waiting', 'actual runtime UUID',
+                            'records the claim', 'Do not require receiver_thread_ids or invoke claim-worker',
+                            '/root/<task-name> is not a worker UUID', 'a worker result is outstanding'):
+            self.assertIn(requirement, contract)
+
 
     def test_nested_worker_contract_preserves_primary_task_ownership(self) -> None:
         contract = nested_worker_contract()
 
-        self.assertIn("Luna or Terra worker may optionally", contract)
-        self.assertIn("Luna-only", contract)
-        self.assertIn("Do not open deadline tasks", contract)
-        self.assertIn("may work or wait", contract)
-        self.assertIn("collects or stops them before returning", contract)
-        self.assertIn("explicit exclusive ownership", contract)
+        self.assertIn('fork_turns="none"', contract)
+        self.assertIn("native Luna helpers", contract)
+        self.assertIn("Helpers need no deadline task", contract)
+        self.assertIn("caller owns the result", contract)
+        self.assertIn("collects or stops helpers before return", contract)
+        self.assertIn("never own coordinator state", contract)
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -1200,16 +1188,13 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("exposes a contradiction or a missing causal step", prompt)
         self.assertIn("Internal machine state and DFS detail", prompt)
         self.assertIn('fork_turns="none"', prompt)
-        self.assertIn("explicitly select gpt-5.6-luna or gpt-5.6-terra", prompt)
+        self.assertIn("Explicitly choose gpt-5.6-luna or gpt-5.6-terra", prompt)
         self.assertIn("Never omit model selection", prompt)
         self.assertIn("pass coordinator or predecessor history", prompt)
-        self.assertIn("freely rewrite the active work-ledger projection", prompt)
-        self.assertIn("multiple simultaneous entries for one", prompt)
-        self.assertIn("ordinary recoverable work, not external authority", prompt)
-        self.assertIn("closed diagnostic or documentation gap", prompt)
+        # Verify the complete producing contract reaches routing without freezing its prose.
+        self.assertIn(coordinator_ledger_contract(), prompt)
         self.assertIn("`  - Subtasks:`", prompt)
         self.assertIn("`    - [STATE] ID :: DESCRIPTION`", prompt)
-        self.assertIn("not separate workers, deadline tasks, closure gaps", prompt)
         self.assertIn(ordinary_worker_evidence_contract(), prompt)
         ingress = worker_result_ingress_contract()
         self.assertIn(ingress, prompt)
@@ -1222,9 +1207,12 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("not as terminal authority", ingress)
         self.assertIn("name the assigned-outcome exit", ingress)
         self.assertIn("checkpoint-worker", ingress)
-        self.assertIn("keep the same task live only while", ingress)
-        self.assertIn("would repeat an unchanged request", ingress)
-        self.assertIn("compact no-replay handoff", ingress)
+        self.assertIn("keep the same task live.", ingress)
+        self.assertNotIn("would repeat an unchanged request", ingress)
+        self.assertIn("why the attempt was inconclusive", ingress)
+        self.assertNotIn("next turn supplies new", ingress)
+        self.assertIn("marked current owner-contract section", ingress)
+        self.assertIn("Verify receipt and use", ingress)
         self.assertIn("project its remaining frontier to a fresh task", ingress)
         self.assertIn("Context exhaustion is not a formal finding", ingress)
         self.assertNotIn("followup_task to the same bound worker", ingress)
@@ -1241,7 +1229,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("choose the next route", ingress)
         self.assertIn("authorized repository repair, rerun", ingress)
         self.assertLess(
-            ingress.index("keep the same task live only while"),
+            ingress.index("keep the same task live."),
             ingress.index("execution context is exhausted"),
         )
         self.assertIn("abandon only that attempt", ingress)
@@ -1268,14 +1256,15 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("retry fuse ends a strategy, not recoverable work", contract)
         self.assertIn("non-credit observation/bootstrap step", contract)
 
-    def test_worker_evidence_contract_does_not_terminalize_first_divergence(self) -> None:
+    def test_worker_evidence_contract_keeps_context_current_without_duplicate_lifecycle(self) -> None:
         contract = ordinary_worker_evidence_contract()
-        self.assertNotIn("returns the first relevant divergence", contract)
-        self.assertIn("preserves the first relevant divergence as a diagnostic anchor", contract)
-        self.assertIn("continuing diagnosis, repair, or a changed tactic", contract)
-        self.assertIn("execution context cannot carry the next necessary act", contract)
-        self.assertIn("compact handoff", contract)
-        self.assertIn("That ends only the worker attempt, not the outcome", contract)
+        self.assertIn("preserving independent accepted work", contract)
+        self.assertIn("missing knowledge", contract)
+        self.assertIn("show --revision SHA256", contract)
+        # Outcome/lifecycle guidance has one producing owner instead of duplicate packet prose.
+        ingress = worker_result_ingress_contract()
+        self.assertIn("only disproves the current strategy", ingress)
+        self.assertIn("abandon only that attempt", ingress)
 
     def test_fresh_restart_prompt_includes_exact_owner_reason(self) -> None:
         prompt = coordinator_prompt(
@@ -1363,11 +1352,12 @@ class CoordinatorSupervisorTests(unittest.TestCase):
 
         self.assertIn("complete pending section of .de67/mutation-suggestions.md is mandatory owner input", prompt)
         self.assertIn("repair the earliest preventable systemic cause", prompt)
-        self.assertIn("separate immediate recovery from repeatable method correction", prompt)
-        self.assertIn("reproduction or counterexample that could expose the original failure", prompt)
-        self.assertIn("preserve the gate and state the exact remaining uncertainty", prompt)
+        self.assertIn("Separate immediate recovery from repeatable method correction", prompt)
+        self.assertIn("prove the correction with a reproduction or counterexample", prompt)
+        self.assertIn("preserve that entry and state the exact gap", prompt)
         self.assertIn("external supervisor alone launches the successor", prompt)
-        self.assertIn("`  - Subtasks:`", prompt)
+        self.assertIn("coordinator_ledger_contract()", prompt)
+        self.assertIn("when a ledger change makes it relevant", prompt)
         self.assertNotIn("test-and-task-guidelines.md", prompt)
         self.assertNotIn("Read the exact live selected mutation target", prompt)
         self.assertNotIn("deadline_harness.py", prompt)
@@ -1463,7 +1453,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("complete pending section of .de67/mutation-suggestions.md is mandatory owner input", reviewer_prompt)
         self.assertIn("repair the earliest preventable systemic cause", reviewer_prompt)
         self.assertIn("reproduction or counterexample", reviewer_prompt)
-        self.assertIn("durably resolve the gate", reviewer_prompt)
+        self.assertIn("Resolve the gate only after every pending entry is dispositioned", reviewer_prompt)
         self.assertIn("external supervisor alone launches the successor", reviewer_prompt)
         self.assertNotIn("orchestrator-guidelines.md", reviewer_prompt)
         self.assertNotIn("test-and-task-guidelines.md", reviewer_prompt)
@@ -2272,12 +2262,10 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.run_root / "active-ledger-continuation" / "prompt.txt"
         ).read_text(encoding="utf-8")
         self.assertNotIn("orchestrator-guidelines.md", continuation_prompt)
-        self.assertIn(live_coordination_contract(), continuation_prompt)
-        self.assertIn(worker_result_ingress_contract(), continuation_prompt)
-        self.assertIn("findings are state events", continuation_prompt)
-        self.assertIn("minimal action brief", continuation_prompt)
-        self.assertIn("freely rewrite the active work-ledger projection", continuation_prompt)
-        self.assertIn("ordinary recoverable work, not external authority", continuation_prompt)
+        # The same session retains its original contracts; continuation adds only the next action.
+        self.assertNotIn(live_coordination_contract(), continuation_prompt)
+        self.assertNotIn(worker_result_ingress_contract(), continuation_prompt)
+        self.assertIn("DE67_POLICY_DECIDE_ARGV_JSON", continuation_prompt)
 
     def test_active_clock_prevents_completion(self) -> None:
         self.write_work_documents()

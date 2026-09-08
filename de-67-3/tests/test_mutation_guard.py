@@ -590,6 +590,18 @@ class MutationGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(guard.GuardError, "crosses existing slice"):
             guard.insert_dfs_slices(dfs, dfs, "R-003", ((4, 5),))
 
+    def test_maintenance_slice_keeps_durable_identity_and_binding_checks(self):
+        text = ("<!-- DE67:DFS-SLICE:BEGIN id=DE67-MAINT-CADENCE-S001 claim=DE67-MAINT-CADENCE -->\n"
+                "- [ ] DE67-MAINT-CADENCE — Retain counted progress.\n"
+                "<!-- DE67:DFS-SLICE:END id=DE67-MAINT-CADENCE-S001 claim=DE67-MAINT-CADENCE -->\n")
+        slices = guard.parse_dfs_slices(text)
+        self.assertEqual(slices[0].claim_id, "DE67-MAINT-CADENCE")
+        self.assertEqual(guard._selected_claim_id("DE67-MAINT-CADENCE"), "DE67-MAINT-CADENCE")
+        with self.assertRaises(guard.GuardError):
+            guard.parse_dfs_slices(text.replace("claim=DE67-MAINT-CADENCE", "claim=DE67-MAINT-OTHER", 1))
+        with self.assertRaises(guard.GuardError):
+            guard.parse_dfs_slices(text.replace("DE67-MAINT-", "UNBOUND-"))
+
     def test_dfs_slice_parser_rejects_crossed_duplicate_and_fenced_markers(self) -> None:
         crossed = (
             "<!-- DE67:DFS-SLICE:BEGIN id=R-001-S001 claim=R-001 -->\n"
@@ -1476,6 +1488,26 @@ class MutationGuardTests(unittest.TestCase):
         result, output = self.run_random_review_cli(state, cycle)
         self.assertEqual(result, 0, output)
         self.assertIn("guarded no-op", output)
+
+    def test_random_review_repairs_missing_status_delimiter_without_new_work(self) -> None:
+        state, cycle = self.random_review_state(2)
+        original = (self.baseline / guard.DFS_FILE).read_text(encoding="utf-8")
+        original += (
+            "\n<!-- DE67:DFS-SLICE:BEGIN id=R-099-S001 claim=R-099 -->\n"
+            "Required behavior and proof remain unchanged.\n\n"
+            "- [ ] 🔴 R-099 — Existing unaccepted outcome.\n"
+            "<!-- DE67:DFS-SLICE:END id=R-099-S001 claim=R-099 -->\n"
+        )
+        (self.baseline / guard.DFS_FILE).write_text(original, encoding="utf-8")
+        repaired = original.replace("- [ ] 🔴 R-099", "Implementation status:\n\n- [ ] 🔴 R-099")
+        (self.candidate / guard.DFS_FILE).write_text(repaired, encoding="utf-8")
+        result, output = self.run_random_review_cli(state, cycle)
+        self.assertEqual(result, 0, output)
+        for invalid in (repaired.replace("[ ] 🔴 R-099", "[x] R-099"),
+                        repaired.replace("proof remain unchanged", "proof is waived")):
+            (self.candidate / guard.DFS_FILE).write_text(invalid, encoding="utf-8")
+            result, output = self.run_random_review_cli(state, cycle)
+            self.assertEqual(result, 1, output)
 
     def test_random_dfs_review_preserves_frozen_contract(self) -> None:
         state, cycle = self.random_review_state(2)

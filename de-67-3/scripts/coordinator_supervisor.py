@@ -25,7 +25,9 @@ from blocker_adapter import (
     parse_adapter_command,
     safe_wait_for_reply,
 )
+from instruction_context import common_guidance
 from deadline_harness import DeadlineError, DeadlineHarness
+from policy_kernel import current_owner_contract, worker_selection_contract
 from repository_checkpoint import (
     RepositoryCheckpointError,
     checkpoint_repository,
@@ -798,113 +800,92 @@ def dfs_has_open_work(workspace: Path) -> bool:
 
 
 def ordinary_worker_evidence_contract() -> str:
-    """Return the reusable evidence-retrieval contract for ordinary workers."""
-    return (
-        "Before dispatch or retirement, refresh the existing ledger item's Current handoff: "
-        "what is proved, what is still running with exact handles and a status query, the first "
-        "unresolved step, and useful evidence links. Replace superseded process status and tactics; "
-        "completed administrative restarts are not pending work. Historical receipts preserve proof "
-        "and no-replay facts, not current PIDs or routing permissions. Do not create another handoff "
-        "document or require a fresh read of already sufficient evidence. "
-        "Brief each ordinary worker with the outcome, current proof frontier, accepted no-replay "
-        "facts, first open boundary, exact bindings and artifacts, relevant entrypoints, and a "
-        "small initial read plan that explains why each read matters. Do not paste available bulk "
-        "or require blanket WEC, DFS, ledger, registry, report, or repository reading. The worker "
-        "inspects metadata such as source, size, freshness, repetition, and role before contents, "
-        "uses indexed narrow queries and compact operational receipts by default, keeps complete "
-        "audit output in digest-bound artifacts, "
-        "and preserves the first relevant divergence as a diagnostic anchor while continuing "
-        "diagnosis, repair, or a changed tactic inside the assigned outcome. Evidence bounds come "
-        "from the current claim, "
-        "never a fixed quota. A larger read remains available when deleting it would leave that "
-        "claim unproved. When the execution context cannot carry the next necessary act, the worker "
-        "returns the structured compact handoff needed for a durable continuation receipt. That "
-        "receipt names exact evidence and bindings, material changes, tests and live actions, the "
-        "first open causal boundary, narrow follow-up queries, and work that must not be replayed. "
-        "That ends only the worker attempt, not the outcome."
-    )
+    return ('Select task context around the assigned outcome: established premises, missing knowledge, '
+            'source/scenario/evidence entrypoints, constraints and ownership. Discovery may itself be '
+            'the bounded assignment; do not manufacture a scout for a known route. Dispatch prepares '
+            'the ledger assignment and current frontier automatically, including a valid zero-bundle '
+            'brief. To supply a custom selection use context_library.py --workspace WORKSPACE --task '
+            'TASK: put --name NAME --source PATH [--kind skill] [--dependency SOURCE_OR_EVIDENCE]; '
+            'reuse --name NAME --revision SHA256; prepare --brief PATH [--bundle NAME ...] '
+            '[--handoff PATH]. Dependencies bind the facts behind a summary, not just the summary file. '
+            'catalog shows metadata; show --revision SHA256 [--section HEADING] retrieves exact text; '
+            'assemble previews selection. Limits are visible in catalog and adjustable from evidence; '
+            'replace stale/irrelevant knowledge at capacity rather than truncating constraints. '
+            'A changed task assignment invalidates its custom preparation; refresh selection or use '
+            'a successor task while preserving independent accepted work. Material premise changes '
+            'require explicit correction to affected live workers; issued packets remain immutable. '
+            'Judge actual worker input and useful returned work, not bundle counts or ceremony. '
+            'Return a material architecture, ownership or independent prerequisite decision to Sol; '
+            'ordinary investigation and changed tactics remain within worker autonomy.')
 
 
 def coordinator_ledger_contract() -> str:
     """Return the coordinator's authority over the active work projection."""
     return (
-        "Own and freely rewrite the active work-ledger projection as evidence changes. Split or "
-        "merge independently actionable work, including multiple simultaneous entries for one "
-        "still-red DFS claim. Repository-owned implementation, tooling, fixtures, scenarios, "
-        "registry bindings, and executable proof routes are ordinary recoverable work, not "
-        "external authority. A closed diagnostic or documentation gap does not strand unfinished "
-        "product proof; preserve the closed evidence and use the existing durable transitions to "
-        "project and dispatch the remaining work. Trust the agent doing repository work to change "
-        "the implementation, harness, fixtures, or observation path when that is the shortest honest "
-        "route to proof. Trust the agent coordinating the claim to retire a failed strategy and invent "
-        "a materially different implementation route; a retry fuse ends a strategy, not recoverable "
-        "work. Choose whether and how to decompose an outcome; expose subdivisions when they "
-        "help execution or explain progress. For the progress plot, prefer four to seven meaningful "
-        "spokes by grouping related steps when useful; this is a presentation preference, not a "
-        "task-count or execution constraint. Do not invent work to fill the plot. When using structured "
-        "subtasks, write a nested line exactly `  - Subtasks:` followed by rows exactly "
-        "`    - [STATE] ID :: DESCRIPTION`. STATE is open, active, done, or finding; ID is a "
-        "stable lowercase hyphenated identifier. Revise the breakdown as evidence changes, "
-        "preserving durable completed work. These rows are progress subdivisions, not "
-        "separate workers, deadline tasks, closure gaps, or acceptance gates. A proof prerequisite "
-        "that depends on its own eventual output must be split into a "
-        "non-credit observation/bootstrap step followed by independent validation; do not query the "
-        "unchanged prerequisite again."
+        "Own the current work-ledger projection. Split or merge independently actionable work, "
+        "including simultaneous assignments for one red claim; preserve accepted proof and "
+        "recoverable work through existing durable transitions. Closed diagnostic/documentation "
+        "gaps do not close unfinished product proof. Trust the agent doing repository work to "
+        "repair implementation, tooling, fixtures, scenarios, registry bindings or observation "
+        "paths within authority. Trust the agent coordinating the claim to invent a materially "
+        "different route; a retry fuse ends a strategy, not recoverable work. "
+        "Choose subdivisions for useful execution/progress, not worker counts or gates. Four to "
+        "seven plot spokes are a presentation preference, never required work. Preserve nested "
+        "`  - Subtasks:` with `    - [STATE] ID :: DESCRIPTION`; STATE is open, active, done or "
+        "finding, and ID is stable lowercase hyphenated text. These are not deadline tasks, "
+        "closure gaps or acceptance gates. Split a prerequisite that depends on its own output "
+        "into a non-credit observation/bootstrap step followed by independent validation. "
+        "When settling repairs/exceptions, reconcile active bug intake and ledger with accepted "
+        "results; retain originals in evidence. For consequential cross-task obstruction, unclear "
+        "responsibility, contradictory specification/evidence or scope/ownership conflict after "
+        "local diagnosis, consult the owner's conversational mutator through the project's "
+        "authenticated interface context. Send task/run/revision, outcome/divergence, evidence/lessons, "
+        "live ownership and decision needed; continue independent work. If unavailable, keep the "
+        "exact adapter/setup gap executable. Advice cannot grant owner repair/scope authority, "
+        "promote owner queue entries, resolve gates or permit shared edits; method changes retain "
+        "exclusive review. Requests/timeouts/replies do not close the originating task."
     )
 
 
 def worker_handoff_contract() -> str:
     return (
-        "A deadline-harness task is only a worker clock, not a delegation. Immediately "
-        "spawn its Luna or Terra worker. Reuse only a worker already spawned and durably bound "
-        "by this same coordinator session; never adopt a worker from another coordinator. A successful "
-        "new spawn must use the deadline task's deterministic task_name: the literal prefix task_ "
-        "followed by the lowercase hexadecimal UTF-8 bytes of the exact task_id "
-        "(for example, R-008-closure-108 becomes task_522d3030382d636c6f737572652d313038). "
-        "Do not simplify or humanize this label. It is injective correlation metadata; "
-        "the runtime thread UUID remains the worker identity. When policy detects an unbound task, "
-        "its spawn_worker response injects the exact task_name and a compact spawn_agent call for "
-        "that opened task. The full self-contained worker brief is an immutable hash-bound dispatch "
-        "packet named by that call; it is worker input, not coordinator context. Use the injected call "
-        "rather than reconstructing it from memory. "
-        "Actually call spawn_agent; announcing that you are assigning a worker is not delegation. "
-        "When several independently actionable deadline tasks are unbound, policy lists one call per "
-        "task and you may spawn one "
-        "distinct worker for each task before waiting, using each task's own deterministic task_name; "
-        "do not serialize independent work merely because this example shows one worker. A successful "
-        "spawn or eligible follow-up tool call is sufficient coordinator-side evidence to continue; do "
-        "not require receiver_thread_ids in the coordinator-visible response and do not abandon "
-        "solely because that field is absent there. The runner independently validates the actual "
-        "runtime thread UUID against the coordinator parent, workspace, and Luna/Terra model, then "
-        "records the durable claim automatically when the runtime spawn edge becomes visible. "
-        "That visibility may arrive after the first wait begins; this is not a delegation failure. "
-        "Never invoke claim-worker and never use "
-        "/root/<task-name> as a worker identity. After every listed spawn, continue live coordination; "
-        "call wait_agent when no useful coordination decision remains. Do not finish while a worker "
-        "result is outstanding. If no verified roster "
-        "handoff exists when the coordinator process exits, the runner abandons the attempt. "
-        "After a verified handoff, remain in the worker-result lifecycle: an empty or timed wait "
-        "is not completion. Reassess useful coordination or wait again; record a returned terminal "
-        "result before routing or exiting."
+        "Before opening focused exploration, record its outcome and exit condition as "
+        "`  - Assignment TASK-ID: ...` in the existing ledger; keep independent assignments separate. "
+        "Whole-claim assignments remain valid; broader product scope is context for narrower tasks. "
+        "Sol owns a compact code-grounded brief before substantial playtesting: behavior, actual "
+        "actor/owner, necessary conditions, discriminating actions/observations and evidence limits. "
+        "Reuse current facts through context_library.py; use bounded Luna research for missing "
+        "premises and Terra for hard diagnosis when useful, without a mandatory scout chain. "
+        "Select accepted results and the first open boundary, not attempt history; refresh changed "
+        "dependencies and verify actual packet input/use. Workers choose and adapt execution. "
+        "Opening a clock does not delegate. Actually call spawn_agent using the kernel's "
+        "exact task_name, fork_turns and hash-bound packet arguments and one explicit model_choices "
+        "capability; do not inherit coordinator history. The full packet is worker input, not coordinator context. "
+        "Independently actionable opened tasks need one distinct worker each before waiting, with "
+        "exclusive edit/runtime ownership. Reuse only workers durably bound by this coordinator. "
+        "The runner validates the actual runtime UUID, coordinator parent and workspace and records the claim; "
+        "visibility may arrive during waiting. Do not require receiver_thread_ids or invoke claim-worker. "
+        "A /root/<task-name> is not a worker UUID. Continue live coordination; wait when no useful "
+        "decision remains. A timeout is not completion. Record returns before routing or exiting; "
+        "do not finish while a worker result is outstanding. Attempts without verified handoff are abandoned."
     )
 
 
 def nested_worker_contract() -> str:
-    """Keep optional primary-worker helpers native and outside durable task ownership."""
-    return (
-        "A primary Luna or Terra worker may optionally spawn Luna-only native helpers for independent "
-        "work with "
-        "fork_turns=\"none\", self-contained briefs, and worker-selected reasoning effort. "
-        "Do not open deadline tasks, ledger entries, or claims for helpers. The primary worker "
-        "retains the assigned outcome, may work or wait while helpers run, judges their results, "
-        "and collects or stops them before returning. Give helpers explicit exclusive ownership before "
-        "overlapping edits or shared mutable runtime operations."
-    )
+    return ('Sol and primary workers may use native Luna helpers with fork_turns="none", '
+            'an explicit model and suitable effort. Helpers need no deadline task, DFS slice, '
+            'ledger entry or claim, and never own coordinator state. If unavailable, use bounded '
+            'local retrieval. The caller owns the result and collects or stops helpers before return.')
 
 
 def worker_result_ingress_contract() -> str:
     """Order a verified worker return before ledger-derived route selection."""
     return (
+        "Keep owner execution corrections in the marked current owner-contract section of .de67/WEC.md "
+        "as pending instructions until the responsible worker acknowledges them and returns applied "
+        "evidence, or an explicit deferral reason. The ledger is a replaceable projection, not their "
+        "sole store. Send relevant changes to a live worker with native messaging; new briefs already "
+        "include the marked owner contract. Verify receipt and use, not just file preservation. "
         "Native progress messages and questions from a live worker are nonterminal conversation: "
         "respond when useful without demanding a result receipt, pausing the task, or creating a "
         "ledger item for each observation. Use checkpoint-worker only when evidence needs durable "
@@ -915,14 +896,23 @@ def worker_result_ingress_contract() -> str:
         "A return that only disproves the current strategy is nonterminal even when the worker names "
         "no successor. If the assigned outcome still has an authorized repository repair, rerun, "
         "observation, or materially different implementation route, preserve the returned evidence "
-        "and choose the next route. Use checkpoint-worker and keep the same task live only while the "
-        "next turn supplies new "
-        "evidence, a new affordance, or a materially different strategy that the bound worker can "
-        "execute. If its execution context is exhausted or the next message would repeat an unchanged "
-        "request, preserve a compact no-replay handoff, abandon only that attempt, keep the unfinished "
+        "and choose the next route. Use checkpoint-worker and keep the same task live. "
+        "Resume the bound worker through followup_task when its accumulated understanding remains "
+        "useful, including questions, partial returns, failed tests, diagnosis, repair, and verification. "
+        "A changed tactic alone does not require fresh context. Consider a fresh worker for substantially "
+        "different context or concrete evidence that the existing worker cannot continue effectively. "
+        "Ending an assignment and interrupting execution are separate decisions: completion, cancellation, "
+        "a concrete need to stop ongoing actions, or demonstrated inability can justify stopping; "
+        "communication and partial results alone do not. "
+        "If its execution context is exhausted, preserve accepted proof plus why the attempt was "
+        "inconclusive, abandon only that attempt, keep the unfinished "
         "ledger outcome visible, and project its remaining frontier to a fresh task after any required "
         "incident review. Context exhaustion is not a formal finding or an assigned-outcome exit. "
-        "Before every terminal transition, persist one identity-bound worker result receipt through "
+        "When accepting returned work, reconcile all worker/helper game attempts, including failed "
+        "startups and replacements, against their PID/birth identity and broker. Arrange graceful "
+        "closure through the responsible owner or an explicit retained-session handoff; a finished "
+        "report or hidden window is not OS exit. Preserve an exact cleanup blocker without erasing "
+        "valid gameplay proof. Before every terminal transition, persist one identity-bound worker result receipt through "
         "record-worker-receipt. It preserves the achieved outcome or first divergence, material "
         "repository/runtime changes, journal entries, tests and live actions, evidence ceilings, "
         "exact continuation bindings and artifacts, accepted no-replay work, first remaining "
@@ -1011,31 +1001,19 @@ def coordinator_context_contract() -> str:
 
 
 def live_coordination_contract() -> str:
-    """Allow useful coordination while execution remains with cheaper workers."""
+    return 'Use native send_message for live questions and steering; workers address /root. Use followup_task to start an idle bound worker. Sol owns direction and scope: establish enough code behavior, test premises and constraints for a meaningful experiment; turn unknown material premises into bounded investigation instead of hidden assumptions. When execution reveals a substantial independent tooling problem, decide who owns it without interrupting useful live state or handing off merely for a changed tactic. After hard diagnosis, reassess whether Luna can perform substantial remaining execution at lower total cost. Integrate shared repairs and accepted independent results; carry forward current findings rather than the journey when the context changes. Notice recurring context/tool obstructions in worker evidence and commission a bounded repair through the existing work ledger; validate that it removes the demonstrated repetition. DE67 method edits retain exclusive mutation/guard ownership. Do not convert worker discovery transcripts into coordinator context or request parallel summaries, periodic reports or new receipts. Use current-root token_usage in work_context as feedback with helper/handoff costs; distinguish expected savings from measured use, never quotas. When no useful coordination decision remains, wait_agent, waking no later than the item deadline; apply policy at routing transitions.'
+
+
+def coordinator_continuation_prompt() -> str:
+    """Resume the same session without replaying its stable role contracts."""
     return (
-        "Communication channels: use native send_message(target=..., message=...) for live "
-        "questions, answers, and steering, addressing the worker by its returned agent id or "
-        "canonical task name. Workers send progress and questions to their parent at /root. "
-        "Messages are delivered during active work and wake wait_agent; they do not terminate "
-        "the task. send_message does not start an idle worker turn: use followup_task to resume "
-        "an idle bound worker with useful next work in its existing assignment. Worker final "
-        "responses enter the result lifecycle described above. "
-        "While a worker runs, choose what can advance the assigned outcomes: inspect relevant "
-        "evidence, watch an informative run, ask or answer a question through native send_message, "
-        "steer the bound worker, or revise the executable ledger route and brief as evidence changes. "
-        "Keep implementation and substantial investigation with Luna or Terra; your own inspection "
-        "should inform coordination rather than duplicate their work. You may open and dispatch "
-        "independently actionable work through the existing policy and deadline transitions while "
-        "another task stays live. Preserve one primary worker per task and exclusive ownership of "
-        "overlapping edits or mutable runtime state. A follow-up to a busy worker continues its "
-        "existing task; it does not assign an unrelated queued task. Preserve the frozen DFS "
-        "outcome and evidence boundaries when changing the route. Treat observations as evidence "
-        "to judge: keep ordinary repair inside its outcome, and create separate work only when it "
-        "needs independent ownership or a durable decision. Progress messages need no quota, "
-        "periodic report, or automatic ledger entry. When no useful coordination decision remains, "
-        "call wait_agent for worker events, waking no later than the item deadline; avoid repeated "
-        "unchanged reads and status chatter. Deadline, integrity, and mutation gates still govern "
-        "every routing transition."
+        "Continue the same DE-67 coordinator lifecycle under the role contracts already in this "
+        "session. Ordinary worker results and findings are state events, not a reason to stop. "
+        "Ingest any pending worker return under the existing receipt contract before routing; "
+        "otherwise execute DE67_POLICY_DECIDE_ARGV_JSON without a shell for the next action brief. "
+        "Use current state and changed evidence, not a replay of prior instructions or history. "
+        "Continue live coordination; wait_agent when no useful decision remains while workers "
+        "are outstanding. The supervisor still owns process and restart transitions.\n"
     )
 
 
@@ -1049,16 +1027,29 @@ def coordinator_prompt(
 ) -> str:
     lines = [
         f"Act as a fresh Phase-3 delivery coordinator in {workspace}.",
+        common_guidance(workspace),
         worker_result_ingress_contract(),
         "Do not read packaged DE-67 SKILL.md, kernel, role, reference, or guideline prose during delivery.",
         "The hash-bound .de67/phase3-policy.d67 file is the machine-canonical routing policy.",
         "Before each coordinator routing transition, execute the argument array in DE67_POLICY_DECIDE_ARGV_JSON as a subprocess without a shell.",
+        current_owner_contract(workspace),
+        "Before selecting work, read the current DFS and reconcile the active ledger with its refrozen outcomes. Historical acceptances preserve earlier proof; only the current owner contract decides whether fresh proof is required.",
         coordinator_context_contract(),
+        "Current work, independent task results, receipt search, recorded dispatch relationships and runner "
+        "metadata and latest-assigned coordinator-tree token usage are available from this argument array: " + json.dumps([
+            sys.executable, str(Path(__file__).with_name("work_context.py")),
+            "--workspace", str(workspace), "--state", str(state_path), "--lineage", lineage_id])
+        + ". Narrow by --claim, --task, --receipt or --contains; --full retains every matching receipt. "
+        "Use --usage for token usage only and --usage --full for source coverage and freshness. "
+        "The infrastructure indexes existing records automatically. Choose relevant context and use a "
+        "local query or Luna helper for a specific unresolved extraction or interpretation question. "
+        "Packets preserve independent contributions and exact references; shared claim or recency alone "
+        "does not establish predecessor authority. Missing context remains visible and merits targeted discovery.",
         live_coordination_contract(),
         "Write every owner-facing text field rendered on the hosted dashboard in simple English. This includes ledger items, latest findings, waiting work, mutation or incident summaries, and any DFS summary that the dashboard displays. First explain what happened and why it matters in terms any reader can understand. Then preserve the necessary technical identifiers and evidence, state what remains or happens next, and use one concrete statement per sentence. If the simple explanation exposes a contradiction or a missing causal step, record that problem instead of hiding it behind technical language. Internal machine state and DFS detail that the dashboard does not display do not need this rewrite.",
         "Never review, apply, or resolve a mutation. When the compiled policy says retire_for_mutation_review, dispatch no worker, make no guidance change, and exit immediately so the external supervisor can run the exclusive reviewer.",
         "Do not infer policy from workspace guideline prose; those files are legacy differential fixtures on this branch.",
-        "For every worker, explicitly select gpt-5.6-luna or gpt-5.6-terra: Luna for clear execution and Terra for debugging/discovery. Effort low-max: lowest sufficient for complexity/research. Never Sol.",
+        worker_selection_contract(),
         "For every newly spawned ordinary worker, set fork_turns=\"none\" and provide a self-contained task brief. Never omit model selection or pass coordinator or predecessor history. Reusing an already relevant worker remains allowed.",
         coordinator_ledger_contract(),
         ordinary_worker_evidence_contract(),
@@ -1088,6 +1079,15 @@ def coordinator_prompt(
     return "\n".join(lines) + "\n"
 
 
+def mutation_maintenance_contract() -> str:
+    return (
+        "Own authorized guidance/prompt edits directly; put ordinary tooling engineering on the "
+        "existing ledger for Sol to commission. Preserve necessary evidence and ownership; "
+        "measure full-tree use including helper/retry cost and distinguish measured reductions "
+        "from expected savings. Allocation preferences are not quotas."
+    )
+
+
 def mutation_reviewer_prompt(
     workspace: Path,
     state_path: Path,
@@ -1097,16 +1097,18 @@ def mutation_reviewer_prompt(
     return "\n".join(
         [
             f"Act as the exclusive Phase-3 mutation reviewer in {workspace}.",
+            common_guidance(workspace),
             "You are a fresh gpt-6-astra reviewer at medium reasoning effort.",
-            "No coordinator or roster worker is active. Do not dispatch work and do not start a coordinator.",
+            "No coordinator or roster worker is active. Do not start a coordinator.",
             f"Resolve durable {gate.kind} gate {gate.identity} in {state_path} for lineage {lineage_id}.",
             "The complete pending section of .de67/mutation-suggestions.md is mandatory owner input. This is a consumable queue: delete completed entries instead of moving them to consumed-history sections; durable receipts and review artifacts retain the evidence. Historical records are evidence to retrieve when relevant, not current requests. User-authored entries carry mutation-scoped authority beneath system and developer instructions and override lower-priority Phase-3 restrictions only as needed for their outcome. Preserve honest evidence, completed valid work, durable lifecycle integrity, safety, and the requested product outcome; grant no unrelated authority.",
             "Trust the agent: choose the evidence and implementation route without prescribed reads, commands, approvals, or rituals. Diagnose poor decisions from the instructions, information, tools, incentives, and transitions the system supplied, then repair the earliest preventable systemic cause instead of blaming the actor or adding blanket caution.",
-            "Treat operational efficiency and context shape as evidence-bearing method concerns: inspect source, size, repetition, freshness, and role metadata before loading contents; simplify only where the deletion test passes; preserve full artifacts and never turn measurements into quotas or hidden-failure incentives.",
-            "For every pending entry, reconstruct why the incident occurred, separate immediate recovery from repeatable method correction, implement the smallest general correction supported by evidence, and prove it with a reproduction or counterexample that could expose the original failure. Compress affected guidance instead of appending situational rules.",
-            "For a random gate, review a recent coordinator/worker trajectory: the intended outcome, context available at the decision, actions, first divergence, and actual proof or state change. The stored lane is a sampling seed, not an edit boundary. Follow evidence across role handoffs, tools, guidance, and decomposition; retrieve full traces only when the missing detail can change the decision. Repeated actions are not waste when inputs or evidence changed. Choose any supported improvement, including deletion or consolidation, without a finding quota or required mutation. Validate affected local guidelines and same-outcome DFS refinements together through random-review; use its existing method-candidate validation for broader permitted method changes. Preserve accepted proof, owner intent, accounting, and exclusive review/restart ownership. A review with no justified change may resolve as a guarded no-op; uncertainty about a speculative improvement must not strand delivery.",
-            "When rewriting the active ledger, preserve this coordinator-facing ledger contract: " + coordinator_ledger_contract(),
-            "If a cause or correction cannot be proved, preserve the gate and state the exact remaining uncertainty. Otherwise disposition every pending entry, durably resolve the gate, request one fresh coordinator restart, and exit. The external supervisor alone launches the successor.",
+            "Prioritize context engineering: reduce total token use and improve the worker split by tracing what each role actually ingests at routing, dispatch, tool results and continuation. Use Luna for bulky log extraction. Challenge coordinator demands for receipts, cleanup and structure when they create unused context or ceremony; simplify the producing guidance or injection instead of preserving workflow convention. Keep necessary evidence and ownership intact, preserve retrievable artifacts, and distinguish measured reductions from expected savings. Do not turn allocation preferences into quotas.",
+            mutation_maintenance_contract(),
+            "Disposition every pending owner entry. Trace enough supplied context, actions and results to distinguish material causes and validate the smallest supported correction. Further examples or full traces earn their place only when missing detail can change the correction, safety, validation or outcome assessment. Preserve unresolved attribution honestly instead of completing a narrative. Separate immediate recovery from repeatable method correction, prove the correction with a reproduction or counterexample, and compress affected guidance instead of appending situational rules.",
+            "For a periodic gate, look across recent coordinator and worker activity for a useful simplification or repair. Follow the strongest evidence of friction or wasted context; the stored random lane is legacy scheduling metadata, not a target or scope requirement. Trace a relevant trajectory from intended outcome through supplied context and actions to actual proof or state change. Follow evidence across role handoffs, tools, guidance, and decomposition; retrieve full traces only when the missing detail can change the decision. Repeated actions are not waste when inputs or evidence changed. Choose any supported improvement, including deletion or consolidation, without a finding quota or required mutation. Validate affected local guidelines and same-outcome DFS refinements together through random-review; use its existing method-candidate validation for broader permitted method changes. Preserve accepted proof, owner intent, accounting, and exclusive review/restart ownership. A review with no justified change may resolve as a guarded no-op; uncertainty about a speculative improvement must not strand delivery.",
+            "If changing the active ledger, preserve accepted proof and recoverable work, independent same-claim assignments and the existing subdivision syntax. Its full coordinator-facing contract is coordinator_ledger_contract() in coordinator_supervisor.py; inspect that contract when a ledger change makes it relevant.",
+            "If uncertainty prevents proving a necessary correction, preserve that entry and state the exact gap. Unproved speculative attribution alone does not strand an otherwise supported correction. Resolve the gate only after every pending entry is dispositioned, record the review evidence and request one fresh coordinator restart. The external supervisor alone launches the successor; an owner-ordered stop remains in force until an authorized start.",
         ]
     ) + "\n"
 
@@ -1282,29 +1284,7 @@ def run_child(
             workspace, state_path, lineage_id, run_id, generation, restart_reason
         )
     else:
-        prompt = (
-            "Continue the same DE-67 coordinator lifecycle. Ordinary worker results "
-            "and findings are state events, not a reason to stop. "
-            + worker_result_ingress_contract()
-            + " Before any other action, execute "
-            "DE67_POLICY_DECIDE_ARGV_JSON without a shell and obey its minimal action brief. "
-            "Worker: Luna for clear execution; Terra for debugging/discovery. Effort low-max: "
-            "lowest sufficient for complexity/research. Never Sol. Every newly spawned ordinary "
-            "worker must use fork_turns=\"none\" and a self-contained brief; never omit model "
-            "selection or pass coordinator or predecessor history. "
-            + coordinator_context_contract()
-            + " "
-            + live_coordination_contract()
-            + " "
-            + coordinator_ledger_contract()
-            + " "
-            + ordinary_worker_evidence_contract()
-            + " "
-            + worker_handoff_contract()
-            + " "
-            + nested_worker_contract()
-            + "\n"
-        )
+        prompt = coordinator_continuation_prompt()
     if decision_opportunity > 1:
         prompt = prompt.rstrip() + "\n" + coordinator_recovery_contract(
             decision_opportunity, workspace

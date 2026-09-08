@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "de-67-3" / "scripts"))
 
 from workspace_setup import (  # noqa: E402
     CONFIG_RELATIVE_PATH,
@@ -25,6 +26,7 @@ from workspace_setup import (  # noqa: E402
     push_checkpoints,
 )
 import workspace_setup  # noqa: E402
+from instruction_context import common_guidance  # noqa: E402
 
 MODULE_PATH = Path(workspace_setup.__file__).resolve()
 
@@ -87,6 +89,74 @@ class WorkspaceSetupTests(unittest.TestCase):
             "# Feature DFS\n\nStatus: Frozen against inspected source baseline\n",
             encoding="utf-8",
         )
+
+    def accepted_projection(self) -> None:
+        self.freeze_dfs()
+        environment = self.workspace / ".de67"
+        (environment / "DFS.md").write_text(
+            "# DFS\nStatus: Refrozen\n"
+            "<!-- DE67:DFS-SLICE:BEGIN id=R-001-S001 claim=R-001 -->\n"
+            "Current contract remains outside the historical projection.\n"
+            "Implementation status:\n\n"
+            "- [ ] 🔴 R-001 — Proof remains open.\n"
+            "<!-- DE67:DFS-SLICE:END id=R-001-S001 claim=R-001 -->\n"
+            "- [ ] 🔴 R-002 — Fresh campaign proof remains open.\n",
+            encoding="utf-8",
+        )
+        (environment / "work-ledger.md").write_text(
+            "- [x] R-001 — Historical proof accepted.\n", encoding="utf-8"
+        )
+        self.git(self.workspace, "add", ".de67/DFS.md")
+        self.git(self.workspace, "commit", "-m", "red baseline")
+        with workspace_setup._deadline_harness_class()(
+            self.workspace / DEADLINE_STATE_RELATIVE_PATH
+        ) as harness:
+            harness.start_task("project", "explore", "R-001", 100, now=0)
+            harness.complete_task("project", "explore", "route proved", now=1)
+            harness.transition_claim_to_closure(
+                "project", "R-001", "explore", "Close it.", "Run it.",
+                "Independent proof remains.", now=2,
+            )
+            harness.start_task("project", "closure", "R-001", 100, phase="closure", now=3)
+            harness.complete_task("project", "closure", "proof complete", now=4)
+            harness.accept_claim("project", "R-001", "closure", "accepted proof", now=5)
+
+    def test_refreeze_setup_rejects_incompatible_projection_before_push(self) -> None:
+        self.accepted_projection()
+        dfs = self.workspace / ".de67/DFS.md"
+        dfs.write_text(dfs.read_text().replace("Implementation status:", "Historical acceptance:"))
+        state = self.workspace / DEADLINE_STATE_RELATIVE_PATH
+        before = state.read_bytes()
+        with patch.object(workspace_setup, "push_checkpoints") as push:
+            with self.assertRaisesRegex(SetupError, "no implementation status block for R-001"):
+                configure(self.workspace, [("origin", "dev")], bind_clock=True,
+                          worker_capabilities=VERIFIED_WORKERS)
+        push.assert_not_called()
+        self.assertEqual(state.read_bytes(), before)
+        self.assertFalse((self.workspace / CONFIG_RELATIVE_PATH).exists())
+
+    def test_refreeze_projection_preserves_history_and_fresh_obligations(self) -> None:
+        self.accepted_projection()
+        environment = self.workspace / ".de67"
+        (environment / "work-ledger.md").write_text(
+            "- [ ] 🔴 R-002 — Fresh campaign proof remains open.\n"
+        )
+        paths = [environment / "DFS.md", environment / "work-ledger.md",
+                 self.workspace / DEADLINE_STATE_RELATIVE_PATH,
+                 environment / "state/dfs-status-baselines.json"]
+        before = {path: path.read_bytes() for path in paths}
+        workspace_setup._validate_dfs_projection(self.workspace, paths[2])
+        self.assertEqual({path: path.read_bytes() for path in paths}, before)
+
+    def test_refreeze_preflight_recovers_committed_baseline_only_in_copy(self) -> None:
+        self.accepted_projection()
+        baseline = self.workspace / ".de67/state/dfs-status-baselines.json"
+        baseline.unlink()
+        state = self.workspace / DEADLINE_STATE_RELATIVE_PATH
+        before = state.read_bytes()
+        workspace_setup._validate_dfs_projection(self.workspace, state)
+        self.assertFalse(baseline.exists())
+        self.assertEqual(state.read_bytes(), before)
 
     def test_configuration_pushes_backlog_and_post_commit_pushes_next_head(self) -> None:
         backlog = self.commit_file("tracked.txt", "two\n", "backlog")
@@ -582,6 +652,105 @@ class WorkspaceSetupTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertEqual(bound, ("empty-state-lineage",))
+
+    def test_phase_two_guidance_source_records_audited_baseline_without_editing_agents(self) -> None:
+        self.freeze_dfs()
+        agents = self.workspace / "AGENTS.md"
+        custom = "# Project notes\n\nKeep this custom instruction.\n"
+        agents.write_text(custom, encoding="utf-8")
+        global_source = self.root / "global-AGENTS.md"
+        global_source.write_text("shared effective rules\n", encoding="utf-8")
+
+        result = configure(
+            self.workspace,
+            [("origin", "dev")],
+            bind_clock=True,
+            worker_capabilities=VERIFIED_WORKERS,
+            guidance_source=global_source,
+        )
+
+        self.assertEqual(agents.read_text(encoding="utf-8"), custom)
+        guidance = result["guidance"]
+        self.assertTrue(guidance["effective"])
+        self.assertFalse(guidance["fallback"])
+        self.assertEqual(guidance["source"], str(global_source.resolve()))
+
+    def test_phase_two_missing_guidance_source_preserves_custom_agents_without_a_duplicate_copy(self) -> None:
+        self.freeze_dfs()
+        agents = self.workspace / "AGENTS.md"
+        custom = "# Project notes\n\nKeep this custom instruction.\n"
+        agents.write_text(custom, encoding="utf-8")
+
+        first = configure(
+            self.workspace,
+            [("origin", "dev")],
+            bind_clock=True,
+            worker_capabilities=VERIFIED_WORKERS,
+        )
+        once = agents.read_text(encoding="utf-8")
+        second = configure(
+            self.workspace,
+            [("origin", "dev")],
+            bind_clock=True,
+            worker_capabilities=VERIFIED_WORKERS,
+        )
+
+        self.assertEqual(once, custom)
+        self.assertEqual(agents.read_text(encoding="utf-8"), once)
+        self.assertTrue(first["guidance"]["fallback"])
+        self.assertFalse(first["guidance"]["effective"])
+        self.assertEqual(second["guidance"], first["guidance"])
+        self.assertTrue(common_guidance(self.workspace))
+
+    def test_phase_two_reuses_an_unchanged_audited_guidance_source(self) -> None:
+        self.freeze_dfs()
+        source = self.root / "global-AGENTS.md"
+        source.write_text("effective baseline\n", encoding="utf-8")
+        first = configure(
+            self.workspace, [("origin", "dev")], bind_clock=True,
+            worker_capabilities=VERIFIED_WORKERS, guidance_source=source,
+        )
+        second = configure(
+            self.workspace, [("origin", "dev")], bind_clock=True,
+            worker_capabilities=VERIFIED_WORKERS,
+        )
+        self.assertEqual(second["guidance"], first["guidance"])
+
+    def test_phase_two_rejects_missing_explicit_guidance_source(self) -> None:
+        self.freeze_dfs()
+        with self.assertRaisesRegex(SetupError, "Guidance source is not a readable file"):
+            configure(
+                self.workspace,
+                [("origin", "dev")],
+                bind_clock=True,
+                worker_capabilities=VERIFIED_WORKERS,
+                guidance_source=self.root / "missing-AGENTS.md",
+            )
+
+    def test_phase_two_guidance_reconciliation_preserves_existing_config_fields(self) -> None:
+        self.freeze_dfs()
+        configure(
+            self.workspace,
+            [("origin", "dev")],
+            bind_clock=True,
+            worker_capabilities=VERIFIED_WORKERS,
+        )
+        config_path = self.workspace / CONFIG_RELATIVE_PATH
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["user_preserved_field"] = {"note": "leave this alone"}
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+
+        configure(
+            self.workspace,
+            [("origin", "dev")],
+            bind_clock=True,
+            worker_capabilities=VERIFIED_WORKERS,
+        )
+
+        self.assertEqual(
+            json.loads(config_path.read_text(encoding="utf-8"))["user_preserved_field"],
+            {"note": "leave this alone"},
+        )
 
     def test_default_lineage_uses_primary_upstream_when_origin_is_absent(self) -> None:
         self.git(self.workspace, "remote", "rename", "origin", "primary")

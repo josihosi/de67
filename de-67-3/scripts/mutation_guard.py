@@ -28,15 +28,16 @@ CANONICAL_GUIDELINES_ROOT = SKILL_ROOT / "assets" / "environment"
 
 ATX_HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]+\S.*$")
 FENCE = re.compile(r"^[ \t]*(?P<marker>`{3,}|~{3,})")
-CLAIM_REFERENCE = r"R-[A-Za-z0-9._-]+[ \t]+—[ \t]+\S.*?"
-CLAIM_ID = re.compile(r"^R-[A-Za-z0-9._-]+$")
+CLAIM_ID_PATTERN = r"(?:R-|DE67-MAINT-)[A-Za-z0-9._-]+"
+CLAIM_REFERENCE = rf"{CLAIM_ID_PATTERN}[ \t]+—[ \t]+\S.*?"
+CLAIM_ID = re.compile(rf"^{CLAIM_ID_PATTERN}$")
 ACTIVE_ITEM = re.compile(rf"^- \[ \] (?P<reference>{CLAIM_REFERENCE})[ \t]*$")
-DFS_SLICE_ID_PATTERN = r"R-[A-Za-z0-9._-]+-S[0-9]{3,}"
+DFS_SLICE_ID_PATTERN = rf"{CLAIM_ID_PATTERN}-S[0-9]{{3,}}"
 DFS_SLICE_ID = re.compile(rf"^{DFS_SLICE_ID_PATTERN}$")
 DFS_SLICE_MARKER = re.compile(
     rf"^<!-- DE67:DFS-SLICE:(?P<kind>BEGIN|END) "
     rf"id=(?P<id>{DFS_SLICE_ID_PATTERN}) "
-    rf"claim=(?P<claim>R-[A-Za-z0-9._-]+) -->$"
+    rf"claim=(?P<claim>{CLAIM_ID_PATTERN}) -->$"
 )
 DFS_SLICE_MARKER_TOKEN = "DE67:DFS-SLICE:"
 DFS_SLICE_LEDGER_TOKEN = "DFS slices:"
@@ -939,7 +940,7 @@ def _same_claim(reference: str, label: str) -> bool:
 def _selected_claim_id(selected_claim: str) -> str:
     claim_id = _stable_key(_normalize_reference(selected_claim))
     if not CLAIM_ID.fullmatch(claim_id):
-        raise GuardError(f"Selected claim has no valid R-id: {selected_claim}")
+        raise GuardError(f"Selected claim has no valid product or maintenance id: {selected_claim}")
     return claim_id
 
 
@@ -1313,7 +1314,24 @@ def validate_dfs_expansion(before: Path, candidate: Path, task_claim_id: str) ->
 
 
 def validate_random_dfs_mutation(before: Path, candidate: Path) -> tuple[str, ...]:
-    """Allow only a same-contract append-only DFS refinement with new red work."""
+    """Allow status projection metadata repair or same-contract new red work."""
+
+    baseline = read_markdown(before)
+    proposed = read_markdown(candidate)
+    # The status heading is a parser delimiter, not a new product obligation.
+    # Admit only the canonical missing heading immediately before an existing
+    # red claim inside its matching slice. Every other byte remains protected.
+    normalized = baseline
+    for item in parse_dfs_slices(baseline):
+        if re.search(r"(?m)^Implementation status:\s*$", item.content):
+            continue
+        row = re.search(r"(?m)^- \[ \] 🔴 " + re.escape(item.claim_id)
+                        + r"(?=[ \t]+—|[ \t]*$)", item.content)
+        if row is not None:
+            content = item.content[:row.start()] + "Implementation status:\n\n" + item.content[row.start():]
+            normalized = normalized.replace(item.content, content, 1)
+    if proposed == normalized and proposed != baseline:
+        return ()
 
     return _validate_append_only_dfs(
         before,

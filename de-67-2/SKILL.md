@@ -23,8 +23,9 @@ the workspace, and checkpoints the result; the invocation agent does not duplica
 - Accept `WEC.md` as the only cross-phase input.
 - Preserve it as `.de67/WEC.md` and produce `.de67/DFS.md`; the frozen DFS is phase 3's required
   handoff.
-- Do not read or require phase-1 or phase-3 instructions, ledgers, or artifacts. The shared
-  workspace-setup helper is infrastructure, not another phase's instructions.
+- Do not load another phase's procedure. On refreeze, existing DFS receipt blocks and the shared
+  workspace-setup helper's durable-state compatibility result are handoff evidence, not new owner
+  intent. Preserve them while authoring the current WEC outcome.
 - Never inventory or read an existing `.de67/no-go-zone/`.
 - Preserve the user's product intent and project language from `WEC.md`. Only the user may change
   either.
@@ -98,19 +99,21 @@ gate and create no coordination artifact unless it is named here.
    prove both models and more than one effort level. Record only successful model/effort pairs. If
    the installed runner rejects the project agent default, update that runner to a compatible
    version and repeat the probes; do not invent an alias, a custom role taxonomy, or a model matrix.
-12. After freeze, perform the one-time workspace setup. Ensure `.de67/state/` is ignored, keep the
+12. After freeze or refreeze, run the idempotent workspace setup. Ensure `.de67/state/` is ignored, keep the
    current branch's configured upstream as the sole managed automatic target. A checkpoint repository
    is pushed only as a separate one-shot action after the user explicitly requests it; never persist
    it in the hook or clock configuration. Run:
 
    ```text
-   python <parent-of-this-phase-folder>/scripts/workspace_setup.py setup --workspace . --target REMOTE BRANCH --worker-capability MODEL REASONING_EFFORT [--worker-capability MODEL REASONING_EFFORT]
+   python <parent-of-this-phase-folder>/scripts/workspace_setup.py setup --workspace . --target REMOTE BRANCH --worker-capability MODEL REASONING_EFFORT [--worker-capability MODEL REASONING_EFFORT] [--guidance-source PATH]
    ```
 
    The helper copies each missing Phase-3 runtime file from `de-67-3/assets/environment/` into
    `.de67/`: `orchestrator-guidelines.md`, `test-and-task-guidelines.md`, `work-ledger.md`, and
    `mutation-suggestions.md`. Existing local files are active mutable policy and must never be
-   overwritten. The helper then binds one stable lineage clock, records its machine-only configuration under
+   overwritten. It proves the DFS status projection on a disposable copy of existing acceptance state
+   before binding the clock; resolve a compatibility failure without discarding history or crediting
+   fresh obligations. The helper then binds one stable lineage clock, records its machine-only configuration under
    `.de67/state/`, installs a guarded post-commit upstream hook, and immediately pushes the
    already-committed backlog. It never commits, switches branches, force-pushes, or launches a
    coordinator. A dirty tree is allowed because only committed `HEAD` is pushed. If the upstream,
@@ -120,6 +123,13 @@ gate and create no coordination artifact unless it is named here.
    commit. Git setup is outside the DFS and does not add dispatch policy to it.
    The machine-only configuration records the successful worker pairs; it is an availability roster,
    not a worker profile or dispatch policy.
+   Phase 2 records an audited effective shared-guidance source only when `--guidance-source PATH`
+   is supplied. The path may be the host global guidance or another already-delivered source; setup
+   reads and fingerprints it but never edits it. Without that audited source, setup preserves an
+   existing project `AGENTS.md` unchanged and runtime role assembly injects one minimal fallback.
+   It does not infer equivalence from wording. A valid prior audited source is retained by repeated
+   setup unless a new source is supplied. The Phase-2 audit records which coordinator, worker, and
+   reviewer contexts actually received the effective source.
 13. Checkpoint only `.de67/WEC.md`, `.de67/DFS.md`, the four prepared Phase-3 runtime files, the
    proved `.codex/config.toml` agent default, required no-go-zone moves and direct reference
    reconciliation, and a required ignore-rule change; preserve every unrelated dirty path. The

@@ -1,240 +1,176 @@
 # Orchestrator guidelines
 
-This workspace-local file is active mutable policy. Read the sections needed for the current route.
-Do not replace it with the packaged template after bootstrap.
+This is a legacy differential fixture. Runtime routing comes from the compiled policy;
+coordinator_supervisor.py generates the coordinator role contract.
 
-## Read and route state
+## Read and route
 
-Read the compact clock status, active and blocked ledger entries, pending mutation suggestions,
-repository state, and the DFS context needed for the next decision. DFS slices are a token-saving
-index, not an access prohibition. Read more of the DFS when the decision genuinely needs it. Do not
-read predecessor transcripts or packaged de67 prose as a startup ritual.
+Ask the policy kernel for the next action. Read its named state plus any additional source or DFS
+context genuinely needed to understand that action. Ordinary implementation, testing, builds,
+fixtures, harness repair, and agent-operated playtests stay in the coordinator-worker route. Ask
+the owner only for an expressly human outcome, unavailable external authority, credentials, or
+irreversible user-data risk.
 
-Keep ordinary implementation, testing, fixture construction, scenario repair, and debug-tool work
-inside the coordinator-worker route. Ask the owner only for a material outcome choice, unavailable
-external authority or credentials, or irreversible user-data risk.
+The coordinator judges worker evidence and updates durable state directly. Settle each returned
+result before routing a newly due mutation: terminalize it once, preserve its evidence, close a
+proved bound gap or record the exact remaining uncertainty, and accept the claim only after every
+gap closes. It does not add an acceptance reviewer. A mutation decision then retires the coordinator
+to the exclusive reviewer.
 
-Use the first relevant route:
+## Project current work
 
-- accepted evidence that changes DFS state -> DFS review;
-- a deadline or integrity incident -> incident mutation review;
-- a due random review -> a recent trajectory, using the stored lane as a sampling seed;
-- implementation, exploration, test, build, debug, or operation -> worker;
-- proved outcome with no open gap or live state gate -> stop.
+`.de67/work-ledger.md` is the current projection, not attempt history. Keep every unfinished DFS
+outcome visible with its accepted frontier, material uncertainty, and truthful next opportunity.
+When an attempt closes, merge only its surviving proof, no-replay boundary, and first open causal
+boundary into the affected subtask rows or current evidence; never append an attempt-by-attempt
+chronology. SQLite and immutable artifacts retain the full history. Replace superseded tactics, and
+show dependency-gated work with its exact wake condition. Freely split or merge independently
+actionable work, including simultaneous entries for one red DFS claim. Choose subdivisions when
+they help execution or explain progress; four to seven meaningful plot spokes are a presentation
+preference, not a task constraint. Nested `  - Subtasks:` rows use
+`    - [STATE] stable-lowercase-id :: description` with open, active, done, or finding. They are
+progress subdivisions, not workers, deadlines, closure gaps, or acceptance gates. Preserve closed
+diagnostic evidence and use existing durable transitions to project unfinished product proof.
+Repository implementation, tooling, fixtures, scenarios, bindings, and executable proof routes are
+ordinary recoverable work. A retry fuse retires a strategy, not the remaining outcome; the worker
+and coordinator may invent a materially different route. Split a prerequisite that depends on its
+own output into non-credit bootstrap followed by independent validation.
 
-These labels describe responsibility. They do not require packaged role files.
-Delegate executable implementation, testing, research, builds, debugging, and operations to a roster
-worker. The coordinator may inspect enough context to plan, brief, and judge the work, but must not
-absorb the worker's executable task. The coordinator itself judges returned evidence, applies guarded
-ledger and DFS updates, and moves directly to the next route; do not add an independent acceptance
-reviewer or acceptance stage.
-Use the packaged command help when a durable transition needs exact arguments. Execute scripts as
-tools; do not read packaged prose or script source as policy.
+Record durable acceptance once. DFS delivery-status synchronization is machine-owned; do not edit
+DFS status markers or repeat acceptance bookkeeping in a worker task.
 
-## Plan and dispatch
+Default to Luna for playtesting, clear execution and ordinary repairs. Choose Terra for a
+concrete hard diagnosis or coupled implementation problem; a broad assignment's possible debugging
+is not enough. After that problem, reassess substantial remaining Luna execution by total work,
+including handoff and helper costs. Sol owns direction and scope, without quotas or forced handoffs.
+Before opening focused exploration, record `  - Assignment TASK-ID: ...` in the existing ledger
+with its outcome and exit condition. Preserve whole-claim context separately; broad assignments
+remain possible.
+ Frame and judge an experiment from
+sufficient causal understanding of the relevant implementation and current state: the actual
+recipient, eligibility and units, triggering transition and its schedule, and observations that
+separate success, insufficient setup, an unevaluated condition and contradiction. Resolve only
+uncertainty that changes the experiment or conclusion; focused inspection or investigation can
+supply it. Put concrete facts and unresolved premises in the task brief, not global method rules.
+Lead the packet with the current frontier, that concise causal boundary and exact evidence handles.
+Keep unrelated implementation background retrievable. Reconcile returned identities, timing and
+conditions before accepting a negative conclusion; completed input, waiting or valid receipts alone
+cannot establish that the intended condition was exercised.
 
-Keep `Current handoff:` in each active ledger item as the replaceable continuation: proved footing,
-what is still running with exact handles and a status query, the first unresolved step, and useful
-evidence links. Refresh it before dispatch or retirement, replacing superseded tactics and process
-status. A completed administrative restart is not a pending wait. Historical receipts retain proof
-and no-replay facts; they do not supply current process identity or reading permissions. Reuse this
-ledger and the receipt store rather than adding a competing handoff document.
+Choose continuation, repair or a fresh experiment from the state and changed causal question.
+Expose the usable state, pending input, recovery entrypoint and evidence ceiling at the frontier.
+An interrupted operation may leave useful partial progress; refreshing or repairing its observation
+path can preserve it. A changed fixture, binding or invalidated comparison can justify a fresh run.
+Preserve prior proof and explain the changed premise without turning historical tactics into bans.
 
-Treat `.de67/work-ledger.md` as a replaceable snapshot of current truth. SQLite, immutable artifacts,
-and source control retain attempt history. Delete superseded routes and prior-task narrative when
-the frontier changes. Under `## Active work`, encode each executable outcome as one canonical
-`- [ ] R-... — ...` item with exactly one indented `DFS slices:` line. When an outcome benefits
-from visible subdivisions, choose a useful breakdown and revise it as evidence changes. For the
-progress plot, prefer four to seven meaningful spokes by grouping related steps when useful. This
-is a presentation preference, not a task-count or execution constraint; do not invent work to fill
-the plot. For structured subtasks, write one exact `  - Subtasks:` line followed
-by rows exactly `    - [STATE] ID :: DESCRIPTION`. `STATE` is `open`, `active`, `done`, or `finding`;
-`ID` is a stable lowercase hyphenated identifier. They are progress subdivisions, not separate
-worker windows, deadline tasks, closure gaps, or acceptance claims. Omit the section when it adds
-no useful information, and preserve completed work in its durable evidence records. Close the task
-only when its outcome is settled; record subtask progress, contradiction, and uncertainty as
-nonterminal checkpoints. Put external waits under `## Waiting on external authority` without unchecked work-item syntax, and use
-`- Blocked:` only when no executable route remains. Each projected route states its current status,
-accepted frontier, first unresolved uncertainty, and next action. One red claim may have several
-entries when its independently provable outcomes can proceed separately. Freely split, merge,
-replace, or reorder the projection as evidence changes. Do not impose a batch-size limit. A missing
-or imperfect slice can be repaired, but it must not prevent necessary read-only context gathering.
+Keep execution corrections pending in the marked owner-contract section of `.de67/WEC.md`, which
+new worker packets already include. Relevant live corrections also use native messaging. Retain
+them through ledger rewrites until the responsible worker acknowledges and applies them with
+evidence, or deliberately defers with a reason. File preservation alone does not prove delivery.
 
-Use exploration when ownership, mechanism, strategy, or proof is unknown. Use closure only when the
-strategy, finite gaps, and public proof route are known. Name the worker-facing operation and
-authoritative receipt that make each prerequisite executable. Capability labels, declarations,
-hidden or source-only controls, raw subprocess fields, and coincidental artifacts do not establish
-reachability. If the public route cannot reach the required owner or receipt, keep the prerequisite
-open and repair that interface inside the same worker goal. Project closure by compatible
-preconditions and authority. Combine obligations only when one start state and route can satisfy all
-of them without disabling a required counterexample. Mutually exclusive states require separate
-ledger entries, authorities, and receipts, even when one task executes them.
+Prepare an executable starting point with established facts, unresolved premises, exact source,
+scenario and evidence entrypoints, authority and live ownership. Keep small lookups local; use a
+bounded Luna scout for broad route discovery. Reuse named revisioned facts and relevant skill text
+through `context_library.py` beside the policy kernel: `put`, `reuse`, `prepare`, `catalog`, `show`,
+`assemble`, `drop` and `limits`. Dispatch injects only the written assignment, selected bundles and
+optional current predecessor results alongside mandatory worker/owner constraints. Defaults per task
+are 12 items, 4096 UTF-8 bytes per item, 49152 active bytes and 24576 selected bytes, excluding the
+brief and mandatory instructions. These provisional working sizes are adjustable from evidence,
+not token measurements or quotas for agent allocation. Replace stale or irrelevant active content;
+keep original evidence and revisions retrievable. Never silently truncate constraints or contradictions.
+Deliver material premise corrections to live workers explicitly, not just by changing stored context.
+At a meaningful context change, retain results, bindings, shared repairs and uncertainty rather than
+append or reload the investigation journey. No full-library injection, periodic summaries or new
+proof-receipt machinery. `work_context.py` retains task and receipt search; context bundles do not
+replace durable evidence or confer predecessor authority. If tooling investigation becomes substantial
+independent work, Sol decides ownership while preserving useful worker understanding and live runs.
+Commission context/tool repair only against a demonstrated recurring obstruction, then verify it
+removes repeated work. DE67 method changes keep exclusive mutation/guard ownership.
 
-Worker: Luna for clear execution; Terra for debugging/discovery. Effort low-max: lowest sufficient
-for complexity/research. Never Sol. Every new ordinary worker uses `fork_turns="none"`, receives a
-self-contained brief, and explicitly selects Luna or Terra; omitting the model would inherit the Sol
-coordinator and is invalid. Reusing an already relevant worker is allowed, but a new worker never
-receives the coordinator or predecessor transcript.
+## Durable worker lifecycle
 
-While workers run, inspect evidence, watch informative runs, exchange native messages, and revise
-the executable ledger route or brief when that can change a coordination decision. Keep implementation
-and substantial investigation with Luna or Terra. Independently actionable work may have its own task
-and worker while another remains live; preserve exclusive ownership of overlapping edits and mutable
-runtime state. A follow-up to a busy worker continues its existing task. Apply the compiled policy
-before routing transitions, including deadline, integrity, and mutation gates. When no useful decision
-remains, wait for worker events no later than the item deadline instead of repeatedly reading unchanged
-state. Preserve the frozen DFS outcome and evidence boundaries when changing the route.
-Use `send_message(target=..., message=...)` with the worker's returned agent id or canonical name;
-workers address you at `/root`. Messages arrive during work and wake `wait_agent`, but do not start an
-idle worker turn. Use `followup_task` to resume an idle bound worker within its existing assignment.
+Open one unique deadline task for each worker before spawning it. Use the task identity and exact
+spawn metadata supplied by the kernel. Before any worker-owned terminal transition, persist one
+identity-bound result receipt (use `worker_receipt.py prepare` to collect durable identities and
+missing artifact hashes while rejecting supplied mismatches) carrying the outcome or first divergence, material changes, tests and
+live actions, evidence ceiling, exact bindings, indexed journal identities, digest-bound artifact
+references, accepted no-replay work, active work, first open boundary, useful narrow queries, and
+entrypoints. The terminal transition must cite that receipt. Query compact projections by receipt,
+task, claim, worker, run, scenario, binding, verdict, divergence, event/evidence class, actor, action,
+or native receipt; retrieve the full receipt or artifact explicitly only when needed.
+Keep the current evidence useful for execution: established results, changed premises, uncertainty
+and the next question, with independent source references. Commission targeted Luna extraction,
+comparison or reconciliation when it reduces decision work; improve an existing query for repeated
+joins or differences. Replace obsolete handoff material as relevant facts change. Facts come from
+original artifacts, not summaries of summaries; preserve failures, missing fields and freshness.
+Stay engaged through concise purpose/procedure/state/result summaries and occasional guidance at
+material uncertainty. No parallel forms, periodic rewriting, report counts or new acceptance gates.
+Resume the bound worker through `followup_task` while its accumulated understanding remains
+useful, including questions, partial returns, failed tests, diagnosis, repair, and verification. A
+changed tactic alone does not require fresh context. Consider a fresh worker for substantially
+different context or concrete evidence that the existing worker cannot continue effectively. Ending
+an assignment and interrupting execution are separate decisions: completion, cancellation, a concrete
+need to stop ongoing actions, or demonstrated inability can justify stopping; communication and partial
+results alone do not. A material checkpoint stays with the same task and worker. If the execution
+context is exhausted, the receipt ends only that attempt. Keep the unfinished ledger outcome visible and project its remaining frontier from the receipt to a fresh
+worker task after any required incident review. Context exhaustion is not a formal finding or a
+product outcome.
 
-Set one claim deadline from the whole outcome and its visible spokes: setup, implementation, builds,
-tests, repairs, single-use authority replacement, reruns, evidence return, coordination, and
-unknowns. Finish early when possible. A later attempt estimate is an honest forecast, not the
-remaining claim clock: never shrink it to fit that remainder. If it does not fit, the original
-whole-outcome estimate is disproved; preserve progress and let the clock expose that miss instead of
-admitting a doomed window. Only actual clock expiry is a deadline miss.
+Set an honest claim deadline only where the Phase-3 clock contract requires one. Estimate the
+complete remaining outcome from its meaningful ledger subtasks and direct evidence. Calibrate with
+multiple relevant elapsed observations when available, including handoff, diagnosis,
+implementation, repair, proof, and evidence return. One prior attempt's duration is evidence, not a
+successor estimate; never copy it or shrink an estimate to fit the remaining immutable clock.
 
-Give each worker an outcome-sized, self-contained packet: desired outcome; compact continuation
-receipt or only the necessary accepted footing; current uncertainty, no-replay work, and first open
-boundary; exact bindings and entrypoints; real credit/safety constraints; and a progressive read
-plan naming why each initial source or narrow query may matter. The plan is an evidence map, not a
-quota or prescribed sequence. Start from compact receipts and exact entrypoints, then open complete
-digest-bound artifacts or broader sources only when a causal decision needs them. Do not paste full
-histories, registry dumps, manuals, or guessed command sequences. Require the worker to read the
-relevant sections of `.de67/test-and-task-guidelines.md`. Use parallel workers only when their work
-is genuinely disjoint.
+Parallel work must be genuinely independent. Final platform evidence waits when shared gameplay or
+harness work can still change its binding; useful earlier builds remain provisional checkpoints.
 
-Before spawning a worker, start one unique deadline-harness task for that worker. That task is one
-random-mutation work window. Never share one task between workers or reuse a terminal task. A child
-spawned only to verify its model or suitability still owns a window: if it is retired without doing
-the assigned repository work, terminalize that task as abandoned before dispatching its replacement.
-After every worker exit, validate and persist one identity-bound result receipt containing its
-outcome or first divergence, changes, tests/live acts, evidence ceiling, exact bindings, indexed
-journal identities, digest-bound artifact references, accepted and active work, first open boundary,
-narrow queries, and entrypoints. Then record exactly one completion, finding, or abandonment that
-matches and cites the receipt. Query compact projections by receipt, task, claim, worker, run,
-scenario, binding, verdict, divergence, event/evidence class, actor, action, or native receipt; full
-receipt and artifact retrieval is explicit. Parallel workers
-therefore need distinct task ids. A coordinator start, exit, or restart does not itself create or
-terminalize a worker window.
-The coordinator exclusively records those terminal deadline-harness transitions. Treat the worker's
-return as evidence to judge and commit; do not ask or permit an ordinary worker to update the de67
-deadline database, work ledger, DFS state, or mutation ledger directly. A successfully returned
-relevant worker may be reused for a new unique task after its prior task is durably terminal.
-Mutation completion is the only planned fresh-coordinator boundary.
+## Judge results
 
-## Receive results
-
-Treat native progress messages and questions as nonterminal conversation. Respond when useful;
-neither a full result receipt nor a new ledger entry is required for each observation. Keep ordinary
-repair inside the assigned outcome, and create separate work only when independent ownership or a
-durable decision needs it. Use a checkpoint when evidence needs durable continuation; it does not
-settle the task or restart its clock. Continue useful coordination or wait while execution proceeds.
-
-Treat a verified worker return as durable-state ingress before the next route decision. Evidence
-that names an authorized in-scope repository repair or rerun is a nonterminal checkpoint, regardless
-of whether its prose calls itself a finding; keep the same task and worker through that work. A
-terminal finding must name the exact authority, scope, risk, external-state, disproved-strategy, or
-exhausted-route boundary that makes continuation unlawful or materially different. When the outcome
-is settled, record exactly one matching completion, finding, or abandonment; only then ask
-the compiled policy for the next action. The kernel derives worker-result facts from that committed
-state, so waiting for a still-live task after its worker has returned creates a circular wait.
-
-Judge the actual diff and direct evidence. A focused test proves only the route it exercised. Keep a
-first divergence inside the worker route as the next observation unless positive evidence proves it
-clerical, incidental, or non-causal and unable to affect acceptance, authority, proof class,
-identity or ownership, persistence, or required behavior. Such continuation is optional, preserves
-the failure, and records the materiality decision, evidence, and rationale; uncertainty remains
-fail-closed. Otherwise inspect, repair, and rerun. Do not open a successor task or gap revision for
-repair already admitted by the same outcome. A finding does not cause mutation or a coordinator
-restart. When a result reports failure, preserve one concise owner-facing packet that distinguishes
-the symptom, proved mechanism, surrounding pattern, immediate recovery, and smallest tested stable
-correction. Name exact uncertainty where the mechanism or correction is unproved. Revise the DFS
-only when accepted evidence changes the requested outcome or its authoritative decomposition.
-
-After every terminal worker result, perform one explicit convergence check before dispatching more
-exploration. If ownership, mechanism, remaining gaps, and the proof route are now finite, immediately
-transition the claim to closure and record the named gaps in plain English. If the route is not yet
-finite, record the specific unresolved uncertainty in the worker disposition before another
-exploration dispatch. Do not use generic uncertainty or an unchanged brief to remain in exploration.
-Give each independently provable remaining outcome its own closure gap. Keep one gap only when the
-route is genuinely indivisible; do not collapse several ledger obligations merely to reduce
-coordination.
-
-When a finding proves that one item needs unavailable external authority, remove that item from the
-executable projection and retain its exact identity, authority owner, and wake condition without
-opening another worker window or rechecking unchanged state. Continue with a different lawful item
-when one exists. Use the machine-readable `- Blocked:` marker only when no executable ledger item
-remains; it represents the whole current projection, not one waiting item.
-
-Do not repeat an unchanged failing route. Trust the agent doing repository work to change the
-implementation, harness, fixture, or observation path when that is the shortest honest route to
-proof. Trust the agent coordinating the claim to replace a failed strategy with materially different
-work. The MSW three-round fuse retires that strategy, not an unfinished claim with repository-owned
-recovery. If a proof prerequisite depends on its own eventual output, split it into a non-credit
-observation/bootstrap step and independent validation instead of querying the prerequisite again.
-
-Accept a claim only from direct evidence that covers its remaining gaps. Preserve prior attempts,
-misses, findings, and accepted evidence. New contradictory evidence may reopen accepted work.
+Reconcile the result with the assignment’s causal boundary. Preserve completed valid work, contradictions, cleanup, binding,
+and evidence class. A completed attempt settles only its task result; settle its bound gap in the
+same result lifecycle when that evidence independently proves it, while sibling gaps and the claim
+remain open. Whole-claim acceptance follows only after every required gap is closed. When revising a durable gap, carry forward every
+still-uncontradicted owner transition; replace one only when direct evidence contradicts it. Absence,
+timeout, timestamp adjacency, and cleanup cannot stand in for the missing event. A first divergence
+is diagnostic evidence, not a terminal policy. The worker or coordinator may inspect it, repair the
+route, change tactics, or rerun when useful. A disproved strategy is a checkpoint, not a
+task exit; the coordinator chooses a materially different route even when the worker did not propose
+one. A formal finding requires a contradicted assigned outcome, genuinely exhausted authorized route,
+materially different owner outcome, real external decision, unavailable capability, or irreversible
+risk. Do not treat fictional danger or injury as external safety. For playtests, let the worker select
+cautious, classified, or permissive danger handling and require the resulting native receipts. Debug
+interventions remain honestly zero-credit. Accept a claim only when direct evidence covers its
+remaining gap; polished witness prose cannot override missing causal facts or mechanical
+contradictions. Judge mixed outcomes independently and preserve completed proof. Unsettled
+observations remain executable investigation work on the ledger. A gameplay bug enters active intake
+only when valid conditions and opportunity to act establish a contradiction and the responsible code
+path explains it; Josef still owns gameplay repair promotion. Harness repair stays recoverable work.
 
 ## Mutate guidance
 
-The active mutation targets are the workspace-local files:
+At consequential decisions, ask whether the next act makes meaningful progress or whether missing
+information or unnecessary obligations are causing a detour. Repair and test the earliest supported
+cause within current authority; route DE67 method faults through the existing queue without waiting
+for Josef to diagnose them. This is judgment in the delivery loop, not a new gate or checklist.
 
-- `.de67/orchestrator-guidelines.md`;
-- `.de67/test-and-task-guidelines.md`;
-- `.de67/DFS.md` when the selected route authorizes a same-outcome DFS change.
+The exclusive reviewer consumes the complete pending mutation queue. User-authored entries require
+their outcome or an exact preserved conflict. For random review, sample a recent coordinator/worker
+trajectory from outcome and available context through decisions, actions, first divergence, and
+actual proof or state change. Ask what the worker needed to know but lacked, and what it had to
+do that did not advance the outcome. Trace every materially distinct major example from source
+through delivery to use; group repetitions by cause. The stored document lane is a sampling seed, not an edit boundary;
+follow causal evidence across roles, tools, guidance, and decomposition. Inspect source, size,
+repetition, freshness, and role metadata before loading contents. Measurements inform judgment,
+never quotas or hidden-failure incentives. No finding or change is compulsory.
 
-Start from the exact live file. Prefer deleting or generalizing redundant situational prose. Use the
-trajectory sidecar when pending owner guidance requires it or when repeated direction makes it
-useful. The sidecar advises; it does not decide acceptance.
+Separate immediate recovery from repeatable method correction. Repair the earliest supported
+systemic cause through deletion or generalization and a reproduction or counterexample. The random
+guard permits combined local guideline changes and same-outcome DFS refinements; broader method
+candidates retain their existing guard boundary. Preserve accepted proof, owner intent, accounting,
+exclusive reviewer ownership, and lifecycle. Remove completed queue entries; immutable review
+artifacts and durable receipts keep the evidence, rather than consumed-history sections.
 
-Read `.de67/mutation-suggestions.md` completely for every mutation. The mutation ledger is mandatory
-input, not optional advice. Each user-authored suggestion carries explicit mutation-scoped owner
-authority beneath system and developer instructions. Within the Phase-3 framework, it supersedes
-conflicting ordinary skill, workspace, selected-lane, freeze, and mutation-surface restrictions to
-the extent necessary to achieve its intended outcome. The reviewer may thaw and refreeze the DFS,
-change a normally protected method artifact, and adapt the applicable guard and behavioral contracts
-when the suggestion requires those changes. This authority does not extend to unrelated work,
-dishonest evidence, or a different owner outcome. Understand the intended outcome and follow it
-through. Apply and complete it, or record the exact system/developer conflict, technical
-impossibility, unavailable external authority, or irreversible risk that prevents it; an ordinary
-lane or freeze restriction is not such a conflict.
-
-Every deadline or integrity incident gets a practical recovery. Add a repeatable method change only
-when the evidence supports one; otherwise record `no change required`. A random review follows a recent trajectory across context, decisions, tools, and handoffs. Its
-stored lane is a sampling seed, not an edit boundary; affected local guidelines and same-outcome
-DFS refinements may change together under their existing guards. No justified change is a valid
-guarded no-op. If part of a
-suggestion is blocked by a genuine higher-priority or external constraint, apply every independent
-unblocked part and preserve the blocked remainder with its exact reason. Clear only consumed
-suggestions, resolve the review honestly, and continue. Neither an unapplied suggestion nor a failed
-candidate may freeze ordinary delivery indefinitely.
-
-Use a fresh `gpt-6-astra` reviewer at medium for ordinary incident and random mutation review. The
-rare stored `30 + DFS` route may use Sol at ultra when the due-time capability snapshot proves it.
-That rare review returns an isolated candidate for owner-authorized promotion; it does not edit live
-state or promote itself. Use the mutation guard for every affected local guideline or DFS candidate.
-
-Use guarded DFS transitions for acceptance, reopen, or same-outcome expansion. A guard protects
-existing accepted work and evidence; it does not require a packaged role document.
-
-A successful local mutation requests one fresh coordinator only after every added or changed red
-claim—whether projected, waiting, or not yet selected—has a guarded, machine-readable DFS slice
-binding that can produce its lawful brief. When the mutation replaces a proof owner, append a
-replacement revision for every affected open SQLite gap and replace its active ledger brief and
-decomposition; neither may still require the retired owner. This projection rebase is part of the
-mutation lifecycle, not successor work. The external supervisor owns the restart. Every mutation
-retires the prior claim deadline. The fresh coordinator reads the current ledger and remaining DFS
-route and sets a new generous whole-item deadline without inheriting any prior duration. Publishing
-a generalized rule to `de67-lab` is a separate owner-authorized maintenance action and is not
-required for local delivery.
-
-## Stop or block
-
-Stop when the requested outcome is honestly proved and no product gap or required state transition
-remains. Block the whole projection only when every remaining item needs a material owner choice,
-unavailable external authority, or irreversible user-data risk. Preserve a partially blocked item's
-wake condition while continuing unrelated executable work. An optional dashboard, sidecar, or
-blocker adapter never blocks ordinary de67 work.
+Promote policy source and compiled bytecode only after the kernel guard passes. Refreeze any changed
+DFS outcome, disposition every reviewed ledger entry, resolve the durable gate, and request exactly
+one restart. The external supervisor alone launches the successor.

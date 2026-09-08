@@ -1043,6 +1043,32 @@ def _active_coordinator_id(workspace: Path) -> str | None:
     return None
 
 
+def native_mutator_state(workspace: Path, refresh_seconds: int) -> dict[str, Any] | None:
+    config = workspace / ".de67/state/workspace.json"
+    if not config.exists() or json.loads(config.read_text()).get("persistent_mutator") is not True:
+        return None
+    path = workspace / ".de67/state/mutator-session.json"
+    if not path.exists():
+        return {"glowing": False, "status": "idle"}
+    session = json.loads(path.read_text())
+    address = workspace / ".de67/state/mutator-input.json"
+    if session.get("state") == "active" and address.exists():
+        binding = json.loads(address.read_text())
+        if (binding.get("workspace") == str(workspace.resolve())
+                and binding.get("thread_id") == session.get("thread_id")
+                and binding.get("state") == "active"):
+            try:
+                os.kill(binding["runner_pid"], 0)
+                os.kill(binding["server_pid"], 0)
+                return {"glowing": True, "status": session.get("mode", "working")}
+            except ProcessLookupError:
+                pass
+    if (session.get("result") == "completed"
+            and 0 <= time.time() - session.get("updated_at", 0) <= refresh_seconds):
+        return {"glowing": True, "status": "replied"}
+    return {"glowing": False, "status": "idle"}
+
+
 def openclaw_mutator_state(database: Path, refresh_seconds: int) -> dict[str, Any]:
     """Read the dedicated mutator agent's activity, never its message contents."""
     uri = f"file:{quote(str(database.resolve()), safe='/:')}?mode=ro"
@@ -1609,12 +1635,14 @@ class Dashboard:
             except Exception as error:
                 fuel = {"available": False, "error": str(error)}
             fratbro = self._fratbro_source(ledger, clock)
-            mutator_activity = {"glowing": False, "status": "disabled"}
-            if self.mutator_activity_db is not None:
-                try:
+            try:
+                mutator_activity = native_mutator_state(self.workspace, self.refresh_seconds)
+                if mutator_activity is None and self.mutator_activity_db is not None:
                     mutator_activity = openclaw_mutator_state(self.mutator_activity_db, self.refresh_seconds)
-                except Exception:
-                    mutator_activity = {"glowing": False, "status": "unavailable"}
+                if mutator_activity is None:
+                    mutator_activity = {"glowing": False, "status": "disabled"}
+            except Exception:
+                mutator_activity = {"glowing": False, "status": "unavailable"}
             return {"dfs": dfs, "ledger": ledger, "clock": clock, "sidecar": sidecar,
                     "fratbro": fratbro, "fuel": fuel, "mutator_activity": mutator_activity,
                     "process": process,

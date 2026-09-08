@@ -1,5 +1,6 @@
 import json
 import queue
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -67,6 +68,74 @@ class RelayTests(unittest.TestCase):
         self.assertEqual([(j["role"], j["text"]) for j in self.relay.jobs.values()],
                          [("coordinator", "first"), ("mutator", "second")])
         self.assertEqual(route_message(" COORDINATOR:\nhello"), ("coordinator", "hello"))
+
+    def test_first_owner_message_starts_one_mutator_and_recovers_native_receipt(self):
+        atomic_json(self.relay.workspace / '.de67/state/workspace.json', {'persistent_mutator': True})
+        self.relay.accept(self.message(1, 'remember orchard'))
+        self.relay.jobs['1'].update(thread_id='old', turn_id='rejected-turn', run_id='old-run')
+        self.relay.accept(self.message(2, 'second message'))
+        self.relay.connect = lambda role: None
+        class Process:
+            pid = 12345
+            stdin = io.StringIO()
+            def poll(self): return None
+            def terminate(self): pass
+            def wait(self): return 0
+        with patch('de67_agent_relay.subprocess.Popen', return_value=Process()) as spawn:
+            self.relay.reconcile()
+            self.assertEqual(spawn.call_count, 1)
+        first = self.relay.jobs['1']
+        self.assertEqual(first['status'], 'starting')
+        self.assertNotIn('turn_id', first)
+        self.assertNotIn('thread_id', first)
+        self.assertEqual(self.relay.jobs['2']['status'], 'pending')
+        initial = json.loads((Path(first['launch_dir']) / 'input.json').read_text())
+        self.assertEqual(initial['client_id'], 'discord:1')
+        self.assertIn('remember orchard', initial['input'][0]['text'])
+        atomic_json(Path(first['launch_dir']) / 'receipt.json',
+                    {'state': 'submitted', 'thread_id': 'astra', 'turn_id': 'first', 'run_id': 'owner-1'})
+        self.relay.recover_launches()
+        self.assertEqual(first['thread_id'], 'astra')
+        self.assertEqual(first['status'], 'submitted')
+
+    def test_finished_launch_recovers_reply_without_any_live_app_server(self):
+        self.relay.accept(self.message(1, 'hello'))
+        launch = self.root / 'launch'
+        launch.mkdir()
+        job = self.relay.jobs['1']
+        job.update(status='starting', launch_dir=str(launch))
+        atomic_json(launch / 'receipt.json', {'state': 'submitted', 'thread_id': 'fresh',
+                                             'turn_id': 'turn', 'run_id': 'run'})
+        events = [self.event({'type': 'userMessage', 'clientId': 'discord:1'}),
+                  self.event({'type': 'agentMessage', 'id': 'final', 'phase': 'final_answer',
+                              'text': 'Completed before attachment'})]
+        (launch / 'output.jsonl').write_text(''.join(json.dumps({
+            'type': 'app_server.notification', **event}) + '\n' for event in events))
+        self.relay.connect = lambda role: None
+        self.relay.history_connection = lambda: None
+        self.relay.reconcile()
+        self.relay.reconcile()
+        self.assertEqual(job['status'], 'replied')
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn('Completed before attachment', self.sent[0][0])
+
+    def test_invalid_initial_message_does_not_block_the_next_owner_message(self):
+        self.relay.accept(self.message(1, ''))
+        self.relay.accept(self.message(2, 'valid message'))
+        self.relay.connect = lambda role: None
+        started = []
+        def start(job):
+            if not job['text']:
+                raise ValueError('Message has no usable input')
+            started.append(job['id'])
+            job['status'] = 'starting'
+            return True
+        self.relay.start_mutator = start
+        self.relay.reconcile()
+        self.assertEqual(self.relay.jobs['1']['status'], 'failed')
+        self.assertEqual(started, ['2'])
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn('no usable input', self.sent[0][0])
 
     def test_input_enters_only_selected_context_without_starting_a_session(self):
         self.relay.accept(self.message(1, "coordinator: hello"))

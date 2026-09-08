@@ -14,9 +14,29 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import codex_app_server_runner as transport
 import codex_runner
+import mutator_session
 
 
 class AppServerTransportTests(unittest.TestCase):
+    def test_service_cleanup_retains_reparented_descendants_and_rechecks_birth(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            socket = workspace / 'owned.sock'
+            captured = {200: (100, 'server', f'codex app-server --listen unix://{socket}'),
+                        300: (200, 'child', 'helper'), 400: (200, 'old', 'helper')}
+            current = {300: (1, 'child', 'helper'), 400: (1, 'new', 'unrelated')}
+            killed = []
+            def kill(pid, signum):
+                killed.append(pid)
+                current.pop(pid)
+            with patch.object(transport, 'process_snapshot', side_effect=lambda: dict(current)), \
+                 patch.object(transport.os, 'kill', side_effect=kill), \
+                 patch.object(transport, 'signal', SimpleNamespace(SIGTERM=15, SIGKILL=9)):
+                transport.stop_owned_runtime(SimpleNamespace(pid=100, poll=lambda: 0),
+                    workspace, workspace, {}, captured_rows=captured, owned_socket=socket)
+            self.assertEqual(killed, [300])
+            self.assertIn(400, current)
+
     def test_outer_cleanup_selects_only_owned_tree_even_after_adapter_death(self):
         for adapter_dead in (False, True):
             with self.subTest(adapter_dead=adapter_dead), tempfile.TemporaryDirectory() as directory:
@@ -104,6 +124,26 @@ class AppServerTransportTests(unittest.TestCase):
                 self.assertTrue(servers[-1].stopped)
                 self.assertFalse(list((workspace / '.de67/state').glob('*-input.json')))
                 self.assertFalse(list((workspace / 'codex/state/de67-input').glob('*.sock')))
+
+            transport.atomic_json(workspace / '.de67/state/workspace.json', {'persistent_mutator': True})
+            env.update(DE67_PROCESS_ROLE='mutation-reviewer', DE67_COORDINATOR_MODEL='gpt-6-astra',
+                       DE67_COORDINATOR_RESUME_SESSION='')
+            for expected in ('thread/start', 'thread/resume'):
+                calls.clear()
+                with patch.dict(os.environ, env, clear=True), patch.object(transport.sys, 'platform', 'darwin'), \
+                     patch.object(transport.signal, 'signal'), patch.object(transport.subprocess, 'Popen', Server), \
+                     patch.object(transport, 'Rpc', Client), patch.object(mutator_session.MutatorSession, 'acquire'), \
+                     redirect_stdout(io.StringIO()):
+                    self.assertEqual(transport.run('codex', workspace, 'Current review'), 0)
+                launch = next((method, params) for method, params in calls if method.startswith('thread/'))
+                self.assertEqual(launch[0], expected)
+                self.assertTrue(launch[1]['config']['features.context_management.experimental_mode'])
+                persisted = json.loads((workspace / '.de67/state/mutator-session.json').read_text())
+                self.assertEqual(persisted['thread_id'], 'fresh')
+                self.assertEqual(persisted['state'], 'idle')
+
+            # The persistent mutator must not turn coordinator resets into resumes.
+            env.update(DE67_PROCESS_ROLE='coordinator', DE67_COORDINATOR_MODEL='gpt-5.6-sol')
 
             with patch.dict(os.environ, env, clear=True), patch.object(transport.sys, 'platform', 'darwin'), \
                  patch.object(transport.signal, 'signal'), patch.object(transport.subprocess, 'Popen', Server), \

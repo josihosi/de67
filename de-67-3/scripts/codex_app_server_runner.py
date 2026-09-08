@@ -124,14 +124,15 @@ def process_snapshot() -> dict[int, tuple[int, str, str]]:
 
 
 def stop_owned_runtime(process: Any, workspace: Path, run_directory: Path,
-                       environment: dict[str, str]) -> None:
+                       environment: dict[str, str], *, captured_rows=None,
+                       owned_socket: Path | None = None) -> None:
     """Outer-runner cleanup, including an adapter killed before its finally block.
 
     Keep the supervisor's existing process group intact. Select only this child tree,
     or its orphaned server's unique run socket, and recheck birth identity before signals.
     """
-    socket = socket_path(run_directory, environment)
-    rows = process_snapshot()
+    socket = owned_socket or socket_path(run_directory, environment)
+    rows = process_snapshot() if captured_rows is None else captured_rows
     roots = {process.pid} if process.poll() is None else set()
     roots.update(pid for pid, (_, _, command) in rows.items()
                  if command.endswith(f"app-server --listen unix://{socket}"))
@@ -183,10 +184,15 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
     if process_role not in {"coordinator", "mutation-reviewer"}:
         raise RpcError(f"Unsupported App Server role: {process_role}")
     role = "mutator" if process_role == "mutation-reviewer" else "coordinator"
+    if os.environ.get("DE67_INITIAL_INPUT_PATH") and role != "mutator":
+        raise RpcError("Initial owner-conversation input is valid only for the mutator")
     address = workspace / ".de67" / "state" / f"{role}-input.json"
     parent_pid = os.getppid()
     server: subprocess.Popen[Any] | None = None
     rpc: Rpc | None = None
+    session = None
+    thread_id = None
+    completed = False
     stopping = False
 
     def stop(_signum: int, _frame: Any) -> None:
@@ -196,6 +202,12 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, stop)
     try:
+        config_path = workspace / ".de67/state/workspace.json"
+        workspace_config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+        if role == "mutator" and workspace_config.get("persistent_mutator") is True:
+            from mutator_session import MutatorSession
+            session = MutatorSession(workspace)
+            session.acquire(lambda: stopping or os.getppid() != parent_pid)
         with (run_directory / "app-server.log").open("a", encoding="utf-8") as log:
             server = subprocess.Popen([codex, "app-server", "--listen", f"unix://{socket}"],
                                       stdin=subprocess.DEVNULL, stdout=log, stderr=log)
@@ -215,25 +227,46 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
                 "sandbox": os.environ.get("DE67_COORDINATOR_SANDBOX", "danger-full-access"),
                 "config": {"model_reasoning_effort": effort},
             }
-            resume = os.environ.get("DE67_COORDINATOR_RESUME_SESSION", "").strip()
+            if model == "gpt-6-astra":
+                params["config"]["features.context_management.experimental_mode"] = True
+            resume = session.thread_id() if session else os.environ.get("DE67_COORDINATOR_RESUME_SESSION", "").strip()
             if resume:
                 params.update(threadId=resume, excludeTurns=True)
             thread = rpc.call("thread/resume" if resume else "thread/start", params)["thread"]
             thread_id = thread["id"]
+            if session:
+                session.record(thread_id, state="starting", runner_pid=os.getpid())
             emit({"type": "thread.started", "thread_id": thread_id})
-            turn = rpc.call("turn/start", {"threadId": thread_id, "effort": effort,
-                            "input": [{"type": "text", "text": prompt}]})["turn"]
+            turn_params = {"threadId": thread_id, "effort": effort,
+                           "input": [{"type": "text", "text": prompt}]}
+            initial_path = os.environ.get("DE67_INITIAL_INPUT_PATH")
+            initial = json.loads(Path(initial_path).read_text(encoding="utf-8")) if initial_path else None
+            if initial:
+                turn_params["input"].extend(initial["input"])
+                turn_params["clientUserMessageId"] = initial["client_id"]
+                atomic_json(Path(initial["receipt_path"]), {"state": "submitting", "thread_id": thread_id})
+            turn = rpc.call("turn/start", turn_params)["turn"]
             turn_id = turn["id"]
             binding = {"workspace": str(workspace), "role": role,
                        "run_id": os.environ.get("DE67_COORDINATOR_RUN_ID"),
                        "runner_pid": os.getpid(), "server_pid": server.pid, "socket": str(socket),
                        "thread_id": thread_id, "turn_id": turn_id, "state": "active"}
             atomic_json(address, binding)
+            if initial:
+                atomic_json(Path(initial["receipt_path"]), {**binding, "state": "submitted"})
+            if session:
+                session.record(thread_id, state="active", runner_pid=os.getpid(), turn_id=turn_id,
+                               mode="conversation" if initial else "review")
             pending = rpc.notifications
             rpc.notifications = []
             while not stopping:
                 if os.getppid() != parent_pid:
                     raise RpcError("Owning DE67 runner exited")
+                from agent_mailbox import deliver
+                deliver(workspace, role, rpc, thread_id, turn_id)
+                if rpc.notifications:
+                    pending.extend(rpc.notifications)
+                    rpc.notifications = []
                 try:
                     message = pending.pop(0) if pending else rpc.receive()
                 except queue.Empty:
@@ -249,6 +282,7 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
                 elif method == "turn/started":
                     emit({"type": "turn.started", "turn_id": payload["turn"]["id"]})
                 elif method == "turn/completed" and payload["turn"]["id"] == turn_id:
+                    completed = payload["turn"]["status"] == "completed"
                     binding["state"] = "finished"
                     atomic_json(address, binding)
                     emit({"type": "turn.completed", "turn_id": turn_id})
@@ -274,6 +308,12 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
                         server.wait()
             finally:
                 socket.unlink(missing_ok=True)
+                if session:
+                    try:
+                        if thread_id:
+                            session.record(thread_id, state="idle", result="completed" if completed else "interrupted")
+                    finally:
+                        session.close()
 
 
 if __name__ == "__main__":

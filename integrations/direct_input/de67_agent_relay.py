@@ -10,6 +10,7 @@ import os
 import queue
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -65,6 +66,7 @@ class Relay:
         self.jobs = {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in self.jobs_dir.glob("*.json")}
         self.connections: dict[str, tuple[dict[str, Any], Rpc]] = {}
         self.history_rpc: Rpc | None = None
+        self.mutator_process: subprocess.Popen[Any] | None = None
         for job in self.jobs.values():
             if job["status"] == "submitting":
                 job["status"] = "uncertain"
@@ -72,6 +74,102 @@ class Relay:
 
     def save(self, job: dict[str, Any]) -> None:
         atomic_json(self.jobs_dir / f"{job['id']}.json", job)
+
+    def recover_launches(self) -> None:
+        for job in self.jobs.values():
+            if job["status"] != "starting":
+                continue
+            receipt_path = Path(job["launch_dir"]) / "receipt.json"
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.exists() else {}
+            if receipt.get("state") == "submitted":
+                job.update(status="submitted", thread_id=receipt["thread_id"],
+                           turn_id=receipt["turn_id"], run_id=receipt["run_id"])
+                self.save(job)
+                continue
+            pid = job.get("launch_pid")
+            try:
+                if pid:
+                    os.kill(pid, 0)
+                    continue
+            except ProcessLookupError:
+                pass
+            job.update(status="uncertain" if receipt or not pid else "failed",
+                       error="Mutator launch ended before a native input receipt was available")
+            if receipt.get("thread_id"):
+                job["thread_id"] = receipt["thread_id"]
+            self.save(job)
+
+    def recover_launch_output(self) -> None:
+        """Read new complete events from our own launches, even after server exit."""
+        for job in self.jobs.values():
+            if not job.get("launch_dir"):
+                continue
+            path = Path(job["launch_dir"]) / "output.jsonl"
+            if not path.exists():
+                continue
+            offset = job.get("launch_read_offset", 0)
+            with path.open("rb") as source:
+                source.seek(offset)
+                while True:
+                    line = source.readline()
+                    if not line or not line.endswith(b"\n"):
+                        break
+                    offset = source.tell()
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    if event.get("type") == "app_server.notification":
+                        self.observe("mutator", event)
+            if offset != job.get("launch_read_offset", 0):
+                job["launch_read_offset"] = offset
+                self.save(job)
+
+    def start_mutator(self, job: dict[str, Any]) -> bool:
+        path = self.workspace / ".de67/state/workspace.json"
+        config = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if config.get("persistent_mutator") is not True:
+            return False
+        if self.mutator_process is not None:
+            if self.mutator_process.poll() is None:
+                return True
+            self.mutator_process = None
+        if any(item["status"] == "starting" for item in self.jobs.values()):
+            return True
+        from mutator_session import owner_prompt
+        scripts = Path(__file__).resolve().parents[2] / "de-67-3/scripts"
+        python = config.get("agent_transport_python") or sys.executable
+        launch = self.root / "launches" / job["id"]
+        launch.mkdir(parents=True, exist_ok=True)
+        initial_path = launch / "input.json"
+        atomic_json(initial_path, {"input": self.input_for(job), "client_id": "discord:" + job["id"],
+                                  "receipt_path": str(launch / "receipt.json")})
+        environment = dict(os.environ, DE67_AGENT_TRANSPORT="app-server",
+            DE67_AGENT_TRANSPORT_PYTHON=python, DE67_PROCESS_ROLE="mutation-reviewer",
+            DE67_COORDINATOR_MODEL="gpt-6-astra", DE67_COORDINATOR_REASONING_EFFORT="medium",
+            DE67_COORDINATOR_RUN_ID="owner-message-" + job["id"],
+            DE67_CODEX=self.config.get("codex") or shutil.which("codex") or "codex",
+            DE67_INITIAL_INPUT_PATH=str(initial_path))
+        for key in ("DE67_COORDINATOR_RESUME_SESSION", "DE67_DEADLINE_STATE", "DE67_LINEAGE"):
+            environment.pop(key, None)
+        for key in ("thread_id", "turn_id", "run_id", "launch_read_offset"):
+            job.pop(key, None)
+        job.update(status="starting", launch_dir=str(launch))
+        self.save(job)
+        try:
+            with (launch / "output.jsonl").open("a", encoding="utf-8") as output:
+                self.mutator_process = subprocess.Popen([python, str(scripts / "codex_runner.py"),
+                    "--cwd", str(self.workspace)], cwd=self.workspace, env=environment,
+                    stdin=subprocess.PIPE, stdout=output, stderr=output, text=True)
+                job["launch_pid"] = self.mutator_process.pid
+                self.save(job)
+                self.mutator_process.stdin.write(owner_prompt(self.workspace, scripts, python))
+                self.mutator_process.stdin.close()
+        except OSError as error:
+            job.update(status="failed", error=str(error))
+            self.save(job)
+            raise
+        return True
 
     def log(self, event: str, **detail: Any) -> None:
         with (self.root / "events.jsonl").open("a", encoding="utf-8") as stream:
@@ -251,7 +349,27 @@ class Relay:
             self.observe(role, message)
 
     def recover_history(self, role: str, rpc: Rpc) -> None:
+        for job in self.jobs.values():
+            if (job["role"] != role or job["status"] != "uncertain"
+                    or not job.get("thread_id") or job.get("turn_id")):
+                continue
+            cursor = None
+            while True:
+                params = {"threadId": job["thread_id"], "limit": 100, "sortDirection": "desc"}
+                if cursor:
+                    params["cursor"] = cursor
+                page = rpc.call("thread/items/list", params)
+                receipt = next((entry for entry in page["data"]
+                    if entry.get("item", entry).get("clientId") == "discord:" + job["id"]), None)
+                if receipt and receipt.get("turnId"):
+                    job.update(turn_id=receipt["turnId"], status="applied")
+                    self.save(job)
+                    break
+                cursor = page.get("nextCursor")
+                if not cursor:
+                    break
         turns = {(job["thread_id"], job["turn_id"]) for job in self.jobs.values() if job["role"] == role
+                   and job.get("thread_id") and job.get("turn_id")
                    and job["status"] in {"submitted", "applied", "uncertain", "awaiting_final"}}
         for thread_id, turn_id in turns:
             wanted = {"discord:" + job["id"] for job in self.jobs.values()
@@ -308,6 +426,10 @@ class Relay:
                 self.save(job)
 
     def reconcile(self) -> None:
+        if self.mutator_process is not None:
+            self.mutator_process.poll()
+        self.recover_launches()
+        self.recover_launch_output()
         for role in ("coordinator", "mutator"):
             cached = self.connections.get(role)
             if cached:
@@ -329,10 +451,19 @@ class Relay:
                             self.recover_history(role, history_rpc)
                     self.note_ended_session(relevant, None)
                     for job in relevant:
-                        if job["status"] == "pending" and not job.get("waiting_notified"):
-                            self.send(f"Saved for the {role}'s next active session.", job["id"], job["id"] + ":waiting")
-                            job["waiting_notified"] = True
-                            self.save(job)
+                        if job["status"] == "pending":
+                            if role == "mutator":
+                                try:
+                                    if self.start_mutator(job):
+                                        continue
+                                except (ValueError, subprocess.CalledProcessError) as error:
+                                    job.update(status="failed", error=str(error))
+                                    self.save(job)
+                                    continue
+                            if not job.get("waiting_notified"):
+                                self.send(f"Saved for the {role}'s next active session.", job["id"], job["id"] + ":waiting")
+                                job["waiting_notified"] = True
+                                self.save(job)
                     continue
                 binding, rpc = connected
                 self.recover_history(role, rpc)
@@ -399,6 +530,12 @@ class Relay:
             rpc.close()
         if self.history_rpc:
             self.history_rpc.close()
+        if self.mutator_process is not None:
+            # Stop only the relay-owned runner; its adapter detects parent exit and
+            # the persistent native thread remains available to the next invocation.
+            if self.mutator_process.poll() is None:
+                self.mutator_process.terminate()
+            self.mutator_process.wait()
 
 
 def main() -> None:

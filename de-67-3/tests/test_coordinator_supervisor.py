@@ -696,6 +696,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         received = self.root / "received.txt"
         receiver.write_text(
             "import os, pathlib, sys\n"
+            "assert 'DE67_INITIAL_INPUT_PATH' not in os.environ, 'owner launch input leaked into supervisor child'\n"
             "pathlib.Path(os.environ['RECEIVED_PROMPT']).write_text(sys.stdin.read(), encoding='utf-8')\n",
             encoding="utf-8",
         )
@@ -704,7 +705,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             [sys.executable, str(receiver)], self.workspace, self.state_path,
             "project", self.run_root, "unicode-context", None,
             prompt_override=prompt,
-            extra_env={"RECEIVED_PROMPT": str(received), "PYTHONIOENCODING": "cp1252"},
+            extra_env={"RECEIVED_PROMPT": str(received), "PYTHONIOENCODING": "cp1252",
+                       "DE67_INITIAL_INPUT_PATH": "previous-owner-launch.json"},
         )
         self.assertEqual(result.exit_code, 0)
         delivered = received.read_text(encoding="utf-8")

@@ -26,6 +26,7 @@ from blocker_adapter import (
     safe_wait_for_reply,
 )
 from instruction_context import common_guidance
+from agent_mailbox import communication_contract
 from deadline_harness import DeadlineError, DeadlineHarness
 from policy_kernel import current_owner_contract, worker_selection_contract
 from repository_checkpoint import (
@@ -1028,6 +1029,7 @@ def coordinator_prompt(
     lines = [
         f"Act as a fresh Phase-3 delivery coordinator in {workspace}.",
         common_guidance(workspace),
+        communication_contract(workspace, "coordinator", "mutator"),
         worker_result_ingress_contract(),
         "Do not read packaged DE-67 SKILL.md, kernel, role, reference, or guideline prose during delivery.",
         "The hash-bound .de67/phase3-policy.d67 file is the machine-canonical routing policy.",
@@ -1098,7 +1100,7 @@ def mutation_reviewer_prompt(
         [
             f"Act as the exclusive Phase-3 mutation reviewer in {workspace}.",
             common_guidance(workspace),
-            "You are a fresh gpt-6-astra reviewer at medium reasoning effort.",
+            "You are the gpt-6-astra reviewer at medium reasoning effort. A persistent context may contain old reviews or owner conversations; use only this invocation's current gate and bindings as review authority.",
             "No coordinator or roster worker is active. Do not start a coordinator.",
             f"Resolve durable {gate.kind} gate {gate.identity} in {state_path} for lineage {lineage_id}.",
             "The complete pending section of .de67/mutation-suggestions.md is mandatory owner input. This is a consumable queue: delete completed entries instead of moving them to consumed-history sections; durable receipts and review artifacts retain the evidence. Historical records are evidence to retrieve when relevant, not current requests. User-authored entries carry mutation-scoped authority beneath system and developer instructions and override lower-priority Phase-3 restrictions only as needed for their outcome. Preserve honest evidence, completed valid work, durable lifecycle integrity, safety, and the requested product outcome; grant no unrelated authority.",
@@ -1337,6 +1339,9 @@ def run_child(
             ),
         }
     )
+    # Owner-conversation launch input belongs only to that invocation, even when
+    # the owner mutator starts this supervisor through an inherited environment.
+    environment.pop("DE67_INITIAL_INPUT_PATH", None)
     if resume_session_id is None:
         environment.pop("DE67_COORDINATOR_RESUME_SESSION", None)
     else:

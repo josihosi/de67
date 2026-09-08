@@ -15,6 +15,27 @@ SPEC.loader.exec_module(dashboard_module)
 
 
 class DashboardTests(unittest.TestCase):
+    def test_native_persistent_mutator_activity_replaces_legacy_source(self) -> None:
+        state = self.workspace / '.de67/state'
+        state.mkdir(parents=True, exist_ok=True)
+        config_path = state / 'workspace.json'
+        config = json.loads(config_path.read_text()) if config_path.exists() else {}
+        config['persistent_mutator'] = True
+        config_path.write_text(json.dumps(config))
+        self.assertEqual(dashboard_module.native_mutator_state(self.workspace, 30),
+                         {'glowing': False, 'status': 'idle'})
+        session = {'thread_id': 'astra', 'state': 'active', 'mode': 'conversation'}
+        (state / 'mutator-session.json').write_text(json.dumps(session))
+        (state / 'mutator-input.json').write_text(json.dumps({
+            'thread_id': 'astra', 'workspace': str(self.workspace.resolve()), 'state': 'active',
+            'runner_pid': 123, 'server_pid': 456}))
+        with patch.object(dashboard_module.os, 'kill'):
+            self.assertEqual(dashboard_module.native_mutator_state(self.workspace, 30),
+                             {'glowing': True, 'status': 'conversation'})
+        with patch.object(dashboard_module.os, 'kill', side_effect=ProcessLookupError):
+            self.assertEqual(dashboard_module.native_mutator_state(self.workspace, 30),
+                             {'glowing': False, 'status': 'idle'})
+
     def test_mutator_message_lights_galaxy_until_reply(self) -> None:
         database = self.workspace / "openclaw-agent.sqlite"
         connection = sqlite3.connect(database)

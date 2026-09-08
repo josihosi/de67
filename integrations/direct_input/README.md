@@ -5,14 +5,20 @@ This optional relay sends Discord messages into DE67's existing native agent con
 - Plain messages go to the active mutation reviewer.
 - A leading `coordinator:` routes that message to the active coordinator.
 - Input starts with `User Message:`. No importance keyword is needed.
-- An inactive role's messages wait for its next normal DE67 launch. The relay never
-  launches agents, starts turns, or resumes old conversations to process queued input.
+- With `persistent_mutator` enabled, the first plain owner message starts Astra's
+  mutator session. Later conversations and supervisor reviews resume that same native
+  thread. A process lock prevents two mutator invocations from using it concurrently.
+- Coordinator messages wait for the next normal DE67 launch when Sol is inactive.
 - Intentional DE67 resets remain fresh launches. Only the supervisor's explicit
   `DE67_COORDINATOR_RESUME_SESSION` requests a continuation.
 
 Native workers stay under their coordinator. Codex rejects external App Server input
-to native multi-agent children; the coordinator can forward an owner instruction using
-its normal `send_message` or `followup_task` tools. All roles retain their configured
+to native multi-agent children; owner input is limited to coordinator and mutator.
+Sol replies to workers using native `send_message` or `followup_task`. Workers without
+native outbound messaging use `de-67-3/scripts/agent_mailbox.py`, whose command is
+included in their task brief. Concurrent messages have separate durable records and
+the recipient's adapter serializes delivery into its active turn. Agent messages are
+explicitly distinguished from owner input. All roles retain their configured
 models, effort, full-access sandbox, skills and computer-use capabilities.
 
 ## Runtime
@@ -27,7 +33,8 @@ the adapter. Add these fields to the target workspace's existing
 ```json
 {
   "agent_transport": "app-server",
-  "agent_transport_python": "/absolute/path/to/venv/bin/python"
+  "agent_transport_python": "/absolute/path/to/venv/bin/python",
+  "persistent_mutator": true
 }
 ```
 
@@ -38,6 +45,10 @@ the original transport on the next normal launch.
 
 Each active role publishes `.de67/state/coordinator-input.json` or `mutator-input.json`.
 These are temporary connection bindings; they are removed when that runner exits.
+The mutator's durable identity is `.de67/state/mutator-session.json`; preserve it across
+restarts. Astra uses experimental context management. Conversations may run alongside
+delivery, while applying mutations still requires the existing exclusive review lifecycle.
+The dashboard reads the native mutator binding and persistent session state.
 The adapter preserves the runner's task handoff, event audit, role prompt refresh, and
 context-index recording. App Server diagnostics remain in the run's `app-server.log`.
 

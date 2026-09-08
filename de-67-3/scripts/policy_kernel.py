@@ -22,6 +22,7 @@ if SCRIPT_ROOT not in sys.path:
 import symbol_codec
 from context_library import dispatch_context, selected_sources, task_view, ContextError
 from instruction_context import common_guidance
+from agent_mailbox import communication_contract
 from work_context import context_view, provider_context, record_dispatch, dispatch_evidence_index
 
 
@@ -720,6 +721,7 @@ def unbound_worker_spawns(
                 + "identities and artifact hashes from an agent-authored draft and validates any supplied "
                 + "identities/hashes; its --help gives the exact invocation; do not change coordination records. "
                 + worker_communication_contract()
+                + communication_contract(workspace, task_id)
             )
             task_name = "task_" + task_id.encode("utf-8").hex()
             packet, packet_digest = _write_worker_dispatch_packet(

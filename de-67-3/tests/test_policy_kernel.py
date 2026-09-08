@@ -999,6 +999,8 @@ class PolicyKernelTests(unittest.TestCase):
             workspace = Path(directory)
             de67 = workspace / ".de67"
             de67.mkdir()
+            (de67 / "state").mkdir()
+            (de67 / "state/workspace.json").write_text(json.dumps({"agent_transport": "app-server"}))
             large_route = "worker-only-evidence " * 4000
             (de67 / "work-ledger.md").write_text(
                 f"- [ ] R-LARGE — {large_route}\n", encoding="utf-8"
@@ -1018,6 +1020,9 @@ class PolicyKernelTests(unittest.TestCase):
             call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
             coordinator_json = json.dumps(call, sort_keys=True)
             packet = Path(call["dispatch_packet"]["path"])
+            brief = packet.read_text(encoding="utf-8")
+            self.assertIn("agent_mailbox.py", brief)
+            self.assertIn('"--from", "R-LARGE-exploration-001"', brief)
 
             # Growing private worker evidence must not grow the coordinator response.
             (de67 / "work-ledger.md").write_text(

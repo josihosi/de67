@@ -265,6 +265,21 @@ def _command(codex: str, workspace: Path, environment: dict[str, str]) -> list[s
     sandbox = environment.get("DE67_COORDINATOR_SANDBOX", "danger-full-access").strip()
     if sandbox not in {"read-only", "workspace-write", "danger-full-access"}:
         raise RunnerError(f"Unsupported Codex sandbox: {sandbox}")
+    transport = environment.get("DE67_AGENT_TRANSPORT", "").strip()
+    transport_python = environment.get("DE67_AGENT_TRANSPORT_PYTHON", sys.executable)
+    if not transport:
+        binding = workspace / ".de67" / "state" / "workspace.json"
+        if binding.is_file():
+            settings = json.loads(binding.read_text(encoding="utf-8"))
+            transport = settings.get("agent_transport", "cli")
+            transport_python = settings.get("agent_transport_python", transport_python)
+    if transport == "app-server":
+        if sys.platform == "win32":
+            raise RunnerError("The optional App Server transport requires macOS or Linux")
+        return [transport_python, str(Path(__file__).with_name("codex_app_server_runner.py")),
+                "--codex", codex, "--cwd", str(workspace)]
+    if transport not in {"", "cli"}:
+        raise RunnerError(f"Unsupported agent transport: {transport}")
     resume_session = environment.get("DE67_COORDINATOR_RESUME_SESSION", "").strip()
     command = [codex, "exec", "--sandbox", sandbox]
     if resume_session:
@@ -666,6 +681,10 @@ def run(
     from work_context import record_run
     record_run(workspace, run_directory, selected_environment)
     command = _command(codex, workspace, selected_environment)
+    app_server_transport = len(command) > 1 and command[1] == str(
+        Path(__file__).with_name("codex_app_server_runner.py")
+    )
+    process_environment = {**selected_environment, "DE67_RUNNER_ACTIVE_DIR": str(run_directory)}
     recovered_workers = _initial_recovered_workers(selected_environment)
     loop_guard = CoordinatorLoopGuard(
         initial_unbound_tasks=_initial_unbound_tasks(selected_environment),
@@ -687,7 +706,7 @@ def run(
             process = subprocess.Popen(
                 command,
                 cwd=workspace,
-                env=selected_environment,
+                env=process_environment,
                 stdin=prompt_stream,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -696,7 +715,6 @@ def run(
                 errors="replace",
             )
             if process.stdout is None:
-                process.kill()
                 raise RunnerError("Codex output pipe was not created")
             for line in process.stdout:
                 output_stream.write(line)
@@ -718,6 +736,9 @@ def run(
                     tasks_to_abandon = loop_guard.unbound_tasks
                     raise
             exit_code = _reap(process)
+            if app_server_transport:
+                from codex_app_server_runner import stop_owned_runtime
+                stop_owned_runtime(process, workspace, run_directory, selected_environment)
             process = None
             loop_guard.reconcile_handoffs()
             if loop_guard.unbound_tasks:
@@ -732,9 +753,17 @@ def run(
         if process is not None:
             tasks_to_abandon = loop_guard.unbound_tasks
             try:
-                process.kill()
-            except OSError:
-                pass
+                if app_server_transport:
+                    from codex_app_server_runner import stop_owned_runtime
+                    stop_owned_runtime(process, workspace, run_directory, selected_environment)
+                else:
+                    process.kill()
+            except Exception as cleanup_error:
+                cleanup_errors.append(str(cleanup_error))
+                try:
+                    process.kill()
+                except OSError:
+                    pass
             _reap(process)
         if tasks_to_abandon:
             try:

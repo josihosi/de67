@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""One runner-owned Codex App Server, with a live input address for its coordinator."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import queue
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+
+class RpcError(RuntimeError):
+    def __init__(self, message: str, code: int | None = None):
+        super().__init__(message)
+        self.code = code
+
+
+class Rpc:
+    """JSON RPC over the local, private App Server websocket."""
+
+    def __init__(self, socket: Path):
+        from websockets.exceptions import ConnectionClosed
+        from websockets.sync.client import unix_connect
+        self.closed_error = ConnectionClosed
+        self.connection = unix_connect(str(socket), compression=None, max_size=None)
+        self.notifications: list[dict[str, Any]] = []
+        self.sequence = 0
+
+    def send(self, message: dict[str, Any]) -> None:
+        self.connection.send(json.dumps(message))
+
+    def receive(self, timeout: float = 1) -> dict[str, Any]:
+        try:
+            message = json.loads(self.connection.recv(timeout=timeout))
+        except TimeoutError:
+            raise queue.Empty from None
+        except self.closed_error as error:
+            raise RpcError("Codex App Server connection closed") from error
+        if "id" in message and "method" in message:
+            # This runner is noninteractive, just like codex exec. Do not invent approvals.
+            if message["method"] == "item/tool/requestUserInput":
+                self.send({"id": message["id"], "result": {"answers": {}}})
+            else:
+                self.send({"id": message["id"], "error": {
+                    "code": -32601, "message": "No interactive handler in DE67 runner"}})
+        return message
+
+    def call(self, method: str, params: dict[str, Any], timeout: float = 60) -> Any:
+        self.sequence += 1
+        request_id = self.sequence
+        self.send({"id": request_id, "method": method, "params": params})
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                message = self.receive(min(1, max(.01, deadline - time.monotonic())))
+            except queue.Empty:
+                continue
+            if message.get("id") == request_id and "method" not in message:
+                if "error" in message:
+                    raise RpcError(f"{method}: {message['error']}", message["error"].get("code"))
+                return message.get("result")
+            if "method" in message and "id" not in message:
+                self.notifications.append(message)
+        raise RpcError(f"{method} receipt timed out; delivery may be uncertain")
+
+    def close(self) -> None:
+        self.connection.close()
+
+
+def normalize_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Keep the existing runner's CLI-event audit and worker-binding contract."""
+    kind = item.get("type")
+    result = dict(item)
+    if kind == "commandExecution":
+        result.update(type="command_execution", aggregated_output=item.get("aggregatedOutput"),
+                      exit_code=item.get("exitCode"))
+    elif kind == "collabAgentToolCall":
+        tools = {"spawnAgent": "spawn_agent", "followupTask": "followup_task",
+                 "sendMessage": "send_message", "interruptAgent": "interrupt_agent",
+                 "listAgents": "list_agents", "wait": "wait"}
+        result.update(type="collab_tool_call", tool=tools.get(item.get("tool"), item.get("tool")),
+                      receiver_thread_ids=item.get("receiverThreadIds", []),
+                      agents_states=item.get("agentsStates", {}))
+    elif kind == "agentMessage":
+        result["type"] = "agent_message"
+    if result.get("status") == "inProgress":
+        result["status"] = "in_progress"
+    return result
+
+
+def atomic_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    temp.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    temp.replace(path)
+
+
+def emit(value: dict[str, Any]) -> None:
+    print(json.dumps(value, ensure_ascii=False), flush=True)
+
+
+def socket_path(run_directory: Path, environment: dict[str, str]) -> Path:
+    root = Path(environment.get("CODEX_HOME") or Path.home() / ".codex") / "state" / "de67-input"
+    tag = hashlib.sha256(str(run_directory).encode()).hexdigest()[:16]
+    return root / (tag + ".sock")
+
+
+def process_snapshot() -> dict[int, tuple[int, str, str]]:
+    result = subprocess.run(["ps", "-axo", "pid=,ppid=,lstart=,stat=,command="],
+                            check=True, capture_output=True, text=True)
+    rows = {}
+    for line in result.stdout.splitlines():
+        fields = line.split(maxsplit=8)
+        if len(fields) == 9 and fields[0].isdigit() and fields[1].isdigit() and not fields[7].startswith("Z"):
+            rows[int(fields[0])] = (int(fields[1]), " ".join(fields[2:7]), fields[8])
+    return rows
+
+
+def stop_owned_runtime(process: Any, workspace: Path, run_directory: Path,
+                       environment: dict[str, str]) -> None:
+    """Outer-runner cleanup, including an adapter killed before its finally block.
+
+    Keep the supervisor's existing process group intact. Select only this child tree,
+    or its orphaned server's unique run socket, and recheck birth identity before signals.
+    """
+    socket = socket_path(run_directory, environment)
+    rows = process_snapshot()
+    roots = {process.pid} if process.poll() is None else set()
+    roots.update(pid for pid, (_, _, command) in rows.items()
+                 if command.endswith(f"app-server --listen unix://{socket}"))
+    owned = set(roots)
+    while True:
+        children = {pid for pid, (parent, _, _) in rows.items() if parent in owned}
+        if children <= owned:
+            break
+        owned.update(children)
+    identities = {pid: rows[pid][1] for pid in owned if pid in rows}
+
+    def alive() -> dict[int, str]:
+        current = process_snapshot()
+        return {pid: birth for pid, birth in identities.items()
+                if pid in current and current[pid][1] == birth
+                and "<defunct>" not in current[pid][2]}
+
+    def signal_owned(signum: int) -> None:
+        for pid in alive():
+            try:
+                os.kill(pid, signum)
+            except ProcessLookupError:
+                pass
+
+    signal_owned(signal.SIGTERM)
+    deadline = time.monotonic() + 10
+    while alive() and time.monotonic() < deadline:
+        process.poll()  # Reap the adapter while observing its descendants.
+        time.sleep(.05)
+    signal_owned(signal.SIGKILL)
+    role = "mutator" if environment.get("DE67_PROCESS_ROLE") == "mutation-reviewer" else "coordinator"
+    address = workspace / ".de67/state" / f"{role}-input.json"
+    try:
+        binding = json.loads(address.read_text(encoding="utf-8"))
+        if binding.get("runner_pid") == process.pid and binding.get("socket") == str(socket):
+            address.unlink()
+    except (OSError, ValueError):
+        pass
+    socket.unlink(missing_ok=True)
+
+
+def run(codex: str, workspace: Path, prompt: str) -> int:
+    if sys.platform == "win32":
+        raise RpcError("The optional Unix App Server transport requires macOS or Linux")
+    run_directory = Path(os.environ["DE67_RUNNER_ACTIVE_DIR"])
+    socket = socket_path(run_directory, os.environ)
+    socket.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    process_role = os.environ.get("DE67_PROCESS_ROLE", "coordinator")
+    if process_role not in {"coordinator", "mutation-reviewer"}:
+        raise RpcError(f"Unsupported App Server role: {process_role}")
+    role = "mutator" if process_role == "mutation-reviewer" else "coordinator"
+    address = workspace / ".de67" / "state" / f"{role}-input.json"
+    parent_pid = os.getppid()
+    server: subprocess.Popen[Any] | None = None
+    rpc: Rpc | None = None
+    stopping = False
+
+    def stop(_signum: int, _frame: Any) -> None:
+        nonlocal stopping
+        stopping = True
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, stop)
+    try:
+        with (run_directory / "app-server.log").open("a", encoding="utf-8") as log:
+            server = subprocess.Popen([codex, "app-server", "--listen", f"unix://{socket}"],
+                                      stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+            ready_by = time.monotonic() + 30
+            while not socket.exists():
+                if server.poll() is not None or time.monotonic() >= ready_by or stopping:
+                    raise RpcError("Runner-owned App Server did not open its socket")
+                time.sleep(.05)
+            rpc = Rpc(socket)
+            rpc.call("initialize", {"clientInfo": {"name": "de67_runner", "version": "1.0"},
+                                    "capabilities": {"experimentalApi": True}})
+            rpc.send({"method": "initialized", "params": {}})
+            model = os.environ.get("DE67_COORDINATOR_MODEL", "gpt-5.6-sol")
+            effort = os.environ.get("DE67_COORDINATOR_REASONING_EFFORT", "low")
+            params: dict[str, Any] = {
+                "cwd": str(workspace), "model": model, "approvalPolicy": "never",
+                "sandbox": os.environ.get("DE67_COORDINATOR_SANDBOX", "danger-full-access"),
+                "config": {"model_reasoning_effort": effort},
+            }
+            resume = os.environ.get("DE67_COORDINATOR_RESUME_SESSION", "").strip()
+            if resume:
+                params.update(threadId=resume, excludeTurns=True)
+            thread = rpc.call("thread/resume" if resume else "thread/start", params)["thread"]
+            thread_id = thread["id"]
+            emit({"type": "thread.started", "thread_id": thread_id})
+            turn = rpc.call("turn/start", {"threadId": thread_id, "effort": effort,
+                            "input": [{"type": "text", "text": prompt}]})["turn"]
+            turn_id = turn["id"]
+            binding = {"workspace": str(workspace), "role": role,
+                       "run_id": os.environ.get("DE67_COORDINATOR_RUN_ID"),
+                       "runner_pid": os.getpid(), "server_pid": server.pid, "socket": str(socket),
+                       "thread_id": thread_id, "turn_id": turn_id, "state": "active"}
+            atomic_json(address, binding)
+            pending = rpc.notifications
+            rpc.notifications = []
+            while not stopping:
+                if os.getppid() != parent_pid:
+                    raise RpcError("Owning DE67 runner exited")
+                try:
+                    message = pending.pop(0) if pending else rpc.receive()
+                except queue.Empty:
+                    continue
+                method = message.get("method")
+                payload = message.get("params", {})
+                if payload.get("threadId") != thread_id:
+                    continue
+                if not str(method).endswith("/delta") and not str(method).endswith("/outputDelta"):
+                    emit({"type": "app_server.notification", **message})
+                if method in {"item/started", "item/completed"}:
+                    emit({"type": method.replace("/", "."), "item": normalize_item(payload["item"])})
+                elif method == "turn/started":
+                    emit({"type": "turn.started", "turn_id": payload["turn"]["id"]})
+                elif method == "turn/completed" and payload["turn"]["id"] == turn_id:
+                    binding["state"] = "finished"
+                    atomic_json(address, binding)
+                    emit({"type": "turn.completed", "turn_id": turn_id})
+                    return 0 if payload["turn"]["status"] == "completed" else 1
+            return 130
+    finally:
+        try:
+            if address.exists() and json.loads(address.read_text(encoding="utf-8")).get("runner_pid") == os.getpid():
+                address.unlink()
+        except (OSError, ValueError):
+            pass
+        try:
+            if rpc is not None:
+                rpc.close()
+        finally:
+            try:
+                if server is not None and server.poll() is None:
+                    server.terminate()
+                    try:
+                        server.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        server.kill()
+                        server.wait()
+            finally:
+                socket.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--codex", required=True)
+    parser.add_argument("--cwd", required=True)
+    args = parser.parse_args()
+    try:
+        raise SystemExit(run(args.codex, Path(args.cwd).resolve(), sys.stdin.read()))
+    except (RpcError, OSError, KeyError) as error:
+        print(f"DE67 App Server: {error}", file=sys.stderr)
+        raise SystemExit(2)

@@ -1521,7 +1521,7 @@ def render_fuel(fuel: dict[str, Any]) -> str:
               '<circle cx="15" cy="8" r="2" fill="#101318"/>'
               '<path d="M5 6L0 8L5 10Z" fill="currentColor" opacity=".55"/></svg>')
     legend = '<div class="fuel-legend">' + "".join(
-        f'<span><i style="color:{color}">{rocket}</i>{label.removeprefix("worker ")}</span>'
+        f'<span><i style="color:{color}" aria-hidden="true"></i>{label.removeprefix("worker ")}</span>'
         for role, label, color in roles) + '</div>'
     rows = "".join(
         f'<span title="{_escape(label)}: {totals[role]:,} fresh tokens" aria-label="{_escape(label)}: {totals[role]:,} fresh tokens">'
@@ -2075,10 +2075,9 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 .fuel-bar-axis span:first-child{{transform:none}}.fuel-bar-axis span:last-child{{transform:translateX(-100%)}}
 .fuel>span{{display:block;font-size:9px;color:#777480}}
 .fuel .fuel-period{{font-size:8px;color:#96909f}}
-.fuel .fuel-legend{{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:15px 0 20px}}
+.fuel .fuel-legend{{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:15px 0 20px;padding:10px;border:1px solid #39313f;border-radius:6px}}
 .fuel-legend>span{{display:flex;align-items:center;gap:6px;font-size:9px;color:#b1a9bb}}
-.fuel-legend i{{display:inline-block;width:24px;height:16px;flex-shrink:0}}
-.fuel-legend i svg{{width:24px;height:16px;margin:0}}
+.fuel-legend i{{display:inline-block;width:20px;height:6px;border-radius:2px;background:currentColor;flex-shrink:0}}
 .fuel-bars{{display:grid;gap:13px;padding-right:48px}}
 .fuel-bars>small{{font-size:8px;color:#96909f;margin:0;white-space:nowrap}}
 .fuel-bars>span{{position:relative;display:flex;align-items:center;height:8px}}

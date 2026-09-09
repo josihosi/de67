@@ -162,7 +162,8 @@ def read_sidecar(script: Path, workspace: Path, state: Path, claim: str) -> dict
 
 
 def render_trajectory(report: dict[str, Any], briefing: dict[str, Any] | None = None,
-                      *, stale: bool = False, error: str | None = None) -> str:
+                      *, stale: bool = False, error: str | None = None,
+                      context: dict[str, Any] | None = None) -> str:
     if briefing is not None and not isinstance(briefing, dict):
         briefing = {"error": "invalid briefing cache"}
     raw_gaps = report.get("gaps")
@@ -181,6 +182,12 @@ def render_trajectory(report: dict[str, Any], briefing: dict[str, Any] | None = 
                                       or any(item.get("status") == "active" for item in subtasks))
     state = ("Last recorded trajectory · update unavailable" if stale else
              "Active trajectory" if live else "Recorded trajectory" if axes else "No active trajectory")
+    context_label = " · ".join(
+        f"{label} {_escape(value)}" for label, value in (context or {}).items()
+        if value is not None and value != ""
+    )
+    header_label = context_label or (state if axes or stale else "")
+    state_label = f"<span>{header_label}</span>" if header_label else ""
     notices = []
     if error and error != "no active claim":
         notices.append(f'<p class="radar-notice">Trajectory unavailable · {_escape(error)}</p>')
@@ -189,7 +196,7 @@ def render_trajectory(report: dict[str, Any], briefing: dict[str, Any] | None = 
                        + (' · showing the last saved briefing.' if headline else '.') + '</p>')
     return (
         '<section class="trajectory"><header class="radar-briefing">'
-        f'<div class="radar-kicker">NAVIGATION <span>{_escape(state)}</span></div>'
+        f'<div class="radar-kicker">NAVIGATION {state_label}</div>'
         f'<h2><strong>{_escape(headline or ("Tracking " + str(report.get("claim", "the current work")) if axes else "Standing by for the next trajectory."))}</strong></h2></header>'
         f'{"".join(notices)}'
         f'{render_attention_spider(report, axes, gaps, bool(subtasks), live=live)}'
@@ -1895,6 +1902,8 @@ class Dashboard:
             blocked_html = render_work_digest(ledger_data["blocked"])
             sidecar_html = render_trajectory(
                 sidecar.get("data") or {}, fratbro if self.fratbro_cache else None,
+                context={"claim": active_claim, "deadline generation": deadline.get("generation"),
+                         "restart": restart.get("generation")},
                 stale=bool(sidecar.get("stale")),
                 error=sidecar.get("error") if self.sidecar_script else None,
             ) if self.sidecar_script or self.fratbro_cache else ""
@@ -2160,7 +2169,7 @@ code,pre{{background:#15111b}}
 @media(prefers-reduced-motion:reduce){{.sun,.sun .sun-corona,.sun-aura,.sun-rim,.sun-surface{{transition:none;animation:none}}}}
 
 .trajectory{{--radar-font:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;font-family:var(--radar-font);position:relative;padding:28px 28px 20px;background:none;border:0;border-radius:0}}
-.trajectory::before{{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(#80628d,#80628d) left top/26px 1px no-repeat,linear-gradient(#80628d,#80628d) left top/1px 22px no-repeat,linear-gradient(#80628d,#80628d) right top/26px 1px no-repeat,linear-gradient(#80628d,#80628d) right top/1px 22px no-repeat,linear-gradient(#80628d,#80628d) left bottom/26px 1px no-repeat,linear-gradient(#80628d,#80628d) left bottom/1px 22px no-repeat,linear-gradient(#80628d,#80628d) right bottom/26px 1px no-repeat,linear-gradient(#80628d,#80628d) right bottom/1px 22px no-repeat}}
+.trajectory::before{{content:"";position:absolute;inset:0;pointer-events:none;border:1px solid #80628d;border-radius:8px;mask:linear-gradient(#000 0 0) left top/26px 22px no-repeat,linear-gradient(#000 0 0) right top/26px 22px no-repeat,linear-gradient(#000 0 0) left bottom/26px 22px no-repeat,linear-gradient(#000 0 0) right bottom/26px 22px no-repeat}}
 .trajectory .radar-briefing{{display:block;margin:0;padding:0 0 22px;border:0}}
 .radar-kicker{{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#caabd6;font-size:10px;letter-spacing:.18em;line-height:1.6;padding-top:12px;border-top:1px solid #594262}}
 .radar-kicker span{{display:inline;color:#a99bad;letter-spacing:.04em;font-size:10px}}

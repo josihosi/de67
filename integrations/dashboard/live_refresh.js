@@ -9,6 +9,35 @@
   const reading = () => Boolean(window.getSelection()?.toString());
   const paused = () => document.hidden || reading();
 
+  function drawRadars() {
+    for (const stage of main.querySelectorAll(".radar-stage")) {
+      const links = stage.querySelector(".radar-links");
+      if (!links) continue;
+      links.replaceChildren();
+      if (getComputedStyle(links).display === "none") continue;
+      const origin = stage.getBoundingClientRect();
+      links.setAttribute("viewBox", `0 0 ${origin.width} ${origin.height}`);
+      for (const card of stage.querySelectorAll("[data-radar-index]")) {
+        const marker = stage.querySelector(`[data-radar-marker="${card.dataset.radarIndex}"]`);
+        if (!marker) continue;
+        const from = card.getBoundingClientRect(), to = marker.getBoundingClientRect();
+        const x2 = to.x + to.width / 2 - origin.x, y2 = to.y + to.height / 2 - origin.y;
+        const x1 = (from.right < to.x ? from.right : from.left) - origin.x;
+        const y1 = from.y + from.height / 2 - origin.y;
+        const bend = x1 + (x2 - x1) * .4;
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", `M${x1},${y1} C${bend},${y1} ${bend},${y2} ${x2},${y2}`);
+        links.append(path);
+      }
+    }
+  }
+  const radarObserver = new ResizeObserver(drawRadars);
+  function observeRadars() {
+    radarObserver.disconnect();
+    for (const stage of main.querySelectorAll(".radar-stage")) radarObserver.observe(stage);
+    drawRadars();
+  }
+
   function morph(current, incoming) {
     if (current.isEqualNode(incoming)) return current;
     if (current.nodeType !== incoming.nodeType || current.nodeName !== incoming.nodeName) {
@@ -81,6 +110,7 @@
     for (const id of ["dashboard-header", "dashboard-content", "dashboard-sources"]) {
       morph(document.getElementById(id), incoming.querySelector(`#${id}`));
     }
+    observeRadars();
     const anchor = anchors.find(([node]) => node.isConnected);
     if (scroll === 0) window.scrollTo(window.scrollX, 0);
     else if (anchor) window.scrollBy(0, anchor[0].getBoundingClientRect().top - anchor[1]);
@@ -126,5 +156,7 @@
     if (reading()) status.textContent = "Updates paused · text selected";
     else status.textContent = interval > 0 ? `Live · every ${interval / 1000}s` : "Manual refresh";
   });
+  observeRadars();
+  document.fonts.ready.then(drawRadars);
   schedule();
 })();

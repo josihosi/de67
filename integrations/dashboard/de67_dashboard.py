@@ -161,7 +161,10 @@ def read_sidecar(script: Path, workspace: Path, state: Path, claim: str) -> dict
     return value
 
 
-def render_trajectory(report: dict[str, Any]) -> str:
+def render_trajectory(report: dict[str, Any], briefing: dict[str, Any] | None = None,
+                      *, stale: bool = False, error: str | None = None) -> str:
+    if briefing is not None and not isinstance(briefing, dict):
+        briefing = {"error": "invalid briefing cache"}
     raw_gaps = report.get("gaps")
     gaps = [
         gap if isinstance(gap, dict) else {"summary": str(gap)}
@@ -173,39 +176,49 @@ def render_trajectory(report: dict[str, Any]) -> str:
         for item in raw_subtasks
     ] if isinstance(raw_subtasks, list) else []
     axes = subtasks or gaps
-    if not axes:
-        return '<section class="trajectory"><h2>Trajectory sidecar</h2><p class="subtle">No closure trajectory.</p></section>'
+    headline, details = briefing_content(briefing or {})
+    live = bool(axes) and not stale and (report.get("latest_task_result") == "active"
+                                      or any(item.get("status") == "active" for item in subtasks))
+    state = ("Last recorded trajectory · update unavailable" if stale else
+             "Active trajectory" if live else "Recorded trajectory" if axes else "No active trajectory")
+    notices = []
+    if error and error != "no active claim":
+        notices.append(f'<p class="radar-notice">Trajectory unavailable · {_escape(error)}</p>')
+    if briefing and (briefing.get("stale") or briefing.get("error")):
+        notices.append('<p class="radar-notice">Briefing update unavailable'
+                       + (' · showing the last saved briefing.' if headline else '.') + '</p>')
     return (
-        '<section class="trajectory"><h2>Trajectory sidecar</h2>'
-        f'{render_attention_spider(report, axes, gaps, bool(subtasks))}'
+        '<section class="trajectory"><header class="radar-briefing">'
+        f'<div class="radar-kicker">MISSION RADAR <span>{_escape(state)}</span></div>'
+        f'<h2><strong>{_escape(headline or ("Tracking " + str(report.get("claim", "the current work")) if axes else "Standing by for the next trajectory."))}</strong></h2></header>'
+        f'{"".join(notices)}'
+        f'{render_attention_spider(report, axes, gaps, bool(subtasks), live=live)}'
+        f'<div class="radar-details">{details}</div>'
         '</section>'
     )
 
 
-def render_fratbro_status(value: dict[str, Any]) -> str:
+def briefing_content(value: dict[str, Any]) -> tuple[str, str]:
+    """Keep the recorded headline and every detail in the combined radar panel."""
     summary = value.get("summary") if isinstance(value, dict) else None
     if isinstance(summary, dict) and "headline" in summary:
         fields = "".join(
-            f'<div class="brief-field"><small>{label}</small><p>{_escape(summary.get(key, ""))}</p></div>'
+            f'<div class="radar-detail"><h3>{label}</h3><p>{_escape(summary.get(key, ""))}</p></div>'
             for key, label in (("changed", "What changed"), ("next", "Next"), ("snag", "Obstacle"))
             if summary.get(key)
         )
-        return ('<section class="fratbro"><div class="eyebrow">BRIEFING</div>'
-                f'<h2>{_escape(summary.get("headline", ""))}</h2><div class="brief-grid">{fields}</div></section>')
+        return str(summary.get("headline", "")), fields
     if isinstance(summary, dict):
         parts = [str(summary.get(key, "")).strip()
                  for key in ("cooking", "changed", "snag", "next", "health")
                  if str(summary.get(key, "")).strip()]
     elif isinstance(summary, str):
-        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z])", summary.strip())
+        parts = [part for part in re.split(r"(?<=[.!?])\s+", summary.strip(), maxsplit=1) if part]
     else:
         parts = []
     if not parts:
-        return '<section class="fratbro"><h2>Briefing</h2><p class="subtle">Waiting for a fresh briefing.</p></section>'
-    lead = parts[0]
-    return ('<section class="fratbro"><div class="eyebrow">BRIEFING</div>'
-            f'<h2>At a glance</h2><p class="brief-lead">{_escape(lead)}</p>'
-            f'<a class="text-link" href="/briefing">Read the full briefing ↗</a></section>')
+        return "", ""
+    return parts[0], "".join(f'<p>{_escape(part)}</p>' for part in parts[1:])
 
 
 def worker_dot_positions(count: int) -> list[tuple[float, float]]:
@@ -310,6 +323,7 @@ def render_attention_spider(
     axes_data: list[dict[str, Any]],
     gaps: list[dict[str, Any]],
     uses_subtasks: bool = False,
+    *, live: bool = False,
 ) -> str:
     gap_ids = [
         str(axis.get("subtask_id" if uses_subtasks else "gap_id", "?"))
@@ -317,44 +331,53 @@ def render_attention_spider(
     ]
     raw_series = report.get("attention")
     series = [item for item in raw_series if isinstance(item, dict)] if isinstance(raw_series, list) else []
-    radius = max(174, len(gap_ids) * 18)
-    node_radius = radius + 80
-    size = node_radius * 2 + 130
+    radius = max(174, len(gap_ids) * 12)
+    size = radius * 2 + 100
     center = size / 2
 
     def point(index: int, distance: float) -> tuple[float, float]:
-        angle = -math.pi / 2 + (2 * math.pi * index / len(gap_ids))
+        angle = -math.pi / 2 + (2 * math.pi * index / max(1, len(gap_ids)))
         return center + distance * math.cos(angle), center + distance * math.sin(angle)
 
     grid: list[str] = []
     for fraction in (0.25, 0.5, 0.75, 1.0):
-        coordinates = " ".join(
-            f"{x:.1f},{y:.1f}" for x, y in (point(index, radius * fraction) for index in range(len(gap_ids)))
-        )
-        grid.append(f'<polygon points="{coordinates}" />')
+        grid.append(f'<circle cx="{center}" cy="{center}" r="{radius * fraction}" />')
+    for bearing in range(0, 360, 5):
+        angle = math.radians(bearing)
+        inner = radius + (13 if bearing % 30 == 0 else 18)
+        outer = radius + 23
+        grid.append(f'<line x1="{center + inner * math.cos(angle):.1f}" y1="{center + inner * math.sin(angle):.1f}" '
+                    f'x2="{center + outer * math.cos(angle):.1f}" y2="{center + outer * math.sin(angle):.1f}" />')
     axes: list[str] = []
     nodes: list[str] = []
+    node_data: list[tuple[str, str, str, str, str, float, float]] = []
+    cards: dict[str, list[tuple[float, str]]] = {"left": [], "right": []}
     latest_gap = str(report.get("latest_task_gap") or "")
     for index, (gap_id, gap) in enumerate(zip(gap_ids, axes_data)):
         x, y = point(index, radius)
-        node_x, node_y = point(index, node_radius)
         axes.append(f'<line x1="{center:.1f}" y1="{center:.1f}" x2="{x:.1f}" y2="{y:.1f}" />')
         status = str(gap.get("status", "open"))
         active = status == "active" if uses_subtasks else (
             gap_id == latest_gap and report.get("latest_task_result") == "active"
         )
         tone = "active" if active else "proved" if status in {"proved", "done"} else "open"
-        summary = " ".join(str(gap.get("summary", "")).split())
-        nodes.append(
-            f'<g class="trajectory-node {tone}" transform="translate({node_x - 58:.1f} {node_y - 28:.1f})">'
-            f'<title>{_escape(summary)}</title><rect width="116" height="56" rx="8" />'
-            f'<text x="58" y="21">{_escape(gap_id)}'
-            f'{"" if uses_subtasks else " r" + _escape(gap.get("revision", "?"))}</text>'
-            f'<text class="node-state" x="58" y="41">{_escape("active" if active else status)}'
-            f'{"" if uses_subtasks else " · " + _escape(gap.get("attempts", 0)) + " attempts"}</text></g>'
-        )
+        summary = " ".join(str(gap.get("summary", "No explanation recorded.")).split())
+        label = gap_id + ("" if uses_subtasks else " r" + str(gap.get("revision", "?")))
+        state = ("active" if active else status) + ("" if uses_subtasks else " · " + str(gap.get("attempts", 0)) + " attempts")
+        contact = f"{index + 1:02d}"
+        node_data.append((label, state, summary, tone, contact, x, y))
+        side = "left" if x < center - 1 or (abs(x - center) <= 1 and index == 0) else "right"
+        cards[side].append((y,
+            f'<article id="trajectory-contact-{index}" class="radar-contact {tone}" data-radar-index="{index}" style="--contact-order:{index + 1}">'
+            f'<div class="radar-contact-heading"><span class="contact-number">{contact}</span>'
+            f'<span class="contact-id">{_escape(label)}</span></div>'
+            f'<p>{_escape(summary)}</p><span class="contact-state">{_escape(state)}</span></article>'
+        ))
 
     shapes: list[str] = []
+    headings: list[str] = []
+    destinations: list[str] = []
+    measurements: dict[int, list[str]] = {}
     legend: list[str] = []
     available_keys = {"target", "code", "test", "result"}
     for item in series:
@@ -377,23 +400,51 @@ def render_attention_spider(
                 raw = max(0.0, float(entry.get("raw_relation", 0)))
             except (TypeError, ValueError):
                 raw = 0.0
+            measurements.setdefault(index, []).append(
+                f'{item.get("label", key)} · relative {relative:.2f} · cosine {raw:.3f}')
             x, y = point(index, radius * relative)
             coordinates.append(f"{x:.1f},{y:.1f}")
             circles.append(
                 f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3"><title>{_escape(str(item.get("label", key)))} '
                 f'→ {_escape(gap_id)} · relative {relative:.2f} · cosine {raw:.3f}</title></circle>'
             )
+            if key == "target" and relative > 0:
+                course = f'M{center:.1f},{center:.1f} L{x:.1f},{y:.1f}'
+                ship_x, ship_y = point(index, radius * relative * .78)
+                bearing = math.degrees(math.atan2(y - center, x - center)) + 90
+                headings.append(
+                    f'<g class="assigned-bearing{" heading-live" if live else ""}" data-assigned-index="{index}">'
+                    f'<title>{"Assigned to" if live else "Last assignment"} {_escape(gap_id)}</title>'
+                    f'<path class="assigned-course-halo" d="{course}" />'
+                    f'<path class="assigned-course" d="{course}" />'
+                    f'<g class="assigned-ship" transform="translate({ship_x:.1f} {ship_y:.1f}) rotate({bearing:.1f})">'
+                    '<path class="ship-exhaust" d="M-3 9 L0 21 L3 9Z" />'
+                    '<path d="M0 -12 L8 9 L0 5 L-8 9Z" /></g></g>'
+                )
+                destinations.append(f'<a href="#trajectory-contact-{index}">{index + 1:02d} · {_escape(gap_id)}</a>')
         label = str(item.get("label", key))
         source = str(item.get("source", ""))
-        shapes.append(
-            f'<g class="attention-series attention-{css_key}"><polygon points="{" ".join(coordinates)}">'
-            f'<title>{_escape(label)} · {_escape(source)}</title></polygon>{"".join(circles)}</g>'
-        )
+        if key != "target":
+            shapes.append(
+                f'<g class="attention-series attention-{css_key}"><polygon points="{" ".join(coordinates)}">'
+                f'<title>{_escape(label)} · {_escape(source)}</title></polygon>{"".join(circles)}</g>'
+            )
         legend.append(
             f'<span title="{_escape(source)}"><i class="attention-key attention-{css_key}"></i>{_escape(label)}</span>'
         )
+    for index, (label, state, summary, tone, contact, x, y) in enumerate(node_data):
+        # Boundary markers cover maximum-attention points; retain all their values
+        # in the marker tooltip as well as on the individual series points.
+        tooltip = " · ".join([label, state, summary, *measurements.get(index, [])])
+        nodes.append(
+            f'<a href="#trajectory-contact-{index}" class="trajectory-node {tone}">'
+            f'<title>{_escape(tooltip)}</title>'
+            f'<circle data-radar-marker="{index}" cx="{x:.1f}" cy="{y:.1f}" r="15" />'
+            f'<text x="{x:.1f}" y="{y + 4:.1f}">{contact}</text></a>'
+        )
     gap_cards: list[str] = []
-    for gap in gaps:
+    # The side cards already contain gap descriptions unless the map uses subtasks.
+    for gap in gaps if uses_subtasks else []:
         gap_id = str(gap.get("gap_id", "?"))
         summary = " ".join(str(gap.get("summary", "No explanation recorded.")).split())
         status = str(gap.get("status", "open"))
@@ -407,17 +458,29 @@ def render_attention_spider(
         )
     return (
         f'<article class="attention-panel"><div class="attention-heading"><h3>'
-        f'{"Subtask attention" if uses_subtasks else "Attention spider"}</h3>'
+        f'{"Subtask constellation" if uses_subtasks else "Work constellation"}</h3>'
         f'<span>{"Relative pull · not completion" if series else "Waiting for attention data"}</span></div>'
-        f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="Attention distribution across '
+        f'<div class="radar-stage{" radar-idle" if not axes_data else ""}">'
+        '<svg class="radar-links" aria-hidden="true"></svg>'
+        '<div class="radar-scope">'
+        f'<svg class="radar-map" viewBox="0 0 {size} {size}" role="img" aria-label="Attention distribution across '
         f'{"ledger subtasks" if uses_subtasks else "closure gaps"}">'
+        f'<circle class="radar-disc" cx="{center}" cy="{center}" r="{radius + 27}" />'
         f'<g class="attention-grid">{"".join(grid)}{"".join(axes)}</g>'
-        f'{"".join(shapes)}<g class="attention-nodes">{"".join(nodes)}</g></svg>'
+        f'<path class="radar-origin" d="M{center - 8} {center}h16 M{center} {center - 8}v16" />'
+        f'{"".join(shapes)}{"".join(headings)}<g class="attention-nodes">{"".join(nodes)}</g></svg>'
+        f'{"<p class=radar-standby>No active trajectory<br><span>Awaiting work coordinates</span></p>" if not axes_data else ""}'
+        '</div>'
+        f'<div class="radar-contacts radar-left">{"".join(card for _, card in sorted(cards["left"]))}</div>'
+        f'<div class="radar-contacts radar-right">{"".join(card for _, card in sorted(cards["right"]))}</div></div>'
+        + (f'<div class="assigned-destination"><span>{"Assigned to" if live else "Last assignment"}</span>'
+           f'{"".join(destinations)}</div>' if destinations else '') +
         f'<div class="attention-legend">{"".join(legend)}</div>'
-        f'<div class="attention-claim"><strong>{_escape(report.get("claim", "Claim"))}</strong>'
-        f'<span>{_escape(report.get("latest_task") or "No active attempt")}</span></div>'
+        + (f'<div class="attention-claim"><strong>{_escape(report.get("claim", ""))}</strong>'
+           f'<span>{_escape(report.get("latest_task") or "No active attempt")}</span></div>'
+           if report.get("claim") or report.get("latest_task") else '') +
         f'<div class="gap-explanations">{"".join(gap_cards)}</div>'
-        '<p>Each line is scaled to its own strongest gap. Hover a point for raw cosine similarity.</p>'
+        + ('<p>Each line is scaled to its own strongest work item. Hover a point for raw cosine similarity.</p>' if series else '') +
         '</article>'
     )
 
@@ -1571,10 +1634,9 @@ class Dashboard:
             )
             if signature == self._sidecar_signature and "sidecar" in self._good:
                 return self._good["sidecar"]
-            if not claim:
-                raise ValueError("no active claim")
             value = {
-                "data": read_sidecar(self.sidecar_script, self.workspace, state, claim),
+                "data": (read_sidecar(self.sidecar_script, self.workspace, state, claim)
+                         if claim else {"gaps": [], "subtasks": []}),
                 "observed": time.time(), "stale": False, "error": None,
             }
             self._sidecar_signature = signature
@@ -1831,15 +1893,11 @@ class Dashboard:
                 if ledger_data["waiting"] else ""
             )
             blocked_html = render_work_digest(ledger_data["blocked"])
-            if sidecar.get("data"):
-                sidecar_html = render_trajectory(sidecar["data"])
-            elif sidecar.get("error") == "not configured":
-                sidecar_html = ""
-            else:
-                sidecar_html = (
-                    '<section class="trajectory"><h2>Trajectory sidecar</h2>'
-                    f'<p class="subtle">Unavailable · {_escape(sidecar.get("error", "no report"))}</p></section>'
-                )
+            sidecar_html = render_trajectory(
+                sidecar.get("data") or {}, fratbro if self.fratbro_cache else None,
+                stale=bool(sidecar.get("stale")),
+                error=sidecar.get("error") if self.sidecar_script else None,
+            ) if self.sidecar_script or self.fratbro_cache else ""
             details = " · ".join(filter(None, [
                 f'claim {_escape(active_claim)}' if active_claim else "",
                 f'gap {_escape(task.get("closure_gap_id"))} r{_escape(task.get("closure_gap_revision"))}' if task.get("closure_gap_id") else "",
@@ -1854,8 +1912,7 @@ class Dashboard:
                     f'<span>{_escape(finding.get("short_verdict", ""))}</span>'
                     f'<em>{_escape(finding_age)}</em></div>'
                 )
-            fratbro_html = render_fratbro_status(fratbro) if self.fratbro_cache else ""
-            body = f'{cosmos_html}{sidecar_html}{fratbro_html}{finding_html}<section class="work-section"><div class="eyebrow">THE WORK / CURRENT SCOPE</div><h2>Work in focus</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section class="work-section"><div class="eyebrow">ON THE HORIZON</div><h2>Up next</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section class="work-section"><div class="eyebrow">NEEDS ATTENTION</div><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
+            body = f'{cosmos_html}{sidecar_html}{finding_html}<section class="work-section"><div class="eyebrow">THE WORK / CURRENT SCOPE</div><h2>Work in focus</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section class="work-section"><div class="eyebrow">ON THE HORIZON</div><h2>Up next</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section class="work-section"><div class="eyebrow">NEEDS ATTENTION</div><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
         # Stable region IDs let the browser update optional panels in place.
         for css, key in (("cosmos", "campaign"), ("trajectory", "trajectory"),
                          ("fratbro", "briefing"), ("activity", "finding"),
@@ -2101,6 +2158,68 @@ code,pre{{background:#15111b}}
 .sun.on.activity-working .sun-aura{{opacity:.85}}.sun.on.activity-working .sun-rim{{opacity:.9}}
 @keyframes solar-breath{{0%,100%{{transform:scale(1)}}50%{{transform:scale(1.035)}}}}
 @media(prefers-reduced-motion:reduce){{.sun,.sun .sun-corona,.sun-aura,.sun-rim,.sun-surface{{transition:none;animation:none}}}}
+
+.trajectory{{--radar-font:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;font-family:var(--radar-font);padding:28px 28px 20px;background:radial-gradient(ellipse at 50% 32%,#45265022,transparent 65%),linear-gradient(155deg,#211b2988,#17141d99);border:1px solid #49394f;border-radius:16px}}
+.trajectory .radar-briefing{{display:block;margin:0;padding:0 0 22px;border:0}}
+.radar-kicker{{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#caabd6;font-size:10px;letter-spacing:.18em;line-height:1.6}}
+.radar-kicker span{{display:inline;color:#a99bad;letter-spacing:.04em;font-size:10px}}
+.trajectory .radar-briefing h2{{font:600 clamp(17px,1.9vw,23px)/1.55 var(--radar-font);letter-spacing:-.025em;max-width:76ch;margin:13px 0 0;overflow-wrap:anywhere}}
+.radar-briefing strong{{font:inherit;color:#eee4f1}}
+.trajectory .attention-panel{{padding:18px 0 0;border:0;border-top:1px solid #46374c;border-radius:0;background:none;overflow:visible}}
+.attention-heading{{gap:12px;flex-wrap:wrap}}.trajectory .attention-heading h3{{font:500 11px/1.5 var(--radar-font);color:#bdaac5;letter-spacing:.08em;text-transform:uppercase}}
+.trajectory .attention-heading>span{{font-size:10px;color:#a69aaa}}
+.radar-stage{{position:relative;isolation:isolate;display:grid;grid-template-areas:"left map right";grid-template-columns:minmax(0,1fr) minmax(240px,1.85fr) minmax(0,1fr);gap:22px;align-items:center;margin:18px 0}}
+.radar-scope{{grid-area:map;min-width:0;position:relative;background:radial-gradient(ellipse,#7750960a,transparent 65%)}}
+.trajectory .radar-map{{display:block;width:100%;min-width:0;height:auto;overflow:visible}}
+.trajectory .radar-links{{position:absolute;inset:0;z-index:-1;display:block;width:100%;height:100%;min-width:0;pointer-events:none;overflow:visible}}
+.radar-links path{{fill:none;stroke:#9d77af;stroke-width:1;opacity:.38}}
+.radar-disc{{fill:#1e1724;fill-opacity:.55;stroke:#8b659655;stroke-width:1}}
+.trajectory .attention-grid circle,.trajectory .attention-grid line{{fill:none;stroke:#755484;stroke-opacity:.32;stroke-width:1}}
+.radar-origin{{fill:none;stroke:#c4a4ce;stroke-width:1;opacity:.65}}
+.assigned-course-halo{{fill:none;stroke:#fff1cf;stroke-width:8;opacity:.09}}
+.assigned-course{{fill:none;stroke:#fff1cf;stroke-width:2.5;stroke-dasharray:9 7;stroke-linecap:round}}
+.assigned-ship{{fill:#fff1cf;stroke:#fffbea;stroke-width:1;filter:drop-shadow(0 0 5px #ffdd9988)}}
+.assigned-ship .ship-exhaust{{fill:#f1bb75;stroke:none;opacity:.7}}
+.heading-live .assigned-course{{animation:course-flow 2s linear infinite}}
+.assigned-destination{{display:flex;justify-content:center;align-items:baseline;flex-wrap:wrap;gap:7px 13px;margin:14px 0 8px;font-size:11px;line-height:1.8;overflow-wrap:anywhere}}
+.assigned-destination span{{color:#c1aa86;font-size:10px;text-transform:uppercase;letter-spacing:.12em}}
+.assigned-destination a{{color:#fff1cf;text-decoration:none;border-bottom:1px solid #9d82524d;min-width:0}}
+.assigned-destination a:hover,.assigned-destination a:focus{{border-color:#fff1cf}}
+.trajectory .attention-key.attention-target{{background:#fff1cf;box-shadow:0 0 5px #ffdb9e66}}
+@keyframes course-flow{{to{{stroke-dashoffset:-32}}}}
+@media(prefers-reduced-motion:reduce){{.heading-live .assigned-course{{animation:none}}}}
+.trajectory .trajectory-node circle{{fill:#211928;stroke:#ba9ac8;stroke-width:1.5}}
+.trajectory .trajectory-node text{{fill:#ddd0e4;font:500 12px var(--radar-font);text-anchor:middle}}
+.trajectory .trajectory-node.active circle{{fill:#50334e;stroke:#f0c6e7;stroke-width:2.5}}
+.trajectory .trajectory-node.proved circle{{stroke:#8acbb0}}.trajectory .trajectory-node.open circle{{stroke:#c9ad7f}}
+.trajectory .trajectory-node:hover circle,.trajectory .trajectory-node:focus circle{{fill:#65476a;stroke:#fff0ff}}
+.radar-contacts{{display:flex;flex-direction:column;gap:14px;min-width:0}}.radar-left{{grid-area:left}}.radar-right{{grid-area:right}}
+.radar-contact{{min-width:0;padding:13px 14px;border:1px solid #55425e;border-radius:9px;background:#211b29;overflow-wrap:anywhere;scroll-margin-top:20px}}
+.radar-contact.active{{border-color:#c391b1;background:linear-gradient(135deg,#392639,#251c2c)}}
+.radar-contact.proved{{border-left:2px solid #8acbb0}}.radar-contact.open{{border-left:2px solid #c9ad7f}}
+.radar-contact:target{{outline:2px solid #dec2ea;outline-offset:3px}}
+.radar-contact-heading{{display:flex;align-items:baseline;gap:9px;min-width:0;line-height:1.55}}
+.contact-number{{flex:none;font-size:10px;color:#c6a9d4}}.contact-id{{font-size:11px;color:#dfcbe8;min-width:0}}
+.radar-contact p{{margin:9px 0 10px;color:#e0d8e5;font-size:12px;line-height:1.7;white-space:normal}}
+.contact-state{{display:block;font-size:10px;line-height:1.6;color:#b9aaba}}.radar-contact.active .contact-state{{color:#efc8df}}
+.trajectory .attention-legend{{font-size:10px;line-height:1.8;gap:6px 14px;margin:16px 0 10px;flex-wrap:wrap}}
+.trajectory .attention-legend span{{white-space:normal;overflow-wrap:anywhere}}
+.trajectory .attention-claim{{flex-wrap:wrap;overflow-wrap:anywhere;line-height:1.7;gap:5px 12px}}
+.trajectory .attention-claim strong{{font:500 12px var(--radar-font);color:#d2b5de}}.trajectory .attention-claim span{{font-size:10px;min-width:0}}
+.trajectory .attention-panel>p{{font-size:10px;line-height:1.8;margin:10px 0;color:#a899b1}}
+.radar-idle{{grid-template-columns:1fr;grid-template-areas:"map";margin:6px 0 12px}}
+.radar-idle .radar-scope{{width:min(100%,350px);margin:auto}}.radar-idle .radar-contacts{{display:none}}.radar-idle .radar-map{{opacity:.45}}
+.radar-standby{{position:absolute;top:52%;left:0;width:100%;margin:0;text-align:center;font-size:12px;color:#d0b6db;line-height:1.9}}
+.radar-standby span{{color:#a997b1;font-size:10px}}
+.radar-details{{margin-top:24px;padding-top:7px;border-top:1px solid #46374c}}.radar-details:empty{{display:none}}
+.radar-detail{{display:grid;grid-template-columns:110px minmax(0,1fr);gap:20px;padding:15px 0}}
+.radar-detail+.radar-detail{{border-top:1px solid #3b2e4233}}
+.trajectory .radar-detail h3{{margin:3px 0 0;font:500 10px/1.8 var(--radar-font);color:#baa1c5;letter-spacing:.08em;text-transform:uppercase}}
+.radar-details p{{font:400 12px/1.9 var(--radar-font);color:#c9becf;margin:0;overflow-wrap:anywhere;white-space:pre-line}}
+.radar-details>p{{margin:14px 0}}.radar-notice{{font-size:11px;line-height:1.7;color:#d9ba8c;overflow-wrap:anywhere}}
+.trajectory .gap-explanation{{min-width:0;overflow-wrap:anywhere}}.trajectory .gap-explanation div{{flex-wrap:wrap}}.trajectory .gap-explanation div span{{min-width:0}}
+@media(max-width:800px){{.radar-stage{{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"map map" "left right";gap:16px}}.radar-scope{{width:min(100%,430px);margin:auto}}.trajectory .radar-links{{display:none}}.radar-idle{{grid-template-areas:"map";grid-template-columns:1fr}}}}
+@media(max-width:500px){{.trajectory{{padding:20px 16px}}.radar-stage{{display:flex;flex-direction:column;align-items:stretch}}.radar-scope{{order:0}}.radar-contacts{{display:contents}}.radar-contact{{order:var(--contact-order)}}.radar-detail{{grid-template-columns:minmax(0,1fr);gap:6px}}.radar-contact p{{font-size:12px}}.radar-kicker{{gap:6px}}}}
 
 </style><script src="/live_refresh.js" defer></script></head><body><main data-dashboard data-refresh-seconds="{self.refresh_seconds}"><header id="dashboard-header"><h1 class="supervisor-{_escape(supervisor)}" title="Supervisor: {_escape(supervisor)}" aria-label="de67 · supervisor {_escape(supervisor)}">de67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}<div id="refresh-status" class="subtle" role="status">{refresh_label}</div><div id="dashboard-content">{body}</div><footer id="dashboard-sources">{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")

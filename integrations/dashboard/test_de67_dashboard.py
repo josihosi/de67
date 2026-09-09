@@ -336,7 +336,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("escaped &lt;finding&gt;", page)
         self.assertNotIn("escaped <finding>", page)
 
-    def test_fratbro_card_is_opt_in_and_directly_below_trajectory(self) -> None:
+    def test_briefing_headline_and_details_surround_the_radar(self) -> None:
         cache = self.workspace / "dashboard-cache/fratbro.json"
         cache.parent.mkdir()
         cache.write_text(json.dumps({"summary": (
@@ -353,8 +353,11 @@ class DashboardTests(unittest.TestCase):
                 sidecar_script=sidecar, fratbro_cache=cache,
             ).render("overview").decode()
 
-        self.assertLess(page.index("Trajectory sidecar"), page.index("BRIEFING"))
-        self.assertLess(page.index("BRIEFING"), page.index("Latest finding"))
+        body = page.split('<body>')[1]
+        self.assertLess(body.index("The worker is testing"), body.index('class="radar-stage"'))
+        self.assertLess(body.index('class="radar-stage"'), body.index("The wall blocked it"))
+        self.assertLess(body.index("The wall blocked it"), body.index("Latest finding"))
+        self.assertNotIn('class="fratbro"', body)
         self.assertIn("The worker is testing whether real smoke escapes a building.", page)
         self.assertNotIn("Fratbro status <em>stale</em>", page)
         self.assertNotIn("Fratbro status", dashboard_module.Dashboard(
@@ -813,26 +816,26 @@ class DashboardTests(unittest.TestCase):
             first = dashboard.render("overview").decode()
             second = dashboard.render("overview").decode()
         self.assertEqual(run.call_count, 1)
-        self.assertIn("Trajectory sidecar", first)
+        self.assertIn("MISSION RADAR", first)
         self.assertIn("G-002 r41", first)
         self.assertNotIn("What the boxes mean", first)
-        self.assertEqual(first.count('class="gap-explanation '), 2)
-        self.assertEqual(first.count('class="gap-state"'), 2)
+        self.assertEqual(first.count('class="radar-contact '), 2)
+        self.assertEqual(first.count('class="contact-state"'), 2)
         self.assertIn("active · 3 attempts", first)
         self.assertNotIn("code 0.80 · test 0.40", first)
         self.assertNotIn('class="product-vector"', first)
         self.assertNotIn('class="test-vector"', first)
         self.assertNotIn("product surface present", first)
-        self.assertIn("Attention spider", first)
+        self.assertIn("Work constellation", first)
         self.assertIn("Relative pull · not completion", first)
         self.assertIn('class="attention-series attention-code"', first)
         self.assertIn("Current &lt;diff&gt;", first)
-        self.assertIn("Each line is scaled to its own strongest gap", first)
+        self.assertIn("Each line is scaled to its own strongest work item", first)
         self.assertIn('class="attention-claim"', first)
         self.assertEqual(first.count('class="trajectory-node '), 2)
         self.assertIn("&lt;active route&gt;", first)
-        self.assertLess(first.index("cosmos-workers"), first.index("Trajectory sidecar"))
-        self.assertLess(first.index("Trajectory sidecar"), first.index("Latest finding"))
+        self.assertLess(first.index("cosmos-workers"), first.index("MISSION RADAR"))
+        self.assertLess(first.index("MISSION RADAR"), first.index("Latest finding"))
         self.assertEqual(first.split("<body>")[0], second.split("<body>")[0])
         self.assertEqual(before, set(self.workspace.rglob("*")))
 
@@ -859,10 +862,11 @@ class DashboardTests(unittest.TestCase):
             ],
         })
         self.assertEqual(many.count('class="trajectory-node open"'), 14)
-        self.assertIn('viewBox="0 0 794 794"', many)
+        self.assertEqual(many.count('class="radar-contact open"'), 14)
 
         empty = dashboard_module.render_trajectory({"claim": "R-EXPLORE", "gaps": []})
-        self.assertIn("No closure trajectory", empty)
+        self.assertIn("No active trajectory", empty)
+        self.assertIn('class="radar-map"', empty)
 
     def test_trajectory_uses_literal_subtasks_as_axes_and_keeps_gap_cards(self) -> None:
         rendered = dashboard_module.render_trajectory({
@@ -882,10 +886,10 @@ class DashboardTests(unittest.TestCase):
             "attention": [],
         })
 
-        self.assertIn("Subtask attention", rendered)
+        self.assertIn("Subtask constellation", rendered)
         self.assertIn("Attention distribution across ledger subtasks", rendered)
         self.assertEqual(rendered.count('class="trajectory-node '), 4)
-        self.assertIn(">signal</text>", rendered)
+        self.assertIn('class="contact-id">signal</span>', rendered)
         self.assertNotIn("signal r?", rendered)
         self.assertIn("G-001 r2", rendered)
         self.assertEqual(rendered.count('class="gap-explanation '), 1)
@@ -906,6 +910,20 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(first["data"]["gaps"], [])
         self.assertEqual(second, first)
         self.assertEqual(run.call_count, 1)
+
+    def test_idle_is_the_last_good_trajectory_after_source_failure(self):
+        script = self.workspace / "sidecar.py"
+        script.write_text("# fixture")
+        state = self.workspace / ".de67/state/deadlines.sqlite3"
+        dashboard = dashboard_module.Dashboard(self.workspace, sidecar_script=script)
+        with patch.object(dashboard_module, "read_sidecar", return_value={"gaps": [{"gap_id": "G-old"}]}):
+            dashboard._sidecar_source(state, "R-009")
+            idle = dashboard._sidecar_source(state, None)
+        script.unlink()
+        failed = dashboard._sidecar_source(state, None)
+        self.assertEqual(failed["data"], idle["data"])
+        self.assertEqual(failed["data"]["gaps"], [])
+        self.assertTrue(failed["stale"])
 
     def test_active_workers_are_counted_by_model_and_effort(self) -> None:
         day = self.sessions / "2026/08/18"
@@ -1326,13 +1344,48 @@ class OverviewDesignTests(unittest.TestCase):
         self.assertIn('href="/ledger"', result)
 
     def test_structured_briefing_escapes_fields_and_omits_empty_obstacle(self):
-        result = dashboard_module.render_fratbro_status({"summary": {
+        result = dashboard_module.render_trajectory({}, {"summary": {
             "headline": "Save <confirmation>", "changed": "A rejected action is visible.",
             "next": "Test the native exit.", "snag": ""}})
         self.assertIn("Save &lt;confirmation&gt;", result)
         self.assertIn("What changed", result)
         self.assertIn("Next", result)
         self.assertNotIn("Obstacle", result)
+
+    def test_idle_and_stale_radar_preserve_briefing_without_inventing_work(self):
+        briefing = {"summary": "Work paused. the next run is awaiting evidence."}
+        result = dashboard_module.render_trajectory({}, briefing)
+        self.assertIn('<strong>Work paused.</strong>', result)
+        self.assertIn("the next run is awaiting evidence.", result)
+        self.assertIn("No active trajectory", result)
+        self.assertNotIn('data-radar-marker=', result)
+        stale = dashboard_module.render_trajectory(
+            {"gaps": [{"gap_id": "G-1", "summary": "<full title>", "status": "open"}]},
+            briefing, stale=True, error="source <offline>")
+        self.assertIn("Last recorded trajectory", stale)
+        self.assertIn("source &lt;offline&gt;", stale)
+        self.assertIn("&lt;full title&gt;", stale)
+
+    def test_invalid_briefing_does_not_hide_the_radar(self):
+        for invalid in (["not an object"], "not an object", 42):
+            result = dashboard_module.render_trajectory({}, invalid)
+            self.assertIn("MISSION RADAR", result)
+            self.assertIn("Briefing update unavailable", result)
+
+    def test_assignment_is_directional_and_maximum_measurements_remain_accessible(self):
+        report = {"latest_task_result": "active", "gaps": [{"gap_id": "G-1", "summary": "Work"}],
+                  "attention": [
+                      {"key": "target", "points": [{"gap_id": "G-1", "relative_pull": 1}]},
+                      {"key": "code", "label": "Code", "points": [
+                          {"gap_id": "G-1", "relative_pull": 1, "raw_relation": .625}]}]}
+        result = dashboard_module.render_trajectory(report)
+        self.assertIn('class="assigned-bearing heading-live"', result)
+        self.assertIn('class="assigned-ship"', result)
+        marker = result.split('class="attention-nodes"')[1].split('</a>')[0]
+        self.assertIn("Code · relative 1.00 · cosine 0.625", marker)
+        stale = dashboard_module.render_trajectory(report, stale=True)
+        self.assertIn("Last assignment", stale)
+        self.assertNotIn('class="assigned-bearing heading-live"', stale)
 
 class WorkerScaleTests(unittest.TestCase):
     def test_dots_do_not_overlap_at_each_supported_count(self):

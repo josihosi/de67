@@ -191,7 +191,11 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
     server: subprocess.Popen[Any] | None = None
     rpc: Rpc | None = None
     session = None
+    workers = None
+    coordinator_done = False
+    coordinator_exit = 0
     thread_id = None
+    resume = ""
     completed = False
     stopping = False
 
@@ -204,10 +208,15 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
     try:
         config_path = workspace / ".de67/state/workspace.json"
         workspace_config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+        initial_path = os.environ.get("DE67_INITIAL_INPUT_PATH")
+        initial = json.loads(Path(initial_path).read_text(encoding="utf-8")) if initial_path else None
         if role == "mutator" and workspace_config.get("persistent_mutator") is True:
             from mutator_session import MutatorSession
             session = MutatorSession(workspace)
             session.acquire(lambda: stopping or os.getppid() != parent_pid)
+            resume = session.thread_id() or ""
+        if not session:
+            resume = os.environ.get("DE67_COORDINATOR_RESUME_SESSION", "").strip()
         with (run_directory / "app-server.log").open("a", encoding="utf-8") as log:
             server = subprocess.Popen([codex, "app-server", "--listen", f"unix://{socket}"],
                                       stdin=subprocess.DEVNULL, stdout=log, stderr=log)
@@ -229,7 +238,8 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
             }
             if model == "gpt-6-astra":
                 params["config"]["features.context_management.experimental_mode"] = True
-            resume = session.thread_id() if session else os.environ.get("DE67_COORDINATOR_RESUME_SESSION", "").strip()
+            if role == "mutator" and "mutator_context_window" in workspace_config:
+                params["config"]["model_context_window"] = workspace_config["mutator_context_window"]
             if resume:
                 params.update(threadId=resume, excludeTurns=True)
             thread = rpc.call("thread/resume" if resume else "thread/start", params)["thread"]
@@ -239,8 +249,6 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
             emit({"type": "thread.started", "thread_id": thread_id})
             turn_params = {"threadId": thread_id, "effort": effort,
                            "input": [{"type": "text", "text": prompt}]}
-            initial_path = os.environ.get("DE67_INITIAL_INPUT_PATH")
-            initial = json.loads(Path(initial_path).read_text(encoding="utf-8")) if initial_path else None
             if initial:
                 turn_params["input"].extend(initial["input"])
                 turn_params["clientUserMessageId"] = initial["client_id"]
@@ -251,25 +259,41 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
                        "run_id": os.environ.get("DE67_COORDINATOR_RUN_ID"),
                        "runner_pid": os.getpid(), "server_pid": server.pid, "socket": str(socket),
                        "thread_id": thread_id, "turn_id": turn_id, "state": "active"}
+            if role == "coordinator":
+                binding.update(deadline_state=os.environ.get("DE67_DEADLINE_STATE"),
+                               lineage=os.environ.get("DE67_LINEAGE"),
+                               supervisor_id=os.environ.get("DE67_SUPERVISOR_PID"))
             atomic_json(address, binding)
+            if role == "coordinator" and all(binding.get(key) for key in
+                    ("deadline_state", "lineage", "supervisor_id")):
+                from worker_library import WorkerDispatcher
+                workers = WorkerDispatcher(workspace, rpc, binding)
             if initial:
                 atomic_json(Path(initial["receipt_path"]), {**binding, "state": "submitted"})
             if session:
-                session.record(thread_id, state="active", runner_pid=os.getpid(), turn_id=turn_id,
-                               mode="conversation" if initial else "review")
+                session.record(thread_id, state="active", runner_pid=os.getpid(), turn_id=turn_id)
             pending = rpc.notifications
             rpc.notifications = []
             while not stopping:
                 if os.getppid() != parent_pid:
                     raise RpcError("Owning DE67 runner exited")
-                from agent_mailbox import deliver
-                deliver(workspace, role, rpc, thread_id, turn_id)
+                if workers is not None:
+                    workers.reconcile()
+                if coordinator_done and not pending and not rpc.notifications and (workers is None or not workers.has_active_turns()):
+                    return coordinator_exit
+                if not coordinator_done:
+                    if workers is not None:
+                        workers.process_pending()
+                    from agent_mailbox import deliver
+                    deliver(workspace, role, rpc, thread_id, turn_id)
                 if rpc.notifications:
                     pending.extend(rpc.notifications)
                     rpc.notifications = []
                 try:
                     message = pending.pop(0) if pending else rpc.receive()
                 except queue.Empty:
+                    continue
+                if workers is not None and workers.observe(message):
                     continue
                 method = message.get("method")
                 payload = message.get("params", {})
@@ -286,7 +310,11 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
                     binding["state"] = "finished"
                     atomic_json(address, binding)
                     emit({"type": "turn.completed", "turn_id": turn_id})
-                    return 0 if payload["turn"]["status"] == "completed" else 1
+                    coordinator_done = True
+                    coordinator_exit = 0 if payload["turn"]["status"] == "completed" else 1
+                    # Keep this server alive for already dispatched worker turns. The
+                    # supervisor resumes Sol after returns; no new work is dispatched
+                    # while Sol's own turn is finished.
             return 130
     finally:
         try:
@@ -308,10 +336,13 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
                         server.wait()
             finally:
                 socket.unlink(missing_ok=True)
+                if workers is not None and (server is None or server.poll() is not None):
+                    workers.shutdown()
                 if session:
                     try:
                         if thread_id:
-                            session.record(thread_id, state="idle", result="completed" if completed else "interrupted")
+                            session.record(thread_id, state="idle",
+                                           result="completed" if completed else "interrupted")
                     finally:
                         session.close()
 

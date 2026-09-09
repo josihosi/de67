@@ -5,9 +5,10 @@ This optional relay sends Discord messages into DE67's existing native agent con
 - Plain messages go to the active mutation reviewer.
 - A leading `coordinator:` routes that message to the active coordinator.
 - Input starts with `User Message:`. No importance keyword is needed.
-- With `persistent_mutator` enabled, the first plain owner message starts Astra's
-  mutator session. Later conversations and supervisor reviews resume that same native
-  thread. A process lock prevents two mutator invocations from using it concurrently.
+- With `persistent_mutator` enabled, owner messages and supervisor reviews use the
+  same durable Astra conversation. Reviews resume its history with their current
+  invocation instructions. Owner messages can reach Astra during an active review.
+  One process lock prevents concurrent mutator invocations.
 - Coordinator messages wait for the next normal DE67 launch when Sol is inactive.
 - Intentional DE67 resets remain fresh launches. Only the supervisor's explicit
   `DE67_COORDINATOR_RESUME_SESSION` requests a continuation.

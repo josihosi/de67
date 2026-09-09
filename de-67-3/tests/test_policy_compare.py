@@ -12,11 +12,6 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "policy_compare.py"
 POLICY = ROOT / "assets" / "environment" / "phase3-policy.d67"
 CONTRACTS = ROOT / "assets" / "environment" / "phase3-contracts.json"
-BASELINE_REF = "backup/pre-lab-lab-20260822"
-HAS_REPOSITORY_HISTORY = (ROOT.parent / ".git").exists() and subprocess.run(
-    ["git", "-C", str(ROOT.parent), "cat-file", "-e", BASELINE_REF + "^{commit}"],
-    capture_output=True,
-).returncode == 0
 SPEC = importlib.util.spec_from_file_location("de67_policy_compare", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 compare_module = importlib.util.module_from_spec(SPEC)
@@ -31,11 +26,11 @@ class PolicyComparisonTests(unittest.TestCase):
         names = [case["name"] for case in value["decision_cases"] + value["trace_cases"]]
         self.assertEqual(len(names), len(set(names)))
 
-    @unittest.skipUnless(HAS_REPOSITORY_HISTORY, "comparison needs the historical baseline ref")
     def test_main_and_lab_comparison_has_only_declared_strengthenings(self) -> None:
-        report = compare_module.compare(POLICY, CONTRACTS, BASELINE_REF)
+        report = compare_module.compare(POLICY, CONTRACTS)
         self.assertTrue(report["passed"])
-        self.assertLess(report["ratio"], 1)
+        self.assertNotIn("baseline_policy_bytes", report)
+        self.assertGreater(report["compiled_policy_bytes"], 0)
         divergences = {
             case["name"] for case in report["trace_cases"]
             if case["main"] != case["lab"]
@@ -47,11 +42,10 @@ class PolicyComparisonTests(unittest.TestCase):
             "proof-owner-replacement-leaves-stale-projection",
         })
 
-    @unittest.skipUnless(HAS_REPOSITORY_HISTORY, "comparison needs the historical baseline ref")
     def test_comparison_cli_is_reproducible(self) -> None:
         command = [
             sys.executable, str(SCRIPT), "--policy", str(POLICY),
-            "--contracts", str(CONTRACTS), "--baseline-ref", BASELINE_REF,
+            "--contracts", str(CONTRACTS),
         ]
         first = subprocess.run(command, text=True, capture_output=True)
         second = subprocess.run(command, text=True, capture_output=True)
@@ -59,10 +53,10 @@ class PolicyComparisonTests(unittest.TestCase):
         self.assertEqual(first.stdout, second.stdout)
         self.assertTrue(json.loads(first.stdout)["passed"])
 
-    def test_missing_baseline_fails_closed(self) -> None:
+    def test_missing_policy_fails_closed(self) -> None:
         result = subprocess.run(
-            [sys.executable, str(SCRIPT), "--policy", str(POLICY),
-             "--contracts", str(CONTRACTS), "--baseline-ref", "missing-ref"],
+            [sys.executable, str(SCRIPT), "--policy", str(ROOT / "missing-policy.d67"),
+             "--contracts", str(CONTRACTS)],
             text=True, capture_output=True,
         )
         self.assertEqual(result.returncode, 2)

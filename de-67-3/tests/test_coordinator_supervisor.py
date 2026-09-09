@@ -23,6 +23,7 @@ from coordinator_supervisor import (  # noqa: E402
     SupervisionEvent,
     SupervisorError,
     _complete_mutation_review,
+    _fresh_deadline_harness,
     _supervisor_lock,
     build_parser,
     coordinator_context_contract,
@@ -548,7 +549,46 @@ def restart_required(restart: dict[str, object]) -> bool:
     return value
 
 
+class ReviewerLaunchPromotionTests(unittest.TestCase):
+    def test_retained_supervisor_uses_promoted_machine_bindings(self):
+        import coordinator_supervisor as supervisor
+        gate = MutationGate("random", "cycle 13", "DFS.md")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            promoted = root / "coordinator_supervisor.py"
+            source = Path(supervisor.__file__).read_text()
+            promoted.write_text(source.replace(
+                '"DE67_COORDINATOR_MODEL": "gpt-6-astra",',
+                '"PROMOTED_BINDING": "revision-2", "DE67_COORDINATOR_MODEL": "gpt-6-astra",'
+            ))
+            with patch.object(supervisor, "__file__", str(promoted)), \
+                 patch.object(supervisor, "mutation_reviewer_environment", side_effect=AssertionError("stale producer used")), \
+                 patch.object(supervisor, "run_child") as child:
+                supervisor.run_mutation_reviewer([], root, root / "state", "lineage", root, gate,
+                    extra_env={"PRESERVED": "yes", "DE67_MUTATION_GATE_JSON": "stale"}, run_id="review")
+            values = child.call_args.kwargs["extra_env"]
+            self.assertEqual(values["PROMOTED_BINDING"], "revision-2")
+            self.assertEqual(values["PRESERVED"], "yes")
+            self.assertEqual(values["DE67_COORDINATOR_MODEL"], "gpt-6-astra")
+            self.assertEqual(child.call_args.kwargs["role"], "mutation-reviewer")
+            self.assertEqual(child.call_count, 1)
+
+
+
 class CoordinatorSupervisorTests(unittest.TestCase):
+    def test_post_review_projection_loads_the_installed_delivery_writer(self) -> None:
+        # A long-lived parent keeps its ordinary import, but the sole
+        # post-review projection must use the exact on-disk writer that the
+        # exclusive reviewer promoted before it can authorize one successor.
+        fresh = _fresh_deadline_harness()
+        self.assertIsNot(fresh, DeadlineHarness)
+        self.assertEqual(
+            Path(sys.modules[fresh.__module__].__file__).resolve(),
+            (SCRIPTS / "deadline_harness.py").resolve(),
+        )
+        with fresh(self.state_path) as harness:
+            self.assertEqual(harness.synchronize_dfs_statuses(persist=False), ())
+
     def test_packaged_ledger_refills_until_dfs_is_green_without_batch_cap(self) -> None:
         template = (
             SCRIPTS.parent / "assets" / "environment" / "work-ledger.md"
@@ -647,11 +687,11 @@ class CoordinatorSupervisorTests(unittest.TestCase):
 
     def test_worker_handoff_contract_explains_runtime_owned_claim(self) -> None:
         contract = worker_handoff_contract()
-        for requirement in ('exact task_name, fork_turns and hash-bound packet', 'model_choices',
+        for requirement in ('exact task and hash-bound packet', 'explicit model/effort',
                             'outcome and exit condition', 'Assignment TASK-ID',
-                            'worker input, not coordinator context', 'Actually call spawn_agent',
-                            'one distinct worker each before waiting', 'actual runtime UUID',
-                            'records the claim', 'Do not require receiver_thread_ids or invoke claim-worker',
+                            'worker input, not coordinator context', 'Assign through worker_library.py',
+                            'one distinct worker each before waiting', 'Native spawn_agent remains available',
+                            'records verified ownership', 'Do not invoke claim-worker yourself',
                             '/root/<task-name> is not a worker UUID', 'a worker result is outstanding'):
             self.assertIn(requirement, contract)
 

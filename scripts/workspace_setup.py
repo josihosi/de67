@@ -33,7 +33,6 @@ PHASE3_WORKSPACE_FILES = (
     "phase3-policy.d67",
     "phase3-policy.json",
     "phase3-contracts.json",
-    "orchestrator-guidelines.md",
     "test-and-task-guidelines.md",
     "work-ledger.md",
     "mutation-suggestions.md",
@@ -505,15 +504,24 @@ def _deadline_harness_class() -> type[Any]:
     return module.DeadlineHarness
 
 
+def _resolve_specification(workspace: Path) -> Any:
+    script_root = str(Path(__file__).resolve().parents[1] / "de-67-3/scripts")
+    if script_root not in sys.path:
+        sys.path.insert(0, script_root)
+    from specification import SpecificationError, resolve
+
+    try:
+        return resolve(workspace / ".de67")
+    except SpecificationError as error:
+        raise SetupError(str(error)) from error
+
+
 def _require_frozen_dfs(workspace: Path) -> None:
-    path = workspace / ".de67/DFS.md"
-    if not path.is_file():
-        raise SetupError("Freeze .de67/DFS.md before workspace setup")
-    text = path.read_text(encoding="utf-8")
+    specification = _resolve_specification(workspace)
     if re.search(
-        r"(?mi)^\s*(?:-\s*)?Status:\s*`?(?:Frozen|Refrozen)\b", text
+        r"(?mi)^\s*(?:-\s*)?Status:\s*`?(?:Frozen|Refrozen)\b", specification.text
     ) is None:
-        raise SetupError(".de67/DFS.md must record Frozen or Refrozen status")
+        raise SetupError(f"{specification.label} must record Frozen or Refrozen status")
 
 
 def _prepare_phase3_environment(workspace: Path) -> dict[str, list[str]]:
@@ -551,11 +559,15 @@ def _validate_dfs_projection(workspace: Path, state_path: Path) -> None:
         return
     harness_class = _deadline_harness_class()
     try:
+        specification = _resolve_specification(workspace)
         with tempfile.TemporaryDirectory(prefix="de67-refreeze-") as directory:
             environment = Path(directory) / ".de67"
             copied_state = environment / "state" / "deadlines.sqlite3"
             copied_state.parent.mkdir(parents=True)
-            for name in ("DFS.md", "work-ledger.md"):
+            names = ("DFS.md", "work-ledger.md")
+            if not specification.legacy:
+                names += (specification.path.name,)
+            for name in names:
                 shutil.copy2(workspace / ".de67" / name, environment / name)
             baseline = state_path.parent / "dfs-status-baselines.json"
             if baseline.is_file():
@@ -564,7 +576,7 @@ def _validate_dfs_projection(workspace: Path, state_path: Path) -> None:
                 with closing(sqlite3.connect(copied_state)) as destination:
                     source.backup(destination)
             # Projection may read HEAD to recover a missing red baseline. This gitfile
-            # permits that read; the projection writes only the disposable DFS/state.
+            # permits that read; projection writes only the disposable documents/state.
             git_dir = _git_text(workspace, ["rev-parse", "--absolute-git-dir"])
             (Path(directory) / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
             with harness_class(copied_state) as harness:

@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,6 +28,7 @@ from workspace_setup import (  # noqa: E402
 )
 import workspace_setup  # noqa: E402
 from instruction_context import common_guidance  # noqa: E402
+from specification import compatibility_pointer, render_functional_specification  # noqa: E402
 
 MODULE_PATH = Path(workspace_setup.__file__).resolve()
 
@@ -120,6 +122,58 @@ class WorkspaceSetupTests(unittest.TestCase):
             harness.start_task("project", "closure", "R-001", 100, phase="closure", now=3)
             harness.complete_task("project", "closure", "proof complete", now=4)
             harness.accept_claim("project", "R-001", "closure", "accepted proof", now=5)
+
+    def migrate_specification(self) -> None:
+        environment = self.workspace / ".de67"
+        dfs = environment / "DFS.md"
+        fs = environment / "FS.md"
+        fs.write_text(
+            render_functional_specification(dfs.read_text(encoding="utf-8")),
+            encoding="utf-8",
+        )
+        dfs.write_text(compatibility_pointer(fs), encoding="utf-8")
+
+    def test_migrated_fs_setup_preserves_bound_acceptance_and_authoring_files(self) -> None:
+        self.accepted_projection()
+        self.migrate_specification()
+        environment = self.workspace / ".de67"
+        paths = [environment / name for name in ("FS.md", "DFS.md", "work-ledger.md")]
+        paths.append(environment / "state/dfs-status-baselines.json")
+        before = {path: path.read_bytes() for path in paths}
+        self.assertNotIn("Implementation status:", paths[0].read_text(encoding="utf-8"))
+        state = self.workspace / DEADLINE_STATE_RELATIVE_PATH
+        with closing(sqlite3.connect(state)) as connection:
+            accepted_before = sorted(connection.iterdump())
+
+        result = configure(
+            self.workspace, [("origin", "dev")], bind_clock=True,
+            worker_capabilities=VERIFIED_WORKERS,
+        )
+
+        self.assertEqual(result["clock"]["lineage"], "project")
+        self.assertTrue(result["push"]["ok"])
+        self.assertEqual({path: path.read_bytes() for path in paths}, before)
+        with closing(sqlite3.connect(state)) as connection:
+            self.assertEqual(sorted(connection.iterdump()), accepted_before)
+
+    def test_migrated_fs_setup_rejects_stale_pointer_before_binding_or_push(self) -> None:
+        self.accepted_projection()
+        self.migrate_specification()
+        fs = self.workspace / ".de67/FS.md"
+        fs.write_text(fs.read_text(encoding="utf-8") + "Changed contract.\n", encoding="utf-8")
+        state = self.workspace / DEADLINE_STATE_RELATIVE_PATH
+        before = state.read_bytes()
+
+        with patch.object(workspace_setup, "push_checkpoints") as push:
+            with self.assertRaisesRegex(SetupError, "compatibility pointer does not match FS.md"):
+                configure(
+                    self.workspace, [("origin", "dev")], bind_clock=True,
+                    worker_capabilities=VERIFIED_WORKERS,
+                )
+
+        push.assert_not_called()
+        self.assertEqual(state.read_bytes(), before)
+        self.assertFalse((self.workspace / CONFIG_RELATIVE_PATH).exists())
 
     def test_refreeze_setup_rejects_incompatible_projection_before_push(self) -> None:
         self.accepted_projection()
@@ -261,7 +315,7 @@ class WorkspaceSetupTests(unittest.TestCase):
 
     def test_setup_copies_missing_phase3_files_and_preserves_local_mutations(self) -> None:
         self.freeze_dfs()
-        local = self.workspace / ".de67" / "orchestrator-guidelines.md"
+        local = self.workspace / ".de67" / "test-and-task-guidelines.md"
         local.write_text("# Local mutable policy\n", encoding="utf-8")
 
         result = configure(
@@ -274,13 +328,14 @@ class WorkspaceSetupTests(unittest.TestCase):
 
         self.assertEqual(local.read_text(encoding="utf-8"), "# Local mutable policy\n")
         self.assertIn(
-            "orchestrator-guidelines.md",
+            "test-and-task-guidelines.md",
             result["phase3_environment"]["preserved"],
         )
+        self.assertFalse((self.workspace / ".de67" / "orchestrator-guidelines.md").exists())
         for name in PHASE3_WORKSPACE_FILES:
             destination = self.workspace / ".de67" / name
             self.assertTrue(destination.is_file(), name)
-            if name != "orchestrator-guidelines.md":
+            if name != "test-and-task-guidelines.md":
                 self.assertEqual(
                     destination.read_bytes(),
                     (PHASE3_ENVIRONMENT_ROOT / name).read_bytes(),

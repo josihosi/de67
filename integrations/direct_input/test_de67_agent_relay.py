@@ -172,6 +172,31 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(len([m for m, _ in rpc.calls if m == "turn/steer"]), 1)
         self.assertEqual(self.relay.jobs["1"]["status"], "replied")
 
+    def test_owner_input_reaches_the_shared_conversation_during_review(self):
+        self.relay.workspace.mkdir(parents=True)
+        socket = self.root / 'review.sock'
+        socket.touch()
+        binding = self.binding('mutator', 'owner-thread')
+        binding.update(workspace=str(self.relay.workspace), role='mutator', state='active',
+                       session_kind='review', runner_pid=100, server_pid=101, socket=str(socket))
+        atomic_json(self.relay.workspace / '.de67/state/mutator-input.json', binding)
+        class ConnectedRpc(FakeRpc):
+            def send(self, message): pass
+            def call(client, method, params):
+                if method == 'thread/read':
+                    return {'thread': {'cwd': str(self.relay.workspace), 'status': {'type': 'active'}}}
+                return super().call(method, params)
+        rpc = ConnectedRpc()
+        self.relay.accept(self.message(1, 'current owner correction'))
+        with patch('de67_agent_relay.os.kill'), patch('de67_agent_relay.Rpc', return_value=rpc):
+            self.relay.start_mutator = lambda job: self.fail('must use the active shared conversation')
+            self.relay.reconcile()
+        steers = [params for method, params in rpc.calls if method == 'turn/steer']
+        self.assertEqual(len(steers), 1)
+        self.assertEqual(steers[0]['threadId'], 'owner-thread')
+        self.assertEqual(steers[0]['clientUserMessageId'], 'discord:1')
+        self.assertEqual(self.relay.jobs['1']['status'], 'submitted')
+
     def test_uncertain_delivery_is_recovered_from_history_without_resending(self):
         self.relay.accept(self.message(1, "hello"))
         rpc = FakeRpc()

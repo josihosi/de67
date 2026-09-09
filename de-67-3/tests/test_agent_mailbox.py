@@ -53,6 +53,25 @@ class MailboxTests(unittest.TestCase):
             self.assertEqual(receipt["state"], "uncertain")
             self.assertEqual(receipt["thread_id"], "new")
 
+    def test_mutator_advisory_is_bound_to_the_selected_review_turn(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            message = enqueue(workspace, "mutator", "coordinator", "current gate evidence")
+            calls = []
+            class Client:
+                def call(self, method, params):
+                    calls.append((method, params))
+            deliver(workspace, "mutator", Client(), "review-thread", "review-turn")
+            self.assertEqual(calls, [("turn/steer", {
+                "threadId": "review-thread", "expectedTurnId": "review-turn",
+                "clientUserMessageId": "de67-agent:" + message["id"],
+                "input": [{"type": "text", "text":
+                    "Agent Message from coordinator (agent-supplied identity; not owner input):\ncurrent gate evidence"}],
+            })])
+            receipt = json.loads((mailbox(workspace, "mutator") / (message["id"] + ".json")).read_text())
+            self.assertEqual((receipt["state"], receipt["thread_id"], receipt["turn_id"]),
+                             ("delivered", "review-thread", "review-turn"))
+
 
 if __name__ == "__main__":
     unittest.main()

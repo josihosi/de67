@@ -27,7 +27,6 @@ class MethodProvenanceTests(unittest.TestCase):
             state.mkdir(parents=True)
             for name, text in (
                 ("DFS.md", "# Frozen DFS\n"),
-                ("orchestrator-guidelines.md", "orchestrate\n"),
                 ("test-and-task-guidelines.md", "test\n"),
             ):
                 (local / name).write_text(text, encoding="utf-8")
@@ -66,6 +65,7 @@ class MethodProvenanceTests(unittest.TestCase):
             self.assertEqual(result["workspace"]["clock"]["restart_generation"], 4)
             self.assertEqual(result["workspace"]["clock"]["mutation_receipts"], 2)
             self.assertEqual(len(result["workspace"]["guidance_sha256"]["DFS.md"]), 64)
+            self.assertNotIn("orchestrator-guidelines.md", result["workspace"]["guidance_sha256"])
             self.assertTrue(result["workspace"]["git"]["uncheckpointed"])
             self.assertEqual(
                 before,

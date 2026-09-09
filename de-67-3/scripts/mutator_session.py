@@ -36,7 +36,9 @@ class MutatorSession:
         value = json.loads(self.path.read_text(encoding="utf-8"))
         if value.get("workspace") != str(self.workspace) or value.get("model") != "gpt-6-astra":
             raise ValueError("Persistent mutator context belongs to another workspace or model")
-        return value["thread_id"]
+        # Preserve the owner thread when reading state written by the split-context version.
+        owner = value.get("owner")
+        return owner.get("thread_id") if isinstance(owner, dict) else value.get("thread_id")
 
     def record(self, thread_id: str, **status: Any) -> None:
         write_json(self.path, {"workspace": str(self.workspace), "model": "gpt-6-astra",
@@ -59,6 +61,8 @@ def owner_prompt(workspace: Path, scripts: Path, python: str) -> str:
         "Respect any owner stop; resume work only when authorized. Use current installed DE67 "
         "guidance and the actual workspace state for mutation validation and restart ownership. "
         "Do not create a second coordinator or a competing mutation reviewer. "
+        "Refine coordinator and worker context to support useful decisions and effective work. "
+        "Keep Josef's conversation in the mutator's context, including during reviews. "
         "The same context is also used for supervisor-invoked exclusive reviews; only a current "
         "supervisor review invocation grants that review's gate and bindings.\n"
         "For messages to Sol, use this argument array with --message TEXT (or message on stdin):\n"

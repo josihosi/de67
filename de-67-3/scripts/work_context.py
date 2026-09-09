@@ -109,7 +109,9 @@ def record_dispatch(workspace: Path, state: Path, lineage: str, task: str,
     db=connect_index(workspace)
     try:
         with db:
-            db.execute('INSERT OR IGNORE INTO dispatches VALUES (?,?,?,?,?,?,?)',
+            db.execute('''INSERT INTO dispatches VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(source,lineage,task,digest) DO UPDATE SET
+                path=excluded.path,context_json=excluded.context_json,recorded_at=excluded.recorded_at''',
                 (str(state.resolve()),lineage,task,digest,str(path),
                  json.dumps(context,sort_keys=True),time.time()))
     finally:
@@ -168,13 +170,15 @@ def context_view(workspace: Path, state: Path, lineage: str, *, claim: str | Non
             if bound is None:raise ContextError(f'Unknown task: {task}')
             claim=bound[0]
         added,visible_receipts=sync_receipts(db,source,state,lineage)
+        from worker_library import catalog as worker_catalog
+        workers = worker_catalog(workspace, state=state, lineage=lineage)
         if claim is None and task is None and contains is None and receipt_id is None and not full:
             claims=[dict(r) for r in source.execute('''SELECT t.claim_id,COUNT(DISTINCT t.task_id) AS tasks,
                 COUNT(DISTINCT CASE WHEN t.attempt_terminal_at IS NULL THEN t.task_id END) AS live_tasks,
                 MAX(t.started_at) AS latest_started_at FROM tasks t WHERE t.lineage_id=?
                 GROUP BY t.claim_id ORDER BY latest_started_at DESC''',(lineage,))]
             return {'schema':'de67.work-context.v1','observed_at':time.time(),'lineage':lineage,
-                    'claims':claims,'current_ledger':str(workspace/'.de67/work-ledger.md'),
+                    'claims':claims,'worker_library':workers,'current_ledger':str(workspace/'.de67/work-ledger.md'),
                     'query_argv':[sys.executable,str(Path(__file__).resolve()),'--workspace',str(workspace),
                                   '--state',str(state),'--lineage',lineage,'--claim','CLAIM_ID'],
                     'evidence_limit':'Claim inventory only; inspect --claim, --task, --receipt or --contains. '
@@ -250,13 +254,34 @@ def context_view(workspace: Path, state: Path, lineage: str, *, claim: str | Non
             WHERE source=? AND lineage=?''',(str(state.resolve()),lineage)) if r['task'] in by_task]
         for d in dispatches: d['context']=json.loads(d.pop('context_json'))
         result={'schema':'de67.work-context.v1','observed_at':time.time(),'lineage':lineage,
-                'claim':claim,'task':task,'tasks':tasks,'related_results':catalogue,
+                'claim':claim,'task':task,'tasks':tasks,'worker_library':workers,'related_results':catalogue,
                 'selected_context':selected,'receipt_count':len(rows),'task_head_count':len({r['task'] for r in rows}),
                 'newly_indexed':added,'runner_records':runs,'thread_records':thread_records(tasks),'dispatches':dispatches,
                 'history_query_argv':cli+['--contains','SEARCH TEXT'],
                 'full_history_argv':cli+['--full'],
                 'evidence_limit':'Relationships are exact references or shared gaps, not inferred ancestry. '
                 'Task heads do not supersede other tasks or older proof. Full receipts and source artifacts remain available.'}
+        # A specifically queried live task may expose the supported continuation
+        # command.  These bindings come from the same read-only source snapshot
+        # as ``tasks``; kind and evidence are intentionally left to the caller.
+        # The handle is optional convenience, never a claim of authority.  The
+        # harness rechecks ownership when this argv is executed, so a stale
+        # template cannot bypass a changed or released worker claim.
+        if task is not None:
+            live = by_task.get(task)
+            if (live is not None and live.get('worker_id') and
+                    live.get('released_at') is None and
+                    live.get('attempt_terminal_at') is None):
+                result['checkpoint_worker_template'] = {
+                    'optional': True,
+                    'argv': [sys.executable, str(Path(__file__).with_name('deadline_harness.py')),
+                             '--state', str(state.resolve()), 'checkpoint-worker',
+                             '--lineage', lineage, '--task', task,
+                             '--worker', live['worker_id']],
+                    'bindings': {'state': str(state.resolve()), 'lineage': lineage,
+                                 'task': task, 'worker': live['worker_id']},
+                    'note': 'Optional checkpoint continuation; supply --kind and --evidence.'
+                }
         if full:
             result['receipts']=[{'receipt_id':r['receipt_id'],'sequence':r['sequence'],
                                 'recorded_at':r['recorded_at'],'receipt':decoded[r['receipt_id']]} for r in rows]
@@ -311,10 +336,31 @@ def token_usage_view(workspace: Path, state: Path, lineage: str, *, task: str | 
     root_id=row[0] if row else None
     metadata=thread_tree(root_id,codex_home=codex_home) if root_id else {
         'records':[], 'errors':['No assigned coordinator session for this selection']}
+    if root_id:
+        # Persistent workers have no native parent edge to the current Sol. Their
+        # durable task claims supply exact ownership and usage windows instead.
+        with closing(sqlite3.connect(f'file:{state.resolve()}?mode=ro',uri=True)) as source:
+            claims = source.execute("""SELECT worker_id,claimed_at,released_at FROM worker_claims
+                WHERE lineage_id=? AND coordinator_session_id=?""", (lineage,root_id)).fetchall()
+        windows = {}
+        native_ids = {r['id'] for r in metadata['records']}
+        for worker, start, end in claims:
+            if worker not in native_ids:
+                windows.setdefault(worker, []).append({'start':start, 'end':end})
+        for worker, spans in windows.items():
+            tree = thread_tree(worker, codex_home=codex_home)
+            for record in tree['records']:
+                existing = next((r for r in metadata['records'] if r['id'] == record['id']), None)
+                if existing is None:
+                    metadata['records'].append(record | {'usage_windows':spans})
+                elif 'usage_windows' in existing:
+                    existing['usage_windows'] = existing['usage_windows'] + spans
+            metadata.setdefault('errors', []).extend(tree.get('errors', []))
+            metadata.setdefault('unavailable_thread_ids', []).extend(tree.get('unavailable_thread_ids', []))
     db=connect_index(workspace)
     try: result=usage_projection(db,metadata,root_id=root_id,details=details)
     finally: db.close()
-    result['selection_basis']='Coordinator owning the selected task, or latest assigned task in this lineage; not an assertion of a live process.'
+    result['selection_basis']='Coordinator owning the selected task, or latest assigned task in this lineage, plus persistent workers/helpers during its assignment windows; not an assertion of a live process.'
     config=workspace/'.de67/state/workspace.json'
     if config.is_file():
         result['allocation_preference']=json.loads(config.read_text(encoding='utf-8')).get('token_allocation_preference')

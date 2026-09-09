@@ -1,7 +1,9 @@
 """Incremental own-response usage in the existing disposable work-context index."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import sqlite3
 import time
@@ -125,8 +127,61 @@ def _ingest(db: sqlite3.Connection, record: dict) -> dict:
     return result
 
 
+def _timestamp(value: object) -> float | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        # A local/naive timestamp cannot establish an assignment boundary.
+        return stamp.timestamp() if stamp.utcoffset() is not None else None
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _windows(value: object) -> tuple[list[dict], int]:
+    """Validate half-open assignment windows without inventing missing bounds."""
+    if not isinstance(value, list):
+        return [], 1
+    windows = []
+    invalid = 0
+    for window in value:
+        if not isinstance(window, dict) or not {'start', 'end'} <= window.keys():
+            invalid += 1
+            continue
+        start, end = window['start'], window['end']
+        if (isinstance(start, bool) or not isinstance(start, (int, float)) or not math.isfinite(start)
+                or (end is not None and (isinstance(end, bool) or not isinstance(end, (int, float))
+                    or not math.isfinite(end) or end < start))):
+            invalid += 1
+            continue
+        try:
+            datetime.fromtimestamp(start, timezone.utc)
+            if end is not None:
+                datetime.fromtimestamp(end, timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            invalid += 1
+            continue
+        windows.append({'start': start, 'end': end})
+    return windows, invalid
+
+
+def _select_rows(rows: list, windows: list[dict]) -> tuple[list, int, int]:
+    selected = []
+    excluded = unknown = 0
+    for row in rows:
+        stamp = _timestamp(row['observed_at'])
+        if stamp is None:
+            unknown += 1
+        elif any(window['start'] <= stamp and (window['end'] is None or stamp < window['end'])
+                 for window in windows):
+            selected.append(row)
+        else:
+            excluded += 1
+    return selected, excluded, unknown
+
+
 def usage_projection(db: sqlite3.Connection, metadata: dict, *, root_id: str, details: bool=False) -> dict:
-    """Count each response/session once, assigning usage by its owning turn model."""
+    """Count own responses once by turn model, optionally within assignment windows."""
     db.row_factory = sqlite3.Row
     _schema(db)
     sources = []
@@ -147,8 +202,22 @@ def usage_projection(db: sqlite3.Connection, metadata: dict, *, root_id: str, de
             source.update(window_started_at=cached['window_start'] if cached else None,
                           counters_observed_at=cached['last_event'] if cached else None,
                           invalid_or_conflicting_records=cached['issues'] if cached else 0,
-                          response_count=db.execute('SELECT COUNT(*) FROM usage_responses WHERE id=?', (identity,)).fetchone()[0])
-            source_complete = bool(rows) and source['available'] and not source['invalid_or_conflicting_records'] and not source.get('partial_record')
+                          response_count=len(rows))
+            if 'usage_windows' in record:
+                windows, invalid = _windows(record['usage_windows'])
+                source['usage_windows'] = windows
+                source['invalid_usage_windows'] = invalid
+                source['source_response_count'] = len(rows)
+                rows, excluded, unknown = _select_rows(rows, windows)
+                started = (datetime.fromtimestamp(min(w['start'] for w in windows), timezone.utc)
+                           .isoformat().replace('+00:00', 'Z')) if windows else None
+                source.update(response_count=len(rows), excluded_response_count=excluded,
+                              unknown_timestamp_response_count=unknown, window_started_at=started,
+                              counters_observed_at=max((row['observed_at'] for row in rows),
+                                                       key=_timestamp, default=None))
+            source_complete = (bool(rows) and source['available'] and not source['invalid_or_conflicting_records']
+                               and not source.get('partial_record') and not source.get('invalid_usage_windows')
+                               and not source.get('unknown_timestamp_response_count'))
             for row in rows:
                 model = row['model'] or 'unattributed'
                 if model == 'unattributed':
@@ -176,7 +245,9 @@ def usage_projection(db: sqlite3.Connection, metadata: dict, *, root_id: str, de
               'errors':metadata.get('errors', []),
               'new_source_bytes_read':sum(s['bytes_read'] for s in sources),
               'evidence_limit':'Selected coordinator tree, including helpers; each own response counted once by turn model. '
-                               'Cumulative counters and descendant rollups excluded; sources without own-response records are gaps. Windows cover these sessions, not a billing period. '
+                               'Cumulative counters and descendant rollups excluded; sources without selected own-response records are gaps. '
+                               'Assignment windows, when supplied, use response timestamps and half-open [start,end) bounds; unknown timestamps are gaps. '
+                               'Otherwise windows cover session lifetimes, not a billing period. '
                                'Cached input is part of input; reasoning is part of output. No cost or quota is inferred.'}
     if details:
         result['sources'] = sources

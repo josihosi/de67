@@ -82,7 +82,12 @@ a substantial independent investigation. Preserve live state and continue indepe
 Use the prepared brief and selected context bundles. `context_library.py catalog` shows metadata;
 `show --revision SHA256 --section HEADING` retrieves a needed section. At meaningful context changes,
 replace the current handoff with accepted results, shared repairs, bindings, constraints, uncertainty
-and original evidence handles. Do not reload a growing history or inherit a predecessor conversation.
+and original evidence handles. A named worker may continue its own conversation across related
+assignments and fresh coordinators. The current brief and owner corrections govern the current task;
+reconcile changed premises explicitly, retain still-valid knowledge, and avoid replaying accepted
+work. Your reusable job describes competence and responsibility, not permission to continue an old
+assignment. Use the library's coordinator mailbox for named-worker communication; native children
+use native messaging. Do not reload a growing history or inherit a predecessor conversation.
 Name recurring context/tool obstructions so Sol can commission a repair at the producing surface.
 
 Return the supported result, material changes, tests and live actions, evidence ceiling, exact

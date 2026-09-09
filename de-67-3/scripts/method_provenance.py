@@ -11,10 +11,15 @@ from pathlib import Path
 import platform
 import sqlite3
 import subprocess
+import sys
 from typing import Any
 from urllib.parse import quote
 
 import mutation_guard
+SCRIPT_ROOT = str(Path(__file__).resolve().parent)
+if SCRIPT_ROOT not in sys.path:
+    sys.path.insert(0, SCRIPT_ROOT)
+from specification import SpecificationError, resolve
 
 
 def _git_state(path: Path) -> dict[str, Any]:
@@ -103,13 +108,30 @@ def report(method_root: Path, workspace: Path | None) -> dict[str, Any]:
     if workspace is not None:
         workspace = workspace.resolve()
         local = workspace / ".de67"
+        try:
+            specification = resolve(local)
+            guidance = {
+                "FS.md": _sha256(specification.path),
+                "DFS.md": _sha256(specification.path),
+            }
+            compatibility = {
+                "canonical": specification.path.name,
+                "legacy": specification.legacy,
+            }
+        except SpecificationError as error:
+            guidance = {"FS.md": None, "DFS.md": None}
+            compatibility = {"error": str(error)}
         result["workspace"] = {
             "path": str(workspace),
             "git": _git_state(workspace),
             "guidance_sha256": {
-                name: _sha256(local / name)
-                for name in ("DFS.md", "orchestrator-guidelines.md", "test-and-task-guidelines.md")
+                **guidance,
+                **{
+                    name: _sha256(local / name)
+                    for name in ("test-and-task-guidelines.md",)
+                },
             },
+            "specification_compatibility": compatibility,
             "clock": _clock_state(_workspace_clock(workspace)),
         }
     return result

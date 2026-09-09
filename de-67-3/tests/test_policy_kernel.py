@@ -71,6 +71,27 @@ CASES = (
 
 
 class PolicyKernelTests(unittest.TestCase):
+    def test_canonical_fs_open_work_comes_from_the_ledger(self) -> None:
+        from specification import compatibility_pointer
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / ".de67"
+            root.mkdir()
+            state = root / "clock.sqlite3"
+            sqlite3.connect(state).close()
+            fs = root / "FS.md"
+            fs.write_text("# Functional contract\nBehavior remains after delivery.\n")
+            (root / "DFS.md").write_text(compatibility_pointer(fs))
+            ledger = root / "work-ledger.md"
+            ledger.write_text("# Ledger\n- [ ] R-001 — Remaining behavior\n")
+            facts = kernel.workspace_facts(workspace, state, "project", now=0)
+            self.assertIn("red_dfs_work", facts)
+            self.assertNotIn("dfs_complete", facts)
+            ledger.write_text("# Ledger\n- [x] R-001 — Accepted behavior\n")
+            facts = kernel.workspace_facts(workspace, state, "project", now=0)
+            self.assertNotIn("red_dfs_work", facts)
+            self.assertIn("dfs_complete", facts)
+
     def test_worker_outcome_contract_keeps_bootstrap_and_validation_in_one_outcome(self) -> None:
         contract = kernel.worker_outcome_contract()
 
@@ -165,14 +186,6 @@ class PolicyKernelTests(unittest.TestCase):
         wait["obligations"].remove("wake_no_later_than_item_deadline")
         with self.assertRaisesRegex(kernel.PolicyError, "required obligations"):
             kernel.guard_policy_candidate(policy, kernel.load_contracts(CONTRACTS))
-
-    def test_compiled_policy_is_smaller_than_runtime_markdown(self) -> None:
-        compiled = kernel.compile_policy(source_policy())
-        prose = sum(
-            (ROOT / "assets" / "environment" / name).stat().st_size
-            for name in ("orchestrator-guidelines.md", "test-and-task-guidelines.md")
-        )
-        self.assertLess(len(compiled), prose)
 
     def test_truncated_corrupt_and_identity_mismatched_bytecode_fail_closed(self) -> None:
         compiled = kernel.compile_policy(source_policy())
@@ -522,7 +535,7 @@ class PolicyKernelTests(unittest.TestCase):
             de67 = workspace / ".de67"
             de67.mkdir()
             (de67 / "work-ledger.md").write_text(
-                "## R-1\n- Active gap\n- Next executable route\n", encoding="utf-8"
+                "## R-1\n- Next executable route: observe the live route.\n", encoding="utf-8"
             )
             (de67 / "mutation-suggestions.md").write_text(
                 "## Pending suggestions\n\n- owner item\n", encoding="utf-8"
@@ -822,7 +835,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-008-S001 claim=R-008 -->\n"
                 "- [ ] R-008 — Complete the outcome,\n  including both profiles.\n"
                 "  - Proof: every branch has independent evidence.\n"
-                "<!-- DE67:DFS-SLICE:END -->\n")
+                "<!-- DE67:DFS-SLICE:END id=R-008-S001 claim=R-008 -->\n")
             (workspace / ".de67/WEC.md").write_text("Only owner promotion authorizes gameplay repair.")
             facts = kernel.workspace_facts(workspace, state, "project", now=5)
             decision = kernel.decide(source_policy(), facts)
@@ -853,6 +866,13 @@ class PolicyKernelTests(unittest.TestCase):
                 self.assertIn('reasoning_effort', completed_call)
             packet = Path(calls[0]["dispatch_packet"]["path"])
             packet_text = packet.read_text(encoding="utf-8")
+            from worker_packet import delivery_text
+            retained_input, reuse = delivery_text(packet_text, packet_text)
+            self.assertEqual(set(reuse["omitted_sections"]), {
+                "common-guidance", "worker-ownership", "worker-outcome", "worker-communication"})
+            self.assertIn("Only owner promotion authorizes gameplay repair.", retained_input)
+            self.assertIn("Observe the actual bandit return boundary", retained_input)
+            self.assertLess(reuse["delivered_utf8_bytes"], reuse["full_utf8_bytes"])
             self.assertIn("Read your complete task brief", arguments["message"])
             self.assertIn(str(packet), arguments["message"])
             self.assertIn(calls[0]["dispatch_packet"]["sha256"], arguments["message"])
@@ -920,7 +940,7 @@ class PolicyKernelTests(unittest.TestCase):
             de67.mkdir()
             (de67 / "work-ledger.md").write_text(
                 "# Work ledger\n\n- [ ] R-NEW — Repair the native launch boundary and "
-                "prove one fresh gameplay frame.\n\n- [ ] R-OTHER — Unrelated work.\n",
+                "prove one fresh gameplay frame.\n  - DFS slices: `R-NEW-S001`\n\n- [ ] R-OTHER — Unrelated work.\n",
                 encoding="utf-8",
             )
             (de67 / "DFS.md").write_text(
@@ -952,6 +972,7 @@ class PolicyKernelTests(unittest.TestCase):
             de67.mkdir()
             (de67 / "work-ledger.md").write_text(
                 "- [ ] R-CAMP — Prove native establishment using `skill.md`.\n"
+                "  - DFS slices: `R-CAMP-S001`\n"
                 "  - Current handoff: OLD INVESTIGATION JOURNEY\n")
             (de67 / "DFS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-CAMP-S001 claim=R-CAMP -->\n"
@@ -1003,7 +1024,7 @@ class PolicyKernelTests(unittest.TestCase):
             (de67 / "state/workspace.json").write_text(json.dumps({"agent_transport": "app-server"}))
             large_route = "worker-only-evidence " * 4000
             (de67 / "work-ledger.md").write_text(
-                f"- [ ] R-LARGE — {large_route}\n", encoding="utf-8"
+                f"- [ ] R-LARGE — {large_route}\n  - DFS slices: `R-LARGE-S001`\n", encoding="utf-8"
             )
             (de67 / "DFS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-LARGE-S001 claim=R-LARGE -->\n"
@@ -1026,7 +1047,7 @@ class PolicyKernelTests(unittest.TestCase):
 
             # Growing private worker evidence must not grow the coordinator response.
             (de67 / "work-ledger.md").write_text(
-                f"- [ ] R-LARGE — {large_route * 2}\n", encoding="utf-8"
+                f"- [ ] R-LARGE — {large_route * 2}\n  - DFS slices: `R-LARGE-S001`\n", encoding="utf-8"
             )
             larger_call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
             self.assertEqual(len(json.dumps(larger_call, sort_keys=True)), len(coordinator_json))
@@ -1058,7 +1079,7 @@ class PolicyKernelTests(unittest.TestCase):
             (de67 / "DFS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-HISTORY-S001 claim=R-HISTORY -->\n"
                 "Prove the relevant mechanism and live boundary.\n"
-                "<!-- DE67:DFS-SLICE:END -->\n",
+                "<!-- DE67:DFS-SLICE:END id=R-HISTORY-S001 claim=R-HISTORY -->\n",
                 encoding="utf-8",
             )
             state = workspace / "state.sqlite3"
@@ -1136,6 +1157,7 @@ class PolicyKernelTests(unittest.TestCase):
             de67.mkdir()
             (de67 / "work-ledger.md").write_text(
                 "- [ ] R-CONT — Finish the live outcome.\n"
+                "  - DFS slices: `R-CONT-S001`\n"
                 "  - Known footing: bulky accepted history must not be copied.\n"
                 "  - Current handoff: Build is finished; inspect `session/current-status.json` and continue native exit.\n"
                 "  - Current uncertainty: The response boundary remains open.\n"
@@ -1151,7 +1173,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "- Acceptance: Observe a real response.\n"
                 "Implementation status:\n"
                 "- Current continuation: obsolete frozen status says rebuild finished transport.\n"
-                "<!-- DE67:DFS-SLICE:END -->\n",
+                "<!-- DE67:DFS-SLICE:END id=R-CONT-S001 claim=R-CONT -->\n",
                 encoding="utf-8",
             )
             (de67 / "WEC.md").write_text("<!-- DE67:OWNER-CONTRACT:BEGIN -->\nPending correction: establish calculation completion, then advance a native turn; acknowledge and return applied evidence.\n<!-- DE67:OWNER-CONTRACT:END -->")
@@ -1241,7 +1263,8 @@ class PolicyKernelTests(unittest.TestCase):
                 "- [x] R-030 — Unrelated accepted outcome.\n"
                 "  - Known footing: This references R-029 and R-029-exploration-035.\n\n"
                 "- [ ] R-029 — Prove the assigned hostile response.\n"
-                "  - DFS slices: `R-029-S001`\n\n"
+                "  - DFS slices: `R-029-S001`\n"
+                "\n"
                 "  - Current uncertainty: Keep this claim's open boundary.\n"
                 "- [ ] R-031 — Another unrelated outcome.\n\n"
                 "- [ ] R-029 — Prove the same claim on the second platform.\n"
@@ -1251,7 +1274,7 @@ class PolicyKernelTests(unittest.TestCase):
             (de67 / "DFS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-029-S001 claim=R-029 -->\n"
                 "Prove the assigned response through its actual owner.\n"
-                "<!-- DE67:DFS-SLICE:END -->\n",
+                "<!-- DE67:DFS-SLICE:END id=R-029-S001 claim=R-029 -->\n",
                 encoding="utf-8",
             )
             state = workspace / "state.sqlite3"
@@ -1275,7 +1298,8 @@ class PolicyKernelTests(unittest.TestCase):
             de67.mkdir()
             (de67 / "work-ledger.md").write_text(
                 "- [ ] R-10 — Wrong longer-prefix route.\n\n"
-                "- [ ] R-1 — Exact short route.\n",
+                "- [ ] R-1 — Exact short route.\n"
+                "  - DFS slices: `R-1-S001`\n",
                 encoding="utf-8",
             )
             (de67 / "DFS.md").write_text(
@@ -1296,6 +1320,34 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertNotIn("Wrong longer-prefix route", ledger)
             self.assertIn("Exact short slice", dfs)
             self.assertNotIn("Wrong longer-prefix slice", dfs)
+
+    def test_exploration_packet_selects_declared_order_and_rejects_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory); de67 = workspace / ".de67"; de67.mkdir()
+            (de67 / "work-ledger.md").write_text(
+                "- [ ] R-ORDER — Ordered packet.\n"
+                "  - DFS slices: `R-ORDER-S002`, `R-ORDER-S003`\n"
+                "  - Assignment R-ORDER-task: Deliver packet.\n"
+            )
+            (de67 / "DFS.md").write_text(
+                "<!-- DE67:DFS-SLICE:BEGIN id=R-ORDER-S001 claim=R-ORDER -->\nOLD\n<!-- DE67:DFS-SLICE:END id=R-ORDER-S001 claim=R-ORDER -->\n"
+                "<!-- DE67:DFS-SLICE:BEGIN id=R-ORDER-S002 claim=R-ORDER -->\nSECOND\n<!-- DE67:DFS-SLICE:END id=R-ORDER-S002 claim=R-ORDER -->\n"
+                "<!-- DE67:DFS-SLICE:BEGIN id=R-ORDER-S003 claim=R-ORDER -->\nTHIRD\n<!-- DE67:DFS-SLICE:END id=R-ORDER-S003 claim=R-ORDER -->\n"
+            )
+            state = workspace / "state.sqlite3"
+            with DeadlineHarness(state) as harness:
+                harness.start_task("project", "R-ORDER-task", "R-ORDER", 100, now=1)
+            call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
+            reference = next((de67 / "state/worker-dispatch").glob("*-context-*.md"))
+            text = reference.read_text()
+            self.assertLess(text.index("SECOND"), text.index("THIRD"))
+            self.assertNotIn("OLD", text)
+            for selector in ("R-ORDER-S999", "R-OTHER-S001"):
+                (de67 / "work-ledger.md").write_text(
+                    "- [ ] R-ORDER — Ordered packet.\n  - DFS slices: `" + selector + "`\n"
+                )
+                with self.assertRaises(kernel.PolicyError):
+                    kernel._exploration_route(workspace, "R-ORDER", "R-ORDER")
 
     def test_preserved_baseline_has_no_compiled_kernel_and_remains_recoverable(self) -> None:
         result = subprocess.run(
@@ -1328,9 +1380,9 @@ class AssignmentTests(unittest.TestCase):
     def test_focused_packet_completion_does_not_accept_whole_claim(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace=Path(directory);de67=workspace/'.de67';de67.mkdir()
-            ledger='- [ ] R-029 — Prove natural discovery through return.\n  - Assignment recovery: Restore runnable Fight test; exit after verified native Fight and ordinary turns.\n  - Current uncertainty: Scout/report connection remains unproved.\n'
+            ledger='- [ ] R-029 — Prove natural discovery through return.\n  - DFS slices: `R-029-S001`\n  - Assignment recovery: Restore runnable Fight test; exit after verified native Fight and ordinary turns.\n  - Current uncertainty: Scout/report connection remains unproved.\n'
             (de67/'work-ledger.md').write_text(ledger)
-            (de67/'DFS.md').write_text('<!-- DE67:DFS-SLICE:BEGIN id=R-029-S001 claim=R-029 -->\nProve discovery, dispatch and return.\n<!-- DE67:DFS-SLICE:END -->\n')
+            (de67/'DFS.md').write_text('<!-- DE67:DFS-SLICE:BEGIN id=R-029-S001 claim=R-029 -->\nProve discovery, dispatch and return.\n<!-- DE67:DFS-SLICE:END id=R-029-S001 claim=R-029 -->\n')
             state=workspace/'state.sqlite3'
             with DeadlineHarness(state) as h:h.start_task('project','recovery','R-029',100,now=1)
             call=kernel.unbound_worker_spawns(workspace,state,'project')[0]

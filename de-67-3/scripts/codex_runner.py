@@ -66,7 +66,7 @@ class CoordinatorLoopGuard:
                 self._pending_delegations.discard(task_id)
 
     def reconcile_handoffs(self) -> None:
-        """Bind workers once the runtime roster has observed their spawn edge."""
+        """Bind workers from an exact library claim or verified native spawn edge."""
         self._reconcile_terminal_tasks()
         if self._roster_resolver is None:
             return
@@ -416,7 +416,18 @@ def _roster_resolver(
         parent_thread_id: str | None,
         used_workers: frozenset[str],
     ) -> str | None:
-        if parent_thread_id is None or not state.is_file():
+        if parent_thread_id is None:
+            return None
+        from worker_library import owned_assignments
+        deadline = environment.get("DE67_DEADLINE_STATE", "").strip()
+        lineage = environment.get("DE67_LINEAGE", "").strip()
+        if deadline and lineage:
+            owned = owned_assignments(workspace, Path(deadline), lineage,
+                                      coordinator_session_id=parent_thread_id)
+            worker = owned.get(_task_id)
+            if worker and worker not in used_workers:
+                return worker
+        if not state.is_file():
             return None
         connection = sqlite3.connect(f"file:{state}?mode=ro", uri=True)
         try:
@@ -498,7 +509,17 @@ def _roster_validator(
     )
 
     def validate(worker_id: str, parent_thread_id: str | None, task_id: str | None = None) -> bool:
-        if parent_thread_id is None or not state.is_file():
+        if parent_thread_id is None:
+            return False
+        from worker_library import owned_assignments
+        deadline = environment.get("DE67_DEADLINE_STATE", "").strip()
+        lineage = environment.get("DE67_LINEAGE", "").strip()
+        if deadline and lineage and task_id != "":
+            owned = owned_assignments(workspace, Path(deadline), lineage,
+                                      coordinator_session_id=parent_thread_id)
+            if (owned.get(task_id) == worker_id if task_id else worker_id in owned.values()):
+                return True
+        if not state.is_file():
             return False
         connection = sqlite3.connect(f"file:{state}?mode=ro", uri=True)
         try:
@@ -567,20 +588,21 @@ def _claim_recorder(environment: dict[str, str]) -> Callable[[str, str, str | No
             raise RunnerError("Durable worker claim lacks supervisor or coordinator identity")
         try:
             with DeadlineHarness(state) as harness:
-                harness.claim_worker(
+                claim = harness.claim_worker(
                     lineage,
                     task_id,
                     worker_id,
                     coordinator_session,
                     supervisor,
                 )
-                harness.checkpoint_worker(
-                    lineage,
-                    task_id,
-                    worker_id,
-                    "delegated",
-                    "runner observed successful roster handoff",
-                )
+                if claim["recorded"]:
+                    harness.checkpoint_worker(
+                        lineage,
+                        task_id,
+                        worker_id,
+                        "delegated",
+                        "runner observed successful roster handoff",
+                    )
         except DeadlineError as error:
             raise RunnerError(f"Durable worker claim failed: {error}") from error
 

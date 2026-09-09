@@ -7,16 +7,18 @@ description: Explicit third phase of de67. Use when the user says `de67 3` to de
 
 This file routes Phase 3; it is not the coordinator procedure.
 
-The invocation authorizes implementation of the frozen DFS in the named working repository. Do not
+The invocation authorizes implementation of the frozen FS in the named working repository. Do not
 read `de-67-1/` or `de-67-2/`. Never inventory, search, or read `.de67/no-go-zone/`.
 
 This router is bootstrap material. A launcher may read it to initialize Phase 3. Runtime decisions
 come from the compiled policy kernel, not packaged or workspace guideline prose. Packaged scripts
 may be executed as tools.
 
-Inspect `.de67/state/workspace.json` and verify that `.de67/DFS.md` records `Frozen` or `Refrozen`
-against an inspected source baseline. A missing configuration, draft DFS, unresolved material owner
-choice, or changed user outcome returns to de67 2.
+Inspect `.de67/state/workspace.json` and verify that the canonical Functional Specification
+(`.de67/FS.md`, or `.de67/DFS.md` in a legacy workspace) records `Frozen` or `Refrozen` against an
+inspected source baseline. A migrated `DFS.md` is a hash-bound pointer to `FS.md`, not a draft or a
+second specification. A missing configuration, draft FS, unresolved material owner choice, or
+changed user outcome returns to de67 2.
 
 Copy each missing environment artifact individually. Never overwrite an existing project file.
 Machine state stays under `.de67/state/`; the DFS and ledgers remain ordinary project artifacts.

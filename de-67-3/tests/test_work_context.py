@@ -119,10 +119,11 @@ class WorkContextTests(unittest.TestCase):
                 h.start_task('project','successor','R-CONT',100,now=8)
             de67=root/'.de67';de67.mkdir(exist_ok=True)
             (de67/'work-ledger.md').write_text('- [ ] R-CONT — Observe ecology.\n'
+                '  - DFS slices: `R-CONT-S001`\n'
                 '  - Known footing: independently accepted branch-a work.\n'
                 '  - Current handoff: Continue `sessions/branch-a`.\n')
             (de67/'DFS.md').write_text('<!-- DE67:DFS-SLICE:BEGIN id=R-CONT-S001 claim=R-CONT -->\n'
-                'Observe independent natural response.\n<!-- DE67:DFS-SLICE:END -->\n')
+                'Observe independent natural response.\n<!-- DE67:DFS-SLICE:END id=R-CONT-S001 claim=R-CONT -->\n')
             call=policy_kernel.unbound_worker_spawns(root,state,'project')[0]
             packet=Path(call['dispatch_packet']['path']).read_text()
             self.assertIn('branch-a established distinct evidence',packet)
@@ -169,5 +170,40 @@ class WorkContextTests(unittest.TestCase):
             self.assertEqual(v['runner_records'][0]['role'],'coordinator')
             self.assertTrue(v['runner_records'][0]['metadata']['events.jsonl']['available'])
             self.assertFalse(v['runner_records'][0]['metadata']['status.json']['available'])
+
+    def test_live_task_exposes_exact_optional_checkpoint_argv_without_mutation(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); state=self.setup_state(root)
+            before=state.read_bytes()
+            view=context_view(root,state,'project',task='branch-a')
+            template=view['checkpoint_worker_template']
+            self.assertTrue(template['optional'])
+            self.assertEqual(template['argv'], [
+                sys.executable, str(SCRIPTS/'deadline_harness.py'), '--state',
+                str(state.resolve()), 'checkpoint-worker', '--lineage', 'project',
+                '--task', 'branch-a', '--worker', 'worker-branch-a'])
+            self.assertEqual(template['bindings'], {
+                'state': str(state.resolve()), 'lineage': 'project',
+                'task': 'branch-a', 'worker': 'worker-branch-a'})
+            self.assertNotIn('--kind', template['argv'])
+            self.assertNotIn('--evidence', template['argv'])
+            self.assertEqual(state.read_bytes(), before)
+
+    def test_checkpoint_template_is_absent_for_unclaimed_and_terminal_tasks(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); state=root/'deadline.sqlite3'
+            with DeadlineHarness(state) as h:
+                h.start_task('project','unclaimed','R-CONT',100,now=1)
+                h.start_task('project','terminal','R-CONT',100,now=2)
+                h.claim_worker('project','terminal','worker-terminal','coordinator','supervisor',now=3)
+                terminal_receipt=receipt('terminal','worker-terminal','sessions/terminal')
+                terminal_receipt['disposition']='abandoned'
+                stored=h.record_worker_result_receipt('project','terminal','worker-terminal',
+                    terminal_receipt,now=4)
+                h.abandon_attempt('project','terminal','done',receipt_id=stored['receipt_id'],now=5)
+            self.assertNotIn('checkpoint_worker_template',
+                             context_view(root,state,'project',task='unclaimed'))
+            self.assertNotIn('checkpoint_worker_template',
+                             context_view(root,state,'project',task='terminal'))
 
 if __name__=='__main__':unittest.main()

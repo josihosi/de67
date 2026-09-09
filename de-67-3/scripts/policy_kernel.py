@@ -22,8 +22,11 @@ if SCRIPT_ROOT not in sys.path:
 import symbol_codec
 from context_library import dispatch_context, selected_sources, task_view, ContextError
 from instruction_context import common_guidance
+from worker_packet import standing_section
 from agent_mailbox import communication_contract
 from work_context import context_view, provider_context, record_dispatch, dispatch_evidence_index
+from mutation_guard import extract_dfs_slices, _active_work_blocks, _ledger_slice_ids, GuardError
+from specification import SpecificationError, resolve
 
 
 MAGIC = b"D67P"
@@ -317,7 +320,8 @@ def current_owner_contract(workspace: Path) -> str:
     path = workspace / ".de67/WEC.md"
     if not path.is_file():
         return ""
-    source = path.read_text(encoding="utf-8")
+    source_bytes = path.read_bytes()
+    source = source_bytes.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     begin, end = "<!-- DE67:OWNER-CONTRACT:BEGIN -->", "<!-- DE67:OWNER-CONTRACT:END -->"
     if begin not in source and end not in source:
         # Legacy workspaces still use the complete WEC as the authority source.
@@ -332,7 +336,7 @@ def current_owner_contract(workspace: Path) -> str:
         body = body.strip()
     return (
         "Current owner contract (.de67/WEC.md sha256 "
-        + hashlib.sha256(path.read_bytes()).hexdigest() + "):\n" + body + "\n"
+        + hashlib.sha256(source_bytes).hexdigest() + "):\n" + body + "\n"
         "Apply these current constraints to this assignment and every helper handoff. "
         "They govern generic repair/finding permissions and supersede historical strategy, "
         "including no-replay advice where the owner requires fresh proof. Acknowledge relevant pending "
@@ -371,7 +375,7 @@ def _worker_read_plan(
         })
     plan.extend([
         {
-            "source": f".de67/DFS.md slice for {claim_id}",
+            "source": f".de67/FS.md slice for {claim_id} (legacy DFS.md resolver compatible)",
             "reason": "read on demand if the compact packet leaves the product or proof boundary ambiguous",
         },
         {
@@ -384,38 +388,53 @@ def _worker_read_plan(
 
 def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[str, str]:
     ledger_path = workspace / ".de67/work-ledger.md"
-    dfs_path = workspace / ".de67/DFS.md"
+    try:
+        specification = resolve(workspace / ".de67")
+    except SpecificationError as error:
+        raise PolicyError(str(error)) from error
+    dfs_path = specification.path
     ledger = ledger_path.read_text(encoding="utf-8")
-    # Cross-references do not own an assignment. Select the primary item,
-    # retaining its continuation paragraphs even when separated by blank lines.
-    item_headers = list(re.finditer(
-        r"^- \[[ xX]\] (?P<identity>[A-Za-z0-9_-]+)(?=\s|$)", ledger, re.MULTILINE
-    ))
-    matching = [item for item in item_headers if item.group("identity") == task_id]
-    if not matching:
-        matching = [item for item in item_headers if item.group("identity") == claim_id]
-    if not matching:
+    # Assignments are nested under the owning active claim item; cross-reference
+    # mentions elsewhere must not become an assignment route.  The guard owns
+    # parsing of active blocks and validation of their DFS selector line.
+    claim_blocks = [
+        (reference, block)
+        for reference, block in _active_work_blocks(ledger)
+        if reference.split(" — ", 1)[0] == claim_id
+    ]
+    assigned_blocks = [
+        item for item in claim_blocks
+        if re.search(rf"^  - Assignment {re.escape(task_id)}:", item[1], re.MULTILINE)
+    ]
+    # Explicit assignments own their block. Legacy whole-claim tasks remain
+    # compatible when exactly one slice-bearing claim block is unambiguous.
+    owning_blocks = assigned_blocks
+    if not owning_blocks and task_id != claim_id:
+        owning_blocks = [
+            item for item in claim_blocks
+            if re.search(r"^  - DFS slices:", item[1], re.MULTILINE)
+        ]
+    if len(owning_blocks) != 1:
         raise PolicyError(
-            f"Unbound exploration task {task_id} has no primary ledger route for {claim_id}"
+            f"Unbound exploration task {task_id} must have exactly one owning ledger item for {claim_id}"
         )
-    routes: list[str] = []
-    for item in matching:
-        following = re.search(r"^(?:- |#{1,6} )", ledger[item.end():], re.MULTILINE)
-        end = item.end() + following.start() if following is not None else len(ledger)
-        routes.append(ledger[item.start():end].strip())
-    dfs = dfs_path.read_text(encoding="utf-8")
-    marker = re.compile(
-        r"<!-- DE67:DFS-SLICE:BEGIN[^>]*claim=" + re.escape(claim_id)
-        + r"(?=\s|-->)[^>]*-->\n(?P<body>.*?)\n"
-        r"<!-- DE67:DFS-SLICE:END[^>]*-->",
-        re.DOTALL,
-    )
-    match = marker.search(dfs)
-    if match is None:
+    reference, owning_route = owning_blocks[0]
+    # Keep independent same-claim ledger frontiers visible in the packet while
+    # taking DFS content only from the selected owner block.
+    route = "\n\n".join(block for _, block in claim_blocks)
+    try:
+        slice_ids = _ledger_slice_ids(owning_route, reference)
+    except GuardError as error:
+        raise PolicyError(str(error)) from error
+    try:
+        selected = extract_dfs_slices(dfs_path, claim_id, slice_ids)
+    except GuardError as error:
+        raise PolicyError(str(error)) from error
+    if not selected.strip():
         raise PolicyError(
-            f"Unbound exploration task {task_id} has no named DFS slice for {claim_id}"
+            f"Unbound exploration task {task_id} has empty selected DFS slices for {claim_id}"
         )
-    return "\n\n".join(routes), match.group("body").strip()
+    return route.strip(), selected.strip()
 
 
 def worker_helper_contract() -> str:
@@ -434,7 +453,7 @@ def worker_helper_contract() -> str:
 def worker_outcome_contract() -> str:
     """Keep recoverable work inside the outcome and reserve terminal findings."""
     return (
-        "Repository-owned implementation, tooling, fixture, scenario, binding and observation repairs remain recoverable work. "
+        "Repository-owned implementation, tooling, fixture, scenario, binding and observation repairs remain recoverable work within the assigned scope. "
         "When a prerequisite becomes a substantial independent investigation, ask Sol to decide its ownership; "
         "continue independent work and preserve live runs and useful understanding. Do not silently absorb unrelated prerequisites. "
         "When a proof prerequisite depends on output it is about to create, treat that work as "
@@ -456,7 +475,8 @@ def worker_outcome_contract() -> str:
 def worker_communication_contract() -> str:
     """Communicate decision-changing evidence without a reporting lifecycle."""
     return (
-        "Use native send_message(target=\"/root\", message=...) for progress or questions that can "
+        "Named workers use the coordinator mailbox command supplied here; native children use "
+        "send_message(target=\"/root\", message=...). Share progress or questions that can "
         "change coordination or another worker's work. During tests, ask the coordinator for help "
         "when results surprise you, progress stalls, or you are unsure what to try next. Share the "
         "relevant actual state, expected behavior, evidence and uncertainty so you can reason "
@@ -595,12 +615,15 @@ def unbound_worker_spawns(
                         f"Unbound closure task {task_id} references missing gap revision"
                     )
                 outcome, proof_route = str(gap["description"]), str(gap["proof_route"])
-                dfs_path = workspace / ".de67/DFS.md"
-                if dfs_path.is_file():
+                try:
+                    specification = resolve(workspace / ".de67")
+                except SpecificationError as error:
+                    raise PolicyError(str(error)) from error
+                if specification.path.is_file():
                     match = re.search(
                         r"<!-- DE67:DFS-SLICE:BEGIN[^>]*claim=" + re.escape(claim_id)
                         + r"(?=\s|-->)[^>]*-->\n(.*?)\n<!-- DE67:DFS-SLICE:END[^>]*-->",
-                        dfs_path.read_text(encoding="utf-8"), re.DOTALL,
+                        specification.text, re.DOTALL,
                     )
                     if match is None:
                         raise PolicyError(f"Closure task {task_id} has no current DFS slice")
@@ -679,17 +702,19 @@ def unbound_worker_spawns(
                                  if str((workspace / item["source"]).resolve()) not in injected]
             except ContextError as error:
                 raise PolicyError(str(error)) from error
+            owner_contract = current_owner_contract(workspace)
             message = (
                 f"Own assigned {phase} work {task_id} for outcome {claim_id}"
                 + (f", focus {gap_id} revision {revision}. " if gap_id else ". ")
                 + f"Scope: {assignment_scope}. "
                 + "Judge task completion against this assignment; preserve broader claim requirements independently.\n"
                 + ("Assigned closure route:\n" + str(gap["proof_route"]) + "\n" if gap else "")
-                + "\n" + common_guidance(workspace) + "\nWorker runtime and helper ownership:\n" + worker_helper_contract() + "\n\n"
+                + "\n" + standing_section("common-guidance", common_guidance(workspace))
+                + standing_section("worker-ownership", "Worker runtime and helper ownership:\n" + worker_helper_contract()) + "\n"
                 + assembled_context
                 + "Context catalogue and exact revision/section retrieval: "
                 + json.dumps([sys.executable, str(Path(__file__).with_name("context_library.py")), "--workspace", str(workspace), "--task", task_id, "catalog"]) + ". Use show --revision SHA256 [--section HEADING] for missing context; do not load the whole library.\n"
-                + current_owner_contract(workspace)
+                + owner_contract
                 + ("Latest other attempt for this claim (lifecycle only; may be parallel, not predecessor evidence):\n"
                    + json.dumps(previous_attempt, ensure_ascii=False, sort_keys=True) + "\n"
                    if previous_attempt is not None else "")
@@ -709,7 +734,7 @@ def unbound_worker_spawns(
                 + "Initial evidence read plan (expand only when its reason becomes material):\n"
                 + json.dumps(read_plan, ensure_ascii=False, sort_keys=True)
                 + "\n"
-                + worker_outcome_contract()
+                + standing_section("worker-outcome", worker_outcome_contract())
                 + " Return a compact result naming the achieved outcome or first divergence, "
                 + "material changes, tests and live actions, evidence ceiling, exact bindings, "
                 + "journal entries, artifact paths and roles, accepted work and why inconclusive attempts "
@@ -720,7 +745,7 @@ def unbound_worker_spawns(
                 + " prepare collects task/worker "
                 + "identities and artifact hashes from an agent-authored draft and validates any supplied "
                 + "identities/hashes; its --help gives the exact invocation; do not change coordination records. "
-                + worker_communication_contract()
+                + "\n" + standing_section("worker-communication", worker_communication_contract())
                 + communication_contract(workspace, task_id)
             )
             task_name = "task_" + task_id.encode("utf-8").hex()
@@ -729,6 +754,7 @@ def unbound_worker_spawns(
             )
             record_dispatch(workspace, state, lineage_id, task_id, packet, packet_digest,
                             {"claim_id":claim_id, "closure_gap_id":gap_id,
+                             "owner_contract_sha256":hashlib.sha256(owner_contract.encode("utf-8")).hexdigest(),
                              "closure_gap_revision":revision,
                              "evidence_receipts":[r["receipt_id"] for r in receipts],
                              "related_tasks":[r["task_id"] for r in context["related_results"]],
@@ -745,9 +771,21 @@ def unbound_worker_spawns(
                         "path": str(packet),
                         "sha256": packet_digest,
                     },
+                    "worker_library": {
+                        "catalog_argv": [sys.executable, str(Path(__file__).with_name("worker_library.py")),
+                                         "--workspace", str(workspace), "list"],
+                        "assign_argv": [sys.executable, str(Path(__file__).with_name("worker_library.py")),
+                                        "--workspace", str(workspace), "assign", "WORKER_NAME",
+                                        "--task", task_id, "--packet", str(packet),
+                                        "--sha256", packet_digest, "--state", str(state),
+                                        "--lineage", lineage_id],
+                    },
                     "instruction": (
-                        "Complete example_call.arguments with one chosen model_choices capability, "
-                        "preserving every supplied identity/packet argument, then call spawn_agent. "
+                        "Consider reusing a named worker with a suitable job and useful context. "
+                        "Use worker_library.assign_argv with that worker's name, creating a named "
+                        "worker first if the job or concurrent ownership requires one. Preserve "
+                        "the exact task and packet. For a native child, complete example_call.arguments "
+                        "with one chosen model_choices capability, then call spawn_agent. "
                         "Choose model and reasoning effort separately for this assignment's "
                         "uncertainty and expected total work, using the existing selection guidance. "
                         "Then continue live coordination; call wait_agent "
@@ -928,14 +966,20 @@ def _terminal_result_was_consumed(
         ).fetchone()
         if consumed is not None:
             return True
-    if _table_exists(connection, "closure_gap_revisions"):
+    if (_table_exists(connection, "closure_gap_revisions")
+            and "closure_gap_revision" in task.keys()
+            and task["closure_gap_revision"] is not None):
         consumed = connection.execute(
             """
             SELECT 1 FROM closure_gap_revisions
-            WHERE lineage_id = ? AND basis_task_id = ? AND recorded_at >= ?
+            WHERE lineage_id = ? AND claim_id = ? AND closure_sequence = ?
+              AND gap_id = ? AND revision = ?
+              AND basis_task_id = ? AND recorded_at >= ?
             LIMIT 1
             """,
-            (lineage_id, task_id, float(terminal_at)),
+            (lineage_id, task["claim_id"], task["phase_sequence_at_dispatch"],
+             task["closure_gap_id"], int(task["closure_gap_revision"]) + 1,
+             task_id, float(terminal_at)),
         ).fetchone()
         if consumed is not None:
             return True
@@ -958,9 +1002,29 @@ def workspace_facts(
 ) -> frozenset[str]:
     facts: set[str] = set()
     current_claim: str | None = None
+    owner_wait_claims: set[str] = set()
+    owner_wait_gaps: set[tuple[str, int, str]] = set()
     connection = sqlite3.connect(f"file:{state.resolve()}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     try:
+        if "route_kind" in {row[1] for row in connection.execute("PRAGMA table_info(closure_gap_revisions)")}:
+            routes = connection.execute("""
+                SELECT g.claim_id, g.closure_sequence, g.gap_id, r.route_kind FROM closure_gaps g
+                JOIN closure_gap_revisions r USING (lineage_id, claim_id, closure_sequence, gap_id)
+                JOIN claim_clocks c ON c.lineage_id=g.lineage_id AND c.claim_id=g.claim_id
+                WHERE g.lineage_id = ? AND g.closed_at IS NULL AND c.phase = 'closure'
+                  AND g.closure_sequence = (SELECT MAX(g2.closure_sequence) FROM closure_gaps g2
+                    WHERE g2.lineage_id=g.lineage_id AND g2.claim_id=g.claim_id)
+                  AND r.revision = (SELECT MAX(x.revision) FROM closure_gap_revisions x
+                    WHERE x.lineage_id=g.lineage_id AND x.claim_id=g.claim_id
+                      AND x.closure_sequence=g.closure_sequence AND x.gap_id=g.gap_id)
+            """, (lineage_id,)).fetchall()
+            owner_wait_gaps = {(str(r["claim_id"]), int(r["closure_sequence"]), str(r["gap_id"]))
+                               for r in routes if r["route_kind"] == "owner_wait"}
+            owner_wait_claims = {str(r["claim_id"]) for r in routes if r["route_kind"] == "owner_wait"} - {
+                str(r["claim_id"]) for r in routes if r["route_kind"] == "executable"}
+            if owner_wait_gaps:
+                facts.add("owner_wait")
         if _table_exists(connection, "tasks"):
             rows = connection.execute(
                 "SELECT * FROM tasks WHERE lineage_id = ? ORDER BY started_at DESC",
@@ -1055,16 +1119,16 @@ def workspace_facts(
                       AND latest.claim_id = generation.claim_id
                   )
                 ORDER BY generation.started_at DESC, clock.claim_id
-                LIMIT 1
                     """,
                     (lineage_id,),
-                ).fetchone()
+                ).fetchall()
             else:
                 clock = connection.execute(
                     "SELECT * FROM claim_clocks WHERE lineage_id = ? "
-                    "ORDER BY started_at DESC LIMIT 1",
+                    "ORDER BY started_at DESC",
                     (lineage_id,),
-                ).fetchone()
+                ).fetchall()
+            clock = next((row for row in clock if str(row["claim_id"]) not in owner_wait_claims), None)
             if clock is not None:
                 current_claim = str(clock["claim_id"])
                 facts.add("open_claim")
@@ -1094,10 +1158,11 @@ def workspace_facts(
                  )
                 WHERE gap.lineage_id = ? AND gap.claim_id = ?
                   AND gap.closed_at IS NULL
-                ORDER BY gap.gap_id LIMIT 1
+                ORDER BY gap.gap_id
                     """,
                     (lineage_id, current_claim),
-                ).fetchone()
+                ).fetchall()
+                open_gap = next((row for row in open_gap if (str(row["claim_id"]), int(row["closure_sequence"]), str(row["gap_id"])) not in owner_wait_gaps), None)
             else:
                 open_gap = connection.execute(
                     """
@@ -1110,7 +1175,7 @@ def workspace_facts(
                 ).fetchone()
             if open_gap is not None:
                 facts.add("open_gap")
-                if str(open_gap["proof_route"]).strip():
+                if open_gap["proof_route"] is not None and str(open_gap["proof_route"]).strip():
                     facts.add("executable_route")
         if _table_exists(connection, "random_mutation_cycles"):
             random_due = connection.execute(
@@ -1154,7 +1219,7 @@ def workspace_facts(
                     (lineage_id,),
                 ).fetchall():
                     gap_id = str(row["gap_id"])
-                    if re.search(
+                    if (str(row["claim_id"]), gap_id) not in {(claim, gap) for claim, _, gap in owner_wait_gaps} and re.search(
                         r"(?<![A-Za-z0-9_-])" + re.escape(gap_id)
                         + r"(?![A-Za-z0-9_-])",
                         frontier_text,
@@ -1184,14 +1249,26 @@ def workspace_facts(
         for line in ledger_text.splitlines()
     ):
         facts.add("blocked_ledger")
-    if any(
-        word in ledger_text.lower()
-        for word in (
-            "next executable", "required mechanism", "active gap", "active work",
-            "proof boundary",
-        )
-    ):
-        facts.add("executable_route")
+    # Execution labels only count in the selected frontier or active unchecked items.
+    # Historical accepted text and owner-only gap proof cannot create a worker route.
+    blocks = _active_work_blocks(ledger_text)
+    frontier_match = re.search(r"(?ms)^## Current delivery frontier\s*$\n(.*?)(?=^## |\Z)", ledger_text)
+    route_texts = [(reference.split()[0], block) for reference, block in blocks]
+    if not blocks:
+        route_texts.extend((section.splitlines()[0].removeprefix("## ").strip(), section)
+                          for section in re.split(r"(?m)(?=^## )", ledger_text) if section.strip())
+    if frontier_match:
+        route_texts.append(("", frontier_match.group(1)))
+    for owner, route_text in route_texts:
+        if owner in owner_wait_claims:
+            continue
+        for line in route_text.splitlines():
+            if not owner or owner == "Current delivery frontier":
+                if any(re.search(r"(?<![A-Za-z0-9_-])" + re.escape(identity) + r"(?![A-Za-z0-9_-])", line)
+                       for identity in owner_wait_claims | {gap for _, _, gap in owner_wait_gaps}):
+                    continue
+            if re.search(r"(?i)^\s*- (?:Next executable route|Active work|Assignment [^:]+):\s*\S", line):
+                facts.add("executable_route")
     suggestions = workspace / ".de67" / "mutation-suggestions.md"
     if suggestions.is_file():
         pending = suggestions.read_text(encoding="utf-8").partition("## Pending suggestions")[2]
@@ -1214,12 +1291,13 @@ def workspace_facts(
             for entry in entries
         ):
             facts.add("pending_suggestions")
-    dfs = workspace / ".de67" / "DFS.md"
-    dfs_text = dfs.read_text(encoding="utf-8") if dfs.is_file() else ""
-    if "🔴" in dfs_text:
-        facts.add("red_dfs_work")
-    else:
-        facts.add("dfs_complete")
+    try:
+        specification = resolve(workspace / ".de67")
+        open_work = ("🔴" in specification.text if specification.legacy
+                     else bool(_active_work_blocks(ledger_text)))
+    except SpecificationError:
+        open_work = False
+    facts.add("red_dfs_work" if open_work else "dfs_complete")
     return frozenset(facts)
 
 
@@ -1308,7 +1386,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.workspace.resolve(), args.state.resolve(), args.lineage
             )
             payload["parallel_dispatch"] = (
-                "Spawn one distinct worker for each listed independent task before waiting."
+                "Assign one distinct worker to each listed independent task before waiting."
             )
             payload["coordinator_next_action"] = (
                 "Spawn every listed worker, then continue live coordination. Call wait_agent "

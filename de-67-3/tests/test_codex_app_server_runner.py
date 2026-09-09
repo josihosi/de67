@@ -127,7 +127,10 @@ class AppServerTransportTests(unittest.TestCase):
 
             transport.atomic_json(workspace / '.de67/state/workspace.json', {'persistent_mutator': True})
             env.update(DE67_PROCESS_ROLE='mutation-reviewer', DE67_COORDINATOR_MODEL='gpt-6-astra',
-                       DE67_COORDINATOR_RESUME_SESSION='')
+                       DE67_COORDINATOR_RESUME_SESSION='', DE67_LINEAGE='lineage',
+                       DE67_MUTATION_GATE_JSON=json.dumps({'kind': 'random', 'identity': 'cycle 1',
+                                                           'selected_lane': 'lane'}))
+            # Owner messages and successive reviews retain one conversation.
             for expected in ('thread/start', 'thread/resume'):
                 calls.clear()
                 with patch.dict(os.environ, env, clear=True), patch.object(transport.sys, 'platform', 'darwin'), \
@@ -153,6 +156,142 @@ class AppServerTransportTests(unittest.TestCase):
                     transport.run('codex', workspace, 'Current role prompt')
             self.assertTrue(servers[-1].stopped)
             self.assertFalse(list((workspace / 'codex/state/de67-input').glob('*.sock')))
+
+    def test_reviews_and_owner_input_resume_original_owner_without_gate_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = workspace / 'run'
+            run_dir.mkdir()
+            transport.atomic_json(workspace / '.de67/state/workspace.json', {'persistent_mutator': True})
+            calls = []
+
+            class Server:
+                pid = 999
+                stopped = False
+                def __init__(self, argv, **kwargs):
+                    Path(argv[-1].removeprefix('unix://')).touch()
+                def poll(self): return 0 if self.stopped else None
+                def terminate(self): self.stopped = True
+                def wait(self, **kwargs): return 0
+
+            class Client:
+                def __init__(self, socket): self.notifications = []
+                def send(self, message): pass
+                def call(self, method, params):
+                    calls.append((method, params))
+                    if method in {'thread/start', 'thread/resume'}:
+                        return {'thread': {'id': params.get('threadId', 'new-thread')}}
+                    if method == 'turn/start':
+                        self.notifications = [{'method': 'turn/completed', 'params': {
+                            'threadId': params['threadId'], 'turn': {'id': 'turn', 'status': 'completed'}}}]
+                        return {'turn': {'id': 'turn'}}
+                def close(self): pass
+
+            env = {'DE67_RUNNER_ACTIVE_DIR': str(run_dir), 'CODEX_HOME': str(workspace / 'codex'),
+                   'DE67_PROCESS_ROLE': 'mutation-reviewer', 'DE67_COORDINATOR_RUN_ID': 'retry-run',
+                   'DE67_COORDINATOR_MODEL': 'gpt-6-astra', 'DE67_COORDINATOR_REASONING_EFFORT': 'medium',
+                   'DE67_LINEAGE': 'lineage'}
+            session = mutator_session.MutatorSession(workspace)
+            # Migration must retain the owner, never select the separate review thread.
+            transport.atomic_json(session.path, {'workspace': str(workspace.resolve()), 'model': 'gpt-6-astra',
+                'thread_id': 'owner-thread', 'owner': {'thread_id': 'owner-thread'},
+                'review': {'thread_id': 'obsolete-review', 'state': 'interrupted', 'gate': {'identity': 'old'}}})
+            for gate_value in (None, '{broken', '{"kind":"random","identity":"different"}'):
+                calls.clear()
+                review_env = dict(env)
+                if gate_value is not None:
+                    review_env['DE67_MUTATION_GATE_JSON'] = gate_value
+                with patch.dict(os.environ, review_env, clear=True), patch.object(transport.sys, 'platform', 'darwin'), \
+                     patch.object(transport.signal, 'signal'), patch.object(transport.subprocess, 'Popen', Server), \
+                     patch.object(transport, 'Rpc', Client), redirect_stdout(io.StringIO()):
+                    self.assertEqual(transport.run('codex', workspace, 'Current review instructions'), 0)
+                launches = [(method, params) for method, params in calls if method.startswith('thread/')]
+                self.assertEqual(len(launches), 1)
+                self.assertEqual((launches[0][0], launches[0][1]['threadId']), ('thread/resume', 'owner-thread'))
+                turn = next(params for method, params in calls if method == 'turn/start')
+                self.assertEqual(turn['input'], [{'type': 'text', 'text': 'Current review instructions'}])
+                saved = json.loads(session.path.read_text())
+                self.assertEqual(saved['thread_id'], 'owner-thread')
+                self.assertEqual(saved['result'], 'completed')
+
+            calls.clear()
+            owner_input = workspace / 'owner-input.json'
+            receipt = workspace / 'owner-receipt.json'
+            transport.atomic_json(owner_input, {'input': [{'type': 'text', 'text': 'User Message: retain me'}],
+                                                'client_id': 'owner:1', 'receipt_path': str(receipt)})
+            owner_env = {**env, 'DE67_COORDINATOR_RUN_ID': 'owner-run',
+                         'DE67_INITIAL_INPUT_PATH': str(owner_input)}
+            with patch.dict(os.environ, owner_env, clear=True), patch.object(transport.sys, 'platform', 'darwin'), \
+                 patch.object(transport.signal, 'signal'), patch.object(transport.subprocess, 'Popen', Server), \
+                 patch.object(transport, 'Rpc', Client), redirect_stdout(io.StringIO()):
+                self.assertEqual(transport.run('codex', workspace, 'owner guidance'), 0)
+            launch = next((method, params) for method, params in calls if method.startswith('thread/'))
+            self.assertEqual((launch[0], launch[1]['threadId']), ('thread/resume', 'owner-thread'))
+            turn = next(params for method, params in calls if method == 'turn/start')
+            self.assertEqual(turn['clientUserMessageId'], 'owner:1')
+            self.assertIn({'type': 'text', 'text': 'User Message: retain me'}, turn['input'])
+            self.assertEqual(json.loads(receipt.read_text())['state'], 'submitted')
+
+    def test_lock_prevents_a_second_mutation_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            owner = mutator_session.MutatorSession(workspace)
+            owner.acquire(lambda: False)
+            owner.record('owner-thread', state='active', turn_id='owner-turn')
+            contender = mutator_session.MutatorSession(workspace)
+            attempts = 0
+            def stopped():
+                nonlocal attempts
+                attempts += 1
+                return attempts > 1
+            try:
+                with self.assertRaisesRegex(RuntimeError, 'another invocation owned it'):
+                    contender.acquire(stopped)
+                saved = json.loads((workspace / '.de67/state/mutator-session.json').read_text())
+                self.assertEqual(saved['thread_id'], 'owner-thread')
+                self.assertEqual(saved['turn_id'], 'owner-turn')
+            finally:
+                contender.close()
+                owner.close()
+
+    def test_review_startup_failure_keeps_shared_conversation_recoverable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = workspace / 'run'
+            run_dir.mkdir()
+            transport.atomic_json(workspace / '.de67/state/workspace.json', {'persistent_mutator': True})
+            env = {'DE67_RUNNER_ACTIVE_DIR': str(run_dir), 'CODEX_HOME': str(workspace / 'codex'),
+                   'DE67_PROCESS_ROLE': 'mutation-reviewer', 'DE67_COORDINATOR_RUN_ID': 'review-run',
+                   'DE67_COORDINATOR_MODEL': 'gpt-6-astra', 'DE67_COORDINATOR_REASONING_EFFORT': 'medium',
+                   'DE67_LINEAGE': 'lineage', 'DE67_MUTATION_GATE_JSON': json.dumps(
+                       {'kind': 'random', 'identity': 'failure', 'selected_lane': None})}
+            mutator_session.MutatorSession(workspace).record('owner-thread', state='idle')
+
+            class Server:
+                pid = 777
+                stopped = False
+                def __init__(self, argv, **kwargs): Path(argv[-1].removeprefix('unix://')).touch()
+                def poll(self): return 0 if self.stopped else None
+                def terminate(self): self.stopped = True
+                def wait(self, **kwargs): return 0
+
+            class Client:
+                def __init__(self, socket): self.notifications = []
+                def send(self, message): pass
+                def call(self, method, params):
+                    if method == 'thread/resume': return {'thread': {'id': params['threadId']}}
+                    if method == 'turn/start': raise transport.RpcError('turn start rejected', -32600)
+                def close(self): pass
+
+            with patch.dict(os.environ, env, clear=True), patch.object(transport.sys, 'platform', 'darwin'), \
+                 patch.object(transport.signal, 'signal'), patch.object(transport.subprocess, 'Popen', Server), \
+                 patch.object(transport, 'Rpc', Client), redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(transport.RpcError, 'turn start rejected'):
+                    transport.run('codex', workspace, 'review prompt')
+            saved = json.loads((workspace / '.de67/state/mutator-session.json').read_text())
+            self.assertEqual(saved['thread_id'], 'owner-thread')
+            self.assertEqual(saved['result'], 'interrupted')
+            self.assertFalse((workspace / '.de67/state/mutator-input.json').exists())
 
     def test_native_command_still_drives_the_existing_handoff_guard(self):
         guard = codex_runner.CoordinatorLoopGuard()

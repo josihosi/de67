@@ -1090,7 +1090,21 @@ def workspace_facts(
         ):
             if _table_exists(connection, table):
                 if table == "claim_deadline_generation_incidents":
-                    query = f"SELECT 1 FROM {table} WHERE lineage_id = ? AND reviewed_at IS NULL LIMIT 1"
+                    # Match the harness's pending-incident view: a preserved
+                    # generation-1 migration mirror is not a second incident.
+                    query = """
+                        SELECT 1 FROM claim_deadline_generation_incidents AS incident
+                        WHERE incident.lineage_id = ? AND incident.reviewed_at IS NULL
+                          AND NOT (incident.generation = 1 AND EXISTS (
+                              SELECT 1 FROM claim_deadline_generation_incidents AS current
+                              WHERE current.lineage_id = incident.lineage_id
+                                AND current.claim_id = incident.claim_id
+                                AND current.generation > 1
+                                AND current.source_task_id = incident.source_task_id
+                                AND current.recorded_at = incident.recorded_at
+                          ))
+                        LIMIT 1
+                    """
                 elif table == "coordinator_restart_requests":
                     query = f"SELECT 1 FROM {table} WHERE lineage_id = ? AND acknowledged_at IS NULL LIMIT 1"
                 else:

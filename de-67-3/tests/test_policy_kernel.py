@@ -71,6 +71,49 @@ CASES = (
 
 
 class PolicyKernelTests(unittest.TestCase):
+    def test_deadline_routing_ignores_only_exact_legacy_mirrors(self) -> None:
+        cases = (
+            ("reviewed mirror", "task-current", 10, 20, False),
+            ("unreviewed current incident", "task-current", 10, None, True),
+            ("different incident time", "task-current", 11, 20, True),
+            ("different incident task", "task-other", 10, 20, True),
+        )
+        for label, mirror_task, mirror_time, reviewed_at, pending in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                state = workspace / "clock.sqlite3"
+                connection = sqlite3.connect(state)
+                try:
+                    connection.execute("""
+                        CREATE TABLE claim_deadline_generation_incidents (
+                            lineage_id TEXT, claim_id TEXT, generation INTEGER,
+                            source_task_id TEXT, recorded_at REAL, reviewed_at REAL
+                        )
+                    """)
+                    connection.executemany(
+                        "INSERT INTO claim_deadline_generation_incidents VALUES (?, ?, ?, ?, ?, ?)",
+                        [("project", "R-026", 1, mirror_task, mirror_time, None),
+                         ("project", "R-026", 4, "task-current", 10, reviewed_at)],
+                    )
+                    connection.commit()
+                    before = connection.execute(
+                        "SELECT * FROM claim_deadline_generation_incidents"
+                    ).fetchall()
+                    facts = kernel.workspace_facts(workspace, state, "project", now=30)
+                    decision = kernel.decide(
+                        source_policy(), facts | {"ledger_work", "executable_route"}
+                    )
+                    self.assertEqual("deadline_incident" in facts, pending)
+                    self.assertEqual(
+                        decision.action,
+                        "retire_for_mutation_review" if pending else "dispatch_exploration_worker",
+                    )
+                    self.assertEqual(before, connection.execute(
+                        "SELECT * FROM claim_deadline_generation_incidents"
+                    ).fetchall())
+                finally:
+                    connection.close()
+
     def test_canonical_fs_open_work_comes_from_the_ledger(self) -> None:
         from specification import compatibility_pointer
         with tempfile.TemporaryDirectory() as directory:

@@ -2028,7 +2028,7 @@ header h1{{font-size:48px;letter-spacing:-3px;color:#626370}}
 header h1.supervisor-running{{color:#cf9bdc;text-shadow:0 0 30px #bc80cf25}}
 header>span{{font-size:10px;max-width:60%;overflow-wrap:anywhere;text-align:right}}
 nav{{margin:16px 0 24px;border-color:#30303b}}nav a{{font-size:11px}}
-.cosmos{{margin:0;padding:0 0 28px;border-bottom:1px solid #30303b}}
+.cosmos{{margin:0;padding:0 0 28px}}
 .cosmos-meta{{display:flex;justify-content:space-between;gap:28px;align-items:flex-start;position:relative;z-index:1}}
 .work-clock{{border:1px solid #76598066;border-radius:5px;padding:14px 18px;max-width:72%;display:grid;gap:9px}}
 .cosmos small{{font-size:10px;letter-spacing:.08em;margin:0;color:#9893a5}}

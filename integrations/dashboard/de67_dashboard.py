@@ -2028,7 +2028,7 @@ header h1{{font-size:48px;letter-spacing:-3px;color:#626370}}
 header h1.supervisor-running{{color:#cf9bdc;text-shadow:0 0 30px #bc80cf25}}
 header>span{{font-size:10px;max-width:60%;overflow-wrap:anywhere;text-align:right}}
 nav{{margin:16px 0 24px;border-color:#30303b}}nav a{{font-size:11px}}
-.cosmos{{margin:0;padding:0 0 28px}}
+.cosmos{{margin:0;padding:0}}
 .cosmos-meta{{display:flex;justify-content:space-between;gap:28px;align-items:flex-start;position:relative;z-index:1}}
 .work-clock{{border:1px solid #76598066;border-radius:5px;padding:14px 18px;max-width:72%;display:grid;gap:9px}}
 .cosmos small{{font-size:10px;letter-spacing:.08em;margin:0;color:#9893a5}}
@@ -2168,7 +2168,8 @@ code,pre{{background:#15111b}}
 @keyframes solar-breath{{0%,100%{{transform:scale(1)}}50%{{transform:scale(1.035)}}}}
 @media(prefers-reduced-motion:reduce){{.sun,.sun .sun-corona,.sun-aura,.sun-rim,.sun-surface{{transition:none;animation:none}}}}
 
-.trajectory{{--radar-font:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;font-family:var(--radar-font);position:relative;padding:28px 28px 20px;background:none;border:0;border-radius:0}}
+.trajectory{{--radar-font:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;font-family:var(--radar-font);position:relative;padding:28px 28px 20px;background:none;border:0;border-radius:0;margin-top:18.667px}}
+@media(min-width:651px){{.cosmos+.trajectory{{margin-top:calc(18.667px - 0.666667cm)}}}}
 .trajectory::before{{content:"";position:absolute;inset:0;pointer-events:none;border:1px solid #80628d;border-radius:8px;mask:linear-gradient(#000 0 0) left top/26px 22px no-repeat,linear-gradient(#000 0 0) right top/26px 22px no-repeat,linear-gradient(#000 0 0) left bottom/26px 22px no-repeat,linear-gradient(#000 0 0) right bottom/26px 22px no-repeat}}
 .trajectory .radar-briefing{{display:block;margin:0;padding:0 0 22px;border:0}}
 .radar-kicker{{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#caabd6;font-size:10px;letter-spacing:.18em;line-height:1.6;padding-top:12px;border-top:1px solid #594262}}

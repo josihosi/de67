@@ -189,7 +189,7 @@ def render_trajectory(report: dict[str, Any], briefing: dict[str, Any] | None = 
                        + (' · showing the last saved briefing.' if headline else '.') + '</p>')
     return (
         '<section class="trajectory"><header class="radar-briefing">'
-        f'<div class="radar-kicker">MISSION RADAR <span>{_escape(state)}</span></div>'
+        f'<div class="radar-kicker">NAVIGATION <span>{_escape(state)}</span></div>'
         f'<h2><strong>{_escape(headline or ("Tracking " + str(report.get("claim", "the current work")) if axes else "Standing by for the next trajectory."))}</strong></h2></header>'
         f'{"".join(notices)}'
         f'{render_attention_spider(report, axes, gaps, bool(subtasks), live=live)}'
@@ -2159,9 +2159,10 @@ code,pre{{background:#15111b}}
 @keyframes solar-breath{{0%,100%{{transform:scale(1)}}50%{{transform:scale(1.035)}}}}
 @media(prefers-reduced-motion:reduce){{.sun,.sun .sun-corona,.sun-aura,.sun-rim,.sun-surface{{transition:none;animation:none}}}}
 
-.trajectory{{--radar-font:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;font-family:var(--radar-font);padding:28px 28px 20px;background:radial-gradient(ellipse at 50% 32%,#45265022,transparent 65%),linear-gradient(155deg,#211b2988,#17141d99);border:1px solid #49394f;border-radius:16px}}
+.trajectory{{--radar-font:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;font-family:var(--radar-font);position:relative;padding:28px 28px 20px;background:none;border:0;border-radius:0}}
+.trajectory::before{{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(#80628d,#80628d) left top/26px 1px no-repeat,linear-gradient(#80628d,#80628d) left top/1px 22px no-repeat,linear-gradient(#80628d,#80628d) right top/26px 1px no-repeat,linear-gradient(#80628d,#80628d) right top/1px 22px no-repeat,linear-gradient(#80628d,#80628d) left bottom/26px 1px no-repeat,linear-gradient(#80628d,#80628d) left bottom/1px 22px no-repeat,linear-gradient(#80628d,#80628d) right bottom/26px 1px no-repeat,linear-gradient(#80628d,#80628d) right bottom/1px 22px no-repeat}}
 .trajectory .radar-briefing{{display:block;margin:0;padding:0 0 22px;border:0}}
-.radar-kicker{{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#caabd6;font-size:10px;letter-spacing:.18em;line-height:1.6}}
+.radar-kicker{{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#caabd6;font-size:10px;letter-spacing:.18em;line-height:1.6;padding-top:12px;border-top:1px solid #594262}}
 .radar-kicker span{{display:inline;color:#a99bad;letter-spacing:.04em;font-size:10px}}
 .trajectory .radar-briefing h2{{font:600 clamp(17px,1.9vw,23px)/1.55 var(--radar-font);letter-spacing:-.025em;max-width:76ch;margin:13px 0 0;overflow-wrap:anywhere}}
 .radar-briefing strong{{font:inherit;color:#eee4f1}}
@@ -2194,12 +2195,13 @@ code,pre{{background:#15111b}}
 .trajectory .trajectory-node.proved circle{{stroke:#8acbb0}}.trajectory .trajectory-node.open circle{{stroke:#c9ad7f}}
 .trajectory .trajectory-node:hover circle,.trajectory .trajectory-node:focus circle{{fill:#65476a;stroke:#fff0ff}}
 .radar-contacts{{display:flex;flex-direction:column;gap:14px;min-width:0}}.radar-left{{grid-area:left}}.radar-right{{grid-area:right}}
-.radar-contact{{min-width:0;padding:13px 14px;border:1px solid #55425e;border-radius:9px;background:#211b29;overflow-wrap:anywhere;scroll-margin-top:20px}}
-.radar-contact.active{{border-color:#c391b1;background:linear-gradient(135deg,#392639,#251c2c)}}
+.radar-contact{{--contact-line:#55425e;position:relative;min-width:0;padding:13px 14px;border:1px solid var(--contact-line);border-radius:0;background:#211b2977;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,0 100%);overflow-wrap:anywhere;scroll-margin-top:20px}}
+.radar-contact::after{{content:"";position:absolute;right:0;top:0;width:12px;height:12px;pointer-events:none;background:linear-gradient(45deg,transparent 44%,var(--contact-line) 47%,var(--contact-line) 53%,transparent 56%)}}
+.radar-contact.active{{--contact-line:#d9bb89;border-left:3px solid #fff1cf;background:linear-gradient(135deg,#4c3a352e,#251c2c77)}}
 .radar-contact.proved{{border-left:2px solid #8acbb0}}.radar-contact.open{{border-left:2px solid #c9ad7f}}
-.radar-contact:target{{outline:2px solid #dec2ea;outline-offset:3px}}
+.radar-contact:target{{--contact-line:#dec2ea;box-shadow:inset 3px 0 #dec2ea}}
 .radar-contact-heading{{display:flex;align-items:baseline;gap:9px;min-width:0;line-height:1.55}}
-.contact-number{{flex:none;font-size:10px;color:#c6a9d4}}.contact-id{{font-size:11px;color:#dfcbe8;min-width:0}}
+.contact-number{{flex:none;display:inline-grid;place-items:center;min-width:22px;height:22px;border:1px solid var(--contact-line);font-size:10px;color:#c6a9d4}}.contact-id{{font-size:11px;color:#dfcbe8;min-width:0}}
 .radar-contact p{{margin:9px 0 10px;color:#e0d8e5;font-size:12px;line-height:1.7;white-space:normal}}
 .contact-state{{display:block;font-size:10px;line-height:1.6;color:#b9aaba}}.radar-contact.active .contact-state{{color:#efc8df}}
 .trajectory .attention-legend{{font-size:10px;line-height:1.8;gap:6px 14px;margin:16px 0 10px;flex-wrap:wrap}}
@@ -2217,7 +2219,7 @@ code,pre{{background:#15111b}}
 .trajectory .radar-detail h3{{margin:3px 0 0;font:500 10px/1.8 var(--radar-font);color:#baa1c5;letter-spacing:.08em;text-transform:uppercase}}
 .radar-details p{{font:400 12px/1.9 var(--radar-font);color:#c9becf;margin:0;overflow-wrap:anywhere;white-space:pre-line}}
 .radar-details>p{{margin:14px 0}}.radar-notice{{font-size:11px;line-height:1.7;color:#d9ba8c;overflow-wrap:anywhere}}
-.trajectory .gap-explanation{{min-width:0;overflow-wrap:anywhere}}.trajectory .gap-explanation div{{flex-wrap:wrap}}.trajectory .gap-explanation div span{{min-width:0}}
+.trajectory .gap-explanation{{min-width:0;border-radius:0;overflow-wrap:anywhere}}.trajectory .gap-explanation div{{flex-wrap:wrap}}.trajectory .gap-explanation div span{{min-width:0}}
 @media(max-width:800px){{.radar-stage{{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"map map" "left right";gap:16px}}.radar-scope{{width:min(100%,430px);margin:auto}}.trajectory .radar-links{{display:none}}.radar-idle{{grid-template-areas:"map";grid-template-columns:1fr}}}}
 @media(max-width:500px){{.trajectory{{padding:20px 16px}}.radar-stage{{display:flex;flex-direction:column;align-items:stretch}}.radar-scope{{order:0}}.radar-contacts{{display:contents}}.radar-contact{{order:var(--contact-order)}}.radar-detail{{grid-template-columns:minmax(0,1fr);gap:6px}}.radar-contact p{{font-size:12px}}.radar-kicker{{gap:6px}}}}
 

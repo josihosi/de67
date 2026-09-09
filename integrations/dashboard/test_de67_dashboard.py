@@ -816,7 +816,7 @@ class DashboardTests(unittest.TestCase):
             first = dashboard.render("overview").decode()
             second = dashboard.render("overview").decode()
         self.assertEqual(run.call_count, 1)
-        self.assertIn("MISSION RADAR", first)
+        self.assertIn("NAVIGATION", first)
         self.assertIn("G-002 r41", first)
         self.assertNotIn("What the boxes mean", first)
         self.assertEqual(first.count('class="radar-contact '), 2)
@@ -834,8 +834,8 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('class="attention-claim"', first)
         self.assertEqual(first.count('class="trajectory-node '), 2)
         self.assertIn("&lt;active route&gt;", first)
-        self.assertLess(first.index("cosmos-workers"), first.index("MISSION RADAR"))
-        self.assertLess(first.index("MISSION RADAR"), first.index("Latest finding"))
+        self.assertLess(first.index("cosmos-workers"), first.index("NAVIGATION"))
+        self.assertLess(first.index("NAVIGATION"), first.index("Latest finding"))
         self.assertEqual(first.split("<body>")[0], second.split("<body>")[0])
         self.assertEqual(before, set(self.workspace.rglob("*")))
 
@@ -1369,7 +1369,7 @@ class OverviewDesignTests(unittest.TestCase):
     def test_invalid_briefing_does_not_hide_the_radar(self):
         for invalid in (["not an object"], "not an object", 42):
             result = dashboard_module.render_trajectory({}, invalid)
-            self.assertIn("MISSION RADAR", result)
+            self.assertIn("NAVIGATION", result)
             self.assertIn("Briefing update unavailable", result)
 
     def test_assignment_is_directional_and_maximum_measurements_remain_accessible(self):

@@ -2169,11 +2169,11 @@ code,pre{{background:#15111b}}
 .attention-heading{{gap:12px;flex-wrap:wrap}}.trajectory .attention-heading h3{{font:500 11px/1.5 var(--radar-font);color:#bdaac5;letter-spacing:.08em;text-transform:uppercase}}
 .trajectory .attention-heading>span{{font-size:10px;color:#a69aaa}}
 .radar-stage{{position:relative;isolation:isolate;display:grid;grid-template-areas:"left map right";grid-template-columns:minmax(0,1fr) minmax(240px,1.85fr) minmax(0,1fr);gap:22px;align-items:center;margin:18px 0}}
-.radar-scope{{grid-area:map;min-width:0;position:relative;background:radial-gradient(ellipse,#7750960a,transparent 65%)}}
+.radar-scope{{grid-area:map;min-width:0;position:relative}}
 .trajectory .radar-map{{display:block;width:100%;min-width:0;height:auto;overflow:visible}}
 .trajectory .radar-links{{position:absolute;inset:0;z-index:-1;display:block;width:100%;height:100%;min-width:0;pointer-events:none;overflow:visible}}
 .radar-links path{{fill:none;stroke:#9d77af;stroke-width:1;opacity:.38}}
-.radar-disc{{fill:#1e1724;fill-opacity:.55;stroke:#8b659655;stroke-width:1}}
+.radar-disc{{fill:none;stroke:#8b659655;stroke-width:1}}
 .trajectory .attention-grid circle,.trajectory .attention-grid line{{fill:none;stroke:#755484;stroke-opacity:.32;stroke-width:1}}
 .radar-origin{{fill:none;stroke:#c4a4ce;stroke-width:1;opacity:.65}}
 .assigned-course-halo{{fill:none;stroke:#fff1cf;stroke-width:8;opacity:.09}}

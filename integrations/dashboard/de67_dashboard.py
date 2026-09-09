@@ -985,7 +985,8 @@ def _active_worker_claims(workspace: Path) -> dict[str, str] | None:
             "SELECT claim.worker_id, claim.coordinator_session_id "
             "FROM worker_claims AS claim JOIN tasks AS task "
             "ON task.lineage_id = claim.lineage_id AND task.task_id = claim.task_id "
-            f"WHERE claim.released_at IS NULL{where}"
+            f"WHERE claim.lineage_id = ? AND claim.released_at IS NULL{where}",
+            (clock["lineage"],),
         ).fetchall()
         return {str(row["worker_id"]): str(row["coordinator_session_id"]) for row in rows}
     finally:
@@ -1185,6 +1186,48 @@ def _reverse_session_lines(path: Path):
             yield pending.decode("utf-8", errors="replace")
 
 
+def _tool_is_waiting(payload: dict[str, Any]) -> bool:
+    name = str(payload.get("name", "")).rsplit(".", 1)[-1]
+    if name in ("wait_agent", "wait_threads", "sleep", "wait", "request_user_input"):
+        return True
+    try:
+        arguments = json.loads(payload.get("arguments", "{}"))
+    except (ValueError, TypeError):
+        arguments = {}
+    if name == "write_stdin":
+        return not arguments.get("chars")
+    if name == "exec":
+        # Code-mode wraps the same shell call in JavaScript. Decode only its
+        # literal command; never execute trace contents to discover activity.
+        source = str(payload.get("input", ""))
+        match = re.search(r'(?:\bcmd|"cmd")\s*:\s*("(?:\\.|[^"\\])*")', source)
+        if not match or "tools.exec_command(" not in source:
+            if "tools.write_stdin(" not in source:
+                return False
+            chars = re.search(r'(?:\bchars|"chars")\s*:', source)
+            return chars is None or bool(re.match(r'\s*(?:""|\'\')\s*[,}]', source[chars.end():]))
+        try:
+            arguments = {"cmd": json.loads(match[1])}
+        except ValueError:
+            return False
+    elif name != "exec_command":
+        return False
+    try:
+        lexer = shlex.shlex(arguments.get("cmd", ""), posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        argv = list(lexer)
+    except ValueError:
+        return False
+    if (len(argv) < 3 or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", Path(argv[0]).name)
+            or Path(argv[1]).name != "worker_library.py"):
+        return False
+    rest = argv[2:]
+    if len(rest) >= 2 and rest[0] == "--workspace":
+        rest = rest[2:]
+    return bool(rest and rest[0] == "wait" and not any(
+        token in (";", "&&", "||", "|", "&") for token in rest))
+
+
 def _session_activity(path: Path) -> str:
     """Project the latest execution signal, ignoring accounting and incoming mail."""
     for line in _reverse_session_lines(path):
@@ -1202,9 +1245,7 @@ def _session_activity(path: Path) -> str:
         if record.get("type") != "response_item":
             continue
         if kind in ("function_call", "custom_tool_call"):
-            name = str(payload.get("name", "")).rsplit(".", 1)[-1]
-            return "waiting" if name in ("wait_agent", "wait_threads", "sleep",
-                                           "request_user_input") else "working"
+            return "waiting" if _tool_is_waiting(payload) else "working"
         if kind in ("function_call_output", "custom_tool_call_output", "reasoning"):
             return "working"
         if kind == "message" and payload.get("role") == "assistant":
@@ -1241,12 +1282,16 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
         uri = f"file:{quote(str(index), safe='/:')}?mode=ro"
         connection = sqlite3.connect(uri, uri=True, timeout=0)
         try:
+            # Library workers have durable owners but need not have native
+            # spawn edges. Seed their helper trees from those same claims.
+            seeds = sorted(owners | set(active_claims))
+            values = ",".join("(?)" for _ in seeds)
             rows = connection.execute(
-                "WITH RECURSIVE tree(id) AS (SELECT ? UNION "
+                f"WITH RECURSIVE tree(id) AS (VALUES {values} UNION "
                 "SELECT child_thread_id FROM thread_spawn_edges JOIN tree "
                 "ON parent_thread_id=tree.id) "
                 "SELECT rollout_path FROM threads JOIN tree ON threads.id=tree.id",
-                (next(iter(owners)),),
+                seeds,
             ).fetchall()
             paths = [Path(row[0]) for row in rows]
         finally:
@@ -1256,7 +1301,9 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     root_path: Path | None = None
     root: dict[str, Any] = {}
     target = workspace.resolve()
-    active_coordinator_id = _active_coordinator_id(workspace)
+    active_coordinator_id = _active_coordinator_id(workspace) or (
+        next(iter(active_claims.values())) if active_claims else None
+    )
     for path in paths:
         candidate = _session_header(path)
         try:
@@ -1288,9 +1335,8 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
             continue
         candidates.append((path, candidate))
 
-    # Codex owns the real spawn tree. Count all live descendants, including
-    # optional Luna helpers below a primary Terra worker, without creating a
-    # parallel ownership model in DE67.
+    # Durable claims identify current primaries, including reused library
+    # workers. Codex's native spawn tree supplies their helper descendants.
     root_id = str(root["id"])
     descendants = {root_id}
     pending = candidates
@@ -1298,8 +1344,10 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
         next_pending: list[tuple[Path, dict[str, Any]]] = []
         changed = False
         for path, candidate in pending:
-            parent = str(candidate.get("parent", ""))
             candidate_id = str(candidate.get("id", ""))
+            parent = str(candidate.get("parent", ""))
+            if active_claims is not None and candidate_id in active_claims:
+                parent = active_claims[candidate_id]
             if parent not in descendants:
                 next_pending.append((path, candidate))
                 continue
@@ -1319,8 +1367,9 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
                 continue
             if active_claims is not None and parent != root_id and _session_complete(path):
                 continue
-            model = str(candidate.get("model", "")).lower().rsplit("-", 1)[-1]
-            effort = str(candidate.get("effort", "")).lower()
+            context = _trace_fuel(path)
+            model = str(context.get("model", "")).lower().rsplit("-", 1)[-1]
+            effort = str(context.get("effort", "")).lower()
             if model in counts and effort in counts[model]:
                 counts[model][effort] += 1
         if not changed:
@@ -1330,18 +1379,39 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
 
 
 
-_TOKEN_TRACES: dict[str, dict[str, Any]] = {}
+_TOKEN_TRACES: dict[tuple[str, bool], dict[str, Any]] = {}
 
 
-def _trace_fuel(path: Path) -> dict[str, Any]:
-    """Read complete appended token events; never treat absent accounting as zero."""
+def _trace_fuel(path: Path, *, windows: list[tuple[float, float | None]] | None = None) -> dict[str, Any]:
+    """Read appended context and usage; retain the producing model for each delta."""
     from datetime import datetime
-    key = str(path)
+    key = (str(path), windows is not None)
+    selection = None if windows is None else tuple(sorted(set(windows), key=lambda window: (
+        window[0], float("inf") if window[1] is None else window[1])))
     stat = path.stat()
     cached = _TOKEN_TRACES.get(key)
-    if cached is None or stat.st_size < cached["offset"]:
-        cached = {"offset": 0, "fresh": None, "observed": 0, "partial": False, "points": []}
+    if cached is None or stat.st_size < cached["offset"] or cached["windows"] != selection:
+        cached = {"offset": 0, "fresh": None, "observed": 0, "partial": False, "points": [],
+                  "model": None, "effort": None, "worker_points": [], "windows": selection,
+                  "worker_totals": {"terra": 0, "luna": 0, "other": 0}}
         _TOKEN_TRACES[key] = cached
+
+    def record(delta: int, timestamp: float | None = None) -> None:
+        if selection is not None:
+            if timestamp is None:
+                cached["partial"] = True
+                return
+            if not any(start <= timestamp and (end is None or timestamp < end)
+                       for start, end in selection):
+                return
+        model = str(cached["model"]).lower().rsplit("-", 1)[-1]
+        role = model if model in ("terra", "luna") else "other"
+        cached["observed"] += delta
+        cached["worker_totals"][role] += delta
+        if timestamp is not None:
+            cached["points"].append((timestamp, delta))
+            cached["worker_points"].append((timestamp, delta, role))
+
     with path.open("rb") as stream:
         stream.seek(cached["offset"])
         while True:
@@ -1349,11 +1419,15 @@ def _trace_fuel(path: Path) -> dict[str, Any]:
             if not line or not line.endswith(b"\n"):
                 break
             cached["offset"] = stream.tell()
-            if b'"token_count"' not in line:
+            if b'"token_count"' not in line and b'"turn_context"' not in line:
                 continue
             try:
                 item = json.loads(line)
                 payload = item.get("payload", {})
+                if item.get("type") == "turn_context":
+                    cached["model"] = payload.get("model")
+                    cached["effort"] = payload.get("effort")
+                    continue
                 if item.get("type") != "event_msg" or payload.get("type") != "token_count":
                     continue
                 usage = (payload.get("info") or {}).get("total_token_usage") or {}
@@ -1362,6 +1436,13 @@ def _trace_fuel(path: Path) -> dict[str, Any]:
                     continue
                 timestamp = datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")).timestamp()
                 previous = cached["fresh"]
+                if selection is not None and not any(
+                    start <= timestamp and (end is None or timestamp < end) for start, end in selection
+                ):
+                    # Keep the baseline for subsequent deltas, but uncertainty
+                    # in another assignment does not describe this selection.
+                    cached["fresh"] = fresh
+                    continue
                 if previous is None or fresh < previous:
                     # Resuming after compaction can reset cumulative counters.
                     # The latest turn is new use; an inherited baseline is not.
@@ -1370,22 +1451,22 @@ def _trace_fuel(path: Path) -> dict[str, Any]:
                         delta = int(last["input_tokens"]) - int(last["cached_input_tokens"]) + int(last["output_tokens"])
                         if delta < 0:
                             continue
-                        cached["observed"] += delta
-                        cached["points"].append((timestamp, delta))
+                        record(delta, timestamp)
                         cached["partial"] |= fresh != delta
                     else:
                         # Only a cumulative observation is available. Keep it in
                         # the partial total, without inventing an instant burst.
-                        cached["observed"] += fresh
+                        record(fresh)
                         cached["partial"] = True
                 else:
                     delta = fresh - previous
-                    cached["observed"] += delta
-                    cached["points"].append((timestamp, delta))
+                    record(delta, timestamp)
                 cached["fresh"] = fresh
             except (ValueError, TypeError, KeyError):
                 continue
     cached["points"] = [(t, n) for t, n in cached["points"] if t >= time.time() - 86400]
+    cached["worker_points"] = [(t, n, role) for t, n, role in cached["worker_points"]
+                               if t >= time.time() - 86400]
     return cached
 
 
@@ -1399,10 +1480,21 @@ def fuel_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
         attempts = connection.execute(
             "SELECT role,run_id FROM supervisor_attempts WHERE lineage_id=?",
             (config["lineage"],)).fetchall()
+        claims = []
+        claim_columns = _table_columns(connection, "worker_claims")
+        claim_windows_unavailable = bool(claim_columns) and not {
+            "lineage_id", "worker_id", "coordinator_session_id", "claimed_at", "released_at"
+        }.issubset(claim_columns)
+        if claim_columns and not claim_windows_unavailable:
+            claims = connection.execute(
+                "SELECT worker_id,coordinator_session_id,claimed_at,released_at "
+                "FROM worker_claims WHERE lineage_id=?",
+                (config["lineage"],),
+            ).fetchall()
     finally:
         connection.close()
     roots = {}
-    missing = 0
+    missing = int(claim_windows_unavailable)
     for role, run_id in attempts:
         try:
             session = (workspace / ".de67/state/coordinator-runs" / run_id / "session_id.txt").read_text().strip()
@@ -1412,9 +1504,17 @@ def fuel_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
                 missing += 1
         except OSError:
             missing += 1
+    # Retain every assignment in this campaign, including released ones.
+    # Reused conversations and their helpers inherit the union of its windows.
+    worker_windows: dict[str, list[tuple[float, float | None]]] = {}
+    for worker, owner, start, end in claims:
+        if roots.get(owner) == "coordinator":
+            roots.setdefault(worker, "workers")
+            worker_windows.setdefault(worker, []).append((float(start), None if end is None else float(end)))
     index = sessions_root.parent / "state_5.sqlite"
     connection = sqlite3.connect(f"file:{quote(str(index), safe='/:')}?mode=ro", uri=True, timeout=0)
     sessions = {}
+    session_windows: dict[str, list[tuple[float, float | None]]] = {}
     try:
         for root, role in roots.items():
             rows = connection.execute(
@@ -1426,6 +1526,8 @@ def fuel_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
                 missing += 1
             for session, path in rows:
                 sessions[session] = (roots.get(session, "astra" if role == "astra" else "workers"), Path(path))
+                if root in worker_windows:
+                    session_windows.setdefault(session, []).extend(worker_windows[root])
     finally:
         connection.close()
     totals = {"astra": 0, "coordinator": 0, "terra": 0, "luna": 0, "other": 0}
@@ -1433,24 +1535,26 @@ def fuel_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     now = time.time()
     bins = [0] * 24  # One-hour display bins over the last twenty-four hours.
     series = {role: [0] * len(bins) for role in totals}
-    for role, path in sessions.values():
+    for session, (role, path) in sessions.items():
         try:
-            usage = _trace_fuel(path)
+            usage = _trace_fuel(path, windows=session_windows.get(session) if role == "workers" else None)
             if usage["fresh"] is None:
                 missing += 1
                 continue
-            if role == "workers":
-                if "worker_model" not in usage:
-                    usage["worker_model"] = str(_session_header(path).get("model", "")).lower().rsplit("-", 1)[-1]
-                role = usage["worker_model"] if usage["worker_model"] in ("terra", "luna") else "other"
             known += 1
-            totals[role] += usage["observed"]
+            if role == "workers":
+                for worker_role, total in usage["worker_totals"].items():
+                    totals[worker_role] += total
+                points = usage["worker_points"]
+            else:
+                totals[role] += usage["observed"]
+                points = ((stamp, delta, role) for stamp, delta in usage["points"])
             missing += bool(usage["partial"])
-            for stamp, delta in usage["points"]:
+            for stamp, delta, point_role in points:
                 bucket = int((stamp - (now - 86400)) / 3600)
                 if 0 <= bucket < len(bins):
                     bins[bucket] += delta
-                    series[role][bucket] += delta
+                    series[point_role][bucket] += delta
         except OSError:
             missing += 1
     return {"available": bool(known), "totals": totals, "bins": bins, "series": series,

@@ -108,6 +108,39 @@ class DashboardTests(unittest.TestCase):
         with patch.object(dashboard_module, "_active_coordinator_id", return_value="live"):
             self.assertEqual(dashboard_module.coordinator_activity(self.workspace, self.sessions), "waiting")
 
+    def test_named_worker_wait_and_polling_activity(self) -> None:
+        trace = self.sessions / "named-wait.jsonl"
+        command = "'/opt/python3.14' '/skills/worker_library.py' --workspace '/workspace path' wait auditor --timeout 300"
+        calls = [
+            {"name": "exec_command", "arguments": json.dumps({"cmd": command})},
+            {"name": "exec", "input": "const r = await tools.exec_command({cmd:" + json.dumps(command) + "}); text(r);"},
+            {"name": "exec", "input": "text(await tools.exec_command(" + json.dumps({"cmd": command}) + "));"},
+            {"name": "functions.wait", "arguments": '{"cell_id":"1"}'},
+            {"name": "write_stdin", "arguments": '{"session_id":1,"chars":""}'},
+            {"name": "exec", "input": 'text(await tools.write_stdin({session_id:1}));'},
+            {"name": "exec", "input": 'const r = await tools.write_stdin({session_id:1,chars:"",yield_time_ms:30000}); text(JSON.stringify(r));'},
+        ]
+        for call in calls:
+            with self.subTest(call=call):
+                record = {"type": "response_item", "payload": {"type": "custom_tool_call", **call}}
+                trace.write_text(json.dumps(record))
+                self.assertEqual(dashboard_module._session_activity(trace), "waiting")
+                with trace.open("a") as stream:
+                    stream.write("\n" + json.dumps({"type": "response_item", "payload": {
+                        "type": "reasoning", "summary": []}}))
+                self.assertEqual(dashboard_module._session_activity(trace), "working")
+        for command in ("cat /skills/worker_library.py wait",
+                        "python /skills/worker_library.py --workspace /repo assign auditor",
+                        "python /skills/worker_library.py wait auditor && python work.py"):
+            self.assertFalse(dashboard_module._tool_is_waiting({
+                "name": "exec_command", "arguments": json.dumps({"cmd": command})}))
+        self.assertFalse(dashboard_module._tool_is_waiting({
+            "name": "write_stdin", "arguments": '{"chars":"run"}'}))
+        self.assertFalse(dashboard_module._tool_is_waiting({
+            "name": "exec", "input": 'text(await tools.write_stdin({session_id:1,chars:"run"}));'}))
+        self.assertFalse(dashboard_module._tool_is_waiting({
+            "name": "exec", "input": 'text(await tools.write_stdin({"session_id":1,"chars":"run"}));'}))
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.workspace = Path(self.temporary.name)
@@ -202,36 +235,162 @@ class DashboardTests(unittest.TestCase):
             connection.executescript("CREATE TABLE supervisor_attempts(role TEXT, run_id TEXT, lineage_id TEXT);")
             connection.executemany("INSERT INTO supervisor_attempts VALUES (?,?,?)", [
                 ("coordinator", "run1", "lineage"), ("coordinator", "run1", "lineage"),
-                ("mutation-reviewer", "run2", "lineage"), ("coordinator", "other", "unrelated")])
+                ("mutation-reviewer", "run2", "lineage"), ("coordinator", "run3", "lineage"),
+                ("coordinator", "other", "unrelated")])
+            connection.executescript("""
+                CREATE TABLE worker_claims (
+                    lineage_id TEXT, worker_id TEXT, coordinator_session_id TEXT,
+                    claimed_at REAL, released_at REAL
+                );
+                INSERT INTO worker_claims VALUES
+                    ('lineage','worker','coord',0,NULL),
+                    ('lineage','named','coord',0,NULL),
+                    ('lineage','named','coord2',0,NULL),
+                    ('lineage','named','coord2',0,NULL),
+                    ('unrelated','unrelated','coord',0,NULL),
+                    ('lineage','orphan','unknown-owner',0,NULL);
+            """)
         connection.close()
-        for run, session in (("run1", "coord"), ("run2", "review")):
+        for run, session in (("run1", "coord"), ("run2", "review"), ("run3", "coord2")):
             folder = self.workspace / ".de67/state/coordinator-runs" / run
             folder.mkdir(parents=True)
             (folder / "session_id.txt").write_text(session)
         index = self.sessions.parent / "state_5.sqlite"
         with sqlite3.connect(index) as connection:
             connection.executescript("CREATE TABLE threads(id TEXT, rollout_path TEXT); CREATE TABLE thread_spawn_edges(parent_thread_id TEXT, child_thread_id TEXT);")
-            for session, total in (("coord",100), ("worker",200), ("nested",300), ("review",400), ("unrelated",999)):
+            for session, total in (("coord",100), ("coord2",110), ("worker",200),
+                                   ("nested",300), ("review",400), ("named",500),
+                                   ("named-helper",600), ("unrelated",999), ("orphan",999)):
                 path = self.sessions / (session + ".jsonl")
-                path.write_text(json.dumps({"type":"turn_context", "payload":{"model":"gpt-5.6-luna" if session == "nested" else "gpt-5.6-terra"}}) + "\n" + json.dumps({"type":"event_msg", "timestamp":datetime.now(timezone.utc).isoformat(),
+                path.write_text(json.dumps({"type":"turn_context", "payload":{"model":"gpt-5.6-luna" if session in ("nested", "named") else "gpt-5.6-terra"}}) + "\n" + json.dumps({"type":"event_msg", "timestamp":datetime.now(timezone.utc).isoformat(),
                     "payload":{"type":"token_count", "info":{"total_token_usage":{
                     "input_tokens":total,"cached_input_tokens":10,"output_tokens":5},
                     "last_token_usage":{"input_tokens":total,"cached_input_tokens":10,"output_tokens":5}}}}) + "\n")
                 connection.execute("INSERT INTO threads VALUES (?,?)", (session,str(path)))
-            connection.executemany("INSERT INTO thread_spawn_edges VALUES (?,?)", [("coord","worker"),("worker","nested")])
+            connection.executemany("INSERT INTO thread_spawn_edges VALUES (?,?)", [
+                ("coord","worker"), ("worker","nested"), ("named","named-helper")])
         connection.close()
         paths = [p for p in self.workspace.rglob("*") if p.is_file()]
         before = [p.read_bytes() for p in paths]
         fuel = dashboard_module.fuel_state(self.workspace, self.sessions)
-        self.assertEqual(fuel["totals"], {"coordinator":95,"terra":195,"luna":295,"astra":395,"other":0})
+        self.assertEqual(fuel["totals"], {"coordinator":200,"terra":790,"luna":790,"astra":395,"other":0})
         self.assertEqual(sum(fuel["bins"]), sum(fuel["totals"].values()))
         for role in fuel["totals"]:
             self.assertEqual(sum(fuel["series"][role]), fuel["totals"][role])
         self.assertFalse(fuel["partial"])
-        self.assertEqual(fuel["sessions"], 4)
+        self.assertEqual(fuel["sessions"], 7)
         self.assertEqual(before, [p.read_bytes() for p in paths])
+        with (self.sessions / "named.jsonl").open("a", encoding="utf-8") as trace:
+            for total, added, model in ((700, 200, "terra"), (1000, 300, "luna")):
+                trace.write(json.dumps({"type": "turn_context", "payload": {
+                    "model": "gpt-5.6-" + model, "effort": "high"}}) + "\n")
+                trace.write(json.dumps({"type": "event_msg", "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "payload": {"type": "token_count", "info": {
+                        "total_token_usage": {"input_tokens": total, "cached_input_tokens": 10, "output_tokens": 5},
+                        "last_token_usage": {"input_tokens": added, "cached_input_tokens": 0, "output_tokens": 0}}}}) + "\n")
+        reused = dashboard_module.fuel_state(self.workspace, self.sessions)
+        self.assertEqual(reused["totals"]["luna"], 1090)
+        self.assertEqual(reused["totals"]["terra"], 990)
+        for role in reused["totals"]:
+            self.assertEqual(sum(reused["series"][role]), reused["totals"][role])
+        self.assertEqual(reused["sessions"], 7)
+        self.assertEqual(dashboard_module.fuel_state(self.workspace, self.sessions)["totals"], reused["totals"])
         (self.sessions / "nested.jsonl").unlink()
         self.assertTrue(dashboard_module.fuel_state(self.workspace, self.sessions)["partial"])
+
+    def test_scoped_compactions_only_mark_relevant_usage_partial(self) -> None:
+        from datetime import datetime, timezone
+        base = int(dashboard_module.time.time()) - 100
+        path = self.sessions / "compacted-worker.jsonl"
+
+        def append(offset, total, last=None):
+            info = {"total_token_usage": {
+                "input_tokens": total, "cached_input_tokens": 0, "output_tokens": 0}}
+            if last is not None:
+                info["last_token_usage"] = {
+                    "input_tokens": last, "cached_input_tokens": 0, "output_tokens": 0}
+            with path.open("a") as stream:
+                stream.write(json.dumps({"type": "event_msg", "timestamp": datetime.fromtimestamp(
+                    base + offset, timezone.utc).isoformat(),
+                    "payload": {"type": "token_count", "info": info}}) + "\n")
+
+        for event in ((0, 50, None), (5, 20, 3), (15, 25, 5),
+                      (25, 15, 2), (35, 19, 4), (45, 2, 1)):
+            append(*event)
+        windows = [(base + 10, base + 20), (base + 30, base + 40)]
+        usage = dashboard_module._trace_fuel(path, windows=windows)
+        self.assertEqual(usage["observed"], 9)
+        self.assertFalse(usage["partial"])
+        self.assertTrue(dashboard_module._trace_fuel(path)["partial"])
+        self.assertTrue(dashboard_module._trace_fuel(path, windows=[(base, base + 10)])["partial"])
+        self.assertFalse(dashboard_module._trace_fuel(path, windows=windows)["partial"])
+        append(55, 1, None)
+        self.assertFalse(dashboard_module._trace_fuel(path, windows=windows)["partial"])
+        # A later assignment containing incomplete accounting must remain partial.
+        self.assertTrue(dashboard_module._trace_fuel(path, windows=windows + [(base + 50, None)])["partial"])
+
+    def test_reused_worker_usage_stays_with_its_campaign_assignment_windows(self) -> None:
+        from datetime import datetime, timezone
+        base = int(dashboard_module.time.time()) - 1000
+        clock = self.workspace / ".de67/state/deadlines.sqlite3"
+        with sqlite3.connect(clock) as connection:
+            connection.executescript("""
+                CREATE TABLE supervisor_attempts(role TEXT,run_id TEXT,lineage_id TEXT);
+                INSERT INTO supervisor_attempts VALUES
+                    ('coordinator','run-a','lineage'),('coordinator','run-b','other');
+                CREATE TABLE worker_claims(lineage_id TEXT,worker_id TEXT,
+                    coordinator_session_id TEXT,claimed_at REAL,released_at REAL);
+            """)
+            connection.executemany("INSERT INTO worker_claims VALUES (?,?,?,?,?)", [
+                ("lineage", "named", "owner-a", base + 10, base + 20),
+                ("lineage", "named", "owner-a", base + 30, base + 40),
+                ("lineage", "named", "owner-a", base + 30, base + 40),
+                ("lineage", "named", "owner-a", base + 50, None),
+                ("other", "named", "owner-b", base + 20, base + 30),
+            ])
+        connection.close()
+        for suffix in ("a", "b"):
+            folder = self.workspace / ".de67/state/coordinator-runs" / ("run-" + suffix)
+            folder.mkdir(parents=True)
+            (folder / "session_id.txt").write_text("owner-" + suffix)
+        with sqlite3.connect(self.sessions.parent / "state_5.sqlite") as connection:
+            connection.executescript("""
+                CREATE TABLE threads(id TEXT,rollout_path TEXT);
+                CREATE TABLE thread_spawn_edges(parent_thread_id TEXT,child_thread_id TEXT);
+                INSERT INTO thread_spawn_edges VALUES ('named','helper');
+            """)
+            for name, events in (
+                ("owner-a", [(1, "sol", 1)]), ("owner-b", [(1, "sol", 1)]),
+                ("named", [(0, "luna", 10), (15, "luna", 20), (20, "terra", 7),
+                           (25, "terra", 30), (35, "terra", 40), (45, "luna", 50),
+                           (55, "luna", 60)]),
+                ("helper", [(15, "luna", 5), (25, "luna", 5), (35, "luna", 5)]),
+            ):
+                records, cumulative = [], 0
+                for offset, model, delta in events:
+                    cumulative += delta
+                    records.append({"type": "turn_context", "payload": {
+                        "model": "gpt-5.6-" + model, "effort": "medium"}})
+                    records.append({"type": "event_msg", "timestamp": datetime.fromtimestamp(
+                        base + offset, timezone.utc).isoformat(), "payload": {"type": "token_count", "info": {
+                            "total_token_usage": {"input_tokens": cumulative, "cached_input_tokens": 0, "output_tokens": 0},
+                            "last_token_usage": {"input_tokens": delta, "cached_input_tokens": 0, "output_tokens": 0}}}})
+                path = self.sessions / (name + ".jsonl")
+                path.write_text("".join(json.dumps(row) + "\n" for row in records), encoding="utf-8")
+                connection.execute("INSERT INTO threads VALUES (?,?)", (name, str(path)))
+        connection.close()
+        config_path = self.workspace / ".de67/state/workspace.json"
+        config = json.loads(config_path.read_text())
+        for lineage, luna, terra in (("lineage", 90, 40), ("other", 5, 37), ("lineage", 90, 40)):
+            config["clock"]["lineage"] = lineage
+            config_path.write_text(json.dumps(config))
+            fuel = dashboard_module.fuel_state(self.workspace, self.sessions)
+            self.assertEqual(fuel["totals"], {
+                "coordinator": 1, "luna": luna, "terra": terra, "astra": 0, "other": 0})
+            self.assertEqual(fuel["sessions"], 3)
+            self.assertFalse(fuel["partial"])
+            for role in fuel["totals"]:
+                self.assertEqual(sum(fuel["series"][role]), fuel["totals"][role])
 
     def test_fuel_labels_and_dynamic_axis(self) -> None:
         for peak, label in ((0,"1"),(1800,"2k"),(9000000,"10m")):
@@ -1308,6 +1467,65 @@ if __name__ == "__main__":
     unittest.main()
 
 class IndexedWorkerTests(unittest.TestCase):
+    def test_named_workers_and_helpers_follow_current_claim_ownership(self):
+        for recorded_parent in (None, "previous-coordinator"):
+            with self.subTest(parent=recorded_parent), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                sessions = root / "sessions"
+                sessions.mkdir()
+                connection = sqlite3.connect(root / "state_5.sqlite")
+                try:
+                    connection.executescript(
+                        "CREATE TABLE threads(id TEXT, rollout_path TEXT);"
+                        "CREATE TABLE thread_spawn_edges(parent_thread_id TEXT, child_thread_id TEXT);"
+                    )
+                    for session, parent, model, effort, cwd in (
+                        ("owner", None, "sol", "low", root),
+                        ("named", recorded_parent, "luna", "high", root),
+                        ("helper", "named", "luna", "low", root),
+                        ("native", "owner", "terra", "medium", root),
+                        ("idle", None, "luna", "medium", root),
+                        ("foreign", None, "luna", "max", root / "other"),
+                    ):
+                        path = sessions / (session + ".jsonl")
+                        records = [
+                            {"type": "session_meta", "payload": {
+                                "id": session, "parent_thread_id": parent, "cwd": str(cwd)}},
+                            {"type": "turn_context", "payload": {
+                                "model": "gpt-5.6-" + model, "effort": effort}},
+                            {"type": "event_msg", "payload": {"type": "task_started"}},
+                        ]
+                        path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+                        connection.execute("INSERT INTO threads VALUES (?, ?)", (session, str(path)))
+                    connection.executemany("INSERT INTO thread_spawn_edges VALUES (?, ?)", [
+                        ("named", "helper"), ("owner", "native"),
+                        ("previous-coordinator", "named"),
+                    ])
+                    connection.commit()
+                finally:
+                    connection.close()
+                with (patch.object(dashboard_module, "_active_coordinator_id", return_value="owner"),
+                      patch.object(Path, "glob", side_effect=AssertionError("history scan")),
+                      patch.object(dashboard_module, "_active_worker_claims", return_value={
+                          "named": "owner", "native": "owner", "foreign": "owner",
+                      }) as claims):
+                    workers = dashboard_module.worker_state(root, sessions)
+                    self.assertTrue(workers["available"])
+                    self.assertEqual(workers["counts"]["luna"], {
+                        "low": 1, "medium": 0, "high": 1, "max": 0})
+                    self.assertEqual(workers["counts"]["terra"]["medium"], 1)
+                    with (sessions / "named.jsonl").open("a", encoding="utf-8") as trace:
+                        trace.write(json.dumps({"type": "turn_context", "payload": {
+                            "model": "gpt-5.6-terra", "effort": "max"}}) + "\n")
+                    changed = dashboard_module.worker_state(root, sessions)
+                    self.assertEqual(changed["counts"]["luna"]["high"], 0)
+                    self.assertEqual(changed["counts"]["luna"]["low"], 1)
+                    self.assertEqual(changed["counts"]["terra"]["max"], 1)
+                    claims.return_value = {"native": "owner"}
+                    released = dashboard_module.worker_state(root, sessions)
+                    self.assertTrue(all(count == 0 for count in released["counts"]["luna"].values()))
+                    self.assertEqual(released["counts"]["terra"]["medium"], 1)
+
     def test_no_workers_does_not_scan_history(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

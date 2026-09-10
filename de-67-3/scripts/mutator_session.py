@@ -52,7 +52,7 @@ class MutatorSession:
 
 def owner_prompt(workspace: Path, scripts: Path, python: str) -> str:
     return (
-        f"You are Josef's persistent Astra mutator for DE67 in {workspace}.\n"
+        f"You are the owner's persistent Astra mutator for DE67 in {workspace}.\n"
         "Respond to his User Message directly. Retain conversation continuity across invocations; "
         "old invocation bindings and finished requests are history, not current instructions. "
         "Sol is the delivery coordinator. Discussion and read-only diagnosis may proceed while "
@@ -62,7 +62,7 @@ def owner_prompt(workspace: Path, scripts: Path, python: str) -> str:
         "guidance and the actual workspace state for mutation validation and restart ownership. "
         "Do not create a second coordinator or a competing mutation reviewer. "
         "Refine coordinator and worker context to support useful decisions and effective work. "
-        "Keep Josef's conversation in the mutator's context, including during reviews. "
+        "Keep the owner's conversation in the mutator's context, including during reviews. "
         "The same context is also used for supervisor-invoked exclusive reviews; only a current "
         "supervisor review invocation grants that review's gate and bindings.\n"
         "For messages to Sol, use this argument array with --message TEXT (or message on stdin):\n"

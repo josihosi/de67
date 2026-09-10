@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import os
 import shutil
@@ -361,7 +362,7 @@ def _initial_recovered_workers(environment: dict[str, str]) -> dict[str, str]:
     state = Path(state_value).expanduser().resolve()
     if not state.is_file():
         return {}
-    with sqlite3.connect(f"file:{state}?mode=ro", uri=True) as connection:
+    with closing(sqlite3.connect(f"file:{state}?mode=ro", uri=True)) as connection:
         rows = connection.execute(
             """
             SELECT task.task_id, claim.worker_id

@@ -4,6 +4,9 @@ This optional adapter gives an active DE67 coordinator a bounded, read-only cons
 the configured Astra Mutator conversation. It is separate from `direct_input`, the owner-authorized
 Discord relay, and never writes the owner mailbox or DE67 ledgers.
 
+Requires macOS or Linux and Python 3.10+: state ownership uses Unix `flock`.
+Native Windows is not supported by this adapter.
+
 The host-owned config must contain `workspace`, `openclaw`, `agent`, `session_key`,
 `recipient_role`, and `role_source`; `role_source_sha256` may pin the host guidance digest. The
 packet supplied by Sol contains `lineage_id`, `task_id`, `assignment_revision`,

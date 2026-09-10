@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import sqlite3
 import subprocess
@@ -47,7 +48,7 @@ class RepositoryCheckpointTest(unittest.TestCase):
         self.state.parent.mkdir(parents=True)
         self.config = self.state.parent / "workspace.json"
         self._write_config()
-        with sqlite3.connect(self.state) as connection:
+        with closing(sqlite3.connect(self.state)) as connection, connection:
             connection.executescript(
                 """
                 CREATE TABLE worker_claims (
@@ -111,7 +112,7 @@ class RepositoryCheckpointTest(unittest.TestCase):
         self.assertNotIn("build_logs/large.json", git(self.workspace, "show", "--name-only", "--format="))
         message = git(self.workspace, "log", "-1", "--format=%B")
         self.assertIn(f"DE67-Checkpoint: {result['checkpoint_id']}", message)
-        with sqlite3.connect(self.state) as connection:
+        with closing(sqlite3.connect(self.state)) as connection, connection:
             row = connection.execute(
                 "SELECT commit_sha, state_revision, status FROM repository_checkpoints WHERE checkpoint_id = ?",
                 (result["checkpoint_id"],),
@@ -173,26 +174,26 @@ class RepositoryCheckpointTest(unittest.TestCase):
             checkpoint_repository(
                 self.workspace, self.state, "lineage", event_hook=move_remote
             )
-        with sqlite3.connect(self.state) as connection:
+        with closing(sqlite3.connect(self.state)) as connection, connection:
             status, failure = connection.execute(
                 "SELECT status, failure_step FROM repository_checkpoints"
             ).fetchone()
         self.assertEqual((status, failure), ("failed", "push-or-verify"))
 
     def test_unfinished_worker_and_active_coordinator_allow_snapshot(self) -> None:
-        with sqlite3.connect(self.state) as connection:
+        with closing(sqlite3.connect(self.state)) as connection, connection:
             connection.execute(
                 "INSERT INTO worker_claims VALUES ('lineage', 'task-1', 'worker-1', 1, NULL)"
             )
         self.assertEqual(checkpoint_repository(self.workspace, self.state, "lineage")["status"], "no_changes")
-        with sqlite3.connect(self.state) as connection:
+        with closing(sqlite3.connect(self.state)) as connection, connection:
             connection.execute(
                 "INSERT INTO supervisor_attempts VALUES ('lineage', 'coordinator', 'run-1', 'current-owner', 1, NULL)"
             )
         self.assertEqual(checkpoint_repository(self.workspace, self.state, "lineage")["status"], "no_changes")
 
     def test_current_supervisor_ignores_unfinished_rows_from_a_prior_owner(self) -> None:
-        with sqlite3.connect(self.state) as connection:
+        with closing(sqlite3.connect(self.state)) as connection, connection:
             connection.execute(
                 "INSERT INTO supervisor_attempts VALUES ('lineage', 'coordinator', 'old-run', 'old-owner', 1, NULL)"
             )

@@ -1,13 +1,30 @@
 # de67 dashboard
 
 This optional package serves a small, read-only view of one de67 workspace. It reads
-`.de67/DFS.md`, `.de67/work-ledger.md`, the deadline SQLite database, and supervisor process state.
-It does not import de67 core, write workspace state, or require OpenClaw.
+the functional specification, `.de67/work-ledger.md`, the deadline SQLite database, and supervisor
+process state. It uses core's read-only resolver for migrated `FS.md`, never writes workspace state,
+and does not require OpenClaw.
+
+## Install
+
+For Codex setting this up for a user: this optional package requires the matching de67 3.0.0 core,
+Python 3.10+, and read access to the project state. The basic website uses only the Python standard
+library. The narrator and subscription display additionally need authenticated Codex; remote
+hosting additionally needs the user's chosen network/authentication service.
+
+Download `de67-3.0.0-dashboard.zip` from the
+[v3.0.0 release](https://github.com/josihosi/de67/releases/tag/v3.0.0), verify its `SHA256SUMS` entry,
+and merge its `de67/` directory into the core installation. Codex can install and launch it after
+learning which project the user wants to observe and whether access should be local or remote.
+Keep credentials and machine-specific service configuration outside the package.
+
+## Run
 
 Run on loopback:
 
 ```sh
-python3 integrations/dashboard/de67_dashboard.py --workspace /path/to/project
+python3 integrations/dashboard/de67_dashboard.py --workspace /path/to/project \
+  --sidecar-script de-67-3/scripts/trajectory_sidecar.py
 ```
 
 Open `http://127.0.0.1:8767`. The visible tab updates in place every 30 seconds without a page reload. Updates pause while
@@ -61,6 +78,19 @@ snapshots, history files, or refresh artifacts. A missing or failed sidecar cann
 The plot keeps current closure gaps around the claim, draws product and test cosine similarity
 along each spoke, and shows the sidecar's categorical trajectory observations without scoring them.
 
+## Weekly subscription fuel
+
+Add `--subscription-codex /path/to/codex` to show account-wide weekly allowance remaining,
+percentage used, and the reset date in the dashboard host's time zone. This optional source
+reads `account/rateLimits/read` over a private Codex App Server connection once per minute;
+it makes no model requests and does not write the project workspace. The existing campaign
+fresh-token chart remains separate from subscription quota.
+
+The lowercase red `ngmi` means percentage used exceeds percentage of the weekly window elapsed:
+continuing that weekly average would exhaust the allowance before reset. It is a pace estimate,
+not a prediction of future activity. Missing reset data leaves pace unknown. A failed read
+preserves the last good value marked stale and suppresses the pace verdict until a fresh read.
+
 ## Optional Fratbro status
 
 The dashboard can ask a read-only Luna-low narrator to translate current agent activity into one
@@ -112,3 +142,19 @@ JavaScript or new model calls are introduced. Narration remains tied to worker l
 For browser integration checks, install `playwright-core` in a test environment and run
 `node integrations/dashboard/test_live_refresh.mjs`. Set `DE67_CHROMIUM` to an installed Chromium
 executable and, if needed, `DE67_PLAYWRIGHT` to the local playwright-core module directory.
+
+## Verify, host, and remove
+
+From the skill root, run `python -X utf8 -m unittest discover -s integrations/dashboard` and open
+the local page. Confirm that FS, ledger, and radar match the selected workspace; unavailable state
+must be shown honestly. The optional subscription source makes no model calls, while narration does.
+
+For private remote access, keep the server on loopback and configure the user's authenticated
+Tailscale Serve or equivalent HTTPS proxy. Verify the local page and then its remote URL from a
+second device. Account login and the intended audience are user choices; no hosting account is
+needed for local use. For a nonstandard flat deployment, set `DE67_SPECIFICATION_SCRIPT` to the
+matching core's `de-67-3/scripts/specification.py`; normal add-on extraction resolves it relatively.
+
+To remove it, stop only its dashboard process/service, remove any optional hosting rule created
+for it, and remove the dashboard code directory. Keep unrelated services and the product's `.de67`
+state intact. The core continues without the dashboard.

@@ -265,18 +265,18 @@ def render_worker_scale(model: str, counts: dict[str, int]) -> str:
         count = counts.get(level, 0)
         marks.append(f'<circle class="strength-stop" cx="{x}" cy="114" r="2"/>')
         for dx, dy in worker_dot_positions(count):
-            marks.append(f'<circle class="worker-dot" cx="{x + dx:.3f}" cy="{58 + dy:.3f}" r="4.67"><title>{_escape(model.title())} · {level.title()} reasoning</title></circle>')
+            marks.append(f'<circle class="worker-dot" cx="{x + dx:.3f}" cy="{58 + dy:.3f}" r="4.67"><title>{_escape(model.lower())} · {level.lower()} reasoning</title></circle>')
         if count > 12:
             marks.append(f'<text class="strength-overflow" x="{x}" y="8">+{count - 12}</text>')
-        marks.append(f'<text class="strength-label" x="{x}" y="156">{level.title()}</text>')
+        marks.append(f'<text class="strength-label" x="{x}" y="156">{level.lower()}</text>')
     emblem = ('<path fill="#7ee6c2" d="M25 4a14 14 0 1 0 0 28A16 16 0 0 1 25 4Z"/>'
               if model == "luna" else
               '<circle cx="18" cy="18" r="14" fill="#77accb"/><path fill="#cee2e7" d="M9 8Q13 4 18 4L20 7 17 10 18 12 15 14 14 18 11 17 10 13 7 12ZM18 19Q22 17 25 20L25 24 22 27 21 30 19 28 19 24 16 22Z"/><path d="M6 16A12 12 0 0 1 13 7" fill="none" stroke="#e2f1f3" stroke-opacity=".45" stroke-width=".8" stroke-linecap="round"/>')
     return (
-        f'<div class="worker-scale" data-model="{model}"><div class="scale-heading"><strong>{_escape(model.title())}</strong>'
+        f'<div class="worker-scale" data-model="{model}"><div class="scale-heading"><strong>{_escape(model.lower())}</strong>'
         f'<span><b>{total}</b> active</span></div>'
         f'<svg class="model-emblem" viewBox="0 0 36 36" aria-hidden="true">{emblem}</svg>'
-        f'<svg viewBox="0 0 396 170" role="img" aria-label="{_escape(model.title() + ": " + description)}">'
+        f'<svg viewBox="0 0 396 170" role="img" aria-label="{_escape(model.lower() + ": " + description)}">'
         + "".join(marks) + '</svg></div>'
     )
 
@@ -518,7 +518,7 @@ def _read_specification_snapshot(path: Path) -> tuple[str, dict[str, Any]]:
     import importlib.util
     resolver = Path(os.environ.get(
         "DE67_SPECIFICATION_SCRIPT",
-        str(Path.home() / ".codex/skills/de67/de-67-3/scripts/specification.py"),
+        str(Path(__file__).resolve().parents[2] / "de-67-3/scripts/specification.py"),
     ))
     spec = importlib.util.spec_from_file_location("_de67_dashboard_specification", resolver)
     if spec is None or spec.loader is None:
@@ -528,7 +528,8 @@ def _read_specification_snapshot(path: Path) -> tuple[str, dict[str, Any]]:
     spec.loader.exec_module(module)
     selected = module.resolve(path.parent)
     text, identity = _read_snapshot(selected.path)
-    if text != selected.text:
+    # The resolver uses universal newlines; the snapshot preserves decoded file bytes.
+    if text.replace("\r\n", "\n").replace("\r", "\n") != selected.text:
         raise OSError("specification changed while it was being read")
     identity["path"] = str(selected.path)
     return text, identity
@@ -1603,7 +1604,7 @@ def render_fuel(fuel: dict[str, Any]) -> str:
     def axis_label(value: float) -> str:
         return f"{value / 1000000:g}m" if value >= 1000000 else f"{value / 1000:g}k" if value >= 1000 else f"{value:g}"
     roles = [("astra", "mutator", "#fff0d6"), ("coordinator", "coordinator", "#eabd69"),
-             ("terra", "worker Terra", "#77accb"), ("luna", "worker Luna", "#82dfbd")]
+             ("terra", "worker terra", "#77accb"), ("luna", "worker luna", "#82dfbd")]
     if totals.get("other", 0):
         roles.append(("other", "other workers", "#9997a0"))
     cumulative = [0] * len(bins)
@@ -1664,6 +1665,185 @@ def render_fuel(fuel: dict[str, Any]) -> str:
 
 
 
+def read_subscription_limits(codex: str, timeout: float = 15) -> dict[str, Any]:
+    """Read account quota over a private stdio connection; never start a model turn."""
+    import queue
+
+    flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+    process = subprocess.Popen(
+        [codex, "app-server", "--listen", "stdio://"], cwd=Path.home(),
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        text=True, encoding="utf-8", **flags,
+    )
+    replies: queue.Queue[Any] = queue.Queue()
+
+    def receive() -> None:
+        try:
+            for line in process.stdout:
+                try:
+                    replies.put(json.loads(line))
+                except ValueError:
+                    continue
+        finally:
+            replies.put(None)
+
+    reader = threading.Thread(target=receive, daemon=True)
+    reader.start()
+    deadline = time.monotonic() + timeout
+
+    def send(message: dict[str, Any]) -> None:
+        process.stdin.write(json.dumps(message) + "\n")
+        process.stdin.flush()
+
+    def response(identifier: int) -> dict[str, Any]:
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError("Subscription read timed out")
+            try:
+                message = replies.get(timeout=left)
+            except queue.Empty:
+                raise TimeoutError("Subscription read timed out") from None
+            if message is None:
+                raise RuntimeError("Subscription connection closed")
+            if isinstance(message, dict) and message.get("id") == identifier:
+                if "error" in message:
+                    raise RuntimeError("Subscription read unavailable")
+                return message["result"]
+
+    try:
+        send({"id": 1, "method": "initialize", "params": {
+            "clientInfo": {"name": "de67_dashboard", "version": "1"}}})
+        response(1)
+        send({"method": "initialized"})
+        send({"id": 2, "method": "account/rateLimits/read"})
+        return response(2)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        reader.join(timeout=1)
+        process.stdin.close()
+        process.stdout.close()
+
+
+def weekly_subscription(result: dict[str, Any], now: float) -> dict[str, Any]:
+    """Select the Codex weekly bucket, not a model-specific or five-hour limit."""
+    buckets = result.get("rateLimitsByLimitId")
+    bucket = buckets.get("codex") if isinstance(buckets, dict) else result.get("rateLimits")
+    if not isinstance(bucket, dict):
+        return {"available": False}
+    for name in ("primary", "secondary"):
+        window = bucket.get(name)
+        if not isinstance(window, dict) or window.get("windowDurationMins") != 10080:
+            continue
+        used = window.get("usedPercent")
+        if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used):
+            continue
+        used = min(100.0, max(0.0, used))
+        reset = window.get("resetsAt")
+        if isinstance(reset, bool) or not isinstance(reset, (int, float)) or not math.isfinite(reset):
+            reset = None
+        seconds = 10080 * 60
+        elapsed = now - (reset - seconds) if reset is not None else None
+        pace = used / (100 * elapsed / seconds) if elapsed is not None and 0 < elapsed < seconds else None
+        return {"available": True, "used": used, "remaining": 100 - used,
+                "reset": reset, "pace": pace, "ngmi": pace is not None and pace > 1,
+                "observed": now}
+    return {"available": False}
+
+
+class SubscriptionUsage:
+    """Optional, cached account read. Network work never holds the dashboard lock."""
+    def __init__(self, codex: str, refresh_seconds: float = 60) -> None:
+        self.codex = codex
+        self.refresh_seconds = refresh_seconds
+        self._lock = threading.Lock()
+        self._state: dict[str, Any] = {"available": False, "loading": True}
+        self._next = 0.0
+        self._running = False
+
+    def _refresh(self) -> None:
+        try:
+            state = weekly_subscription(read_subscription_limits(self.codex), time.time())
+            if not state.get("available"):
+                raise ValueError("Weekly allowance unavailable")
+        except Exception:
+            with self._lock:
+                state = dict(self._state, stale=True, loading=False)
+        with self._lock:
+            self._state = state
+            self._running = False
+            self._next = time.monotonic() + self.refresh_seconds
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            if not self._running and time.monotonic() >= self._next:
+                self._running = True
+                threading.Thread(target=self._refresh, daemon=True).start()
+            state = dict(self._state)
+        if state.get("reset") is not None and state["reset"] <= time.time():
+            state["stale"] = True
+        return state
+
+
+# Trusted widget CSS travels with the fragment so already-open tabs receive visual updates.
+SUBSCRIPTION_STYLE = """<style>.galaxy{height:260px;pointer-events:none}
+.galaxy svg{position:absolute;top:0;left:0;height:500px;pointer-events:auto}
+.subscription{position:absolute;top:125px;left:28px;width:250px;z-index:2;display:grid;gap:7px;color:#bcb2c9}
+.subscription>small{font-size:10px;letter-spacing:.08em}
+.subscription-reading{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.subscription-reading strong{font-size:27px;color:#e8e0ed;font-weight:400;white-space:nowrap}
+.subscription-reading strong span{font-size:inherit;color:inherit;letter-spacing:0}
+.subscription-status{font-size:27px;color:#8ad5b3;font-weight:400;text-transform:none}
+.subscription-tank{height:12px;background:#382c40;border-radius:6px;overflow:hidden;mask-image:repeating-linear-gradient(to right,#000 0,#000 calc(8.333333% - 3px),transparent calc(8.333333% - 3px),transparent 8.333333%)}
+.subscription-tank>i{display:block;height:100%;background:#f7ac66;border-radius:0}
+.subscription{padding:14px 0;width:250px;left:0;top:72px}
+.work-clock{padding-left:0;padding-right:0}
+.work-clock,.mutation-total{border:0;background:transparent;border-radius:0}
+
+.subscription>span{font-size:10px;line-height:1.6;color:#b2a6be}
+.subscription.ngmi .subscription-status{color:#ff787f}
+
+.subscription.stale .subscription-status{color:#c7aa79}
+@media(max-width:650px){
+.galaxy{height:145px}.galaxy svg{height:320px}
+.subscription{position:relative;top:auto;left:0;width:min(100%,300px);margin:0 0 28px}
+}
+</style>"""
+
+
+def render_subscription(state: dict[str, Any] | None) -> str:
+    if state is None:
+        return ""
+    if not state.get("available"):
+        status = "checking allowance…" if state.get("loading") else "usage unavailable"
+        return SUBSCRIPTION_STYLE + f'<aside class="subscription"><small>fuel</small><span>{status}</span></aside>'
+    remaining = state["remaining"]
+    stale = state.get("stale", False)
+    tone = " stale" if stale else " ngmi" if state.get("ngmi") else ""
+    reset = state.get("reset")
+    reset_text = (time.strftime("%d %b", time.localtime(reset))
+                  if reset is not None else "unavailable")
+    pace = state.get("pace")
+    status = "stale reading" if stale else "ngmi" if state.get("ngmi") else "on pace" if pace is not None else "pace unknown"
+    pace_text = f'{pace:.2f}x pace' if pace is not None and not stale else "pace unknown"
+    title = ("Account-wide subscription allowance, including work outside this campaign. "
+             "Pace compares percentage used with percentage of the week elapsed. "
+             "ngmi means continuing that average would exhaust the allowance before reset; it is an estimate.")
+    return (SUBSCRIPTION_STYLE + f'<aside class="subscription{tone}" title="{_escape(title)}">'
+            f'<div class="subscription-reading"><strong><span>fuel</span> {remaining:g}%</strong>'
+            f'<b class="subscription-status">{status}</b></div>'
+            f'<div class="subscription-tank" role="meter" aria-label="Weekly allowance remaining" '
+            f'aria-valuemin="0" aria-valuemax="100" aria-valuenow="{remaining:g}">'
+            f'<i style="width:{remaining:g}%"></i></div>'
+            + f'<span>{pace_text}, reset {reset_text}</span></aside>')
+
+
 class Dashboard:
     def __init__(self, workspace: Path, refresh_seconds: int = 30,
                  sessions_root: Path | None = None,
@@ -1671,7 +1851,8 @@ class Dashboard:
                  fratbro_script: Path | None = None,
                  fratbro_cache: Path | None = None,
                  fratbro_codex: str = "codex",
-                 mutator_activity_db: Path | None = None) -> None:
+                 mutator_activity_db: Path | None = None,
+                 subscription_codex: str | None = None) -> None:
         self.workspace = workspace
         self.refresh_seconds = refresh_seconds
         self.sessions_root = sessions_root or Path.home() / ".codex/sessions"
@@ -1679,6 +1860,7 @@ class Dashboard:
         self.fratbro_script = fratbro_script
         self.fratbro_cache = fratbro_cache
         self.fratbro_codex = fratbro_codex
+        self.subscription = SubscriptionUsage(subscription_codex) if subscription_codex else None
         self.mutator_activity_db = mutator_activity_db
         self._lock = threading.Lock()
         self._good: dict[str, dict[str, Any]] = {}
@@ -1842,6 +2024,7 @@ class Dashboard:
                 mutator_activity = {"glowing": False, "status": "unavailable"}
             return {"dfs": dfs, "ledger": ledger, "clock": clock, "sidecar": sidecar,
                     "fratbro": fratbro, "fuel": fuel, "mutator_activity": mutator_activity,
+                    "subscription": self.subscription.snapshot() if self.subscription else None,
                     "process": process,
                     "workers": workers, "process_error": process_error, "observed": time.time()}
 
@@ -1952,7 +2135,7 @@ class Dashboard:
             # sparse foreground stars. Refreshing state does not reshuffle the sky.
             for i in range(3600):
                 x = rng.uniform(0, 1100)
-                center = 222 - .13 * x + 15 * math.sin(x / 125) + 6 * math.sin(x / 39)
+                center = 440 - .28 * x + 15 * math.sin(x / 180) + 6 * math.sin(x / 65)
                 width = 19 + 22 * math.exp(-((x - 400) / 230) ** 2) + 7 * math.sin(x / 83) ** 2
                 if i < 2750:
                     arm = -16 if rng.random() < .58 else 19
@@ -1963,10 +2146,10 @@ class Dashboard:
                     radius = rng.uniform(.25, .70)
                     opacity = rng.uniform(.22, .70)
                 else:
-                    y = rng.uniform(8, 312)
+                    y = rng.uniform(8, 492)
                     radius = rng.uniform(.35, 1.05)
                     opacity = rng.uniform(.16, .68)
-                if not 5 < y < 315:
+                if not 5 < y < 495:
                     continue
                 if i % 131 == 0:
                     radius, opacity = 1.25, .95
@@ -1974,7 +2157,7 @@ class Dashboard:
                 # SVG edges, rather than ending the foreground stars in a strip.
                 distance = abs(y - center)
                 envelope = .12 + .88 * math.exp(-(distance / (width * 1.8)) ** 2)
-                edge = min(1.0, y / 45, (320 - y) / 70, x / 45, (1100 - x) / 45)
+                edge = min(1.0, y / 45, (500 - y) / 70, x / 45, (1100 - x) / 45)
                 edge = max(0.0, edge)
                 opacity *= envelope * edge * edge * (3 - 2 * edge)
                 stars.append(f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{radius:.2f}" opacity="{opacity:.2f}"/>')
@@ -1994,12 +2177,13 @@ class Dashboard:
                 f'<div class="mutation-total"><small>mutations</small><strong>{_escape(mutations)}</strong>'
                 f'<span title="{_escape(random_note)}">{_escape(due)}</span></div></div>'
                 f'<div class="galaxy {astra_state}" title="{_escape(astra_label)}" role="img" aria-label="{_escape(astra_label)}">'
-                '<svg viewBox="0 0 1100 320" preserveAspectRatio="none" aria-hidden="true"><defs><filter id="dust"><feGaussianBlur stdDeviation="10"/></filter></defs>'
+                '<svg viewBox="0 0 1100 500" preserveAspectRatio="none" aria-hidden="true"><defs><filter id="dust"><feGaussianBlur stdDeviation="10"/></filter></defs>'
                 '<g fill="none" stroke="currentColor" filter="url(#dust)">'
-                '<path d="M-20 207Q100 213 205 179T385 158T570 129T785 97T1120 66" stroke-width="20" opacity=".055"/>'
-                '<path d="M-20 246Q100 262 225 218T405 216T595 166T805 142T1120 110" stroke-width="15" opacity=".045"/>'
+                '<path d="M-20 425Q180 414 380 325T740 235T1120 110" stroke-width="20" opacity=".055"/>'
+                '<path d="M-20 462Q180 454 380 365T740 275T1120 150" stroke-width="15" opacity=".045"/>'
                 '</g>'
                 '<g fill="currentColor">' + "".join(stars) + '</g></svg></div>'
+                f'{render_subscription(state.get("subscription"))}'
                 '<div class="cosmos-deck">'
                 f'<div class="sun {sun_state} activity-{_escape(sun_activity)}" title="Coordinator: {_escape(sun_activity)}" role="img" aria-label="Coordinator: {_escape(sun_activity)}">'
                 '<span>coordinator</span><svg viewBox="0 0 320 320" aria-hidden="true">'
@@ -2360,6 +2544,7 @@ code,pre{{background:#15111b}}
 @media(max-width:800px){{.radar-stage{{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"map map" "left right";gap:16px}}.radar-scope{{width:min(100%,430px);margin:auto}}.trajectory .radar-links{{display:none}}.radar-idle{{grid-template-areas:"map";grid-template-columns:1fr}}}}
 @media(max-width:500px){{.trajectory{{padding:20px 16px}}.radar-stage{{display:flex;flex-direction:column;align-items:stretch}}.radar-scope{{order:0}}.radar-contacts{{display:contents}}.radar-contact{{order:var(--contact-order)}}.radar-detail{{grid-template-columns:minmax(0,1fr);gap:6px}}.radar-contact p{{font-size:12px}}.radar-kicker{{gap:6px}}}}
 
+
 </style><script src="/live_refresh.js" defer></script></head><body><main data-dashboard data-refresh-seconds="{self.refresh_seconds}"><header id="dashboard-header"><h1 class="supervisor-{_escape(supervisor)}" title="Supervisor: {_escape(supervisor)}" aria-label="de67 · supervisor {_escape(supervisor)}">de67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}<div id="refresh-status" class="subtle" role="status">{refresh_label}</div><div id="dashboard-content">{body}</div><footer id="dashboard-sources">{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")
 
@@ -2370,9 +2555,10 @@ def serve(workspace: Path, bind: str, port: int, refresh_seconds: int,
           fratbro_script: Path | None = None,
           fratbro_cache: Path | None = None,
           fratbro_codex: str = "codex",
-          mutator_activity_db: Path | None = None) -> None:
+          mutator_activity_db: Path | None = None,
+          subscription_codex: str | None = None) -> None:
     dashboard = Dashboard(workspace.resolve(), refresh_seconds, sessions_root, sidecar_script,
-                          fratbro_script, fratbro_cache, fratbro_codex, mutator_activity_db)
+                          fratbro_script, fratbro_cache, fratbro_codex, mutator_activity_db, subscription_codex)
 
     class Server(ThreadingHTTPServer):
         def server_bind(self) -> None:
@@ -2435,6 +2621,8 @@ def main() -> None:
                         help="Codex executable used only by the optional narrator")
     parser.add_argument("--mutator-activity-db", type=Path, default=None,
                         help="Optional dedicated OpenClaw mutator agent SQLite store; activity lights the galaxy")
+    parser.add_argument("--subscription-codex", default=None,
+                        help="Optional Codex executable for account-wide weekly quota; no model calls")
     args = parser.parse_args()
     if args.refresh_seconds < 0:
         parser.error("--refresh-seconds cannot be negative")
@@ -2442,7 +2630,7 @@ def main() -> None:
         parser.error("--fratbro-script and --fratbro-cache must be configured together")
     serve(args.workspace, args.bind, args.port, args.refresh_seconds,
           args.codex_sessions, args.sidecar_script, args.fratbro_script, args.fratbro_cache,
-          args.fratbro_codex, args.mutator_activity_db)
+          args.fratbro_codex, args.mutator_activity_db, args.subscription_codex)
 
 
 if __name__ == "__main__":

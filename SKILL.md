@@ -30,12 +30,11 @@ Resolve the execution host before delegating or launching `de67 2` or `de67 3`:
 
 - Identify the current host with `hostname`; never infer it from the cwd spelling, the device that
   initiated the request, or a remembered SSH route.
-- Prefer Josef's Mac mini whenever the exact target workspace exists there. If already on
-  `Josefs-Mac-mini.local`, use that local workspace directly and never hand off or SSH back to the
-  same Mac.
-- From Windows, use the `remote-mac` skill for a one-shot native Mac handoff when that exact
-  workspace exists on the Mac mini. If it does not exist there, use the exact Windows workspace;
-  do not create or copy a Mac workspace solely to satisfy this preference.
+- Follow the user's host-placement instructions. When an authorized remote host owns the exact
+  workspace, use the available remote-access tooling for a one-shot native handoff. If already on
+  that host, stay local; never hand off or SSH back to the same machine.
+- Do not invent a remote host or copy a workspace merely to satisfy a preferred placement.
+  Check the [installation platform scope](docs/install.md) before selecting a runtime route.
 - Verify path, branch, HEAD, recent activity, and dirty state before selecting among similarly named
   worktrees. The presence of a DE67 source checkout does not establish the product workspace.
 
@@ -56,10 +55,12 @@ consent from a discussion or specification request.
 
 ## Install or integrate
 
-When the user supplies the de67 repository and asks Codex to install or integrate it:
+When the user supplies the de67 repository or release archive and asks Codex to install or integrate
+it, read [installation](docs/install.md):
 
-1. Require the OpenAI Codex CLI and Python 3.10 or newer. Git is required only for repository work
-   or publishing generalized method changes. de67 is Codex-specific.
+1. Require the OpenAI Codex CLI and Python 3.10 or newer. Persistent workers use Codex App Server
+   on macOS/Linux with the bundled Python requirements; the detached service requires macOS and
+   tmux. Git is required for repository work. de67 is Codex-specific.
 2. Phase 3 bootstraps mutable guidance into the project workspace. Local delivery and mutation do
    not require a writable de67 source checkout or network access. A user-owned `de67-lab` checkout
    is useful only when the owner chooses to generalize and publish a local improvement.

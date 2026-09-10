@@ -43,7 +43,8 @@ coordinator receives it and decides what it means. The supervisor checks mechani
 does not replace the coordinator's judgment with administrative routing.
 
 Parallel workers are permitted when their work is independent. A due mutation blocks new dispatch,
-but already-live workers are allowed to reach a terminal result before review begins.
+but already-live worker turns must return and stop editing before review begins. Their tasks can remain
+unfinished and resumable after the review.
 
 ## Mutation without losing the work
 
@@ -53,7 +54,7 @@ or worker active and produces a guarded, receipt-backed change before delivery r
 ```mermaid
 flowchart TD
     Signal[Deadline or integrity incident,<br/>owner trigger, or scheduled review] --> Quiet{Workers quiet?}
-    Quiet -->|no| Finish[Let live workers reach a terminal result]
+    Quiet -->|no| Finish[Let live worker turns return]
     Finish --> Quiet
     Quiet -->|yes| Review[Fresh independent mutation reviewer]
     Review --> Candidate[Smallest evidence-backed method change]
@@ -68,13 +69,18 @@ flowchart TD
 `Owner-authorized [defer]: ...` queues the same mandatory input for the next regularly due review
 without interrupting ordinary delivery.
 
-## Structure, not a prison
+## Built on Codex
 
-de67 gives capable agents durable state, clear roles, and honest proof boundaries. The coordinator
-can inspect evidence, repair the work projection, switch independent work, or choose another
-mechanically valid route. The machinery exists for the model to control—not to trap the model in an
-administrative loop.
+de67 supplies the specification, work ledger, deadline state, policy, and review lifecycle.
+The [Codex App Server](https://learn.chatgpt.com/docs/app-server) supplies the native conversations,
+turns, tools, and streamed events used by persistent workers and live input. The coordinator can
+adapt its approach within this workflow, but de67 is not a runtime-independent orchestration
+framework. Moving it to another agent platform would require implementation and new validation.
 
-The read-only [dashboard](../integrations/dashboard/README.md) projects this state for the owner.
-The optional [OpenClaw adapter](../integrations/openclaw_discord/README.md) asks one authenticated
-owner question only when no executable route remains.
+A returned turn is not a completed task. The coordinator can resume a named worker with its useful
+context intact, including under a fresh coordinator after review. Git checkpoints are chosen
+snapshots; a failed push is repairable and does not itself stop the delivery loop.
+
+The optional [dashboard](../integrations/dashboard/README.md) reads this state for the owner.
+The separately installed [Discord package](../integrations/openclaw_discord/SETUP.md) offers direct
+owner input and a distinct blocked-only contact route. Neither is a core prerequisite.

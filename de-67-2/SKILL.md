@@ -109,8 +109,8 @@ gate and create no coordination artifact unless it is named here.
    ```
 
    The helper copies each missing Phase-3 runtime file from `de-67-3/assets/environment/` into
-   `.de67/`: `orchestrator-guidelines.md`, `test-and-task-guidelines.md`, `work-ledger.md`, and
-   `mutation-suggestions.md`. Existing local files are active mutable policy and must never be
+   `.de67/`: `phase3-policy.d67`, `phase3-policy.json`, `phase3-contracts.json`,
+   `test-and-task-guidelines.md`, `work-ledger.md`, and `mutation-suggestions.md`. Existing local files are active mutable policy and must never be
    overwritten. It proves the DFS status projection on a disposable copy of existing acceptance state
    before binding the clock; resolve a compatibility failure without discarding history or crediting
    fresh obligations. The helper then binds one stable lineage clock, records its machine-only configuration under

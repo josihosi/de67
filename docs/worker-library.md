@@ -1,6 +1,7 @@
 # Persistent workers and context for DE67
 
-Sol can keep a named library of worker conversations in each workspace. A standing job describes the worker's useful role; each assignment carries its own current outcome, evidence and authority. A fresh Sol coordinator can reuse a worker after the previous assignment ends, including after mutator steering. Reuse is a judgment about useful context, not a mandatory allocation rule.
+Sol can keep a named library of worker conversations in each workspace. A standing job describes the worker's useful role; each assignment carries its own current outcome, evidence and authority. A fresh Sol coordinator can reuse a worker after its worker turn returns, including after mutator steering. An unfinished assignment can resume
+under the fresh coordinator once the previous execution owner is gone. Reuse is a judgment about useful context, not a mandatory allocation rule.
 
 The existing context tool shows the compact worker catalog alongside task and receipt discovery. Sol can select a relevant worker, revise its idle job description, model or effort, or create another worker for substantially different work. The initial assignment starts a real App Server conversation; later assignments resume its actual thread UUID.
 
@@ -30,12 +31,14 @@ Uncertain `turn/start` delivery is reconciled using exact client identities and 
 
 Only explicitly marked, identical standing sections from the same worker's confirmed earlier packet are omitted on reuse. Current task text, selected context and owner corrections remain present. Complete packets and delivery metadata remain available for audit. Token accounting attributes persistent workers and their helpers to the selected coordinator's actual assignment windows, excluding their earlier assignments.
 
-## Verification and measured limits
+## Platform and evidence limits
 
-Real disposable Sol/Luna runs over dated CAOL evidence demonstrated related-worker reuse, a separate worker for unrelated work, and reuse of the same worker UUID by a fresh Sol with an explicit correction. The corrected worker withdrew the old missing-caller premise. These were coordination simulations; no game or production coordinator was started by the tests.
+The persistent App Server route uses Unix sockets on macOS/Linux. Native Windows retains the CLI
+route and shared logic; it does not yet provide these persistent workers. The bundled detached
+service launcher is macOS-only. See [installation](install.md) for the precise requirements.
 
-The two measured reuse deliveries omitted 3,336 and 3,439 bytes of unchanged guidance. Neither revised night assignment reread its full canonical packet. These observations do not establish token savings against a matched control. Coordinator reading and closeout work remained substantial, including some repeated guidance discovery. All three probe runs, including the discarded setup probe, used 495,942 observed fresh tokens; this excludes outer implementation and review work.
-
-The simulations exposed ambiguous fixture wording, redundant packet-location cues, and a real final-message phase handling defect. The wording and delivery cues were corrected. All 15 captured public final/terminal frames from five completed assignments replay successfully through the corrected collector, with exact final-text hashes and no worker-side terminal authority. Platform, recovery, ownership, stale-owner, packet and accounting tests accompany the implementation.
-
-Detailed identities, artifacts, timing, usage and limitations are recorded in [the simulation evidence report](verification/2026-09-09-worker-library.md). The persistent App Server route is exercised on macOS/Linux; native Windows retains its existing CLI route and shared logic tests.
+Development simulations exercised related-worker reuse and a correction delivered to the same
+worker UUID by a fresh coordinator. They established coordination behavior, not gameplay outcomes
+or measured savings against a matched token-use control. The bundled tests cover final-message
+collection, uncertain delivery, recovery, owner freshness, packets, and usage attribution. Current
+release verification belongs in the [release notes](releases/3.0.0.md).

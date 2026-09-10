@@ -1164,7 +1164,7 @@ def mutation_maintenance_contract() -> str:
         "communication where useful. Give agents clearer context and greater freedom to exercise "
         "judgment. Own authorized context changes directly; commission needed tooling through the "
         "existing ledger for Sol. Preserve necessary evidence and ownership. Refine coordinator and "
-        "worker context for useful decisions and effective work, and keep Josef's conversation in "
+        "worker context for useful decisions and effective work, and keep the owner's conversation in "
         "the mutator's context, including during reviews."
     )
 

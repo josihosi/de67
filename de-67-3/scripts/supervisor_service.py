@@ -231,17 +231,51 @@ def _kill_surviving_process_groups(groups: tuple[int, ...]) -> None:
         except PermissionError as error:
             raise ServiceError(f"Cannot kill supervisor process group: {group}") from error
 
+def _capture_coordinator_runtime(workspace: Path):
+    """Retain ancestry before tmux termination reparents server descendants."""
+    address = workspace / ".de67/state/coordinator-input.json"
+    try:
+        binding = json.loads(address.read_text(encoding="utf-8"))
+        socket = Path(binding["socket"])
+        root = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "state/de67-input"
+        if (binding.get("workspace") != str(workspace)
+                or socket.parent.resolve() != root.resolve()
+                or len(socket.stem) != 16
+                or any(char not in "0123456789abcdef" for char in socket.stem)
+                or socket.suffix != ".sock"):
+            return None
+        runner_pid = int(binding["runner_pid"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    from codex_app_server_runner import process_snapshot
+    return runner_pid, socket, process_snapshot()
+
+
+def _cleanup_coordinator_runtime(workspace: Path, captured) -> None:
+    if captured is None:
+        return
+    from types import SimpleNamespace
+    from codex_app_server_runner import stop_owned_runtime
+    runner_pid, socket, rows = captured
+    # Match the unique server socket, never trust a potentially recycled PID.
+    process = SimpleNamespace(pid=runner_pid, poll=lambda: 0)
+    stop_owned_runtime(process, workspace, workspace, {},
+                       captured_rows=rows, owned_socket=socket)
+
+
 def stop_service(workspace: str | Path) -> ServiceSpec:
     identity = service_identity(workspace)
     with _lock(identity):
         _remove_legacy(identity)
         spec = _control_spec(workspace)
+        captured = _capture_coordinator_runtime(spec.workspace)
         if _running(spec):
             groups = _terminate_session_process_groups(spec)
             result = _tmux(spec, "kill-session", "-t", f"={spec.label}")
             _kill_surviving_process_groups(groups)
             if result.returncode and not _absent(result):
                 raise ServiceError(result.stderr.strip() or "tmux kill-session failed")
+        _cleanup_coordinator_runtime(spec.workspace, captured)
     return spec
 
 def status_service(workspace: str | Path) -> tuple[ServiceSpec, str]:

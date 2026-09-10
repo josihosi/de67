@@ -28,10 +28,13 @@ Every deadline miss records both:
 Mark candidate scope and whether it is guarded, isolated, rejected, or awaiting owner authority.
 Never imply that a narrow guard validated a broader candidate.
 
-A random review records one to three ranked inefficiencies, direct evidence, the stored target
-candidate, any accompanying broad normal-method candidate, and treatment of pending suggestions. A
-bare guarded DFS no-op leaves the stored target and this ledger intact. An applied accompanying
-method candidate consumes the suggestions it resolves like any other successful mutation.
+A random review follows a recent trajectory from assigned outcome through available context,
+decisions, actions, and actual proof or state change. Its stored target is a sampling seed, not an
+edit boundary. Record useful findings with direct evidence and the smallest supported correction;
+there is no finding quota or obligation to mutate. Preserve legitimate repetition after changed
+inputs and independent validation. A guarded no-op resolves a review with no justified improvement.
+Broader method candidates use their existing validation boundary. Consume only suggestions actually
+resolved by the review.
 
 A rare universal review exists only for a persisted `k = 30` plus `DFS.md` lane with proved
 `gpt-5.6-sol`/`ultra` capability. It records the isolated whole-method or DFS candidate and

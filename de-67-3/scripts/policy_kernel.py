@@ -19,8 +19,14 @@ from typing import Any, Iterable, Mapping, Sequence
 SCRIPT_ROOT = str(Path(__file__).resolve().parent)
 if SCRIPT_ROOT not in sys.path:
     sys.path.insert(0, SCRIPT_ROOT)
-from worker_receipt import compact_worker_receipt, receipt_envelope
 import symbol_codec
+from context_library import dispatch_context, selected_sources, task_view, ContextError
+from instruction_context import common_guidance
+from worker_packet import standing_section
+from agent_mailbox import communication_contract
+from work_context import context_view, provider_context, record_dispatch, dispatch_evidence_index
+from mutation_guard import extract_dfs_slices, _active_work_blocks, _ledger_slice_ids, GuardError
+from specification import SpecificationError, resolve
 
 
 MAGIC = b"D67P"
@@ -262,108 +268,36 @@ def decision_json(decision: Decision, facts: Iterable[str]) -> dict[str, Any]:
     }
 
 
-def _compact_worker_ledger_route(route: str) -> str:
-    """Keep coordinator judgment while dropping replayable attempt archaeology."""
-    lines = route.splitlines()
-    starts = [
-        index
-        for index, line in enumerate(lines)
-        if re.match(r"^  - [^:\n]+:", line)
-    ]
-    if not starts:
-        return route.strip()
-    prefix = lines[: starts[0]]
-    segments: list[tuple[str, list[str]]] = []
-    for position, start in enumerate(starts):
-        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
-        segment = lines[start:end]
-        label_match = re.match(r"^  - ([^:\n]+):", segment[0])
-        if label_match is not None:
-            segments.append((label_match.group(1).strip().lower(), segment))
-    core_labels = {
-        "dfs slices",
-        "known footing",
-        "current progress",
-        "current evidence",
-        "current uncertainty",
-        "subtasks",
-    }
-    history = [segment for label, segment in segments if label not in core_labels]
-    latest_history = history[-1] if history else None
-    kept = list(prefix)
-    for label, segment in segments:
-        if label in core_labels or segment is latest_history:
-            kept.extend(segment)
-    return "\n".join(kept).strip()
-
-
 def _ledger_objective(route: str) -> str:
     lines = route.splitlines()
     kept: list[str] = []
+    active = True
     for line in lines:
-        if kept and line.startswith("  - "):
-            break
-        kept.append(line)
+        if re.match(r"^- \[[ xX]\] ", line):
+            active = True
+        elif line.startswith("  - "):
+            active = False
+        if active:
+            kept.append(line)
     return "\n".join(kept).strip()
 
 
-def _selected_ledger_frontier(route: str, *, has_receipt: bool) -> str:
-    labels = {
-        "current uncertainty",
-        "first open boundary",
-        "waiting work",
-        "subtasks",
-    }
-    if not has_receipt:
-        labels.update({"known footing", "current progress", "current evidence"})
+def _selected_ledger_frontier(route: str) -> str:
     lines = route.splitlines()
     selected: list[str] = []
     active = False
     for line in lines:
+        if re.match(r"^- \[[ xX]\] ", line):
+            active = False
         match = re.match(r"^  - ([^:\n]+):", line)
         if match is not None:
-            active = match.group(1).strip().lower() in labels
+            # The coordinator owns the active projection; arbitrary labels cannot
+            # silently remove an actionable continuation or its evidence.
+            active = (match.group(1).strip().lower() != "dfs slices"
+                      and not match.group(1).strip().lower().startswith("assignment "))
         if active:
-            if re.match(r"^    - \[(done)\] ", line):
-                continue
             selected.append(line)
     return "\n".join(selected).strip()
-
-
-def _latest_worker_receipt_for_claim(
-    connection: sqlite3.Connection, lineage_id: str, claim_id: str
-) -> dict[str, Any] | None:
-    rows = connection.execute(
-        """
-        SELECT checkpoint.sequence, checkpoint.evidence, checkpoint.recorded_at
-        FROM worker_checkpoints AS checkpoint
-        JOIN tasks AS task
-          ON task.lineage_id = checkpoint.lineage_id
-         AND task.task_id = checkpoint.task_id
-        WHERE checkpoint.lineage_id = ? AND task.claim_id = ?
-          AND checkpoint.kind = 'result-receipt-v1'
-        ORDER BY checkpoint.recorded_at DESC, checkpoint.task_id DESC,
-                 checkpoint.sequence DESC
-        """,
-        (lineage_id, claim_id),
-    ).fetchall()
-    if not rows:
-        return None
-    try:
-        envelope = json.loads(str(rows[0]["evidence"]))
-    except json.JSONDecodeError as error:
-        raise PolicyError("Latest worker result receipt is corrupt") from error
-    if not isinstance(envelope, dict) or not isinstance(envelope.get("receipt"), dict):
-        raise PolicyError("Latest worker result receipt envelope is corrupt")
-    receipt = dict(envelope["receipt"])
-    expected = receipt_envelope(receipt)["receipt_id"]
-    if envelope.get("receipt_id") != expected:
-        raise PolicyError("Latest worker result receipt digest is corrupt")
-    compact = compact_worker_receipt(
-        receipt, recorded_at=float(rows[0]["recorded_at"])
-    )
-    compact["sequence"] = int(rows[0]["sequence"])
-    return compact
 
 
 def _referenced_entrypoints(*values: str) -> list[str]:
@@ -381,35 +315,42 @@ def _referenced_entrypoints(*values: str) -> list[str]:
     return result
 
 
-def _dfs_worker_boundary(dfs_slice: str) -> str:
-    """Keep acceptance-relevant DFS text without front-loading the full mechanism."""
-
-    lines = dfs_slice.splitlines()
-    selected: list[str] = []
-    active = False
-    status_index = next(
-        (index for index, line in enumerate(lines) if line.strip() == "Implementation status:"),
-        len(lines),
+def current_owner_contract(workspace: Path) -> str:
+    """Carry the current owner-authored handoff verbatim, with source identity."""
+    path = workspace / ".de67/WEC.md"
+    if not path.is_file():
+        return ""
+    source_bytes = path.read_bytes()
+    source = source_bytes.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    begin, end = "<!-- DE67:OWNER-CONTRACT:BEGIN -->", "<!-- DE67:OWNER-CONTRACT:END -->"
+    if begin not in source and end not in source:
+        # Legacy workspaces still use the complete WEC as the authority source.
+        body = source.strip()
+    else:
+        if source.count(begin) != 1 or source.count(end) != 1:
+            raise PolicyError("Owner contract requires one complete marked section")
+        before, _, tail = source.partition(begin)
+        body, marker, _ = tail.partition(end)
+        if not marker or end in before or not body.strip():
+            raise PolicyError("Owner contract markers are empty or out of order")
+        body = body.strip()
+    return (
+        "Current owner contract (.de67/WEC.md sha256 "
+        + hashlib.sha256(source_bytes).hexdigest() + "):\n" + body + "\n"
+        "Apply these current constraints to this assignment and every helper handoff. "
+        "They govern generic repair/finding permissions and supersede historical strategy, "
+        "including no-replay advice where the owner requires fresh proof. Acknowledge relevant pending "
+        "execution corrections and report applied evidence or deliberate deferral with its reason; "
+        "do not silently drop them. Preserve earlier "
+        "valid implementation and evidence at their original scope. Inconclusive attempts are not route "
+        "bans: name the missing evidence and changed step that makes repetition informative.\n"
     )
-    for line in lines[:status_index]:
-        if re.match(r"^- \[[ xX]\]", line):
-            selected.append(line)
-            active = False
-            continue
-        if line.startswith("- "):
-            label = line[2:].split(":", 1)[0].strip().lower()
-            active = label in {
-                "natural proof",
-                "required branches and controls",
-                "failure behavior",
-                "acceptance",
-                "proof",
-            }
-        if active:
-            selected.append(line)
-    if status_index < len(lines):
-        selected.extend(lines[status_index:])
-    return "\n".join(selected).strip()
+
+
+def _dfs_worker_boundary(dfs_slice: str) -> str:
+    """Preserve the whole outcome contract; omit only the legacy status projection."""
+    return re.split(r"^Implementation status:\s*$", dfs_slice, maxsplit=1,
+                    flags=re.MULTILINE)[0].strip()
 
 
 def _worker_read_plan(
@@ -417,25 +358,11 @@ def _worker_read_plan(
     state: Path,
     lineage_id: str,
     claim_id: str,
-    receipt: Mapping[str, Any] | None,
     entrypoints: Sequence[str],
     *,
     playtest: bool,
 ) -> list[dict[str, str]]:
     plan: list[dict[str, str]] = []
-    if receipt is not None:
-        plan.append({
-            "source": f"worker receipt {receipt['receipt_id']}",
-            "reason": "carries the accepted no-replay boundary and exact current continuation",
-            "query": (
-                "python3 "
-                + str(Path(__file__).resolve().with_name("deadline_harness.py"))
-                + " worker-receipts --state "
-                + str(state)
-                + " --lineage " + lineage_id
-                + " --receipt " + str(receipt["receipt_id"])
-            ),
-        })
     for entrypoint in entrypoints:
         plan.append({
             "source": entrypoint,
@@ -448,7 +375,7 @@ def _worker_read_plan(
         })
     plan.extend([
         {
-            "source": f".de67/DFS.md slice for {claim_id}",
+            "source": f".de67/FS.md slice for {claim_id} (legacy DFS.md resolver compatible)",
             "reason": "read on demand if the compact packet leaves the product or proof boundary ambiguous",
         },
         {
@@ -461,70 +388,105 @@ def _worker_read_plan(
 
 def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[str, str]:
     ledger_path = workspace / ".de67/work-ledger.md"
-    dfs_path = workspace / ".de67/DFS.md"
+    try:
+        specification = resolve(workspace / ".de67")
+    except SpecificationError as error:
+        raise PolicyError(str(error)) from error
+    dfs_path = specification.path
     ledger = ledger_path.read_text(encoding="utf-8")
-    blocks = [block.strip() for block in re.split(r"\n\s*\n", ledger) if block.strip()]
-    def mentions_exact_identifier(block: str, identifier: str) -> bool:
-        return re.search(
-            r"(?<![A-Za-z0-9_-])" + re.escape(identifier) + r"(?![A-Za-z0-9_-])",
-            block,
-        ) is not None
-
-    matching = [
-        block for block in blocks
-        if mentions_exact_identifier(block, claim_id)
-        or mentions_exact_identifier(block, task_id)
+    # Assignments are nested under the owning active claim item; cross-reference
+    # mentions elsewhere must not become an assignment route.  The guard owns
+    # parsing of active blocks and validation of their DFS selector line.
+    claim_blocks = [
+        (reference, block)
+        for reference, block in _active_work_blocks(ledger)
+        if reference.split(" — ", 1)[0] == claim_id
     ]
-    if not matching:
+    assigned_blocks = [
+        item for item in claim_blocks
+        if re.search(rf"^  - Assignment {re.escape(task_id)}:", item[1], re.MULTILINE)
+    ]
+    # Explicit assignments own their block. Legacy whole-claim tasks remain
+    # compatible when exactly one slice-bearing claim block is unambiguous.
+    owning_blocks = assigned_blocks
+    if not owning_blocks and task_id != claim_id:
+        owning_blocks = [
+            item for item in claim_blocks
+            if re.search(r"^  - DFS slices:", item[1], re.MULTILINE)
+        ]
+    if len(owning_blocks) != 1:
         raise PolicyError(
-            f"Unbound exploration task {task_id} has no matching ledger route for {claim_id}"
+            f"Unbound exploration task {task_id} must have exactly one owning ledger item for {claim_id}"
         )
-    dfs = dfs_path.read_text(encoding="utf-8")
-    marker = re.compile(
-        r"<!-- DE67:DFS-SLICE:BEGIN[^>]*claim=" + re.escape(claim_id)
-        + r"(?=\s|-->)[^>]*-->\n(?P<body>.*?)\n"
-        r"<!-- DE67:DFS-SLICE:END[^>]*-->",
-        re.DOTALL,
-    )
-    match = marker.search(dfs)
-    if match is None:
+    reference, owning_route = owning_blocks[0]
+    # Keep independent same-claim ledger frontiers visible in the packet while
+    # taking DFS content only from the selected owner block.
+    route = "\n\n".join(block for _, block in claim_blocks)
+    try:
+        slice_ids = _ledger_slice_ids(owning_route, reference)
+    except GuardError as error:
+        raise PolicyError(str(error)) from error
+    try:
+        selected = extract_dfs_slices(dfs_path, claim_id, slice_ids)
+    except GuardError as error:
+        raise PolicyError(str(error)) from error
+    if not selected.strip():
         raise PolicyError(
-            f"Unbound exploration task {task_id} has no named DFS slice for {claim_id}"
+            f"Unbound exploration task {task_id} has empty selected DFS slices for {claim_id}"
         )
-    return _compact_worker_ledger_route("\n\n".join(matching)), match.group("body").strip()
+    return route.strip(), selected.strip()
 
 
 def worker_helper_contract() -> str:
-    """Describe optional native helper delegation without DE67 bureaucracy."""
-    return (
-        "If you are the Terra worker, consider an optional Luna helper when bounded work can "
-        "return independently, such as an isolated live playtest witness, focused test run, log "
-        "analysis, source trace, screenshot inspection, or platform check. Use Codex native "
-        "subagents only, with fork_turns=\"none\", a self-contained brief, and the lowest reasoning "
-        "effort you judge sufficient; use as many as the runtime permits, and work or wait while "
-        "they run. For a playtest, supply the compact charter and isolated run context; the Luna "
-        "helper operates the run and returns the smallest journal-cited witness, while you judge "
-        "the evidence and own any repair. You remain responsible for the whole outcome, may use or "
-        "reject helper results, and must collect or stop every helper before returning. Helpers do "
-        "not own this assignment or change coordination records, and must avoid "
-        "overlapping source edits or shared mutable runtime state without explicit exclusive "
-        "ownership. If you are Luna, do not delegate further."
-    )
+    return ('When native helpers and Luna are available, use model="gpt-5.6-luna", '
+            'fork_turns="none" and suitable effort for bounded discovery or suitable execution. '
+            'Otherwise use focused local retrieval within this task. Helpers never own coordination '
+            'records; the primary worker collects or stops them before returning. '
+            'The primary worker owns every game it or its helpers launches, including failed startups '
+            'and replacement processes, until verified OS exit or explicit ownership handoff. '
+            'At finish use the native quit/save route appropriate to that run and reconcile all owned '
+            'PID/birth identities and brokers. A hidden window, stopped broker, or run.finish response '
+            'does not prove process exit. Preserve owner-retained sessions and report a failed graceful '
+            'closure with its exact live identity; do not silently force-kill it. ')
 
 
 def worker_outcome_contract() -> str:
     """Keep recoverable work inside the outcome and reserve terminal findings."""
     return (
-        "Keep repository-owned implementation, tooling, fixture, scenario, binding, and "
-        "observation prerequisites inside this task while they remain useful to its outcome. "
+        "Repository-owned implementation, tooling, fixture, scenario, binding and observation repairs remain recoverable work within the assigned scope. "
+        "When a prerequisite becomes a substantial independent investigation, ask Sol to decide its ownership; "
+        "continue independent work and preserve live runs and useful understanding. Do not silently absorb unrelated prerequisites. "
         "When a proof prerequisite depends on output it is about to create, treat that work as "
-        "non-credit bootstrap and validate the fresh output independently; do not query the "
-        "unchanged prerequisite again. Return completion only when the assigned outcome is "
+        "non-credit bootstrap and validate the fresh output independently. "
+        "Before interpreting absent behavior, establish its actual opportunity to occur and compare "
+        "the premises of any earlier success. Communicate missing premises or ambiguous results "
+        "so the coordinator can steer the same investigation. A gameplay bug requires both a "
+        "contradiction under valid conditions and its causal code path; unresolved reproduction "
+        "remains ledger work, with gameplay repair promotion owned by the user. "
+        "Return completion only when the assigned outcome is "
         "settled. A disproved strategy is progress, not a task exit: preserve its evidence and "
-        "continue through a materially different evidence-backed route while repository recovery "
+        "continue while repository recovery "
         "remains. Return a formal finding only for a contradicted assigned outcome, materially "
         "different owner outcome, real external or human decision, unavailable capability, "
         "irreversible risk, or an authorized route you have genuinely exhausted."
+    )
+
+
+def worker_communication_contract() -> str:
+    """Communicate decision-changing evidence without a reporting lifecycle."""
+    return (
+        "Named workers use the coordinator mailbox command supplied here; native children use "
+        "send_message(target=\"/root\", message=...). Share progress or questions that can "
+        "change coordination or another worker's work. During tests, ask the coordinator for help "
+        "when results surprise you, progress stalls, or you are unsure what to try next. Share the "
+        "relevant actual state, expected behavior, evidence and uncertainty so you can reason "
+        "together before repeating an ineffective approach. If retrieval itself is awkward, name "
+        "the question the available view could not answer and the relevant evidence handle; let "
+        "Luna retrieve the facts and work with the coordinator on a useful ergonomic repair. "
+        "Use the findings to revise the experiment. Continue authorized unblocked work "
+        "while awaiting a reply. Messages are "
+        "nonterminal and need no receipt, ledger entry, periodic report or quota. Your final response "
+        "returns the assignment result. The /root address is not a durable worker identity. "
     )
 
 
@@ -544,6 +506,65 @@ def _write_worker_dispatch_packet(
         if packet.read_bytes() != encoded:
             raise PolicyError(f"Worker dispatch packet identity collision: {packet}")
     return packet.resolve(), digest
+
+
+def worker_selection_contract() -> str:
+    return 'Default to Luna for playtesting, clear execution and ordinary repairs. An unknown result or a broad assignment that might need debugging does not itself justify Terra. Use Terra for a concrete hard problem: coupled implementation, difficult diagnosis or demonstrated repair difficulty. After that problem is resolved, give substantial remaining execution to Luna when the handoff saves total work, preserving useful understanding and live ownership. Sol retains coordination; Terra can use Luna helpers without becoming another coordinator. Select model and effort separately: low for clear execution, medium for bounded reasoning, high for competing explanations; Luna also supports xhigh/max. Reassess from results, including helper and handoff costs, without quotas or a selection report. Explicitly choose gpt-5.6-luna or gpt-5.6-terra and effort from model_choices; Sol is not an ordinary worker.'
+
+
+def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
+    """Expose available worker capabilities without choosing for the coordinator."""
+    path = workspace / ".de67/state/workspace.json"
+    configured = json.loads(path.read_text(encoding="utf-8")).get("worker_capabilities") if path.is_file() else None
+    efforts_by_model = {
+        "gpt-5.6-luna": ("low", "medium", "high", "xhigh", "max"),
+        "gpt-5.6-terra": ("low", "medium", "high"),
+    }
+    capabilities = configured if configured is not None else [
+        {"model": model, "reasoning_effort": effort}
+        for model, efforts in efforts_by_model.items() for effort in efforts
+    ]
+    if not isinstance(capabilities, list):
+        raise PolicyError("worker_capabilities must be a list")
+    result = []
+    for value in capabilities:
+        if not isinstance(value, dict) or value.get("model") not in {"gpt-5.6-luna", "gpt-5.6-terra"}:
+            continue
+        choice = {"model": value["model"], "reasoning_effort": value.get("reasoning_effort", "medium")}
+        # Setup records successfully probed pairs; defaults do not restrict that roster.
+        if not isinstance(choice["reasoning_effort"], str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]*", choice["reasoning_effort"]
+        ):
+            raise PolicyError("Unsupported worker reasoning effort")
+        if choice not in result:
+            result.append(choice)
+    if not result:
+        raise PolicyError("No configured Luna/Terra worker capability is available")
+    return result
+
+
+def exploration_assignment(route: str, task_id: str, claim_id: str) -> tuple[str, str]:
+    """Bind an explicit task-sized ledger assignment, leaving broad work possible."""
+    lines = route.splitlines()
+    prefix = "  - Assignment " + task_id + ":"
+    matches = [i for i, line in enumerate(lines) if line.startswith(prefix)]
+    if len(matches) > 1:
+        raise PolicyError("Duplicate ledger assignment for " + task_id)
+    if matches:
+        start = matches[0]
+        body = [lines[start][len(prefix):].strip()]
+        for line in lines[start + 1:]:
+            if line.startswith("  - ") or line.startswith("- ") or line.startswith("#"):
+                break
+            body.append(line.strip())
+        outcome = "\n".join(body).strip()
+        if not outcome:
+            raise PolicyError("Empty ledger assignment for " + task_id)
+        return outcome, "task-specific ledger assignment"
+    objective = _ledger_objective(route)
+    if task_id != claim_id and re.search(r"^- \[ \] " + re.escape(task_id) + r"(?=\s|$)", route, re.MULTILINE):
+        return objective, "task-specific ledger item"
+    return objective, "whole-claim assignment; no narrower task assignment supplied"
 
 
 def unbound_worker_spawns(
@@ -575,9 +596,7 @@ def unbound_worker_spawns(
             gap_id = row["closure_gap_id"]
             revision = row["closure_gap_revision"]
             gap = None
-            latest_receipt = _latest_worker_receipt_for_claim(
-                connection, lineage_id, claim_id
-            )
+            assignment_scope = "bound closure gap"
             ledger_route = ""
             dfs_slice = ""
             if gap_id is not None and revision is not None:
@@ -596,11 +615,24 @@ def unbound_worker_spawns(
                         f"Unbound closure task {task_id} references missing gap revision"
                     )
                 outcome, proof_route = str(gap["description"]), str(gap["proof_route"])
+                try:
+                    specification = resolve(workspace / ".de67")
+                except SpecificationError as error:
+                    raise PolicyError(str(error)) from error
+                if specification.path.is_file():
+                    match = re.search(
+                        r"<!-- DE67:DFS-SLICE:BEGIN[^>]*claim=" + re.escape(claim_id)
+                        + r"(?=\s|-->)[^>]*-->\n(.*?)\n<!-- DE67:DFS-SLICE:END[^>]*-->",
+                        specification.text, re.DOTALL,
+                    )
+                    if match is None:
+                        raise PolicyError(f"Closure task {task_id} has no current DFS slice")
+                    proof_route = _dfs_worker_boundary(match.group(1)) + "\nAssigned closure route:\n" + proof_route
             elif phase == "exploration":
                 ledger_route, dfs_slice = _exploration_route(
                     workspace, claim_id, task_id
                 )
-                outcome = _ledger_objective(ledger_route)
+                outcome, assignment_scope = exploration_assignment(ledger_route, task_id, claim_id)
                 proof_route = _dfs_worker_boundary(dfs_slice)
             else:
                 # Legacy closure attempts predate named gap bindings. Preserve
@@ -608,19 +640,26 @@ def unbound_worker_spawns(
                 ledger_route, dfs_slice = _exploration_route(
                     workspace, claim_id, task_id
                 )
-                outcome = _ledger_objective(ledger_route)
+                outcome, assignment_scope = exploration_assignment(ledger_route, task_id, claim_id)
                 proof_route = _dfs_worker_boundary(dfs_slice)
+            previous_row = connection.execute(
+                "SELECT task_id, started_at, attempt_terminal_kind, attempt_terminal_at "
+                "FROM tasks WHERE lineage_id = ? AND claim_id = ? AND task_id != ? "
+                "ORDER BY started_at DESC, task_id DESC LIMIT 1",
+                (lineage_id, claim_id, task_id),
+            ).fetchone()
+            previous_attempt = dict(previous_row) if previous_row is not None else None
             frontier = _selected_ledger_frontier(
-                ledger_route, has_receipt=latest_receipt is not None
+                ledger_route
             ) if ledger_route else ""
-            receipt_entrypoints = (
-                list(latest_receipt.get("entrypoints", []))
-                if latest_receipt is not None
-                else []
-            )
+            context = context_view(workspace, state, lineage_id, claim=claim_id,
+                                   task=task_id, route=ledger_route + "\n" + proof_route)
+            receipts = [item["receipt"] for item in context["selected_context"]]
+            receipt_entrypoints = [path for receipt in receipts
+                                   for path in receipt.get("entrypoints", [])]
             entrypoints = list(dict.fromkeys([
-                *receipt_entrypoints,
                 *_referenced_entrypoints(outcome, frontier, proof_route),
+                *receipt_entrypoints,
             ]))
             playtest = any(
                 word in " ".join((outcome, frontier, proof_route)).lower()
@@ -631,42 +670,95 @@ def unbound_worker_spawns(
                 state,
                 lineage_id,
                 claim_id,
-                latest_receipt,
                 entrypoints,
                 playtest=playtest,
             )
+            task_name = "task_" + task_id.encode("utf-8").hex()
+            reference_context = (
+                "Related task results (independent contributions; no claim-wide latest-wins):\n"
+                + json.dumps([
+                    {key:item[key] for key in ("task_id", "receipt_id", "recorded_at",
+                                              "relationship", "source_bytes")}
+                    if receipts else item for item in context["related_results"]
+                  ], ensure_ascii=False, sort_keys=True) + "\n"
+                + "Broader product contract (not a task-sized completion requirement):\n" + proof_route + "\n"
+                + "Claim ledger context (independent contributions retained):\n" + ledger_route + "\n"
+                + "Directly related evidence, at its original scope:\n"
+                + json.dumps(dispatch_evidence_index(context, detailed=True), ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+                + "Current harness context (observed snapshot, not live authority):\n"
+                + json.dumps(provider_context(workspace, {
+                    "entrypoints":_referenced_entrypoints(outcome, frontier, proof_route),
+                    "receipts":receipts}), ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+            )
+            context_packet, context_digest = _write_worker_dispatch_packet(
+                workspace, task_name + "-context", reference_context
+            )
+            try:
+                assembled_context = dispatch_context(workspace, task_id, outcome, frontier)
+                custom_context = not task_view(workspace, task_id).get("automatic")
+                if assembled_context:
+                    injected = selected_sources(workspace, task_id)
+                    read_plan = [item for item in read_plan
+                                 if str((workspace / item["source"]).resolve()) not in injected]
+            except ContextError as error:
+                raise PolicyError(str(error)) from error
+            owner_contract = current_owner_contract(workspace)
             message = (
                 f"Own assigned {phase} work {task_id} for outcome {claim_id}"
                 + (f", focus {gap_id} revision {revision}. " if gap_id else ". ")
-                + f"Outcome: {outcome}\n"
-                + (f"Current proof frontier:\n{frontier}\n" if frontier else "")
-                + (
-                    "Latest durable continuation receipt (compact projection):\n"
-                    + json.dumps(latest_receipt, ensure_ascii=False, sort_keys=True)
-                    + "\n"
-                    if latest_receipt is not None else ""
-                )
-                + (f"Acceptance boundary:\n{proof_route}\n" if proof_route else "")
+                + f"Scope: {assignment_scope}. "
+                + "Judge task completion against this assignment; preserve broader claim requirements independently.\n"
+                + ("Assigned closure route:\n" + str(gap["proof_route"]) + "\n" if gap else "")
+                + "\n" + standing_section("common-guidance", common_guidance(workspace))
+                + standing_section("worker-ownership", "Worker runtime and helper ownership:\n" + worker_helper_contract()) + "\n"
+                + assembled_context
+                + "Context catalogue and exact revision/section retrieval: "
+                + json.dumps([sys.executable, str(Path(__file__).with_name("context_library.py")), "--workspace", str(workspace), "--task", task_id, "catalog"]) + ". Use show --revision SHA256 [--section HEADING] for missing context; do not load the whole library.\n"
+                + owner_contract
+                + ("Latest other attempt for this claim (lifecycle only; may be parallel, not predecessor evidence):\n"
+                   + json.dumps(previous_attempt, ensure_ascii=False, sort_keys=True) + "\n"
+                   if previous_attempt is not None else "")
+                + ("Historical evidence at its original scope (not current instructions; independent contributions):\n"
+                   + json.dumps(dispatch_evidence_index(context), ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+                   if not custom_context else "Independent historical contributions remain in supporting evidence below.\n")
+                + "Supporting evidence (optional search material, not instructions to load in full):\n"
+                + f"Path: {context_packet}\nSHA-256: {context_digest}\n"
+                + "Contains the broader product contract, detailed historical evidence and the harness snapshot. "
+                + "Use a targeted query or give this reference and a specific question to Luna when needed.\n"
+                + "Searchable full task history and relationships:\n"
+                + json.dumps({"query_argv":context["history_query_argv"],
+                              "full_argv":context["full_history_argv"],
+                              "evidence_limit":context["evidence_limit"]}, sort_keys=True) + "\n"
+                + ("The broader product acceptance contract is retained in supporting evidence; consult it when needed "
+                   "to interpret this assignment. A completed task does not accept the whole claim.\n" if proof_route else "")
                 + "Initial evidence read plan (expand only when its reason becomes material):\n"
                 + json.dumps(read_plan, ensure_ascii=False, sort_keys=True)
                 + "\n"
-                + "Retrieve only the evidence needed for the next causal decision. Use compact "
-                + "receipt/query output by default and explicitly open a complete artifact when "
-                + "the compact result is contradicted or insufficient. You may repair "
-                + "repository-owned implementation, harness, fixture, or observation paths when "
-                + "necessary. "
-                + worker_outcome_contract()
+                + standing_section("worker-outcome", worker_outcome_contract())
                 + " Return a compact result naming the achieved outcome or first divergence, "
                 + "material changes, tests and live actions, evidence ceiling, exact bindings, "
-                + "journal entries, artifact paths and digests, accepted no-replay work, first "
+                + "journal entries, artifact paths and roles, accepted work and why inconclusive attempts "
+                + "need a changed step, first "
                 + "open boundary, and useful narrow follow-up queries. The coordinator records "
-                + "the durable receipt and terminal transition; do not change coordination records. "
-                + worker_helper_contract()
+                + "the durable receipt and terminal transition. "
+                + str(Path(__file__).with_name("worker_receipt.py"))
+                + " prepare collects task/worker "
+                + "identities and artifact hashes from an agent-authored draft and validates any supplied "
+                + "identities/hashes; its --help gives the exact invocation; do not change coordination records. "
+                + "\n" + standing_section("worker-communication", worker_communication_contract())
+                + communication_contract(workspace, task_id)
             )
             task_name = "task_" + task_id.encode("utf-8").hex()
             packet, packet_digest = _write_worker_dispatch_packet(
                 workspace, task_name, message
             )
+            record_dispatch(workspace, state, lineage_id, task_id, packet, packet_digest,
+                            {"claim_id":claim_id, "closure_gap_id":gap_id,
+                             "owner_contract_sha256":hashlib.sha256(owner_contract.encode("utf-8")).hexdigest(),
+                             "closure_gap_revision":revision,
+                             "evidence_receipts":[r["receipt_id"] for r in receipts],
+                             "related_tasks":[r["task_id"] for r in context["related_results"]],
+                             "relationship_basis":"exact route references or shared gap; not inferred ancestry"})
             spawn_message = (
                 f"Own task {task_id}. Read your complete task brief from {packet}. "
                 f"Verify its SHA-256 is {packet_digest}, then follow it."
@@ -679,18 +771,34 @@ def unbound_worker_spawns(
                         "path": str(packet),
                         "sha256": packet_digest,
                     },
+                    "worker_library": {
+                        "catalog_argv": [sys.executable, str(Path(__file__).with_name("worker_library.py")),
+                                         "--workspace", str(workspace), "list"],
+                        "assign_argv": [sys.executable, str(Path(__file__).with_name("worker_library.py")),
+                                        "--workspace", str(workspace), "assign", "WORKER_NAME",
+                                        "--task", task_id, "--packet", str(packet),
+                                        "--sha256", packet_digest, "--state", str(state),
+                                        "--lineage", lineage_id],
+                    },
                     "instruction": (
-                        "Actually call spawn_agent with these arguments. Announcing an assignment "
-                        "is not delegation. After every listed spawn, call wait_agent for the "
-                        "spawned worker ids; do not finish while a worker result is outstanding."
+                        "Consider reusing a named worker with a suitable job and useful context. "
+                        "Use worker_library.assign_argv with that worker's name, creating a named "
+                        "worker first if the job or concurrent ownership requires one. Preserve "
+                        "the exact task and packet. For a native child, complete example_call.arguments "
+                        "with one chosen model_choices capability, then call spawn_agent. "
+                        "Choose model and reasoning effort separately for this assignment's "
+                        "uncertainty and expected total work, using the existing selection guidance. "
+                        "Then continue live coordination; call wait_agent "
+                        "when no useful coordination decision remains. Do not finish while a "
+                        "worker result is outstanding."
                     ),
+                    "model_choices": worker_model_choices(workspace),
+                    "assignment_scope": assignment_scope,
                     "example_call": {
                         "tool": "spawn_agent",
                         "arguments": {
                             "task_name": task_name,
                             "fork_turns": "none",
-                            "model": "gpt-5.6-terra",
-                            "reasoning_effort": "medium",
                             "message": spawn_message,
                         },
                     },
@@ -834,6 +942,19 @@ def _terminal_result_was_consumed(
     terminal_at = task["attempt_terminal_at"]
     if terminal_at is None:
         return False
+    # A supervisor may retire an opened task before any worker claims it (for
+    # example when a coordinator recovery interrupts dispatch).  There is no
+    # ordinary-worker result to ingest in that case, so do not strand the
+    # coordinator on receive_worker_result forever.
+    if task["attempt_terminal_kind"] == "abandoned" and _table_exists(
+        connection, "worker_claims"
+    ):
+        claimed = connection.execute(
+            "SELECT 1 FROM worker_claims WHERE lineage_id = ? AND task_id = ? LIMIT 1",
+            (lineage_id, task_id),
+        ).fetchone()
+        if claimed is None:
+            return True
     if _table_exists(connection, "closure_gaps"):
         consumed = connection.execute(
             """
@@ -845,14 +966,20 @@ def _terminal_result_was_consumed(
         ).fetchone()
         if consumed is not None:
             return True
-    if _table_exists(connection, "closure_gap_revisions"):
+    if (_table_exists(connection, "closure_gap_revisions")
+            and "closure_gap_revision" in task.keys()
+            and task["closure_gap_revision"] is not None):
         consumed = connection.execute(
             """
             SELECT 1 FROM closure_gap_revisions
-            WHERE lineage_id = ? AND basis_task_id = ? AND recorded_at >= ?
+            WHERE lineage_id = ? AND claim_id = ? AND closure_sequence = ?
+              AND gap_id = ? AND revision = ?
+              AND basis_task_id = ? AND recorded_at >= ?
             LIMIT 1
             """,
-            (lineage_id, task_id, float(terminal_at)),
+            (lineage_id, task["claim_id"], task["phase_sequence_at_dispatch"],
+             task["closure_gap_id"], int(task["closure_gap_revision"]) + 1,
+             task_id, float(terminal_at)),
         ).fetchone()
         if consumed is not None:
             return True
@@ -875,9 +1002,30 @@ def workspace_facts(
 ) -> frozenset[str]:
     facts: set[str] = set()
     current_claim: str | None = None
+    terminal_task_ids: set[str] = set()
+    owner_wait_claims: set[str] = set()
+    owner_wait_gaps: set[tuple[str, int, str]] = set()
     connection = sqlite3.connect(f"file:{state.resolve()}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     try:
+        if "route_kind" in {row[1] for row in connection.execute("PRAGMA table_info(closure_gap_revisions)")}:
+            routes = connection.execute("""
+                SELECT g.claim_id, g.closure_sequence, g.gap_id, r.route_kind FROM closure_gaps g
+                JOIN closure_gap_revisions r USING (lineage_id, claim_id, closure_sequence, gap_id)
+                JOIN claim_clocks c ON c.lineage_id=g.lineage_id AND c.claim_id=g.claim_id
+                WHERE g.lineage_id = ? AND g.closed_at IS NULL AND c.phase = 'closure'
+                  AND g.closure_sequence = (SELECT MAX(g2.closure_sequence) FROM closure_gaps g2
+                    WHERE g2.lineage_id=g.lineage_id AND g2.claim_id=g.claim_id)
+                  AND r.revision = (SELECT MAX(x.revision) FROM closure_gap_revisions x
+                    WHERE x.lineage_id=g.lineage_id AND x.claim_id=g.claim_id
+                      AND x.closure_sequence=g.closure_sequence AND x.gap_id=g.gap_id)
+            """, (lineage_id,)).fetchall()
+            owner_wait_gaps = {(str(r["claim_id"]), int(r["closure_sequence"]), str(r["gap_id"]))
+                               for r in routes if r["route_kind"] == "owner_wait"}
+            owner_wait_claims = {str(r["claim_id"]) for r in routes if r["route_kind"] == "owner_wait"} - {
+                str(r["claim_id"]) for r in routes if r["route_kind"] == "executable"}
+            if owner_wait_gaps:
+                facts.add("owner_wait")
         if _table_exists(connection, "tasks"):
             rows = connection.execute(
                 "SELECT * FROM tasks WHERE lineage_id = ? ORDER BY started_at DESC",
@@ -891,6 +1039,8 @@ def workspace_facts(
                     (lineage_id,),
                 ).fetchone()
                 epoch_generation = int(epoch[0]) if epoch is not None else None
+            terminal_task_ids = {str(row["task_id"]) for row in rows
+                                 if row["attempt_terminal_at"] is not None}
             nonterminal = [row for row in rows if row["attempt_terminal_at"] is None]
             worker_claims_exist = _table_exists(connection, "worker_claims")
             claimed_ids: set[str] = set()
@@ -917,7 +1067,9 @@ def workspace_facts(
                 row for row in nonterminal
                 if not worker_claims_exist or str(row["task_id"]) in claimed_ids
             ]
-            if live:
+            from worker_library import returned_assignments
+            returned = returned_assignments(workspace, state, lineage_id)
+            if any(str(row["task_id"]) not in returned for row in live):
                 facts.add("live_task")
             if any(str(row["task_id"]) not in ever_claimed_ids for row in nonterminal):
                 facts.add("unbound_task")
@@ -943,7 +1095,21 @@ def workspace_facts(
         ):
             if _table_exists(connection, table):
                 if table == "claim_deadline_generation_incidents":
-                    query = f"SELECT 1 FROM {table} WHERE lineage_id = ? AND reviewed_at IS NULL LIMIT 1"
+                    # Match the harness's pending-incident view: a preserved
+                    # generation-1 migration mirror is not a second incident.
+                    query = """
+                        SELECT 1 FROM claim_deadline_generation_incidents AS incident
+                        WHERE incident.lineage_id = ? AND incident.reviewed_at IS NULL
+                          AND NOT (incident.generation = 1 AND EXISTS (
+                              SELECT 1 FROM claim_deadline_generation_incidents AS current
+                              WHERE current.lineage_id = incident.lineage_id
+                                AND current.claim_id = incident.claim_id
+                                AND current.generation > 1
+                                AND current.source_task_id = incident.source_task_id
+                                AND current.recorded_at = incident.recorded_at
+                          ))
+                        LIMIT 1
+                    """
                 elif table == "coordinator_restart_requests":
                     query = f"SELECT 1 FROM {table} WHERE lineage_id = ? AND acknowledged_at IS NULL LIMIT 1"
                 else:
@@ -972,16 +1138,16 @@ def workspace_facts(
                       AND latest.claim_id = generation.claim_id
                   )
                 ORDER BY generation.started_at DESC, clock.claim_id
-                LIMIT 1
                     """,
                     (lineage_id,),
-                ).fetchone()
+                ).fetchall()
             else:
                 clock = connection.execute(
                     "SELECT * FROM claim_clocks WHERE lineage_id = ? "
-                    "ORDER BY started_at DESC LIMIT 1",
+                    "ORDER BY started_at DESC",
                     (lineage_id,),
-                ).fetchone()
+                ).fetchall()
+            clock = next((row for row in clock if str(row["claim_id"]) not in owner_wait_claims), None)
             if clock is not None:
                 current_claim = str(clock["claim_id"])
                 facts.add("open_claim")
@@ -1011,10 +1177,11 @@ def workspace_facts(
                  )
                 WHERE gap.lineage_id = ? AND gap.claim_id = ?
                   AND gap.closed_at IS NULL
-                ORDER BY gap.gap_id LIMIT 1
+                ORDER BY gap.gap_id
                     """,
                     (lineage_id, current_claim),
-                ).fetchone()
+                ).fetchall()
+                open_gap = next((row for row in open_gap if (str(row["claim_id"]), int(row["closure_sequence"]), str(row["gap_id"])) not in owner_wait_gaps), None)
             else:
                 open_gap = connection.execute(
                     """
@@ -1027,7 +1194,7 @@ def workspace_facts(
                 ).fetchone()
             if open_gap is not None:
                 facts.add("open_gap")
-                if str(open_gap["proof_route"]).strip():
+                if open_gap["proof_route"] is not None and str(open_gap["proof_route"]).strip():
                     facts.add("executable_route")
         if _table_exists(connection, "random_mutation_cycles"):
             random_due = connection.execute(
@@ -1071,7 +1238,7 @@ def workspace_facts(
                     (lineage_id,),
                 ).fetchall():
                     gap_id = str(row["gap_id"])
-                    if re.search(
+                    if (str(row["claim_id"]), gap_id) not in {(claim, gap) for claim, _, gap in owner_wait_gaps} and re.search(
                         r"(?<![A-Za-z0-9_-])" + re.escape(gap_id)
                         + r"(?![A-Za-z0-9_-])",
                         frontier_text,
@@ -1101,17 +1268,33 @@ def workspace_facts(
         for line in ledger_text.splitlines()
     ):
         facts.add("blocked_ledger")
-    if any(
-        word in ledger_text.lower()
-        for word in (
-            "next executable", "required mechanism", "active gap", "active work",
-            "proof boundary",
-        )
-    ):
-        facts.add("executable_route")
+    # Execution labels only count in the selected frontier or active unchecked items.
+    # Historical accepted text and owner-only gap proof cannot create a worker route.
+    blocks = _active_work_blocks(ledger_text)
+    frontier_match = re.search(r"(?ms)^## Current delivery frontier\s*$\n(.*?)(?=^## |\Z)", ledger_text)
+    route_texts = [(reference.split()[0], block) for reference, block in blocks]
+    if not blocks:
+        route_texts.extend((section.splitlines()[0].removeprefix("## ").strip(), section)
+                          for section in re.split(r"(?m)(?=^## )", ledger_text) if section.strip())
+    if frontier_match:
+        route_texts.append(("", frontier_match.group(1)))
+    for owner, route_text in route_texts:
+        if owner in owner_wait_claims:
+            continue
+        for line in route_text.splitlines():
+            if not owner or owner == "Current delivery frontier":
+                if any(re.search(r"(?<![A-Za-z0-9_-])" + re.escape(identity) + r"(?![A-Za-z0-9_-])", line)
+                       for identity in owner_wait_claims | {gap for _, _, gap in owner_wait_gaps}):
+                    continue
+            assignment = re.match(r"(?i)^\s*- Assignment ([^:]+):\s*\S", line)
+            if assignment and assignment.group(1).strip() in terminal_task_ids:
+                continue
+            if re.search(r"(?i)^\s*- (?:Next executable route|Active work|Assignment [^:]+):\s*\S", line):
+                facts.add("executable_route")
     suggestions = workspace / ".de67" / "mutation-suggestions.md"
     if suggestions.is_file():
         pending = suggestions.read_text(encoding="utf-8").partition("## Pending suggestions")[2]
+        pending = re.split(r"^#{1,2}\s+", pending, maxsplit=1, flags=re.MULTILINE)[0]
         # Legacy unlabelled entries and explicit [trigger] entries are
         # immediate owner gates.  [defer] entries are proposals for the next
         # regular review and must not retire an otherwise healthy coordinator.
@@ -1130,12 +1313,13 @@ def workspace_facts(
             for entry in entries
         ):
             facts.add("pending_suggestions")
-    dfs = workspace / ".de67" / "DFS.md"
-    dfs_text = dfs.read_text(encoding="utf-8") if dfs.is_file() else ""
-    if "🔴" in dfs_text:
-        facts.add("red_dfs_work")
-    else:
-        facts.add("dfs_complete")
+    try:
+        specification = resolve(workspace / ".de67")
+        open_work = ("🔴" in specification.text if specification.legacy
+                     else bool(_active_work_blocks(ledger_text)))
+    except SpecificationError:
+        open_work = False
+    facts.add("red_dfs_work" if open_work else "dfs_complete")
     return frozenset(facts)
 
 
@@ -1224,10 +1408,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.workspace.resolve(), args.state.resolve(), args.lineage
             )
             payload["parallel_dispatch"] = (
-                "Spawn one distinct worker for each listed independent task before waiting."
+                "Assign one distinct worker to each listed independent task before waiting."
             )
             payload["coordinator_next_action"] = (
-                "Spawn every listed worker, then call wait_agent for the spawned worker ids. "
+                "Spawn every listed worker, then continue live coordination. Call wait_agent "
+                "when no useful coordination decision remains. "
                 "Do not finish the coordinator turn while a worker result is outstanding."
             )
         print(json.dumps(payload, sort_keys=True))

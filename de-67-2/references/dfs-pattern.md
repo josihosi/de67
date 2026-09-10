@@ -36,6 +36,24 @@ Each requirement should name, where applicable:
 Do not prescribe a new function merely for symmetry. Name a new symbol only when the inspected code
 has no suitable owner and the contract needs one.
 
+## Preserve usable design reasoning
+
+Transfer the understanding a later agent needs to make a good next decision. For a consequential
+mechanism, explain the causal relationship, why the proposed change fits the inspected code, and
+which competing explanation or tempting shortcut would fail the outcome. State the observation
+that would invalidate the design or require reinspection. A worked transition or counterexample is
+useful when it conveys this more clearly than another list of requirements.
+
+Keep requirements and acceptance strength distinct from implementation tactics. Workers may change
+tactics inside the frozen contract. Record a concrete starting route without making its command
+order, helper names, or incidental steps additional acceptance gates.
+
+Make this reasoning available where it is used: keep a red claim's mechanism, relevant owner
+relationships, proof route, and source references together or linked by stable IDs. Reference shared
+facts once. Omit unrelated implementation history, speculative alternatives, and empty template
+fields. Concision means preserving decision value, not compressing away the explanation. Do not add
+another handoff schema or prescribe the coordinator's context-management procedure.
+
 ## Resolve competing owners
 
 For every affected state or action, build a compact ownership table:
@@ -85,7 +103,11 @@ credit, or a competing owner advancing the transition.
 ## Freeze and refreeze
 
 Record `Draft` while resolving code evidence and user-owned choices; record `Frozen` only after the
-DFS is internally consistent and bound to an inspected source baseline.
+DFS is internally consistent and bound to an inspected source baseline. On refreeze, preserve each
+durably accepted claim's terminal `Implementation status:` block and its `DE67:DELIVERY-STATUS`
+receipt markers inside the stable DFS slice. Keep current requirements outside that replaceable
+projection. Historical acceptance retains its original scope; new proof obligations remain red.
+The workspace-setup compatibility check exercises the real projection against copied durable state.
 
 After its named proof passes, automation may close an existing red item by changing it to `[x]` and
 removing `🔴`. It may also make an evidence-implied nonmaterial clarification to an

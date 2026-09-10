@@ -1,6 +1,6 @@
 ---
 name: de67
-description: Route Codex work through de67 discussion, code-grounded specification, delivery, or an optional alignment audit. Use when the user says `de67 1`, `de67 2`, `de67 3`, or `de67 alignment audit`, invokes `$de67`, or asks Codex to install or integrate de67. Do not use for an ordinary worker assignment merely because its packet path or metadata mentions `.de67`. Route to exactly one surface and never preload unrelated instructions.
+description: Route Codex work through de67 discussion, code-grounded specification, delivery, release packaging, or an optional alignment audit. Use when the user says `de67 1`, `de67 2`, `de67 3`, `de67 release`, or `de67 alignment audit`, invokes `$de67`, or asks Codex to install or integrate de67. Do not use for an ordinary worker assignment merely because its packet path or metadata mentions `.de67`. Route to exactly one surface and never preload unrelated instructions.
 ---
 
 # de67 router
@@ -12,11 +12,16 @@ Match the user's command and read exactly one entrypoint:
 - `de67 1`: read `de-67-1/SKILL.md` for the current-chat discussion and WEC.
 - `de67 2`: read `de-67-2/SKILL.md` for code inspection and DFS authoring.
 - `de67 3`: read `de-67-3/SKILL.md` for implementation, deadlines, and mutation.
+- `de67 release` or an explicit request to package/release the de67 skill: read
+  `release-packaging/SKILL.md` for release preparation and release-facing documentation.
 - `de67 alignment audit`: read `alignment-audit/SKILL.md` for a manual, read-only review of
   agent-facing instructions, machine responses, and active workflow tests.
 
 Open the exact selected entrypoint directly; do not inventory or read sibling phase folders for
-background or completeness. The handoff artifacts are the interface: phase 2 receives `WEC.md`;
+background or completeness. These reading boundaries apply when running a phase. An explicit request
+to inspect or improve the workflow may follow the relevant surfaces without starting those phases.
+
+The handoff artifacts are the interface: phase 2 receives `WEC.md`;
 phase 3 receives the frozen `DFS.md` and Phase-2-initialized `.de67/` clock state.
 
 ## Execution placement
@@ -42,7 +47,10 @@ handoffs, join the delivery loop, mutate the method, or become a completion gate
 when the user asks to audit agentic workflow alignment, contradictory instructions, or rules and
 tests that may be boxing agents in.
 
-If `$de67` is invoked without a phase, ask one structured multiple-choice question listing the
+Release packaging is a maintenance route, not a fourth phase or a phase-3 completion gate.
+Load it only for de67 skill release work; a request to release a product using de67 does not select it.
+
+If `$de67` is invoked without a selected route or a clear task, ask one structured multiple-choice question listing the
 three phases, put the recommended phase first, and route after the answer. Do not infer implementation
 consent from a discussion or specification request.
 
@@ -60,8 +68,8 @@ When the user supplies the de67 repository and asks Codex to install or integrat
    `$de67`.
 4. Verify that `codex` and `python` resolve in the execution environment. Phase 3's bundled runner
    invokes the local Codex CLI; do not replace it with a machine-specific wrapper.
-5. Record the available Luna, Terra, and Sol profiles. Missing optional profiles must not stop
-   ordinary delivery. Use Sol only for mutation review; the rare universal route may use ultra when
-   that capability is available at the stored trigger.
+5. Use Astra high for the Phase-2 owner and Astra medium for the Phase-3 mutation reviewer.
+   Ordinary delivery keeps a Sol low coordinator and Luna/Terra workers. Verify the required models
+   in the target runtime; report unavailable capability rather than silently substituting a model.
 6. Run the skill validator when available, then run the bundled Python tests before reporting the
    installation complete.

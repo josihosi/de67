@@ -3,6 +3,8 @@ import json, os, shlex, shutil, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"; sys.path.insert(0, str(SCRIPTS))
+if sys.platform == "win32":
+    raise unittest.SkipTest("The macOS supervisor service requires POSIX process and locking APIs")
 import supervisor_service  # noqa: E402
 from deadline_harness import DeadlineHarness  # noqa: E402
 from policy_kernel import workspace_facts  # noqa: E402
@@ -20,6 +22,31 @@ class SupervisorServiceTests(unittest.TestCase):
         self.legacy_loaded = patch("supervisor_service._legacy_loaded", return_value=False)
         self.legacy_loaded.start()
     def tearDown(self): self.legacy_loaded.stop(); self.platform.stop(); self.temp.cleanup()
+
+    def test_cleanup_removes_stale_binding_and_preserves_owner_conversation(self):
+        with patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}):
+            socket = self.root / "codex/state/de67-input/0123456789abcdef.sock"
+            socket.parent.mkdir(parents=True)
+            socket.touch()
+            address = self.workspace / ".de67/state/coordinator-input.json"
+            address.write_text(json.dumps({"workspace": str(self.workspace),
+                                          "runner_pid": 12345, "socket": str(socket)}))
+            owner = self.workspace / ".de67/state/mutator-input.json"
+            owner.write_text('{"owner": true}')
+            with patch("codex_app_server_runner.process_snapshot", return_value={}):
+                captured = supervisor_service._capture_coordinator_runtime(self.workspace)
+                supervisor_service._cleanup_coordinator_runtime(self.workspace, captured)
+            self.assertFalse(socket.exists())
+            self.assertFalse(address.exists())
+            self.assertEqual(owner.read_text(), '{"owner": true}')
+            self.assertIsNone(supervisor_service._capture_coordinator_runtime(self.workspace))
+
+    def test_capture_rejects_socket_outside_owned_directory(self):
+        address = self.workspace / ".de67/state/coordinator-input.json"
+        address.write_text(json.dumps({"workspace": str(self.workspace),
+                                      "runner_pid": 12345,
+                                      "socket": str(self.root / "0123456789abcdef.sock")}))
+        self.assertIsNone(supervisor_service._capture_coordinator_runtime(self.workspace))
 
     @patch("supervisor_service.shutil.which")
     def test_spec_preserves_environment_without_auto_restart(self, which):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare compiled Phase-3 behavior and context size with a preserved Git baseline."""
+"""Check compiled Phase-3 behavior against the contract corpus and report its encoded size."""
 
 from __future__ import annotations
 
@@ -53,7 +53,6 @@ def compiled_trace_accepts(policy: Mapping[str, Any], events: Sequence[Mapping[s
 def compare(
     policy_path: Path,
     contracts_path: Path,
-    baseline_ref: str,
 ) -> dict[str, Any]:
     policy = kernel.load_policy(policy_path)
     contracts = json.loads(contracts_path.read_text(encoding="utf-8"))
@@ -73,23 +72,14 @@ def compare(
             "expected_main": case["main"], "expected_lab": case["lab"],
             "match": main == case["main"] and lab == case["lab"],
         })
-    baseline_paths = (
-        "de-67-3/assets/environment/orchestrator-guidelines.md",
-        "de-67-3/assets/environment/test-and-task-guidelines.md",
-    )
-    baseline_bytes = sum(len(kernel.source_from_git(baseline_ref, path)) for path in baseline_paths)
     compiled_bytes = policy_path.stat().st_size
     normalized_source = kernel.canonical_bytes(policy)
     instruction_tape = kernel.symbol_codec.encode(kernel._lower_policy(policy))
     return {
-        "baseline_ref": baseline_ref,
-        "baseline_policy_bytes": baseline_bytes,
         "compiled_policy_bytes": compiled_bytes,
         "normalized_source_bytes": len(normalized_source),
         "instruction_tape_bytes": len(instruction_tape),
         "plain_json_compiled_bytes": kernel.HEADER.size + len(zlib.compress(normalized_source, 9)),
-        "byte_reduction": baseline_bytes - compiled_bytes,
-        "ratio": round(compiled_bytes / baseline_bytes, 4),
         "decision_cases": decisions,
         "trace_cases": traces,
         "passed": all(case["match"] for case in decisions + traces),
@@ -100,10 +90,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--contracts", type=Path, required=True)
-    parser.add_argument("--baseline-ref", default="backup/pre-lab-lab-20260822")
     args = parser.parse_args(argv)
     try:
-        report = compare(args.policy, args.contracts, args.baseline_ref)
+        report = compare(args.policy, args.contracts)
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0 if report["passed"] else 1
     except (OSError, ValueError, json.JSONDecodeError, kernel.PolicyError) as error:

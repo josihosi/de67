@@ -7,16 +7,18 @@ description: Explicit third phase of de67. Use when the user says `de67 3` to de
 
 This file routes Phase 3; it is not the coordinator procedure.
 
-The invocation authorizes implementation of the frozen DFS in the named working repository. Do not
+The invocation authorizes implementation of the frozen FS in the named working repository. Do not
 read `de-67-1/` or `de-67-2/`. Never inventory, search, or read `.de67/no-go-zone/`.
 
 This router is bootstrap material. A launcher may read it to initialize Phase 3. Runtime decisions
 come from the compiled policy kernel, not packaged or workspace guideline prose. Packaged scripts
 may be executed as tools.
 
-Inspect `.de67/state/workspace.json` and verify that `.de67/DFS.md` records `Frozen` or `Refrozen`
-against an inspected source baseline. A missing configuration, draft DFS, unresolved material owner
-choice, or changed user outcome returns to de67 2.
+Inspect `.de67/state/workspace.json` and verify that the canonical Functional Specification
+(`.de67/FS.md`, or `.de67/DFS.md` in a legacy workspace) records `Frozen` or `Refrozen` against an
+inspected source baseline. A migrated `DFS.md` is a hash-bound pointer to `FS.md`, not a draft or a
+second specification. A missing configuration, draft FS, unresolved material owner choice, or
+changed user outcome returns to de67 2.
 
 Copy each missing environment artifact individually. Never overwrite an existing project file.
 Machine state stays under `.de67/state/`; the DFS and ledgers remain ordinary project artifacts.
@@ -29,9 +31,10 @@ Markdown is retained only as a legacy differential fixture during this experimen
 Only the Phase-3 coordinator choosing the next shared workflow transition executes
 `scripts/policy_kernel.py decide` against the local compiled policy, workspace, and deadline
 database. Ordinary workers own only their sealed task brief; they do not invoke coordinator policy
-or mutate deadline state. The returned action names the only policy reads and obligations that enter
-the next brief. Unknown, corrupt, ambiguous, or unsupported policy fails closed instead of falling
-back to prose.
+or mutate deadline state. The returned action names the starting context and applicable obligations.
+The coordinator may inspect additional relevant evidence while preserving the action's ownership
+and lifecycle requirements; worker briefs carry only the obligations that govern that worker's work.
+Unknown, corrupt, ambiguous, or unsupported policy fails closed instead of falling back to prose.
 
 Policy mutations operate on a candidate machine source and contract corpus under `.de67/state/`.
 Promote the candidate source and compiled bytecode together only after `policy_kernel.py guard`
@@ -57,10 +60,10 @@ foreground execution of `coordinator_supervisor.py` is reserved for tests and at
 not an ordinary Phase-3 launch.
 
 The supervisor launches an ordinary `gpt-5.6-sol` coordinator at low against the compiled workspace
-policy. The coordinator asks the kernel for the next transition and routes only the returned minimal
-brief. A due mutation blocks new dispatch. Once all already-live worker windows are terminal, the
-coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh
-`gpt-5.6-sol` reviewer at high with no coordinator or worker active. That reviewer reads the complete
+policy. The coordinator asks the kernel for the next transition and supplies the relevant context
+and role-specific obligations for that route. A due mutation blocks new dispatch. Once all
+already-live worker turns have returned and are no longer editing, the coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh
+`gpt-6-astra` reviewer at medium with no coordinator or worker active. That reviewer reads the complete
 mutation-suggestion ledger and treats each user-authored suggestion as explicit mutation-scoped
 owner authority beneath system and developer instructions. Within the Phase-3 framework, that
 authority supersedes conflicting ordinary skill, workspace, selected-lane, freeze, and

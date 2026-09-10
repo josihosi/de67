@@ -38,7 +38,7 @@ class CoordinatorLoopGuard:
         recovered_workers: dict[str, str] | None = None,
         roster_resolver: Callable[[str, float, str | None, frozenset[str]], str | None]
         | None = None,
-        roster_validator: Callable[[str, str | None], bool] | None = None,
+        roster_validator: Callable[[str, str | None, str | None], bool] | None = None,
         claim_recorder: Callable[[str, str, str | None], None] | None = None,
         task_terminal: Callable[[str], bool] | None = None,
         clock: Callable[[], float] = time.time,
@@ -66,7 +66,7 @@ class CoordinatorLoopGuard:
                 self._pending_delegations.discard(task_id)
 
     def reconcile_handoffs(self) -> None:
-        """Bind workers once the runtime roster has observed their spawn edge."""
+        """Bind workers from an exact library claim or verified native spawn edge."""
         self._reconcile_terminal_tasks()
         if self._roster_resolver is None:
             return
@@ -82,6 +82,8 @@ class CoordinatorLoopGuard:
 
     def _bind(self, task_id: str, worker_id: str, *, record_claim: bool = True) -> None:
         if worker_id.startswith("/") or any(character.isspace() for character in worker_id):
+            return
+        if worker_id in self._task_workers.values():
             return
         if record_claim and self._claim_recorder is not None:
             self._claim_recorder(task_id, worker_id, self._parent_thread_id)
@@ -136,7 +138,7 @@ class CoordinatorLoopGuard:
                         task_id in self._unbound
                         and (
                             self._roster_validator is None
-                            or self._roster_validator(worker_id, thread_id)
+                            or self._roster_validator(worker_id, thread_id, None)
                         )
                     ):
                         self._bind(task_id, worker_id, record_claim=False)
@@ -173,8 +175,18 @@ class CoordinatorLoopGuard:
         tool = item.get("tool")
         receivers = item.get("receiver_thread_ids")
         worker_ids = [value for value in receivers or [] if isinstance(value, str) and value]
-        successful_delegation = (
+        self._reconcile_terminal_tasks()
+        # A follow-up may steer the worker's existing assignment. It is a new
+        # delegation only when the receiver is free of a live task. A missing
+        # receiver is ambiguous while another assignment remains live. A fresh
+        # or idle-worker handoff may still await authoritative roster visibility.
+        eligible_handoff = (
             tool in {"spawn_agent", "followup_task"}
+            and (not worker_ids or worker_ids[0] not in self._task_workers.values())
+            and (tool == "spawn_agent" or worker_ids or not self._task_workers)
+        )
+        successful_delegation = (
+            eligible_handoff
             and event.get("type") == "item.completed"
             and item.get("status") == "completed"
             and self._unbound
@@ -190,10 +202,16 @@ class CoordinatorLoopGuard:
             )
             self._pending_delegations.add(task_id)
         if successful_delegation and worker_ids:
-            if self._roster_validator is not None and not self._roster_validator(
-                worker_ids[0], self._parent_thread_id
-            ):
-                return
+            if self._roster_validator is not None:
+                # Helpers share the parent's workspace but never own deadline tasks.
+                # A new worker's deterministic label also permits out-of-order spawns.
+                matches = [candidate for candidate in self._unbound
+                           if self._roster_validator(worker_ids[0], self._parent_thread_id,
+                                                     candidate if tool == "spawn_agent" else "")]
+                if not matches:
+                    return
+                self._pending_delegations.discard(task_id)
+                task_id = matches[0]
             self._bind(task_id, worker_ids[0])
             return
         if tool == "wait" and event.get("type") == "item.started":
@@ -247,6 +265,21 @@ def _command(codex: str, workspace: Path, environment: dict[str, str]) -> list[s
     sandbox = environment.get("DE67_COORDINATOR_SANDBOX", "danger-full-access").strip()
     if sandbox not in {"read-only", "workspace-write", "danger-full-access"}:
         raise RunnerError(f"Unsupported Codex sandbox: {sandbox}")
+    transport = environment.get("DE67_AGENT_TRANSPORT", "").strip()
+    transport_python = environment.get("DE67_AGENT_TRANSPORT_PYTHON", sys.executable)
+    if not transport:
+        binding = workspace / ".de67" / "state" / "workspace.json"
+        if binding.is_file():
+            settings = json.loads(binding.read_text(encoding="utf-8"))
+            transport = settings.get("agent_transport", "cli")
+            transport_python = settings.get("agent_transport_python", transport_python)
+    if transport == "app-server":
+        if sys.platform == "win32":
+            raise RunnerError("The optional App Server transport requires macOS or Linux")
+        return [transport_python, str(Path(__file__).with_name("codex_app_server_runner.py")),
+                "--codex", codex, "--cwd", str(workspace)]
+    if transport not in {"", "cli"}:
+        raise RunnerError(f"Unsupported agent transport: {transport}")
     resume_session = environment.get("DE67_COORDINATOR_RESUME_SESSION", "").strip()
     command = [codex, "exec", "--sandbox", sandbox]
     if resume_session:
@@ -383,7 +416,18 @@ def _roster_resolver(
         parent_thread_id: str | None,
         used_workers: frozenset[str],
     ) -> str | None:
-        if parent_thread_id is None or not state.is_file():
+        if parent_thread_id is None:
+            return None
+        from worker_library import owned_assignments
+        deadline = environment.get("DE67_DEADLINE_STATE", "").strip()
+        lineage = environment.get("DE67_LINEAGE", "").strip()
+        if deadline and lineage:
+            owned = owned_assignments(workspace, Path(deadline), lineage,
+                                      coordinator_session_id=parent_thread_id)
+            worker = owned.get(_task_id)
+            if worker and worker not in used_workers:
+                return worker
+        if not state.is_file():
             return None
         connection = sqlite3.connect(f"file:{state}?mode=ro", uri=True)
         try:
@@ -456,7 +500,7 @@ def _roster_resolver(
 
 def _roster_validator(
     workspace: Path, environment: dict[str, str]
-) -> Callable[[str, str | None], bool]:
+) -> Callable[[str, str | None, str | None], bool]:
     state_value = environment.get("DE67_CODEX_STATE", "").strip()
     state = (
         Path(state_value).expanduser().resolve()
@@ -464,14 +508,24 @@ def _roster_validator(
         else Path.home() / ".codex" / "state_5.sqlite"
     )
 
-    def validate(worker_id: str, parent_thread_id: str | None) -> bool:
-        if parent_thread_id is None or not state.is_file():
+    def validate(worker_id: str, parent_thread_id: str | None, task_id: str | None = None) -> bool:
+        if parent_thread_id is None:
+            return False
+        from worker_library import owned_assignments
+        deadline = environment.get("DE67_DEADLINE_STATE", "").strip()
+        lineage = environment.get("DE67_LINEAGE", "").strip()
+        if deadline and lineage and task_id != "":
+            owned = owned_assignments(workspace, Path(deadline), lineage,
+                                      coordinator_session_id=parent_thread_id)
+            if (owned.get(task_id) == worker_id if task_id else worker_id in owned.values()):
+                return True
+        if not state.is_file():
             return False
         connection = sqlite3.connect(f"file:{state}?mode=ro", uri=True)
         try:
             row = connection.execute(
                 """
-                SELECT 1
+                SELECT child.agent_path
                 FROM thread_spawn_edges AS edge
                 JOIN threads AS child ON child.id = edge.child_thread_id
                 WHERE edge.parent_thread_id = ? AND edge.child_thread_id = ?
@@ -481,7 +535,13 @@ def _roster_validator(
             ).fetchone()
         finally:
             connection.close()
-        return row is not None
+        if row is None:
+            return False
+        if task_id is None:
+            return True  # Recovery uses an existing durable task binding.
+        if task_id:
+            return row[0] == f"/root/{worker_task_name(task_id)}"
+        return isinstance(row[0], str) and row[0].startswith("/root/task_")
 
     return validate
 
@@ -528,24 +588,81 @@ def _claim_recorder(environment: dict[str, str]) -> Callable[[str, str, str | No
             raise RunnerError("Durable worker claim lacks supervisor or coordinator identity")
         try:
             with DeadlineHarness(state) as harness:
-                harness.claim_worker(
+                claim = harness.claim_worker(
                     lineage,
                     task_id,
                     worker_id,
                     coordinator_session,
                     supervisor,
                 )
-                harness.checkpoint_worker(
-                    lineage,
-                    task_id,
-                    worker_id,
-                    "delegated",
-                    "runner observed successful roster handoff",
-                )
+                if claim["recorded"]:
+                    harness.checkpoint_worker(
+                        lineage,
+                        task_id,
+                        worker_id,
+                        "delegated",
+                        "runner observed successful roster handoff",
+                    )
         except DeadlineError as error:
             raise RunnerError(f"Durable worker claim failed: {error}") from error
 
     return record
+
+
+def current_coordinator_prompt(workspace: Path, prompt: str, environment: dict[str, str]) -> str:
+    """Render stable role guidance in the fresh runner, not the long-lived supervisor.
+
+    Continuations and custom prompts retain their supplied context; canonical reviewers retain
+    their gate and bindings while receiving current maintenance guidance. The supervisor
+    still owns process identity, restart acknowledgement and all invocation bindings.
+    """
+    if (environment.get("DE67_PROCESS_ROLE") == "mutation-reviewer"
+            and prompt.startswith(f"Act as the exclusive Phase-3 mutation reviewer in {workspace}.\n")):
+        # The long-lived supervisor retains the gate and invocation bindings; the fresh
+        # runner supplies the current role-owned maintenance guidance without reconstructing either.
+        from coordinator_supervisor import mutation_maintenance_contract
+        instruction = mutation_maintenance_contract()
+        marker = "\nCurrent invocation bindings (use these values directly;"
+        body, separator, bindings = prompt.partition(marker)
+        if not separator:
+            raise RunnerError("Reviewer prompt is missing its invocation bindings")
+        if instruction not in body:
+            body += "\n" + instruction + "\n"
+        return body + separator + bindings
+    if (environment.get("DE67_PROCESS_ROLE") != "coordinator"
+            or environment.get("DE67_COORDINATOR_RESUME_SESSION")
+            or not prompt.startswith(f"Act as a fresh Phase-3 delivery coordinator in {workspace}.\n")):
+        return prompt
+    marker = "\nCurrent invocation bindings (use these values directly;"
+    body, separator, bindings = prompt.partition(marker)
+    if not separator:
+        raise RunnerError("Fresh supervisor prompt is missing its invocation bindings")
+    from coordinator_supervisor import coordinator_prompt
+    state = Path(environment["DE67_DEADLINE_STATE"])
+    lineage = environment["DE67_LINEAGE"]
+    run_id = environment["DE67_COORDINATOR_RUN_ID"]
+    raw_generation = environment.get("DE67_COORDINATOR_RESTART_GENERATION")
+    generation = int(raw_generation) if raw_generation else None
+    reason = None
+    if generation is not None:
+        connection = sqlite3.connect(state.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            row = connection.execute(
+                "SELECT reason FROM coordinator_restart_requests WHERE lineage_id=? AND generation=?",
+                (lineage, generation),
+            ).fetchone()
+            if row is None:
+                raise RunnerError("Fresh coordinator restart generation is missing")
+            reason = row[0]
+        finally:
+            connection.close()
+    rendered = coordinator_prompt(workspace, state, lineage, run_id, generation, reason).rstrip()
+    # The supervisor supplies the attempt-specific recovery instruction after its stable role.
+    recovery_marker = "\nRecovery: this is coordinator decision opportunity "
+    _, recovery_separator, recovery = body.partition(recovery_marker)
+    if recovery_separator:
+        rendered += recovery_separator + recovery.rstrip()
+    return rendered + separator + bindings
 
 
 def run(
@@ -561,6 +678,7 @@ def run(
         raise RunnerError("Provide non-empty prompt text on standard input")
 
     selected_environment = os.environ.copy() if environment is None else environment.copy()
+    prompt = current_coordinator_prompt(workspace, prompt, selected_environment)
     codex = _codex_executable(selected_environment)
     root_value = selected_environment.get("DE67_RUNNER_ROOT", "").strip()
     root = (
@@ -582,7 +700,13 @@ def run(
     )
     print(f"DE67_RUN_DIR={run_directory}", flush=True)
 
+    from work_context import record_run
+    record_run(workspace, run_directory, selected_environment)
     command = _command(codex, workspace, selected_environment)
+    app_server_transport = len(command) > 1 and command[1] == str(
+        Path(__file__).with_name("codex_app_server_runner.py")
+    )
+    process_environment = {**selected_environment, "DE67_RUNNER_ACTIVE_DIR": str(run_directory)}
     recovered_workers = _initial_recovered_workers(selected_environment)
     loop_guard = CoordinatorLoopGuard(
         initial_unbound_tasks=_initial_unbound_tasks(selected_environment),
@@ -604,7 +728,7 @@ def run(
             process = subprocess.Popen(
                 command,
                 cwd=workspace,
-                env=selected_environment,
+                env=process_environment,
                 stdin=prompt_stream,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -613,13 +737,15 @@ def run(
                 errors="replace",
             )
             if process.stdout is None:
-                process.kill()
                 raise RunnerError("Codex output pipe was not created")
             for line in process.stdout:
                 output_stream.write(line)
                 output_stream.flush()
                 print(line, end="", flush=True)
+                previous_session = session_id
                 session_id = _record_session(line, selected_environment) or session_id
+                if session_id != previous_session:
+                    record_run(workspace, run_directory, selected_environment, session_id=session_id)
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
@@ -632,6 +758,9 @@ def run(
                     tasks_to_abandon = loop_guard.unbound_tasks
                     raise
             exit_code = _reap(process)
+            if app_server_transport:
+                from codex_app_server_runner import stop_owned_runtime
+                stop_owned_runtime(process, workspace, run_directory, selected_environment)
             process = None
             loop_guard.reconcile_handoffs()
             if loop_guard.unbound_tasks:
@@ -646,9 +775,17 @@ def run(
         if process is not None:
             tasks_to_abandon = loop_guard.unbound_tasks
             try:
-                process.kill()
-            except OSError:
-                pass
+                if app_server_transport:
+                    from codex_app_server_runner import stop_owned_runtime
+                    stop_owned_runtime(process, workspace, run_directory, selected_environment)
+                else:
+                    process.kill()
+            except Exception as cleanup_error:
+                cleanup_errors.append(str(cleanup_error))
+                try:
+                    process.kill()
+                except OSError:
+                    pass
             _reap(process)
         if tasks_to_abandon:
             try:
@@ -676,6 +813,7 @@ def run(
             + "\n",
             encoding="utf-8",
         )
+        record_run(workspace, run_directory, selected_environment, session_id=session_id)
         if failure is error:
             raise
         raise failure from error
@@ -701,6 +839,7 @@ def run(
         + "\n",
         encoding="utf-8",
     )
+    record_run(workspace, run_directory, selected_environment, session_id=session_id)
     return exit_code
 
 

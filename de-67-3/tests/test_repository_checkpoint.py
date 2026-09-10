@@ -179,20 +179,17 @@ class RepositoryCheckpointTest(unittest.TestCase):
             ).fetchone()
         self.assertEqual((status, failure), ("failed", "push-or-verify"))
 
-    def test_live_worker_or_reviewer_prevents_checkpoint(self) -> None:
+    def test_unfinished_worker_and_active_coordinator_allow_snapshot(self) -> None:
         with sqlite3.connect(self.state) as connection:
             connection.execute(
                 "INSERT INTO worker_claims VALUES ('lineage', 'task-1', 'worker-1', 1, NULL)"
             )
-        with self.assertRaisesRegex(RepositoryCheckpointError, "worker task"):
-            checkpoint_repository(self.workspace, self.state, "lineage")
+        self.assertEqual(checkpoint_repository(self.workspace, self.state, "lineage")["status"], "no_changes")
         with sqlite3.connect(self.state) as connection:
-            connection.execute("UPDATE worker_claims SET released_at = 2")
             connection.execute(
-                "INSERT INTO supervisor_attempts VALUES ('lineage', 'mutation-reviewer', 'review-1', 'current-owner', 1, NULL)"
+                "INSERT INTO supervisor_attempts VALUES ('lineage', 'coordinator', 'run-1', 'current-owner', 1, NULL)"
             )
-        with self.assertRaisesRegex(RepositoryCheckpointError, "mutation-reviewer"):
-            checkpoint_repository(self.workspace, self.state, "lineage")
+        self.assertEqual(checkpoint_repository(self.workspace, self.state, "lineage")["status"], "no_changes")
 
     def test_current_supervisor_ignores_unfinished_rows_from_a_prior_owner(self) -> None:
         with sqlite3.connect(self.state) as connection:

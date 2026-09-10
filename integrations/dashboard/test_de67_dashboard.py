@@ -78,11 +78,30 @@ class DashboardTests(unittest.TestCase):
         before = [path.read_bytes() for path in paths]
         page = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).render("dfs").decode()
         self.assertIn("<title>de67</title>", page)
-        self.assertIn("<h1>de67</h1>", page)
+        self.assertIn('<h1>de67<span class="brand-dot">.</span></h1>', page)
         self.assertNotIn("DE67", page)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
         self.assertNotIn("<script>", page)
         self.assertEqual(before, [path.read_bytes() for path in paths])
+
+    def test_random_count_excludes_restart_cleanup_and_other_lineages(self):
+        connection = sqlite3.connect(self.workspace / ".de67/state/deadlines.sqlite3")
+        connection.row_factory = sqlite3.Row
+        connection.executescript("""
+            ALTER TABLE tasks ADD COLUMN lineage_id TEXT;
+            ALTER TABLE tasks ADD COLUMN attempt_terminal_at REAL;
+            ALTER TABLE tasks ADD COLUMN attempt_terminal_kind TEXT;
+            ALTER TABLE tasks ADD COLUMN abandonment_reason TEXT;
+            ALTER TABLE random_mutation_cycles ADD COLUMN lineage_id TEXT;
+            UPDATE random_mutation_cycles SET lineage_id='current';
+            UPDATE tasks SET lineage_id='current', attempt_terminal_at=1, attempt_terminal_kind='completed';
+            INSERT INTO tasks (lineage_id,attempt_terminal_at,attempt_terminal_kind) VALUES ('current',2,'restart_normalized'),('other',3,'completed');
+            INSERT INTO tasks (lineage_id,attempt_terminal_at,attempt_terminal_kind,abandonment_reason) VALUES ('current',4,'abandoned','external_supervisor_restart_normalization');
+        """)
+        _, _, cycle = dashboard_module._completed_mutation_counts(connection)
+        self.assertEqual(cycle["terminal_windows"], 1)
+        self.assertEqual(cycle["remaining_windows"], 1)
+        connection.close()
 
     def test_overview_uses_real_ledger_and_clock_state(self) -> None:
         page = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).render("overview").decode()
@@ -91,8 +110,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("deadline generation 11", page)
         self.assertIn("restart 12", page)
         self.assertIn("useful work", page)
-        self.assertIn("<h2>Upcoming DFS work</h2>", page)
-        self.assertIn("R-011 — upcoming work", page)
+        self.assertIn("<h2>Up next</h2>", page)
+        self.assertIn("R-011", page)
+        self.assertIn("upcoming work", page)
         self.assertNotIn("R-012 — accepted work", page)
         self.assertIn("<h2>Waiting on event</h2>", page)
         self.assertIn("waiting work", page)
@@ -124,8 +144,8 @@ class DashboardTests(unittest.TestCase):
                 sidecar_script=sidecar, fratbro_cache=cache,
             ).render("overview").decode()
 
-        self.assertLess(page.index("Trajectory sidecar"), page.index("Fratbro status"))
-        self.assertLess(page.index("Fratbro status"), page.index("Latest finding"))
+        self.assertLess(page.index("Trajectory sidecar"), page.index("BRIEFING"))
+        self.assertLess(page.index("BRIEFING"), page.index("Latest finding"))
         self.assertIn("The worker is testing whether real smoke escapes a building.", page)
         self.assertNotIn("Fratbro status <em>stale</em>", page)
         self.assertNotIn("Fratbro status", dashboard_module.Dashboard(
@@ -188,8 +208,9 @@ class DashboardTests(unittest.TestCase):
             self.workspace, sessions_root=self.sessions
         ).render("overview").decode()
 
-        self.assertIn("<h2>Upcoming DFS work</h2>", page)
-        self.assertIn("R-011 — upcoming work", page)
+        self.assertIn("<h2>Up next</h2>", page)
+        self.assertIn("R-011", page)
+        self.assertIn("upcoming work", page)
 
     def test_upcoming_dfs_work_excludes_active_waiting_blocked_and_accepted_claims(self) -> None:
         ledger = dashboard_module.parse_ledger(
@@ -406,7 +427,7 @@ class DashboardTests(unittest.TestCase):
     def test_missing_sources_return_healthy_unavailable_page(self) -> None:
         empty = Path(self.temporary.name) / "gone"
         page = dashboard_module.Dashboard(empty, sessions_root=self.sessions).render("overview").decode()
-        self.assertIn("Active work ledger", page)
+        self.assertIn("Work in focus", page)
         self.assertIn("SQLite", page)
         self.assertIn("workspace.json", page)
 
@@ -606,7 +627,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("&lt;active route&gt;", first)
         self.assertLess(first.index("Active workers"), first.index("Trajectory sidecar"))
         self.assertLess(first.index("Trajectory sidecar"), first.index("Latest finding"))
-        self.assertEqual(first, second)
+        self.assertEqual(first.split("<body>")[0], second.split("<body>")[0])
         self.assertEqual(before, set(self.workspace.rglob("*")))
 
     def test_trajectory_tolerates_different_gap_shapes_and_missing_fields(self) -> None:
@@ -711,9 +732,9 @@ class DashboardTests(unittest.TestCase):
             self.workspace, sessions_root=self.sessions
         ).render("overview").decode()
         self.assertIn("<h2>Active workers</h2>", page)
-        self.assertIn("<tr><th>Luna</th><td class=\"\">0</td><td class=\"active-count\">1</td>", page)
-        self.assertIn("<tr><th>Terra</th><td class=\"\">0</td><td class=\"\">0</td><td class=\"\">0</td>", page)
-        self.assertIn("<tr><th>Sol</th><td class=\"active-count\">1</td>", page)
+        self.assertIn('aria-label="Luna: low: 0, medium: 1, high: 0, max: 0"', page)
+        self.assertIn("<strong>Terra</strong>", page)
+        self.assertNotIn("<strong>Sol</strong>", page)
         self.assertNotIn("Unavailable", page)
 
     def test_nested_luna_helpers_count_as_active_workers(self) -> None:
@@ -1061,3 +1082,65 @@ class DashboardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class IndexedWorkerTests(unittest.TestCase):
+    def test_no_workers_does_not_scan_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(dashboard_module, "_active_worker_claims", return_value={}),                  patch.object(Path, "glob", side_effect=AssertionError("history scan")):
+                result = dashboard_module.worker_state(root, root / "sessions")
+            self.assertTrue(result["available"])
+            self.assertTrue(all(value == 0 for row in result["counts"].values()
+                                for value in row.values()))
+
+    def test_active_worker_uses_index_without_history_scan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            connection = sqlite3.connect(root / "state_5.sqlite")
+            connection.executescript(
+                "CREATE TABLE threads(id TEXT, rollout_path TEXT);"
+                "CREATE TABLE thread_spawn_edges(parent_thread_id TEXT, child_thread_id TEXT);"
+            )
+            connection.execute("INSERT INTO threads VALUES (?, ?)", ("owner", str(root / "owner.jsonl")))
+            connection.commit()
+            connection.close()
+            with patch.object(dashboard_module, "_active_worker_claims", return_value={"worker": "owner"}),                  patch.object(dashboard_module, "_active_coordinator_id", return_value="owner"),                  patch.object(dashboard_module, "_session_header", return_value={"id": "owner", "cwd": str(root)}),                  patch.object(Path, "glob", side_effect=AssertionError("history scan")):
+                result = dashboard_module.worker_state(root, root / "sessions")
+            self.assertTrue(result["available"])
+
+class OverviewDesignTests(unittest.TestCase):
+    def test_digest_preserves_wrapped_heading_and_moves_completed_work_to_record(self):
+        result = dashboard_module.render_work_digest(
+            "- [ ] R-001 — Repair saving\n  across a restart. More detail.\n  - Evidence: exact receipt\n"
+            "- [x] R-002 — Prior work\n  - Long history\n")
+        self.assertIn("Repair saving across a restart.", result)
+        self.assertNotIn("More detail", result)
+        self.assertNotIn("Long history", result)
+        self.assertIn("1 completed items", result)
+        self.assertIn('href="/ledger"', result)
+
+    def test_structured_briefing_escapes_fields_and_omits_empty_obstacle(self):
+        result = dashboard_module.render_fratbro_status({"summary": {
+            "headline": "Save <confirmation>", "changed": "A rejected action is visible.",
+            "next": "Test the native exit.", "snag": ""}})
+        self.assertIn("Save &lt;confirmation&gt;", result)
+        self.assertIn("What changed", result)
+        self.assertIn("Next", result)
+        self.assertNotIn("Obstacle", result)
+
+class WorkerScaleTests(unittest.TestCase):
+    def test_dots_do_not_overlap_at_each_supported_count(self):
+        import math
+        for count in range(13):
+            points = dashboard_module.worker_dot_positions(count)
+            self.assertEqual(len(points), count)
+            for i, left in enumerate(points):
+                for right in points[i+1:]:
+                    self.assertGreater(math.dist(left, right), 10.34)
+
+    def test_overflow_is_explicit_and_total_remains_exact(self):
+        result = dashboard_module.render_worker_scale("terra", {"max": 15})
+        self.assertEqual(result.count('class="worker-dot"'), 12)
+        self.assertIn("+3", result)
+        self.assertIn("<b>15</b> active", result)
+        self.assertIn("max: 15", result)

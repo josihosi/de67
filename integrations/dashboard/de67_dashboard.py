@@ -518,7 +518,7 @@ def _read_specification_snapshot(path: Path) -> tuple[str, dict[str, Any]]:
     import importlib.util
     resolver = Path(os.environ.get(
         "DE67_SPECIFICATION_SCRIPT",
-        str(Path(__file__).resolve().parents[2] / "de-67-3/scripts/specification.py"),
+        str(Path.home() / ".codex/skills/de67/de-67-3/scripts/specification.py"),
     ))
     spec = importlib.util.spec_from_file_location("_de67_dashboard_specification", resolver)
     if spec is None or spec.loader is None:
@@ -528,8 +528,7 @@ def _read_specification_snapshot(path: Path) -> tuple[str, dict[str, Any]]:
     spec.loader.exec_module(module)
     selected = module.resolve(path.parent)
     text, identity = _read_snapshot(selected.path)
-    # The resolver uses universal newlines; the snapshot preserves decoded file bytes.
-    if text.replace("\r\n", "\n").replace("\r", "\n") != selected.text:
+    if text != selected.text:
         raise OSError("specification changed while it was being read")
     identity["path"] = str(selected.path)
     return text, identity

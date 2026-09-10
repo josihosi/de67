@@ -368,7 +368,7 @@ def _worker_read_plan(
             "source": entrypoint,
             "reason": "named by the current boundary as an implementation or evidence entrypoint",
         })
-    if playtest and (workspace / ".agents/skills/caol-harness/SKILL.md").is_file():
+    if playtest:
         plan.append({
             "source": ".agents/skills/caol-harness/SKILL.md",
             "reason": "owns the current registry and cockpit authority/evidence route",

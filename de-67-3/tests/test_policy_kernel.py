@@ -1,5 +1,4 @@
 from __future__ import annotations
-from contextlib import closing
 
 import copy
 import importlib.util
@@ -90,7 +89,7 @@ class PolicyKernelTests(unittest.TestCase):
                 ledger = de67 / "work-ledger.md"
                 ledger.write_text(f"- [ ] R-029 — Hostile ecology\n  - Assignment {assignment}: Native proof\n")
                 state = workspace / "clock.sqlite3"
-                with closing(sqlite3.connect(state)) as connection, connection:
+                with sqlite3.connect(state) as connection:
                     connection.execute("CREATE TABLE tasks (lineage_id TEXT, task_id TEXT, started_at REAL, attempt_terminal_at REAL, attempt_terminal_kind TEXT)")
                     connection.execute("INSERT INTO tasks VALUES (?, 'R-029-old', 10, ?, ?)", (task_lineage, terminal_at, kind))
                 facts = kernel.workspace_facts(workspace, state, "project", now=30)

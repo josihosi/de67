@@ -1,5 +1,4 @@
 from pathlib import Path
-from contextlib import closing
 import json
 import sqlite3
 import sys
@@ -32,7 +31,7 @@ class RandomCadenceTests(unittest.TestCase):
                 h.connection.commit()
                 before=[tuple(r) for r in h.connection.execute('SELECT * FROM tasks ORDER BY task_id')]
             # Exercise the actual old version constraint, not only an old row in a new schema.
-            with closing(sqlite3.connect(p)) as c, c:
+            with sqlite3.connect(p) as c:
                 sql=c.execute("SELECT sql FROM sqlite_master WHERE name='random_mutation_cycles'").fetchone()[0]
                 sql=sql.replace('CREATE TABLE random_mutation_cycles', 'CREATE TABLE old_shape')
                 sql=sql.replace('cadence_version IN (1, 2, 3)', 'cadence_version IN (1, 2)').replace('DEFAULT 3', 'DEFAULT 2')

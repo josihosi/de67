@@ -157,7 +157,6 @@ class AppServerTransportTests(unittest.TestCase):
             self.assertTrue(servers[-1].stopped)
             self.assertFalse(list((workspace / 'codex/state/de67-input').glob('*.sock')))
 
-    @unittest.skipIf(os.name == "nt", "Mutator session ownership requires Unix flock")
     def test_reviews_and_owner_input_resume_original_owner_without_gate_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -233,7 +232,6 @@ class AppServerTransportTests(unittest.TestCase):
             self.assertIn({'type': 'text', 'text': 'User Message: retain me'}, turn['input'])
             self.assertEqual(json.loads(receipt.read_text())['state'], 'submitted')
 
-    @unittest.skipIf(os.name == "nt", "Mutator session ownership requires Unix flock")
     def test_lock_prevents_a_second_mutation_owner(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -256,7 +254,6 @@ class AppServerTransportTests(unittest.TestCase):
                 contender.close()
                 owner.close()
 
-    @unittest.skipIf(os.name == "nt", "Mutator session ownership requires Unix flock")
     def test_review_startup_failure_keeps_shared_conversation_recoverable(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

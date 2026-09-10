@@ -10,32 +10,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from instruction_context import FALLBACK_GUIDANCE
 from deadline_harness import DeadlineHarness
 from coordinator_supervisor import coordinator_prompt, mutation_reviewer_prompt, MutationGate
-from policy_kernel import unbound_worker_spawns, _worker_read_plan
+from policy_kernel import unbound_worker_spawns
 from context_library import prepare
 
 
 class EffectiveRoleContextTests(unittest.TestCase):
-    def test_project_playtest_skill_is_referenced_only_when_installed(self):
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            path = '.agents/skills/caol-harness/SKILL.md'
-            def sources():
-                return [item['source'] for item in _worker_read_plan(
-                    workspace, workspace / 'clock.sqlite3', 'project', 'R-1', (), playtest=True)]
-            self.assertNotIn(path, sources())
-            skill = workspace / path
-            skill.parent.mkdir(parents=True)
-            skill.write_text('Project playtest guidance.')
-            self.assertIn(path, sources())
-
     def test_baseline_present_absent_and_prepared_or_default_worker(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             de67 = workspace / '.de67'
             (de67 / 'state').mkdir(parents=True)
-            (de67 / 'work-ledger.md').write_text(
-                '- [ ] R-CAMP — Prove a native camp.\n'
-                '  - DFS slices: `R-CAMP-S001`\n')
+            (de67 / 'work-ledger.md').write_text('- [ ] R-CAMP — Prove a native camp.\n')
             (de67 / 'DFS.md').write_text(
                 '<!-- DE67:DFS-SLICE:BEGIN id=R-CAMP-S001 claim=R-CAMP -->\n'
                 '- [ ] 🔴 R-CAMP — Prove a native camp.\n'

@@ -1,4 +1,3 @@
-import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -16,26 +15,6 @@ SPEC.loader.exec_module(dashboard_module)
 
 
 class DashboardTests(unittest.TestCase):
-    def test_migrated_fs_uses_bundled_resolver_and_preserves_workspace(self):
-        specification = self.workspace / '.de67/FS.md'
-        specification.write_text('# Functional specification\n\nThe migrated outcome.\n', encoding='utf-8')
-        pointer = self.workspace / '.de67/DFS.md'
-        pointer.write_text('<!-- DE67:FS-COMPAT canonical=FS.md sha256='
-                           + hashlib.sha256(specification.read_bytes()).hexdigest() + ' -->\n',
-                           encoding='utf-8')
-        before = {p: p.read_bytes() for p in self.workspace.rglob('*') if p.is_file()}
-        dashboard = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions)
-        with patch.object(dashboard_module.Path, 'home', return_value=self.workspace / 'no-installed-skill'):
-            page = dashboard.render('dfs').decode()
-        self.assertIsNone(dashboard.snapshot()['dfs']['error'])
-        self.assertIn('The migrated outcome.', page)
-        self.assertEqual(before, {p: p.read_bytes() for p in before})
-        specification.write_text('Unbound changed content', encoding='utf-8')
-        stale = dashboard.render('dfs').decode()
-        self.assertIn('The migrated outcome.', stale)
-        self.assertNotIn('Unbound changed content', stale)
-        self.assertIn('does not match FS.md', dashboard.snapshot()['dfs']['error'])
-
     def test_native_persistent_mutator_activity_replaces_legacy_source(self) -> None:
         state = self.workspace / '.de67/state'
         state.mkdir(parents=True, exist_ok=True)

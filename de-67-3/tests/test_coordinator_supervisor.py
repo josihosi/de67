@@ -843,7 +843,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertNotEqual(before, claimed)
         self.assertNotEqual(claimed, checkpointed)
 
-    def test_product_checkpoint_runs_only_after_supervisor_journal_is_quiescent(self) -> None:
+    def test_product_checkpoint_is_not_a_supervisor_continuation_gate(self) -> None:
         self.write_work_documents(red=True, active=True)
         observed_live_attempts: list[int] = []
 
@@ -878,7 +878,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 0)
-        self.assertEqual(observed_live_attempts, [0, 0])
+        self.assertEqual(observed_live_attempts, [])
 
     def test_supervisor_does_not_resume_after_child_leaves_orphan_clock(self) -> None:
         self.write_work_documents(red=True, active=True)
@@ -903,6 +903,41 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(row["attempt_terminal_kind"], "abandoned")
         self.assertIn("worker_owner_lost", row["abandonment_reason"])
+
+    def test_owner_wait_return_is_not_reported_as_failed_progress(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "prior proof")
+        # The producer's typed-gap projection is covered by policy-kernel tests;
+        # replay its actual owner-wait-only output at the supervisor boundary.
+        facts = frozenset({"owner_wait", "ledger_work", "red_dfs_work"})
+        with patch("coordinator_supervisor.workspace_facts", return_value=facts):
+            result = run_supervisor(
+                self.state_path, "project", self.workspace,
+                self.runner_command(), self.run_root,
+                extra_env=self.environment("unacknowledged"),
+                run_id_factory=lambda _generation: "owner-wait-return",
+            )
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.read_events()), 1)
+        self.assertEqual(self.statuses()["owner-wait-return"], "WAITING_FOR_OWNER")
+        self.assertFalse((self.run_root / "owner-wait-return" / "supervisor_error.txt").exists())
+
+    def test_owner_wait_does_not_hide_independent_executable_work(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "prior proof")
+        facts = frozenset({"owner_wait", "ledger_work", "red_dfs_work", "executable_route"})
+        with patch("coordinator_supervisor.workspace_facts", return_value=facts):
+            result = run_supervisor(
+                self.state_path, "project", self.workspace,
+                self.runner_command(), self.run_root,
+                extra_env=self.environment("unacknowledged"),
+                run_id_factory=lambda _generation: "mixed-owner-wait",
+            )
+        self.assertEqual(result, 1)
+        error = (self.run_root / "mixed-owner-wait" / "supervisor_error.txt").read_text()
+        self.assertIn("made no durable progress", error)
 
     def test_unchanged_success_with_executable_work_is_not_resumed(self) -> None:
         self.write_work_documents(red=True, active=True)
@@ -1251,12 +1286,12 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("checkpoint-worker", ingress)
         self.assertIn("keep the same task live.", ingress)
         self.assertNotIn("would repeat an unchanged request", ingress)
-        self.assertIn("why the attempt was inconclusive", ingress)
+        self.assertIn("Preserve the task, missed deadline and returned evidence", ingress)
         self.assertNotIn("next turn supplies new", ingress)
         self.assertIn("marked current owner-contract section", ingress)
         self.assertIn("Verify receipt and use", ingress)
-        self.assertIn("project its remaining frontier to a fresh task", ingress)
-        self.assertIn("Context exhaustion is not a formal finding", ingress)
+        self.assertIn("resume it with message", ingress)
+        self.assertIn("Context exhaustion alone does not require abandonment", ingress)
         self.assertNotIn("followup_task to the same bound worker", ingress)
         self.assertNotIn("Read .de67/orchestrator-guidelines.md", prompt)
         self.assertNotIn("test-and-task-guidelines.md", prompt)
@@ -1272,10 +1307,10 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("authorized repository repair, rerun", ingress)
         self.assertLess(
             ingress.index("keep the same task live."),
-            ingress.index("execution context is exhausted"),
+            ingress.index("Context exhaustion alone"),
         )
-        self.assertIn("abandon only that attempt", ingress)
-        self.assertIn("unfinished ledger outcome visible", ingress)
+        self.assertIn("does not require abandonment or replacement", ingress)
+        self.assertIn("recoverable unfinished task", ingress)
         self.assertNotIn("Do not record finding, release the worker", ingress)
 
     def test_pending_owner_suggestion_becomes_gate_only_after_workers_are_quiet(self) -> None:
@@ -1306,7 +1341,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         # Outcome/lifecycle guidance has one producing owner instead of duplicate packet prose.
         ingress = worker_result_ingress_contract()
         self.assertIn("only disproves the current strategy", ingress)
-        self.assertIn("abandon only that attempt", ingress)
+        self.assertIn("does not require abandonment or replacement", ingress)
 
     def test_fresh_restart_prompt_includes_exact_owner_reason(self) -> None:
         prompt = coordinator_prompt(

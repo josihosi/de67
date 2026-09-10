@@ -328,14 +328,16 @@ def message(workspace: Path, name: str, text: str, *,
         worker, assignment = _worker(db, name), _latest(db, name)
         if (worker["retired_at"] is not None or assignment is None or _idle(assignment)
                 or assignment["status"] not in {"running", "returned", "failed", "interrupted"}
-                or json.loads(assignment["binding"])["thread_id"] != binding["thread_id"]):
+                or (json.loads(assignment["binding"])["thread_id"] != binding["thread_id"]
+                    and assignment["status"] != "returned")):
             raise WorkerLibraryError("Message requires this coordinator's known running or returned assignment")
         previous_binding = json.loads(assignment["binding"])
         if not _same_binding(previous_binding, binding) and _old_server_present(previous_binding):
             raise WorkerLibraryError("Previous worker App Server is still present; reconcile its owner before resuming")
+        if (assignment["state_path"] != binding["deadline_state"] or assignment["lineage"] != binding["lineage"]):
+            raise WorkerLibraryError("Assignment differs from the current workspace/lineage")
         task = _task(Path(assignment["state_path"]), assignment["lineage"], assignment["task_id"])
         if (task["released_at"] is not None or task["worker_id"] != worker["thread_id"]
-                or task["coordinator_session_id"] != binding["thread_id"]
                 or task["supervisor_id"] != (assignment["claim_supervisor_id"] or str(previous_binding["supervisor_id"]))):
             raise WorkerLibraryError("Worker no longer owns the task")
         if not _same_binding(previous_binding, binding):
@@ -380,10 +382,35 @@ def owned_assignments(workspace: Path, state: Path, lineage: str,
             task = _task(state, lineage, row["task_id"])
             if (task["attempt_terminal_at"] is None and task["released_at"] is None
                     and task["worker_id"] == row["worker_id"]
-                    and task["coordinator_session_id"] == binding["thread_id"]
                     and task["supervisor_id"] == (row["claim_supervisor_id"] or str(binding["supervisor_id"]))):
                 result[row["task_id"]] = row["worker_id"]
     return result
+
+
+def returned_assignments(workspace: Path, state: Path, lineage: str) -> set[str]:
+    """Open owned tasks with a durably observed completed worker turn."""
+    owned = owned_assignments(workspace, state, lineage)
+    db = _connect(workspace)
+    if db is None:
+        return set()
+    with closing(db):
+        return {row["task_id"] for row in db.execute(
+            "SELECT task_id,worker_id FROM assignments WHERE state_path=? AND lineage=? AND status='returned'",
+            (str(Path(state).resolve()), lineage))
+            if owned.get(row["task_id"]) == row["worker_id"]}
+
+
+def execution_sessions(workspace: Path, state: Path, lineage: str) -> dict[str, str]:
+    """Current named-task controller; durable claim ownership remains historical."""
+    owned = owned_assignments(workspace, state, lineage)
+    db = _connect(workspace)
+    if db is None:
+        return {}
+    with closing(db):
+        return {row["task_id"]: json.loads(row["binding"])["thread_id"]
+                for row in db.execute("SELECT task_id,worker_id,binding FROM assignments WHERE state_path=? AND lineage=?",
+                    (str(Path(state).resolve()), lineage))
+                if owned.get(row["task_id"]) == row["worker_id"]}
 
 
 def worker_owners(workspace: Path, state: Path, lineage: str) -> dict[str, str]:
@@ -678,7 +705,7 @@ class WorkerDispatcher:
                 with DeadlineHarness(assignment["state_path"]) as harness:
                     supervisor_id = assignment["claim_supervisor_id"] or str(self.binding["supervisor_id"])
                     claimed = harness.claim_worker(assignment["lineage"], assignment["task_id"], thread["id"],
-                                                   self.binding["thread_id"], supervisor_id)
+                                                   task["coordinator_session_id"] or self.binding["thread_id"], supervisor_id)
                     if claimed["recorded"]:
                         harness.checkpoint_worker(assignment["lineage"], assignment["task_id"], thread["id"],
                                                   "delegated", "Named worker " + worker["name"] + "; request " + request["id"])
@@ -809,8 +836,24 @@ class WorkerDispatcher:
                 self._request_update(assignment["request_id"], "rejected", reason + " before dispatch")
 
 
+def interaction_guidance(command: str) -> str | None:
+    """Deliver handling context at dispatch/help, without repeating it on waits."""
+    if command in {"wait", "status", "list", "retire"}:
+        return None
+    return (
+        "message NAME --message TEXT steers current work or resumes a returned partial turn. "
+        "State the changed fact, desired outcome/constraint and useful evidence; let the worker adapt. "
+        "describe --job changes an idle reusable job; assign uses the exact packet path and digest for the next task. "
+        "For wait, emit the complete exec_command result, including session_id and exit_code. "
+        "If it yields a session_id, continue that session with write_stdin; an outer functions cell "
+        "instead continues with functions.wait. Inspect completion before starting another wait. "
+        "Use the compact return and its result_path for the pending decision; inspect raw events "
+        "only to answer an unresolved question. Waiting is appropriate when no useful decision remains."
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, epilog=interaction_guidance("help"))
     parser.add_argument("--workspace", type=Path, required=True)
     commands = parser.add_subparsers(dest="command", required=True)
     add = commands.add_parser("create")
@@ -856,10 +899,13 @@ def main(argv: list[str] | None = None) -> int:
             queued = (assign(args.workspace, args.name, args.task, args.packet, args.sha256, args.state, args.lineage)
                       if args.command == "assign" else message(args.workspace, args.name, args.message))
             result = wait_request(args.workspace, queued["request_id"], args.timeout)
+        guidance = interaction_guidance(args.command)
+        if guidance:
+            result["usage_context"] = guidance
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 2 if result.get("state") in {"rejected", "uncertain"} else 0
     except (WorkerLibraryError, OSError, ValueError, sqlite3.Error) as error:
-        print(json.dumps({"state": "rejected", "error": str(error)}))
+        print(json.dumps({"state": "rejected", "error": str(error), "usage_context": interaction_guidance(args.command)}))
         return 2
 
 

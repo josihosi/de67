@@ -1,6 +1,6 @@
 ---
 name: de67
-description: Route Codex work through de67 discussion, code-grounded specification, delivery, or an optional alignment audit. Use when the user says `de67 1`, `de67 2`, `de67 3`, or `de67 alignment audit`, invokes `$de67`, or asks Codex to install or integrate de67. Do not use for an ordinary worker assignment merely because its packet path or metadata mentions `.de67`. Route to exactly one surface and never preload unrelated instructions.
+description: Route Codex work through de67 discussion, code-grounded specification, delivery, release packaging, or an optional alignment audit. Use when the user says `de67 1`, `de67 2`, `de67 3`, `de67 release`, or `de67 alignment audit`, invokes `$de67`, or asks Codex to install or integrate de67. Do not use for an ordinary worker assignment merely because its packet path or metadata mentions `.de67`. Route to exactly one surface and never preload unrelated instructions.
 ---
 
 # de67 router
@@ -12,6 +12,8 @@ Match the user's command and read exactly one entrypoint:
 - `de67 1`: read `de-67-1/SKILL.md` for the current-chat discussion and WEC.
 - `de67 2`: read `de-67-2/SKILL.md` for code inspection and DFS authoring.
 - `de67 3`: read `de-67-3/SKILL.md` for implementation, deadlines, and mutation.
+- `de67 release` or an explicit request to package/release the de67 skill: read
+  `release-packaging/SKILL.md` for release preparation and release-facing documentation.
 - `de67 alignment audit`: read `alignment-audit/SKILL.md` for a manual, read-only review of
   agent-facing instructions, machine responses, and active workflow tests.
 
@@ -45,7 +47,10 @@ handoffs, join the delivery loop, mutate the method, or become a completion gate
 when the user asks to audit agentic workflow alignment, contradictory instructions, or rules and
 tests that may be boxing agents in.
 
-If `$de67` is invoked without a phase, ask one structured multiple-choice question listing the
+Release packaging is a maintenance route, not a fourth phase or a phase-3 completion gate.
+Load it only for de67 skill release work; a request to release a product using de67 does not select it.
+
+If `$de67` is invoked without a selected route or a clear task, ask one structured multiple-choice question listing the
 three phases, put the recommended phase first, and route after the answer. Do not infer implementation
 consent from a discussion or specification request.
 

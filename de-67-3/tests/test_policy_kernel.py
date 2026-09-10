@@ -71,6 +71,33 @@ CASES = (
 
 
 class PolicyKernelTests(unittest.TestCase):
+    def test_terminal_assignments_do_not_advertise_executable_work(self) -> None:
+        cases = (
+            ("completed", 20, "project", "R-029-old", False),
+            ("finding", 20, "project", "R-029-old", False),
+            ("restart_normalized", 20, "project", "R-029-old", False),
+            (None, None, "project", "R-029-old", True),
+            ("completed", 20, "project", "R-029-new", True),
+            ("completed", 20, "other-lineage", "R-029-old", True),
+        )
+        for kind, terminal_at, task_lineage, assignment, executable in cases:
+            with self.subTest(case=(kind, terminal_at, task_lineage, assignment)), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                de67 = workspace / ".de67"
+                de67.mkdir()
+                (de67 / "DFS.md").write_text("- [ ] 🔴 R-029 — Hostile ecology\n")
+                ledger = de67 / "work-ledger.md"
+                ledger.write_text(f"- [ ] R-029 — Hostile ecology\n  - Assignment {assignment}: Native proof\n")
+                state = workspace / "clock.sqlite3"
+                with sqlite3.connect(state) as connection:
+                    connection.execute("CREATE TABLE tasks (lineage_id TEXT, task_id TEXT, started_at REAL, attempt_terminal_at REAL, attempt_terminal_kind TEXT)")
+                    connection.execute("INSERT INTO tasks VALUES (?, 'R-029-old', 10, ?, ?)", (task_lineage, terminal_at, kind))
+                facts = kernel.workspace_facts(workspace, state, "project", now=30)
+                self.assertEqual("executable_route" in facts, executable)
+                # A separate explicit continuation remains independently executable.
+                ledger.write_text(ledger.read_text() + "  - Next executable route: A newly authorized boundary\n")
+                self.assertIn("executable_route", kernel.workspace_facts(workspace, state, "project", now=30))
+
     def test_deadline_routing_ignores_only_exact_legacy_mirrors(self) -> None:
         cases = (
             ("reviewed mirror", "task-current", 10, 20, False),

@@ -23,14 +23,15 @@ The internal fresh-coordinator transition after a mutation review is not an expl
 It runs inside the existing supervisor epoch and must not invoke external-start normalization or
 erase ledger state.
 
-After the supervisor closes a coordinator or mutation-reviewer journal row, and before it opens the
-next model interval, it runs the configured product-repository checkpoint transaction. The
-transaction refuses live worker or reviewer ownership, stages tracked changes plus non-ignored new
-files, creates no empty commit, pushes only the single target in `workspace.json`, and verifies that
-remote ref. Its stable SQLite checkpoint identity is also written as a Git trailer. An unfinished
-allocation is resumed from the trailer on `HEAD`, so a crash after commit cannot duplicate the
-checkpoint. Commit, hook, push, or verification failure leaves the tree recoverable and stops the
-next model interval; a checkpoint is durability only, never DFS acceptance or proof.
+The coordinator chooses when to run `scripts/repository_checkpoint.py`. A checkpoint records a
+Git snapshot, not task completion or acceptance; unfinished task rows do not prohibit it. The
+command preserves its commit/push recovery identity and reports Git failures for repair. The
+supervisor does not require a checkpoint at startup, review exit or coordinator continuation.
+
+A due internal review distinguishes a returned worker turn from its unfinished task. Returned
+named assignments retain their claims and evidence while clocks retire for review. The fresh
+coordinator may resume the same worker with `message`; an active or uncertain turn still prevents
+exclusive review. Explicit external starts retain the normalization behavior described above.
 
 Use `supervisor_service.py status` and `stop` for observation and shutdown. A stopped service never
 implies that DFS or ledger work is complete.

@@ -343,15 +343,49 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
                          (original_worker, "sol-a", "supervisor-a"))
         self.assertEqual(library.owned_assignments(self.workspace, self.state, "project", "sol-a"), {"task-a": original_worker})
 
-    def test_new_sol_cannot_adopt_an_unsettled_assignment(self):
+    def test_new_sol_resumes_returned_open_assignment_after_review(self):
+        from coordinator_supervisor import mutation_gate, active_worker_coordinator_session
         self.worker()
         self.assign()
         self.dispatcher.process_pending()
-        self.returned()
+        (self.workspace / ".de67/mutation-suggestions.md").write_text(
+            "## Pending suggestions\n\n- Owner-authorized [trigger]: Review now.\n")
+        self.assertIsNone(mutation_gate(self.state, "project", self.workspace))
+        with self.assertRaisesRegex(Exception, "worker attempt is running"):
+            self.harness.retire_claim_clocks_for_mutation("project", "review")
+        self.returned(text="Partial evidence; native proof remains")
+        self.assertIsNone(active_worker_coordinator_session(self.state, "project"))
+        before = dict(library._task(self.state, "project", "task-a"))
+        self.assertIsNone(before["attempt_terminal_at"])
+        self.assertIsNotNone(mutation_gate(self.state, "project", self.workspace))
+        self.harness.retire_claim_clocks_for_mutation("project", "review")
+        Path(self.binding["socket"]).unlink()
+        self.binding = self.bind("sol-b", "run-b", "supervisor-b")
+        self.dispatcher = library.WorkerDispatcher(self.workspace, self.rpc, self.binding)
+        queued = library.message(self.workspace, "pilot", "Resume the remaining native proof", environment=self.env)
+        self.dispatcher.process_pending()
+        self.assertEqual(library.request_status(self.workspace, queued["request_id"])["state"], "submitted")
+        self.assertEqual(active_worker_coordinator_session(self.state, "project"), "sol-b")
+        after = library._task(self.state, "project", "task-a")
+        for key in ("worker_id", "coordinator_session_id", "supervisor_id", "attempt_terminal_at"):
+            self.assertEqual(after[key], before[key])
+        self.assertEqual(self.rpc.turn_count, 2)
+        self.assertEqual(self.harness.connection.execute("SELECT COUNT(*) FROM worker_claims").fetchone()[0], 1)
+        self.settle()
+
+    def test_new_sol_cannot_adopt_running_assignment(self):
+        self.worker()
+        self.assign()
+        self.dispatcher.process_pending()
         Path(self.binding["socket"]).unlink()
         self.bind("sol-b", "run-b", "supervisor-b")
         with self.assertRaisesRegex(library.WorkerLibraryError, "this coordinator"):
-            library.message(self.workspace, "pilot", "Steal the task", environment=self.env)
+            library.message(self.workspace, "pilot", "Continue", environment=self.env)
+
+    def test_point_of_use_context_covers_sessions_without_repeating_on_wait(self):
+        self.assertIn("session_id", library.interaction_guidance("assign"))
+        self.assertIn("write_stdin", library.interaction_guidance("message"))
+        self.assertIsNone(library.interaction_guidance("wait"))
 
     def test_uncertain_turn_start_is_not_replayed_or_reassigned(self):
         self.worker()

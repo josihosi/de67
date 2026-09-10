@@ -33,9 +33,9 @@ from worker_receipt import (
 )
 
 
-RANDOM_INTERVAL_MIN = 10
-RANDOM_INTERVAL_MAX = 20
-TEMPORARY_CADENCE_VERSION = 2
+RANDOM_INTERVAL_MIN = 20
+RANDOM_INTERVAL_MAX = 50
+CADENCE_VERSION = 3
 UNIVERSAL_RANDOM_INTERVAL = 30
 RANDOM_MUTATION_LANES = (
     "test-and-task-guidelines.md",
@@ -340,8 +340,8 @@ class DeadlineHarness:
                 interval_windows INTEGER NOT NULL CHECK (
                     interval_windows BETWEEN 10 AND 50
                 ),
-                cadence_version INTEGER NOT NULL DEFAULT 2 CHECK (
-                    cadence_version IN (1, 2)
+                cadence_version INTEGER NOT NULL DEFAULT 3 CHECK (
+                    cadence_version IN (1, 2, 3)
                 ),
                 due_after_terminal_windows INTEGER NOT NULL CHECK (
                     due_after_terminal_windows >= interval_windows
@@ -913,8 +913,13 @@ class DeadlineHarness:
                 lineage_id, claim_id, generation, component, resolved_at,
                 evidence, receipt_id
             )
-            SELECT lineage_id, claim_id, 1, component, resolved_at, evidence, receipt_id
-            FROM deadline_generation_mutation_components
+            SELECT legacy.lineage_id, legacy.claim_id, 1, legacy.component,
+                   legacy.resolved_at, legacy.evidence, legacy.receipt_id
+            FROM deadline_mutation_components AS legacy
+            JOIN claim_deadline_generation_incidents AS incident
+              ON incident.lineage_id = legacy.lineage_id
+             AND incident.claim_id = legacy.claim_id
+             AND incident.generation = 1
             """
         )
         integrity_component_columns = {
@@ -1011,7 +1016,6 @@ class DeadlineHarness:
                 "ADD COLUMN cadence_version INTEGER NOT NULL DEFAULT 1"
             )
         self._migrate_random_interval_constraint()
-        self._migrate_temporary_cadence()
         receipt_columns = {
             row["name"]
             for row in self.connection.execute(
@@ -1191,6 +1195,7 @@ class DeadlineHarness:
         )
         self._migrate_task_terminal_kind_triggers()
         self._migrate_v2_closure_gaps()
+        self._migrate_random_cadence()
         revision_columns = {
             row[1] for row in self.connection.execute("PRAGMA table_info(closure_gap_revisions)")
         }
@@ -1240,7 +1245,8 @@ class DeadlineHarness:
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'random_mutation_cycles'"
         ).fetchone()
         schema = str(row["sql"] if row is not None else "").lower()
-        if "interval_windows between 10 and 30" not in " ".join(schema.split()):
+        if ("interval_windows between 10 and 50" in " ".join(schema.split())
+                and re.search(r"cadence_version\s+in\s*\(\s*1\s*,\s*2\s*,\s*3\s*\)", schema)):
             return
         self.connection.commit()
         self.connection.execute("PRAGMA foreign_keys = OFF")
@@ -1255,7 +1261,7 @@ class DeadlineHarness:
                         interval_windows BETWEEN 10 AND 50
                     ),
                     cadence_version INTEGER NOT NULL DEFAULT 1 CHECK (
-                        cadence_version IN (1, 2)
+                        cadence_version IN (1, 2, 3)
                     ),
                     due_after_terminal_windows INTEGER NOT NULL CHECK (
                         due_after_terminal_windows >= interval_windows
@@ -1298,7 +1304,7 @@ class DeadlineHarness:
             )
             self.connection.execute(
                 f"INSERT INTO random_mutation_cycles_wider ({columns}) "
-                f"SELECT lineage_id, cycle_number, interval_windows, 1, "
+                f"SELECT lineage_id, cycle_number, interval_windows, cadence_version, "
                 f"due_after_terminal_windows, selected_lane, due_task_id, "
                 f"resolution_evidence, ordinary_resolution_evidence, universal_required, "
                 f"universal_resolution_evidence, universal_receipt_id, "
@@ -1320,42 +1326,28 @@ class DeadlineHarness:
         if violations:
             raise DeadlineError("Random cadence migration broke persisted foreign keys")
 
-    def _migrate_temporary_cadence(self) -> None:
-        """Shorten unresolved reviews without replaying counted task attempts.
-
-        Resolved cycles remain historical evidence, including the old 30/DFS
-        universal-review records. An unresolved cycle keeps its original
-        cumulative start and deterministically adopts the new upper boundary,
-        so an already-passed shortened boundary becomes due immediately.
-        """
-
-        self.connection.execute(
-            """
-            UPDATE random_mutation_cycles AS current
-            SET interval_windows = ?,
-                due_after_terminal_windows = COALESCE(
-                    (
-                        SELECT MAX(previous.due_after_terminal_windows)
-                        FROM random_mutation_cycles AS previous
-                        WHERE previous.lineage_id = current.lineage_id
-                          AND previous.cycle_number < current.cycle_number
-                    ),
-                    0
-                ) + ?,
-                due_task_id = NULL,
-                universal_required = 0,
-                cadence_version = ?
-            WHERE resolution_evidence IS NULL
-              AND cadence_version < ?
-              AND universal_capability_status IS NULL
-            """,
-            (
-                RANDOM_INTERVAL_MAX,
-                RANDOM_INTERVAL_MAX,
-                TEMPORARY_CADENCE_VERSION,
-                TEMPORARY_CADENCE_VERSION,
-            ),
-        )
+    def _migrate_random_cadence(self) -> None:
+        """Adopt current bounds without resetting progress or postponing due reviews."""
+        rows = self.connection.execute(
+            "SELECT * FROM random_mutation_cycles "
+            "WHERE resolution_evidence IS NULL AND cadence_version < ?",
+            (CADENCE_VERSION,),
+        ).fetchall()
+        for row in rows:
+            if (row["due_task_id"] is not None or
+                    self._terminal_window_count(row["lineage_id"]) >=
+                    row["due_after_terminal_windows"]):
+                continue
+            interval = min(RANDOM_INTERVAL_MAX,
+                           max(RANDOM_INTERVAL_MIN, row["interval_windows"]))
+            cycle_start = row["due_after_terminal_windows"] - row["interval_windows"]
+            self.connection.execute(
+                "UPDATE random_mutation_cycles SET interval_windows = ?, "
+                "due_after_terminal_windows = ?, cadence_version = ? "
+                "WHERE lineage_id = ? AND cycle_number = ?",
+                (interval, cycle_start + interval, CADENCE_VERSION,
+                 row["lineage_id"], row["cycle_number"]),
+            )
 
     def _migrate_v1_state(self) -> None:
         """Project v1 task clocks into v2 claim state without rewriting v1 rows."""
@@ -1901,14 +1893,18 @@ class DeadlineHarness:
                 """
                 SELECT task_id FROM tasks
                 WHERE lineage_id = ? AND attempt_terminal_at IS NULL
-                ORDER BY started_at, task_id LIMIT 1
+                ORDER BY started_at, task_id
                 """,
                 (lineage_id,),
-            ).fetchone()
-            if running is not None:
+            ).fetchall()
+            from worker_library import returned_assignments
+            workspace = _workspace_for_state(self.state_path)
+            returned = returned_assignments(workspace, self.state_path, lineage_id) if workspace else set()
+            running = [row for row in running if row["task_id"] not in returned]
+            if running:
                 raise DeadlineError(
                     "Mutation cannot retire clocks while a worker attempt is running: "
-                    + str(running["task_id"])
+                    + str(running[0]["task_id"])
                 )
             cursor = self.connection.execute(
                 """
@@ -3099,7 +3095,7 @@ class DeadlineHarness:
                 lineage_id,
                 number,
                 interval,
-                TEMPORARY_CADENCE_VERSION,
+                CADENCE_VERSION,
                 cycle_start + interval,
                 lane,
                 0,

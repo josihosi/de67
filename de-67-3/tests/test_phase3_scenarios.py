@@ -210,7 +210,7 @@ class Phase3ScenarioTests(unittest.TestCase):
         with patch(
             "deadline_harness.secrets.randbelow", side_effect=[3, 1, 7, 0]
         ), DeadlineHarness(self.state) as harness:
-            for number in range(1, 14):
+            for number in range(1, 24):
                 task_id = f"window-{number:02d}"
                 harness.start_task(
                     "project", task_id, f"R-{number:03d}", 100, now=0
@@ -221,8 +221,8 @@ class Phase3ScenarioTests(unittest.TestCase):
 
             mutation = terminal["random_mutation"]
             self.assertTrue(mutation["due"])
-            self.assertEqual(mutation["completed_terminal_windows"], 13)
-            self.assertEqual(mutation["interval_windows"], 13)
+            self.assertEqual(mutation["completed_terminal_windows"], 23)
+            self.assertEqual(mutation["interval_windows"], 23)
             self.assertEqual(
                 mutation["selected_lane"], "DFS.md"
             )

@@ -29,7 +29,7 @@ from blocker_adapter import (
 from instruction_context import common_guidance
 from agent_mailbox import communication_contract
 from deadline_harness import DeadlineError, DeadlineHarness
-from policy_kernel import current_owner_contract, worker_selection_contract
+from policy_kernel import current_owner_contract, worker_selection_contract, workspace_facts
 from specification import SpecificationError, resolve
 from repository_checkpoint import (
     RepositoryCheckpointError,
@@ -420,24 +420,21 @@ def active_worker_coordinator_session(
     lineage_id: str,
 ) -> str | None:
     """Return the one coordinator session that owns all active worker claims."""
+    from worker_library import execution_sessions, returned_assignments
+    workspace = state_path.parent.parent.parent
+    returned = returned_assignments(workspace, state_path, lineage_id)
+    controllers = execution_sessions(workspace, state_path, lineage_id)
     with DeadlineHarness(state_path) as harness:
-        sessions = tuple(
-            str(row["coordinator_session_id"])
+        sessions = sorted({
+            controllers.get(row["task_id"], str(row["coordinator_session_id"]))
             for row in harness.connection.execute(
-                """
-                SELECT DISTINCT claim.coordinator_session_id
-                FROM worker_claims AS claim
-                JOIN tasks AS task
-                  ON task.lineage_id = claim.lineage_id
-                 AND task.task_id = claim.task_id
-                WHERE claim.lineage_id = ?
-                  AND claim.released_at IS NULL
-                  AND task.attempt_terminal_at IS NULL
-                ORDER BY claim.coordinator_session_id
-                """,
-                (lineage_id,),
-            ).fetchall()
-        )
+                """SELECT claim.task_id, claim.coordinator_session_id
+                FROM worker_claims AS claim JOIN tasks AS task
+                  ON task.lineage_id = claim.lineage_id AND task.task_id = claim.task_id
+                WHERE claim.lineage_id = ? AND claim.released_at IS NULL
+                  AND task.attempt_terminal_at IS NULL""", (lineage_id,))
+            if row["task_id"] not in returned
+        })
     if len(sessions) > 1:
         raise SupervisorError(
             "Active worker claims belong to multiple coordinator sessions"
@@ -574,7 +571,10 @@ def mutation_gate(
     """Return the first durable mutation gate only after workers are quiet."""
     with DeadlineHarness(state_path) as harness:
         summary = harness.list_tasks()
-    if any(task.get("state") == "running" for task in summary["tasks"]):
+    from worker_library import returned_assignments
+    returned = returned_assignments(workspace, state_path, lineage_id) if workspace else set()
+    if any(task.get("state") == "running" and task.get("task_id") not in returned
+           for task in summary["tasks"]):
         return None
     if workspace is not None:
         immediate = [
@@ -744,7 +744,7 @@ def work_is_complete(
 
 
 def ledger_has_active_work(workspace: Path) -> bool:
-    """Treat every strict active-ledger item as immediately admissible work."""
+    """Detect unchecked ledger items; executability also depends on route facts."""
     ledger = workspace / ".de67" / "work-ledger.md"
     return ledger.is_file() and ACTIVE_LEDGER_ITEM.search(
         ledger.read_text(encoding="utf-8")
@@ -941,10 +941,10 @@ def worker_result_ingress_contract() -> str:
         "Ending an assignment and interrupting execution are separate decisions: completion, cancellation, "
         "a concrete need to stop ongoing actions, or demonstrated inability can justify stopping; "
         "communication and partial results alone do not. "
-        "If its execution context is exhausted, preserve accepted proof plus why the attempt was "
-        "inconclusive, abandon only that attempt, keep the unfinished "
-        "ledger outcome visible, and project its remaining frontier to a fresh task after any required "
-        "incident review. Context exhaustion is not a formal finding or an assigned-outcome exit. "
+        "A returned turn may leave a recoverable unfinished task; resume it with message, including "
+        "after a due review under the fresh coordinator. Review may proceed once all worker turns "
+        "are returned and no longer editing. Preserve the task, missed deadline and returned evidence. "
+        "Context exhaustion alone does not require abandonment or replacement. "
         "When accepting returned work, reconcile all worker/helper game attempts, including failed "
         "startups and replacements, against their PID/birth identity and broker. Arrange graceful "
         "closure through the responsible owner or an explicit retained-session handoff; a finished "
@@ -1049,6 +1049,8 @@ def named_worker_contract(workspace: Path) -> str:
         "it when responsibility changes. An idle worker can change model/effort for the next job while "
         "retaining its conversation. Reuse remains a judgment about useful context and competence, "
         "not an exact task-name match, compulsory reuse, worker quota or periodic summary ritual. "
+        "Git checkpoints are optional snapshots chosen by the coordinator, not task completion or acceptance. "
+        "A failed checkpoint remains visible for repair and does not stop delivery or a due review. "
         "The library runs through the App Server transport and returns compact result references in "
         "the existing coordinator mailbox. Use its message/wait for named workers; native collaboration "
         "tools address native children. After a mutation a fresh Sol reads the current FS, ledger, owner "
@@ -1307,17 +1309,6 @@ def _complete_mutation_review(
             raise SupervisorError(
                 f"Mutation reviewer failed for {gate.kind} {gate.identity}; ordinary work remains stopped"
             )
-        try:
-            checkpoint_repository(
-                workspace,
-                state_path,
-                lineage_id,
-                supervisor_owner_id=(journal.owner_id if journal is not None else None),
-            )
-        except RepositoryCheckpointError as error:
-            raise SupervisorError(
-                f"Product recovery checkpoint failed after mutation review: {error}"
-            ) from error
         remaining = mutation_gate(state_path, lineage_id, workspace)
         if remaining is not None:
             gate = remaining
@@ -1656,17 +1647,6 @@ def _run_supervisor_locked(
         f"supervisor-{os.getpid()}-{uuid.uuid4().hex}",
         os.environ.get("DE67_SUPERVISOR_START_TOKEN"),
     )
-    try:
-        checkpoint_repository(
-            workdir,
-            state,
-            lineage_id,
-            supervisor_owner_id=journal.owner_id,
-        )
-    except RepositoryCheckpointError as error:
-        raise SupervisorError(
-            f"Product recovery checkpoint failed at supervisor startup: {error}"
-        ) from error
     reviewed_gates: set[tuple[str, str]] = set()
     consumed_events: set[str] = set()
     gate = mutation_gate(state, lineage_id, workdir)
@@ -1687,7 +1667,7 @@ def _run_supervisor_locked(
     # A restarted supervisor resumes the durable owner of any still-live
     # workers. It never launches a fresh coordinator that would have to adopt
     # another session's children or dispatch duplicates.
-    resume_session_id = active_worker_coordinator_session(state, lineage_id)
+    resume_session_id = None if restart.required else active_worker_coordinator_session(state, lineage_id)
     attempted_generations: set[int] = set()
     failed_decision_opportunities = 0
     while True:
@@ -1745,17 +1725,6 @@ def _run_supervisor_locked(
             ),
             None if result.exit_code == 0 else f"exit code {result.exit_code}",
         )
-        try:
-            checkpoint_repository(
-                workdir,
-                state,
-                lineage_id,
-                supervisor_owner_id=journal.owner_id,
-            )
-        except RepositoryCheckpointError as error:
-            raise SupervisorError(
-                f"Product recovery checkpoint failed after coordinator boundary: {error}"
-            ) from error
 
         # This is the only clock read after this child exits. There is no polling loop.
         after = read_clock(state, lineage_id)
@@ -1840,7 +1809,17 @@ def _run_supervisor_locked(
             )
         if work_is_complete(workdir, state, lineage_id):
             return 0
-        has_executable_work = ledger_has_active_work(workdir) or dfs_has_open_work(workdir)
+        frontier_facts = workspace_facts(workdir, state, lineage_id, now=time.time())
+        actionable = bool(frontier_facts & {
+            "executable_route", "live_task", "unbound_task",
+            "worker_completed", "worker_finding", "worker_abandoned",
+        })
+        waiting_on_owner = "owner_wait" in frontier_facts and not actionable
+        has_executable_work = (
+            ledger_has_active_work(workdir) or dfs_has_open_work(workdir)
+        ) and not waiting_on_owner
+        if waiting_on_owner and not after.required and result.exit_code == 0:
+            _write(result.run_dir / "status.txt", "WAITING_FOR_OWNER\n")
         if not after.required and has_executable_work:
             session_path = result.run_dir / "session_id.txt"
             session_id = (
@@ -1961,7 +1940,7 @@ def _run_supervisor_locked(
         failed_decision_opportunities = 0
         restart = after
         generation = after.generation
-        resume_session_id = active_worker_coordinator_session(state, lineage_id)
+        resume_session_id = None if restart.required else active_worker_coordinator_session(state, lineage_id)
 
 
 def run_supervisor(

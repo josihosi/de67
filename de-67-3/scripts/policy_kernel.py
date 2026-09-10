@@ -1002,6 +1002,7 @@ def workspace_facts(
 ) -> frozenset[str]:
     facts: set[str] = set()
     current_claim: str | None = None
+    terminal_task_ids: set[str] = set()
     owner_wait_claims: set[str] = set()
     owner_wait_gaps: set[tuple[str, int, str]] = set()
     connection = sqlite3.connect(f"file:{state.resolve()}?mode=ro", uri=True)
@@ -1038,6 +1039,8 @@ def workspace_facts(
                     (lineage_id,),
                 ).fetchone()
                 epoch_generation = int(epoch[0]) if epoch is not None else None
+            terminal_task_ids = {str(row["task_id"]) for row in rows
+                                 if row["attempt_terminal_at"] is not None}
             nonterminal = [row for row in rows if row["attempt_terminal_at"] is None]
             worker_claims_exist = _table_exists(connection, "worker_claims")
             claimed_ids: set[str] = set()
@@ -1064,7 +1067,9 @@ def workspace_facts(
                 row for row in nonterminal
                 if not worker_claims_exist or str(row["task_id"]) in claimed_ids
             ]
-            if live:
+            from worker_library import returned_assignments
+            returned = returned_assignments(workspace, state, lineage_id)
+            if any(str(row["task_id"]) not in returned for row in live):
                 facts.add("live_task")
             if any(str(row["task_id"]) not in ever_claimed_ids for row in nonterminal):
                 facts.add("unbound_task")
@@ -1281,6 +1286,9 @@ def workspace_facts(
                 if any(re.search(r"(?<![A-Za-z0-9_-])" + re.escape(identity) + r"(?![A-Za-z0-9_-])", line)
                        for identity in owner_wait_claims | {gap for _, _, gap in owner_wait_gaps}):
                     continue
+            assignment = re.match(r"(?i)^\s*- Assignment ([^:]+):\s*\S", line)
+            if assignment and assignment.group(1).strip() in terminal_task_ids:
+                continue
             if re.search(r"(?i)^\s*- (?:Next executable route|Active work|Assignment [^:]+):\s*\S", line):
                 facts.add("executable_route")
     suggestions = workspace / ".de67" / "mutation-suggestions.md"

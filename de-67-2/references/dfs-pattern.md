@@ -103,7 +103,11 @@ credit, or a competing owner advancing the transition.
 ## Freeze and refreeze
 
 Record `Draft` while resolving code evidence and user-owned choices; record `Frozen` only after the
-DFS is internally consistent and bound to an inspected source baseline.
+DFS is internally consistent and bound to an inspected source baseline. On refreeze, preserve each
+durably accepted claim's terminal `Implementation status:` block and its `DE67:DELIVERY-STATUS`
+receipt markers inside the stable DFS slice. Keep current requirements outside that replaceable
+projection. Historical acceptance retains its original scope; new proof obligations remain red.
+The workspace-setup compatibility check exercises the real projection against copied durable state.
 
 After its named proof passes, automation may close an existing red item by changing it to `[x]` and
 removing `🔴`. It may also make an evidence-implied nonmaterial clarification to an

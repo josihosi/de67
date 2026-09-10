@@ -15,28 +15,35 @@ import tempfile
 import time
 from typing import NamedTuple
 
+SCRIPT_ROOT = str(Path(__file__).resolve().parent)
+if SCRIPT_ROOT not in sys.path:
+    sys.path.insert(0, SCRIPT_ROOT)
+from specification import SpecificationError, resolve_path
+
 
 TASK_GUIDELINES = "test-and-task-guidelines.md"
-ORCHESTRATOR_GUIDELINES = "orchestrator-guidelines.md"
-GUIDELINE_FILES = (TASK_GUIDELINES, ORCHESTRATOR_GUIDELINES)
+GUIDELINE_FILES = (TASK_GUIDELINES,)
 DFS_FILE = "DFS.md"
 MUTATION_LEDGER = "mutation-suggestions.md"
 RANDOM_MUTATION_LANES = (*GUIDELINE_FILES, DFS_FILE)
+# Previously stored lane labels are metadata, not files to load.
+LEGACY_RANDOM_MUTATION_LANES = ("orchestrator-guidelines.md",)
 INCIDENT_KINDS = ("deadline_miss", "integrity_breach")
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_GUIDELINES_ROOT = SKILL_ROOT / "assets" / "environment"
 
 ATX_HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]+\S.*$")
 FENCE = re.compile(r"^[ \t]*(?P<marker>`{3,}|~{3,})")
-CLAIM_REFERENCE = r"R-[A-Za-z0-9._-]+[ \t]+—[ \t]+\S.*?"
-CLAIM_ID = re.compile(r"^R-[A-Za-z0-9._-]+$")
+CLAIM_ID_PATTERN = r"(?:R-|DE67-MAINT-)[A-Za-z0-9._-]+"
+CLAIM_REFERENCE = rf"{CLAIM_ID_PATTERN}[ \t]+—[ \t]+\S.*?"
+CLAIM_ID = re.compile(rf"^{CLAIM_ID_PATTERN}$")
 ACTIVE_ITEM = re.compile(rf"^- \[ \] (?P<reference>{CLAIM_REFERENCE})[ \t]*$")
-DFS_SLICE_ID_PATTERN = r"R-[A-Za-z0-9._-]+-S[0-9]{3,}"
+DFS_SLICE_ID_PATTERN = rf"{CLAIM_ID_PATTERN}-S[0-9]{{3,}}"
 DFS_SLICE_ID = re.compile(rf"^{DFS_SLICE_ID_PATTERN}$")
 DFS_SLICE_MARKER = re.compile(
     rf"^<!-- DE67:DFS-SLICE:(?P<kind>BEGIN|END) "
     rf"id=(?P<id>{DFS_SLICE_ID_PATTERN}) "
-    rf"claim=(?P<claim>R-[A-Za-z0-9._-]+) -->$"
+    rf"claim=(?P<claim>{CLAIM_ID_PATTERN}) -->$"
 )
 DFS_SLICE_MARKER_TOKEN = "DE67:DFS-SLICE:"
 DFS_SLICE_LEDGER_TOKEN = "DFS slices:"
@@ -58,12 +65,10 @@ PROTECTED_DFS_SECTIONS = (
 )
 METHOD_REQUIRED_FILES = (
     "SKILL.md",
-    "references/kernel.md",
     "scripts/deadline_harness.py",
     "scripts/mutation_guard.py",
 )
 NORMAL_METHOD_PROTECTED_FILES = (
-    "references/kernel.md",
     "scripts/deadline_harness.py",
     "scripts/mutation_guard.py",
     "tests/test_deadline_harness.py",
@@ -820,16 +825,28 @@ def validate_random_review_mutation(
 ) -> tuple[str, ...]:
     """Validate trajectory-driven local changes; the stored lane is a review seed."""
 
-    if selected_lane not in RANDOM_MUTATION_LANES:
+    if selected_lane not in (*RANDOM_MUTATION_LANES, *LEGACY_RANDOM_MUTATION_LANES):
         raise GuardError(f"Unsupported random mutation lane: {selected_lane}")
     baseline_files = {
         name: read_markdown(baseline_root / name)
-        for name in (*GUIDELINE_FILES, DFS_FILE)
+        for name in GUIDELINE_FILES
     }
     candidate_files = {
         name: read_markdown(candidate_root / name)
-        for name in (*GUIDELINE_FILES, DFS_FILE)
+        for name in GUIDELINE_FILES
     }
+    # ``DFS.md`` remains the durable lane/receipt label, but after migration it
+    # is a hash-bound compatibility handle rather than the contract itself.
+    # Resolve both roots before comparing them so a stale redirect cannot make
+    # a changed FS invisible, and so a valid redirect is checked against the
+    # canonical content instead of being parsed as a specification.
+    try:
+        baseline_specification = resolve_path(baseline_root / DFS_FILE)
+        candidate_specification = resolve_path(candidate_root / DFS_FILE)
+    except SpecificationError as error:
+        raise GuardError(str(error)) from error
+    baseline_files[DFS_FILE] = baseline_specification.text
+    candidate_files[DFS_FILE] = candidate_specification.text
     changed = tuple(
         name
         for name in (*GUIDELINE_FILES, DFS_FILE)
@@ -840,7 +857,9 @@ def validate_random_review_mutation(
             if _meaningful_markdown(baseline_files[name]) == _meaningful_markdown(candidate_files[name]):
                 raise GuardError("Random guideline mutation cannot be whitespace-only")
         elif name == DFS_FILE:
-            validate_random_dfs_mutation(baseline_root / DFS_FILE, candidate_root / DFS_FILE)
+            validate_random_dfs_mutation(
+                baseline_specification.path, candidate_specification.path
+            )
     return changed
 
 
@@ -866,6 +885,7 @@ def broader_mutation_from_incident(
                 SELECT short_verdict, long_detail, reviewed_at
                 FROM claim_deadline_generation_incidents
                 WHERE lineage_id = ? AND source_task_id = ?
+                ORDER BY generation DESC LIMIT 1
                 """,
                 (lineage_id, task_id),
             ).fetchone()
@@ -939,7 +959,7 @@ def _same_claim(reference: str, label: str) -> bool:
 def _selected_claim_id(selected_claim: str) -> str:
     claim_id = _stable_key(_normalize_reference(selected_claim))
     if not CLAIM_ID.fullmatch(claim_id):
-        raise GuardError(f"Selected claim has no valid R-id: {selected_claim}")
+        raise GuardError(f"Selected claim has no valid product or maintenance id: {selected_claim}")
     return claim_id
 
 
@@ -1313,7 +1333,24 @@ def validate_dfs_expansion(before: Path, candidate: Path, task_claim_id: str) ->
 
 
 def validate_random_dfs_mutation(before: Path, candidate: Path) -> tuple[str, ...]:
-    """Allow only a same-contract append-only DFS refinement with new red work."""
+    """Allow status projection metadata repair or same-contract new red work."""
+
+    baseline = read_markdown(before)
+    proposed = read_markdown(candidate)
+    # The status heading is a parser delimiter, not a new product obligation.
+    # Admit only the canonical missing heading immediately before an existing
+    # red claim inside its matching slice. Every other byte remains protected.
+    normalized = baseline
+    for item in parse_dfs_slices(baseline):
+        if re.search(r"(?m)^Implementation status:\s*$", item.content):
+            continue
+        row = re.search(r"(?m)^- \[ \] 🔴 " + re.escape(item.claim_id)
+                        + r"(?=[ \t]+—|[ \t]*$)", item.content)
+        if row is not None:
+            content = item.content[:row.start()] + "Implementation status:\n\n" + item.content[row.start():]
+            normalized = normalized.replace(item.content, content, 1)
+    if proposed == normalized and proposed != baseline:
+        return ()
 
     return _validate_append_only_dfs(
         before,
@@ -1796,7 +1833,10 @@ def extract_dfs_slices(
     if len(slice_ids) != len(set(slice_ids)):
         raise GuardError("DFS slice extraction cannot request a duplicate id")
     claim_id = _selected_claim_id(selected_claim)
-    text = _read_utf8_exact(dfs)
+    try:
+        text = resolve_path(dfs).text
+    except SpecificationError as error:
+        raise GuardError(str(error)) from error
     lines = text.splitlines(keepends=True)
     by_id = {item.slice_id: item for item in parse_dfs_slices(text)}
     blocks: list[str] = []
@@ -1821,6 +1861,19 @@ def red_dfs_claims(dfs_text: str) -> tuple[str, ...]:
         if match:
             claims.append(_normalize_reference(match.group("label")))
     return tuple(claims)
+
+
+def specification_claims(specification_text: str) -> tuple[str, ...]:
+    """Return active legacy lamps or canonical claim identities from slices.
+
+    A functional-only FS intentionally has no implementation-status block.  Its
+    durable slice claims replace status prose for ledger binding; a legacy DFS
+    retains its stricter red-lamp interpretation unchanged.
+    """
+    legacy = red_dfs_claims(specification_text)
+    if legacy:
+        return legacy
+    return tuple(dict.fromkeys(item.claim_id for item in parse_dfs_slices(specification_text)))
 
 
 def active_work_items(ledger_text: str) -> tuple[str, ...]:
@@ -1883,8 +1936,12 @@ def dfs_slice_status(
 
     ledger_text = read_markdown(ledger)
     blocks = _active_work_blocks(ledger_text)
-    dfs_text = read_markdown(dfs)
-    red_claims = red_dfs_claims(dfs_text)
+    try:
+        specification = resolve_path(dfs)
+    except SpecificationError as error:
+        raise GuardError(str(error)) from error
+    dfs_text = specification.text
+    red_claims = specification_claims(dfs_text)
     slices_by_id = {item.slice_id: item for item in parse_dfs_slices(dfs_text)}
     statuses: list[tuple[str, str, str]] = []
     for reference, block in blocks:
@@ -1961,13 +2018,17 @@ def validate_work_ledger(
     state: Path | None = None,
     lineage_id: str | None = None,
 ) -> tuple[str, ...]:
-    """Require current entries to bind red DFS slices and reject stored attempt history."""
+    """Bind current entries to specification slices and preserve task ownership."""
 
     ledger_text = read_markdown(ledger)
     blocks = _active_work_blocks(ledger_text)
     items = tuple(reference for reference, _ in blocks)
-    dfs_text = read_markdown(dfs)
-    red_claims = red_dfs_claims(dfs_text)
+    try:
+        specification = resolve_path(dfs)
+    except SpecificationError as error:
+        raise GuardError(str(error)) from error
+    dfs_text = specification.text
+    red_claims = specification_claims(dfs_text)
     slices = parse_dfs_slices(dfs_text)
     slices_by_id = {item.slice_id: item for item in slices}
     selected_claims: list[str] = []
@@ -2003,12 +2064,9 @@ def validate_work_ledger(
                 for task_id, task_claim in task_rows
                 if _mentions_task(block, task_id)
             }
-            if len(mentioned) > 1:
-                raise GuardError(
-                    f"Work item keeps multiple task identities instead of one current frontier: {reference}"
-                )
-            if mentioned:
-                _, task_claim = next(iter(mentioned))
+            # Independent assignments and valid earlier evidence may share a
+            # claim. Their count does not change task-to-claim ownership.
+            for _, task_claim in mentioned:
                 if _stable_key(task_claim) != _stable_key(claim):
                     raise GuardError(
                         f"Work item mentions a task owned by another DFS claim: {reference}"

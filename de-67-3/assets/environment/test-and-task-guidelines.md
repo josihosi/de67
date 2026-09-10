@@ -1,84 +1,97 @@
 # Test and task guidelines
 
-This workspace-local file is active mutable policy. Read only the sections relevant to the task.
-Do not replace it with the packaged template after bootstrap. Sol is not an ordinary worker; model
-choice is coordinator guidance, not a worker-side gate.
+This is a legacy differential fixture. policy_kernel.py generates ordinary worker instructions;
+the compiled policy owns routing and durable lifecycle transitions.
 
-## Own the assigned outcome
+## Own the outcome
 
-Start from the assigned outcome, proof route, known facts, and durable evidence pointers. Preserve
-user-owned dirty work. When the route is finite, own the complete goal inside one worker window:
-diagnose, repair, test, and continue through reversible in-scope defects until the evidence is
-complete or a real authority, frozen-scope, material-risk, external-state, or deadline blocker ends
-the window. A discrepancy is never acceptance. Continue past one only when positive evidence proves
-it clerical, incidental, or non-causal and proves it cannot affect acceptance, authority, proof
-class, identity or ownership, persistence, or required behavior. Preserve the original failure and
-record the materiality decision, evidence, and continuation rationale; uncertainty remains
-fail-closed. Otherwise repair it or use it as the next causal observation.
+Acknowledge relevant pending owner corrections and return applied evidence or a deliberate deferral
+reason. Use the brief's assignment outcome and exit condition, known evidence, real constraints, and available tools as context,
+not as a prescribed tactic. Inspect broadly or narrowly, repair tools or scenarios, change strategy,
+use honestly labelled interventions, rerun, or abandon an unproductive approach when that advances
+the same outcome. Establish that the relevant condition had an opportunity to occur before
+interpreting its absence. Recover earlier success and compare its premises with the present run;
+communicate missing premises or ambiguity so the coordinator can steer the same investigation.
+A gameplay bug requires both observed contradiction under valid conditions and its causal code path;
+unsettled reproduction stays on the work ledger. When evidence ends one strategy, retire it and
+continue through a materially different evidence-backed route while recoverable work remains.
 
-Use exploration for one concrete unknown and return a usable strategy plus proof route. Use closure
-when ownership, mechanism, gaps, and proof are finite. Make ordinary setup choices that remain inside
-the frozen outcome instead of sending them to the owner.
+Repository-owned implementation, registry or manifest binding, scenario, fixture, harness, build,
+observation path, and executable proof route are reversible in-scope recovery. Repair or replace
+them, revalidate any single-use technical authority, and preserve completed valid evidence. Split a
+bootstrap that depends on its own output from fresh independent validation; the bootstrap earns no
+proof credit and is not queried again unchanged.
 
-## Retrieve evidence for the next decision
+Stop the task only when its outcome is settled as proved or contradicted, or continuation requires a
+materially different owner outcome, a real external decision, a capability unavailable through any
+authorized repository route, or irreversible user-data risk. Preserve the exact uncertainty when it
+is not settled. Do not invent retry counts, observation windows, read quotas, or other limits.
 
-You own evidence retrieval. For each causal decision, identify the fact that would settle it, search
-narrowly, then read only the matching fields, ranges, records, or files. Query structured reports for
-the exact fields needed. Keep verbose build, test, run, diff, and search output in digest-bound
-artifacts; return stable journal identities and narrow query keys rather than copying bulk output.
-Compact output must preserve enough metadata to recover the full evidence losslessly. Use the
-first relevant divergence as the next observation inside the assigned outcome, not as a terminal
-return. Do not combine unrelated broad reads.
+## Preserve truth
 
-Treat observed bytes, entries, elapsed time, checkpoint count, and retrieval shape as diagnostic
-evidence rather than gates or quotas. Derive every output bound from the current claim and evidence shape; never invent a fixed token,
-line, file, or command quota. Larger evidence remains available when you can explain why deleting
-that read would leave the current claim unproved. After each result, name the next causal question.
-When accumulated context no longer helps close the assigned gap, return the result to the coordinator
-rather than repeatedly resubmitting it. The coordinator owns durable de67 transitions. Do not write
-the deadline database, work ledger, DFS state, or mutation ledger; return the evidence and requested
-terminal disposition for the coordinator to judge and record.
+Use authoritative state and direct receipts. Keep source, executable, scenario, run, world, player,
+actor, and ownership binding wherever the claim depends on them. Preserve contradictions, cleanup,
+and the evidence ceiling. Setup, debug intervention, diagnostic replay, focused proof, continuous
+certification, and Windows feel remain distinct classes; prose cannot promote one into another.
 
-## Implement and prove through the real owner
+Choose evidence that can decide the current question. Keep verbose output in digest-bound artifacts
+and return stable journal identities and narrow query keys instead of copying bulk output into the
+result. Compact output must preserve enough metadata to find the full evidence losslessly; metrics
+such as bytes, entries, elapsed time, and checkpoint count diagnose context shape but never become
+quotas. A first divergence is valuable diagnostic evidence, but the worker decides whether to
+inspect, repair, change tactics, rerun, or finish. Mechanical failures such as stale authority,
+missing receipts, false binding, fabricated observations, hidden contradictions, and unowned cleanup
+remain hard failures.
 
-Use native `send_message(target="/root", message=...)` to reach your parent coordinator when changed understanding, surprising evidence, a
-proposed route change, or a need for help can affect coordination or another worker. Share the evidence
-and implication, your intended next move, and any specific question. You may discuss uncertainty before
-a bug is proven or a long detour begins. Continue authorized unblocked work while awaiting a reply.
-Choose useful communication points; no periodic report, message quota, full receipt, or coordination
-record is required for ordinary progress and questions. These messages do not end the assignment.
-Replies arrive as native messages during your work; your final response returns the assignment result.
+## Live playtests
 
-Identify the authoritative state owner and inspect its callers, competing readers or writers, and
-owning tests only as needed for the outcome. Stop blind repetition at the first divergent production
-transition and repair the visible family of related transitions.
+A coordinator brief plus its matching validated charter requests the playtest. Querying is inert;
+the registry supplies single-use technical run authority. The worker owns scenario fit, observation,
+native actions, repair, binding-safe reruns, and the final witness. Missing charter or stale binding
+is agent-owned repair unless an expressly human outcome is required.
 
-Test through the highest changed authoritative boundary reachable without consuming one-use
-authority; a helper test proves only its helper. Before a token, lease, destructive action, or other
-single-use transition, make the owning test reach that boundary with the downstream owner replaced
-by a sentinel, so a pre-boundary defect fails without consuming authority. Add a negative control
-only when it excludes a real competing explanation. Static inspection, startup, helper output, synthetic setup, focused
-feature proof, diagnostic replay, continuous certification, and Windows feel are distinct evidence
-classes. Bind compiled proof to source and executable; inspect serialized state and its owning
-normalization for persistence claims. Structured product state and bound artifacts decide machine
-verdicts; incidental UI text, screenshots, or OCR remain diagnostic unless the frozen claim requires
-that exact observation.
+The charter states the proof question and credit boundary, not an interaction script. Fictional
+danger, injury, or death is gameplay evidence, not external safety. For wait or movement, select the
+operation's danger handling: stop on interruption, handle classified non-dangerous interruptions,
+or ignore danger/interruption prompts. The permissive mode needs no approval or cloak; its receipts
+must show what it continued through. Debug setup or exact-identity creature zapping is allowed when
+useful and remains zero-credit for natural route, ecology, combat, lifecycle, or certification.
 
-Apply the MSW deletion test to artifacts and reruns. Preserve uncertainty and do not demand evidence
-whose removal still leaves the outcome honestly proved.
+The CAOL harness skill and bridge CLI expose compact `response-status` and field-filtered
+`log-query` for session responses and exact debug/JSONL logs. These retain identities, outcomes,
+action availability, omissions, and verified retrieval handles. Use semantic selectors or exact
+record retrieval for the decision at hand; an accepted native request alone does not establish its
+gameplay postcondition. Unparsed or unscoped diagnostics remain visible separately.
 
-## Return the terminal result
+Finish with the smallest supported conclusion, its causal evidence, contradictions, and remaining
+unknowns. Use independent claim verdicts when a combined run has mixed outcomes; route an ordinary
+defect without erasing unaffected evidence, and reserve capability gaps for missing reusable
+interfaces. The witness may use any clear wording. Never invent facts, cite absent values, conceal
+evidence, change identity, or promote its own evidence class.
 
-Return a compact schema-shaped result with the outcome or first divergence, material changes, tests
-and live actions, evidence ceiling, exact bindings, indexed journal identities, digest-bound
-artifact references, accepted no-replay work, active work, first open boundary, useful narrow
-queries, and entrypoints. This result is continuation footing, not a replacement for its full
-artifacts. Keep a new divergence, failed tactic, and
-reversible route change inside the goal-bound task while its outcome, authority, deadline, and risk
-boundary remain valid. A proved prerequisite is not terminal completion of a broader assigned
-outcome; preserve it and continue. Return a finding only when progress requires a different owner
-outcome, unavailable authority, frozen-scope change, material risk, or external-state change. A
-failure report separates the observed symptom, proved mechanism, surrounding failure pattern,
-immediate recovery, and smallest tested stable correction. If mechanism or correction is not proved,
-state that exact uncertainty instead of handing the symptom to the owner as a design problem. A
-finding never weakens acceptance or causes mutation.
+## Context and results
+
+Keep known small lookups local. Use disposable Luna helpers by default for substantial source or
+scenario discovery, historical retrieval, failure-log diagnosis and independent reconciliation.
+Give a bounded question, exact relevant artifacts and the decision to support, with `fork_turns="none"`.
+Import findings, references, contradictions and uncertainty; inspect original details when they can
+change the decision. Preserve exclusive edits/runtime ownership and collect or stop helpers before
+returning. Helpers do not own coordinator records. Sol decides ownership when a prerequisite becomes
+a substantial independent investigation. Preserve live state and continue independent useful work.
+
+Use the prepared brief and selected context bundles. `context_library.py catalog` shows metadata;
+`show --revision SHA256 --section HEADING` retrieves a needed section. At meaningful context changes,
+replace the current handoff with accepted results, shared repairs, bindings, constraints, uncertainty
+and original evidence handles. A named worker may continue its own conversation across related
+assignments and fresh coordinators. The current brief and owner corrections govern the current task;
+reconcile changed premises explicitly, retain still-valid knowledge, and avoid replaying accepted
+work. Your reusable job describes competence and responsibility, not permission to continue an old
+assignment. Use the library's coordinator mailbox for named-worker communication; native children
+use native messaging. Do not reload a growing history or inherit a predecessor conversation.
+Name recurring context/tool obstructions so Sol can commission a repair at the producing surface.
+
+Return the supported result, material changes, tests and live actions, evidence ceiling, exact
+bindings and artifact/journal references, accepted work and first remaining boundary. The coordinator
+records the existing durable receipt and lifecycle transition. No parallel report or new receipt
+system. A context boundary ends only an attempt, never the unfinished outcome. Keep pending owner
+corrections in the current owner contract until applied with evidence or deliberately deferred.

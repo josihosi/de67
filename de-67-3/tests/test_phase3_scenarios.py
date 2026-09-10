@@ -206,7 +206,7 @@ class Phase3ScenarioTests(unittest.TestCase):
             self.assertIn("open_gap", facts)
             self.assertEqual(routed.action, "dispatch_closure_worker")
 
-    def test_worker_twenty_three_runs_stored_mutation_once_then_restarts(self) -> None:
+    def test_stored_mutation_boundary_runs_once_then_restarts(self) -> None:
         with patch(
             "deadline_harness.secrets.randbelow", side_effect=[3, 1, 7, 0]
         ), DeadlineHarness(self.state) as harness:
@@ -224,7 +224,7 @@ class Phase3ScenarioTests(unittest.TestCase):
             self.assertEqual(mutation["completed_terminal_windows"], 23)
             self.assertEqual(mutation["interval_windows"], 23)
             self.assertEqual(
-                mutation["selected_lane"], "orchestrator-guidelines.md"
+                mutation["selected_lane"], "DFS.md"
             )
             facts, routed = self.decision(2)
             self.assertIn("random_mutation_due", facts)

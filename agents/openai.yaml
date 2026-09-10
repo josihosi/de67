@@ -1,7 +1,7 @@
 interface:
   display_name: "de67"
-  short_description: "Route explicitly to one de67 workflow phase"
-  default_prompt: "Use de67 1, de67 2, or de67 3 to choose a workflow phase."
+  short_description: "Route to a de67 phase, release packaging, or audit"
+  default_prompt: "Use de67 1, de67 2, or de67 3 for a phase; de67 release for skill packaging; de67 alignment audit for a workflow audit."
 
 policy:
   allow_implicit_invocation: true

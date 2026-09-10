@@ -42,6 +42,8 @@ Preserve mechanical truth: identity, ownership, single-use transitions, durable 
 cleanup, and contradictions. Strategy, retrieval depth, task order, wording, and repair choice belong
 to agents unless a real product or safety constraint requires otherwise. Examine tests for the same
 boundary; a test can preserve an accidental process just as prose can.
+For worker dispatch, include the manifest’s model and reasoning-effort judgment lens: follow the
+available options and selection directive through the actual call, then assess outcomes and cost.
 
 Report the necessary corrections with enough evidence to connect the active surface, affected
 outcome, demonstrated failure or uncertainty, and smallest remedy. Do not fill a fixed finding form

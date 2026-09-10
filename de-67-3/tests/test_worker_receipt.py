@@ -1,6 +1,9 @@
 from __future__ import annotations
+from contextlib import closing
 
 import hashlib
+import sqlite3
+import copy
 import sys
 import tempfile
 import unittest
@@ -14,10 +17,39 @@ from worker_receipt import (  # noqa: E402
     WorkerReceiptError,
     compact_worker_receipt,
     normalize_worker_receipt,
+    prepare_worker_receipt,
 )
 
 
 class WorkerReceiptTests(unittest.TestCase):
+    def test_prepare_collects_fields_and_preserves_supplied_conflicts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "proof.json"
+            artifact.write_text('{"native": true}')
+            digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            value = self.value(artifact, digest)
+            state = root / "state.sqlite3"
+            with closing(sqlite3.connect(state)) as db, db:
+                db.executescript("CREATE TABLE tasks(lineage_id,task_id,claim_id); CREATE TABLE worker_claims(lineage_id,task_id,worker_id); INSERT INTO tasks VALUES('project','task-1','R-1'); INSERT INTO worker_claims VALUES('project','task-1','worker-1');")
+            draft = copy.deepcopy(value)
+            for key in ("schema", "lineage_id", "task_id", "claim_id", "worker_id"):
+                draft.pop(key)
+            for entry in draft["artifacts"]:
+                entry.pop("sha256")
+            def prepare(v):
+                return prepare_worker_receipt(v, state=state, workspace=root, lineage_id="project", task_id="task-1")
+            self.assertEqual(prepare(draft), normalize_worker_receipt(value, workspace=root, lineage_id="project", task_id="task-1", claim_id="R-1", worker_id="worker-1"))
+            for change in (lambda d: d.update(worker_id="wrong"),
+                           lambda d: d["artifacts"][0].update(sha256="0" * 64),
+                           lambda d: d["artifacts"][0].update(path="missing.json"),
+                           lambda d: d["artifacts"][0].update(path="../outside")):
+                bad = copy.deepcopy(draft)
+                change(bad)
+                with self.assertRaises(WorkerReceiptError):
+                    prepare(bad)
+
+
     def value(self, artifact: Path, digest: str) -> dict[str, object]:
         return {
             "schema": "de67.worker-result-receipt.v1",

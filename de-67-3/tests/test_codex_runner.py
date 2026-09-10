@@ -54,6 +54,49 @@ class CodexRunnerTests(unittest.TestCase):
             "DE67_COORDINATOR_REASONING_EFFORT": "low",
         }
 
+    def test_reviewer_receives_current_maintenance_guidance_with_original_gate(self):
+        from coordinator_supervisor import mutation_maintenance_contract
+        prefix = f"Act as the exclusive Phase-3 mutation reviewer in {self.workspace}.\n"
+        gate = "Resolve durable random gate cycle 9; no coordinator may start here.\n"
+        bindings = '\nCurrent invocation bindings (use these values directly; exact):\n{"run":"unchanged"}'
+        old = prefix + gate + bindings
+        env = {"DE67_PROCESS_ROLE": "mutation-reviewer"}
+        refreshed = codex_runner.current_coordinator_prompt(self.workspace, old, env)
+        self.assertIn(gate, refreshed)
+        self.assertTrue(refreshed.endswith(bindings))
+        self.assertEqual(refreshed.count(mutation_maintenance_contract()), 1)
+        self.assertEqual(codex_runner.current_coordinator_prompt(self.workspace, refreshed, env), refreshed)
+        self.assertEqual(codex_runner.current_coordinator_prompt(self.workspace, "Custom review", env), "Custom review")
+
+    def test_fresh_runner_replaces_loaded_supervisor_guidance_and_preserves_bindings(self) -> None:
+        from deadline_harness import DeadlineHarness
+        from coordinator_supervisor import coordinator_prompt, worker_selection_contract
+        state = self.root / "state.sqlite3"
+        with DeadlineHarness(state) as harness:
+            restart = harness.request_coordinator_restart("project", "Owner outcome remains intact.")["coordinator_restart"]
+        env = dict(DE67_PROCESS_ROLE="coordinator", DE67_DEADLINE_STATE=str(state),
+                   DE67_LINEAGE="project", DE67_COORDINATOR_RUN_ID="fresh",
+                   DE67_COORDINATOR_RESTART_GENERATION=str(restart["generation"]))
+        bindings = "\nCurrent invocation bindings (use these values directly; exact array)\nBOUND-ARGUMENTS"
+        recovery = "\nRecovery: this is coordinator decision opportunity 2 of 3.\nPreserve unfinished work."
+        old = f"Act as a fresh Phase-3 delivery coordinator in {self.workspace}.\nSTALE ROLE GUIDANCE" + recovery + bindings
+        refreshed = codex_runner.current_coordinator_prompt(self.workspace, old, env)
+        self.assertNotIn("STALE ROLE GUIDANCE", refreshed)
+        self.assertIn(worker_selection_contract(), refreshed)
+        self.assertIn("context_library.py", refreshed)
+        self.assertIn("Owner outcome remains intact.", refreshed)
+        self.assertIn(recovery, refreshed)
+        self.assertTrue(refreshed.endswith(bindings))
+        with DeadlineHarness(state) as harness:
+            observed = harness.coordinator_restart_status("project")["coordinator_restart"]
+        self.assertTrue(observed["pending"])
+        self.assertIsNone(observed["acknowledged_at"])
+        for extra in ({"DE67_PROCESS_ROLE": "mutation-reviewer"}, {"DE67_COORDINATOR_RESUME_SESSION": "same-session"}):
+            self.assertEqual(codex_runner.current_coordinator_prompt(self.workspace, old, {**env, **extra}), old)
+        self.assertEqual(codex_runner.current_coordinator_prompt(self.workspace, "Custom prompt", env), "Custom prompt")
+        with self.assertRaisesRegex(codex_runner.RunnerError, "invocation bindings"):
+            codex_runner.current_coordinator_prompt(self.workspace, old.split(bindings)[0], env)
+
     def test_runner_uses_supervisor_model_and_records_auditable_result(self) -> None:
         captured: dict[str, object] = {}
 
@@ -405,6 +448,40 @@ class CodexRunnerTests(unittest.TestCase):
         validate = codex_runner._roster_validator(self.workspace.resolve(), environment)
         self.assertTrue(validate("worker", "coordinator"))
 
+    def test_helper_cannot_take_task_and_named_worker_binds_out_of_order(self) -> None:
+        environment = self.environment()
+        state = self.write_roster_state(None)
+        environment["DE67_CODEX_STATE"] = str(state)
+        connection = sqlite3.connect(state)
+        try:
+            connection.execute("UPDATE threads SET agent_path='/root/discovery' WHERE id='worker'")
+            connection.commit()
+        finally:
+            connection.close()
+        claims = []
+        guard = codex_runner.CoordinatorLoopGuard(
+            initial_unbound_tasks=("other-route", "route"),
+            roster_validator=codex_runner._roster_validator(self.workspace.resolve(), environment),
+            claim_recorder=lambda task, worker, parent: claims.append((task, worker)),
+        )
+        guard.observe({"type": "thread.started", "thread_id": "coordinator"})
+        event = {"type": "item.completed", "item": {
+            "type": "collab_tool_call", "tool": "spawn_agent", "status": "completed",
+            "receiver_thread_ids": ["worker"]}}
+        guard.observe(event)
+        self.assertEqual(claims, [])
+        self.assertEqual(guard.unbound_tasks, ("other-route", "route"))
+        connection = sqlite3.connect(state)
+        try:
+            connection.execute("UPDATE threads SET agent_path=? WHERE id='worker'",
+                               ("/root/" + codex_runner.worker_task_name("route"),))
+            connection.commit()
+        finally:
+            connection.close()
+        guard.observe(event)
+        self.assertEqual(claims, [("route", "worker")])
+        self.assertEqual(guard.unbound_tasks, ("other-route",))
+
     def test_roster_recovery_rejects_worker_for_different_task_name(self) -> None:
         environment = self.environment()
         environment["DE67_CODEX_STATE"] = str(
@@ -472,7 +549,7 @@ class CodexRunnerTests(unittest.TestCase):
         claims: list[tuple[str, str, str | None]] = []
         guard = codex_runner.CoordinatorLoopGuard(
             initial_unbound_tasks=("route",),
-            roster_validator=lambda _worker, _parent: False,
+            roster_validator=lambda _worker, _parent, _task: False,
             claim_recorder=lambda task, worker, parent: claims.append(
                 (task, worker, parent)
             ),
@@ -547,7 +624,7 @@ class CodexRunnerTests(unittest.TestCase):
         claims: list[tuple[str, str, str | None]] = []
         guard = codex_runner.CoordinatorLoopGuard(
             initial_unbound_tasks=("route-1", "route-2", "route-3"),
-            roster_validator=lambda _worker, _parent: True,
+            roster_validator=lambda _worker, _parent, _task: True,
             claim_recorder=lambda task, worker, parent: claims.append(
                 (task, worker, parent)
             ),
@@ -595,13 +672,35 @@ class CodexRunnerTests(unittest.TestCase):
             ],
         )
 
+    def test_conversation_and_followup_preserve_bound_worker_and_queued_task(self) -> None:
+        claims = []
+        guard = codex_runner.CoordinatorLoopGuard(
+            initial_unbound_tasks=("running", "queued"),
+            roster_validator=lambda _worker, _parent, _task: True,
+            claim_recorder=lambda task, worker, parent: claims.append((task, worker, parent)),
+        )
+        guard.observe({"type": "thread.started", "thread_id": "coordinator"})
+        guard.observe({"type": "item.completed", "item": {
+            "type": "collab_tool_call", "tool": "spawn_agent", "status": "completed",
+            "receiver_thread_ids": ["terra-worker"],
+        }})
+        for tool in ("send_message", "wait", "followup_task", "send_message"):
+            guard.observe({"type": "item.completed", "item": {
+                "type": "collab_tool_call", "tool": tool, "status": "completed",
+                "receiver_thread_ids": ["terra-worker"],
+                "agents_states": {"terra-worker": {"completed": "Partial result; game still running"}},
+            }})
+        self.assertEqual(claims, [("running", "terra-worker", "coordinator")])
+        self.assertEqual(guard.unbound_tasks, ("queued",))
+        self.assertEqual(guard._task_workers, {"running": "terra-worker"})
+
     def test_resumed_runner_binds_durable_worker_without_new_spawn_timestamp(self) -> None:
         claims: list[tuple[str, str, str | None]] = []
         guard = codex_runner.CoordinatorLoopGuard(
             initial_unbound_tasks=("route",),
             initial_pending_delegations=("route",),
             recovered_workers={"route": "old-worker"},
-            roster_validator=lambda worker, parent: (
+            roster_validator=lambda worker, parent, _task: (
                 worker == "old-worker" and parent == "coordinator"
             ),
             claim_recorder=lambda task, worker, parent: claims.append(

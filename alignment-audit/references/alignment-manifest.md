@@ -31,6 +31,25 @@ reconstruct: identity, binding, ownership, single-use transitions, immutable rec
 citations, contradictions, and evidence ceilings. The model owns judgment and trajectory; the
 machine owns durable truth.
 
+## Model and reasoning-effort judgment
+
+For worker dispatch, trace configured capabilities through the offered choices, coordinator directive
+and actual spawn arguments. Check that the owner's intended model/effort ranges are available and
+that a template or test does not silently impose a model or reasoning level. Availability alone is
+not a selection policy: the coordinator needs guidance for choosing model and effort separately.
+
+Judge that guidance against assignment uncertainty, interacting changes and expected total work.
+Bounded implementation, testing, diagnosis and data work can suit a less costly capable model;
+substantial ambiguity or demonstrated repair difficulty can justify a stronger one. Effort should
+reflect reasoning difficulty and expected rework, rather than defaulting to medium or increasing
+whenever the model changes. Task labels such as “debugging” should not decide either choice alone.
+
+Compare decisions with valid outcomes, repair cost and deduplicated usage at its stated freshness.
+A freely selected expensive worker is not automatically a mistake, and a cheaper worker is not
+proof of efficiency. Keep owner allocation preferences approximate; do not introduce quotas,
+forced downgrades, extra handoffs or mandatory selection reports. Distinguish tested choice
+mechanics from operational savings that have actually been observed.
+
 ## Structure, not a prison
 
 Good structure makes the next meaningful action obvious and recoverable. It gives the agent handles:
@@ -97,6 +116,35 @@ dashboards, and historical workarounds.
 A correction is incomplete when one layer still teaches the old behavior. Research surrounding
 mechanisms and competing owners, then simplify the complete path. Prefer structural alignment over
 appending another sentence to whichever file exposed the symptom.
+
+## Engineer the context budget
+
+Treat lower total token use and a sensible worker split as workflow outcomes. Inspect what each
+agent actually ingests at routing, dispatch, tool results, waiting and continuation. Use Luna to
+extract bulky logs and artifacts into decision-relevant facts with retrievable evidence. Follow
+cost across models, repeated inputs, retries and handoffs; moving clutter to a cheaper worker is
+not sufficient if the clutter serves no decision.
+
+The coordinator's demands for receipts, cleanup and structure deserve the same scrutiny as worker
+output. Identify what was unnecessary for the task, consumed without meaningful gain, repeated or
+never used. Remove that burden at its producing surface instead of adding advice to ignore it.
+Context engineering takes priority over preserving existing workflow conventions: simplify or
+replace guidance, injections, formats and tests that perpetuate clutter while retaining necessary
+truth, ownership and evidence. Report observed costs and tested reductions separately from savings
+that require future operation to establish; do not impose token quotas or a fixed worker ratio.
+
+## Keep routing coherent
+
+A router should make the appropriate next surface clear from the user's request and the agent's
+role. Keep execution guidance in the role-specific procedure or runtime prompt that actually
+consumes it. Check for ambiguous branches, circular or unnecessary hops, unrelated preloads, and
+instructions duplicated in an entrypoint merely because that file was easiest to edit.
+
+Trace the selected route to the context delivered at the decision point, including continuation or
+worker dispatch when relevant. A correct paragraph in an unread file does not change behavior;
+a router that repeats downstream procedure can create competing authority and needless context.
+Place a correction in its owning surface and verify reachability. Preserve useful progressive
+disclosure without forcing a fixed folder layout or adding routing layers to a simple skill.
 
 ## Put information at its decision point
 

@@ -10,9 +10,13 @@ import json
 import os
 import re
 import shlex
+import shutil
+import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -29,7 +33,6 @@ PHASE3_WORKSPACE_FILES = (
     "phase3-policy.d67",
     "phase3-policy.json",
     "phase3-contracts.json",
-    "orchestrator-guidelines.md",
     "test-and-task-guidelines.md",
     "work-ledger.md",
     "mutation-suggestions.md",
@@ -129,6 +132,65 @@ def _load_config(workspace: Path) -> dict[str, Any] | None:
     if not isinstance(payload, dict) or payload.get("version") != 1:
         raise SetupError("Unsupported workspace configuration")
     return payload
+
+
+def _guidance_source(workspace: Path, source: str | Path) -> Path:
+    path = Path(source).expanduser()
+    if not path.is_absolute():
+        path = workspace / path
+    path = path.resolve()
+    if not path.is_file():
+        raise SetupError(f"Guidance source is not a readable file: {path}")
+    try:
+        path.read_bytes()
+    except OSError as error:
+        raise SetupError(f"Cannot read guidance source {path}: {error}") from error
+    return path
+
+
+def _valid_effective_guidance(value: Any) -> dict[str, Any] | None:
+    """Accept only an unchanged explicit audit record; never infer prose equivalence."""
+
+    if not isinstance(value, dict) or value.get("effective") is not True:
+        return None
+    try:
+        source = Path(str(value["source"]))
+        digest = str(value["sha256"])
+        if source.is_file() and hashlib.sha256(source.read_bytes()).hexdigest() == digest:
+            return value
+    except (KeyError, OSError):
+        pass
+    return None
+
+
+def _reconcile_guidance(
+    workspace: Path, source: str | Path | None, existing: Any = None
+) -> dict[str, Any]:
+    """Record an explicit audited source or install the portable project fallback.
+
+    A source flag is an audit assertion that its rules are effective.  The helper
+    records its identity; it does not infer equivalent prose or edit a global file.
+    """
+
+    if source is not None:
+        path = _guidance_source(workspace, source)
+        return {
+            "source": str(path),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "effective": True,
+            "fallback": False,
+        }
+    retained = _valid_effective_guidance(existing)
+    if retained is not None:
+        return retained
+    return {
+        # Runtime assembly owns this one fallback. Setup does not copy it into
+        # project AGENTS.md because that would duplicate every injected role context.
+        "source": None,
+        "sha256": None,
+        "effective": False,
+        "fallback": True,
+    }
 
 
 def _worker_capabilities(
@@ -442,15 +504,24 @@ def _deadline_harness_class() -> type[Any]:
     return module.DeadlineHarness
 
 
+def _resolve_specification(workspace: Path) -> Any:
+    script_root = str(Path(__file__).resolve().parents[1] / "de-67-3/scripts")
+    if script_root not in sys.path:
+        sys.path.insert(0, script_root)
+    from specification import SpecificationError, resolve
+
+    try:
+        return resolve(workspace / ".de67")
+    except SpecificationError as error:
+        raise SetupError(str(error)) from error
+
+
 def _require_frozen_dfs(workspace: Path) -> None:
-    path = workspace / ".de67/DFS.md"
-    if not path.is_file():
-        raise SetupError("Freeze .de67/DFS.md before workspace setup")
-    text = path.read_text(encoding="utf-8")
+    specification = _resolve_specification(workspace)
     if re.search(
-        r"(?mi)^\s*(?:-\s*)?Status:\s*`?(?:Frozen|Refrozen)\b", text
+        r"(?mi)^\s*(?:-\s*)?Status:\s*`?(?:Frozen|Refrozen)\b", specification.text
     ) is None:
-        raise SetupError(".de67/DFS.md must record Frozen or Refrozen status")
+        raise SetupError(f"{specification.label} must record Frozen or Refrozen status")
 
 
 def _prepare_phase3_environment(workspace: Path) -> dict[str, list[str]]:
@@ -482,6 +553,39 @@ def _prepare_phase3_environment(workspace: Path) -> dict[str, list[str]]:
     return {"copied": copied, "preserved": preserved}
 
 
+def _validate_dfs_projection(workspace: Path, state_path: Path) -> None:
+    """Exercise the delivery projection on a snapshot, never on authoring state."""
+    if not state_path.is_file():
+        return
+    harness_class = _deadline_harness_class()
+    try:
+        specification = _resolve_specification(workspace)
+        with tempfile.TemporaryDirectory(prefix="de67-refreeze-") as directory:
+            environment = Path(directory) / ".de67"
+            copied_state = environment / "state" / "deadlines.sqlite3"
+            copied_state.parent.mkdir(parents=True)
+            names = ("DFS.md", "work-ledger.md")
+            if not specification.legacy:
+                names += (specification.path.name,)
+            for name in names:
+                shutil.copy2(workspace / ".de67" / name, environment / name)
+            baseline = state_path.parent / "dfs-status-baselines.json"
+            if baseline.is_file():
+                shutil.copy2(baseline, copied_state.parent / baseline.name)
+            with closing(sqlite3.connect(state_path.as_uri() + "?mode=ro", uri=True)) as source:
+                with closing(sqlite3.connect(copied_state)) as destination:
+                    source.backup(destination)
+            # Projection may read HEAD to recover a missing red baseline. This gitfile
+            # permits that read; projection writes only the disposable documents/state.
+            git_dir = _git_text(workspace, ["rev-parse", "--absolute-git-dir"])
+            (Path(directory) / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+            with harness_class(copied_state) as harness:
+                if harness.connection.execute("SELECT 1 FROM claim_acceptances LIMIT 1").fetchone():
+                    harness.synchronize_dfs_statuses()
+    except Exception as error:
+        raise SetupError(f"DFS cannot project durable acceptance: {error}") from error
+
+
 def configure(
     workspace_path: str | Path,
     requested_targets: Sequence[Sequence[str]],
@@ -489,6 +593,7 @@ def configure(
     bind_clock: bool,
     lineage: str | None = None,
     worker_capabilities: Sequence[Sequence[str]] = (),
+    guidance_source: str | Path | None = None,
 ) -> dict[str, Any]:
     workspace = _workspace(workspace_path)
     _require_ignored_state(workspace)
@@ -520,6 +625,10 @@ def configure(
     if bind_clock:
         _require_frozen_dfs(workspace)
         phase3_environment = _prepare_phase3_environment(workspace)
+        guidance = _reconcile_guidance(
+            workspace, guidance_source, (existing_config or {}).get("guidance")
+        )
+        _validate_dfs_projection(workspace, state_path)
         requested_lineage = None if lineage is None else lineage.strip()
         if lineage is not None and not requested_lineage:
             raise SetupError("Lineage must not be empty")
@@ -541,10 +650,14 @@ def configure(
         except Exception as error:
             raise SetupError(f"Cannot bind deadline clock: {error}") from error
     else:
+        if guidance_source is not None:
+            raise SetupError("Guidance reconciliation is available only during Phase-2 setup")
         selected_lineage = configured_lineage
         phase3_environment = {"copied": [], "preserved": []}
+        guidance = (existing_config or {}).get("guidance")
     hook = _install_hook(workspace)
-    config = {
+    config = dict(existing_config or {})
+    config.update({
         "version": 1,
         "workspace": str(workspace),
         "source_ref": source_ref,
@@ -556,7 +669,9 @@ def configure(
             if selected_lineage is None
             else {"lineage": selected_lineage, "state": str(state_path)}
         ),
-    }
+    })
+    if guidance is not None:
+        config["guidance"] = guidance
     _atomic_json(workspace / CONFIG_RELATIVE_PATH, config)
     pushed = push_checkpoints(workspace)
     return {
@@ -564,6 +679,7 @@ def configure(
         "hook": str(hook),
         "clock": config["clock"],
         "phase3_environment": phase3_environment,
+        "guidance": guidance,
         "push": pushed,
     }
 
@@ -699,6 +815,10 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "setup":
             command.add_argument("--lineage")
             command.add_argument(
+                "--guidance-source",
+                help="Audited effective guidance source; setup records it without editing it",
+            )
+            command.add_argument(
                 "--worker-capability",
                 nargs=2,
                 action="append",
@@ -724,6 +844,7 @@ def main(argv: list[str] | None = None) -> int:
                 bind_clock=True,
                 lineage=arguments.lineage,
                 worker_capabilities=arguments.worker_capability,
+                guidance_source=arguments.guidance_source,
             )
         elif arguments.command == "configure-push":
             result = configure(

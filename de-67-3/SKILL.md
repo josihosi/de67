@@ -7,16 +7,18 @@ description: Explicit third phase of de67. Use when the user says `de67 3` to de
 
 This file routes Phase 3; it is not the coordinator procedure.
 
-The invocation authorizes implementation of the frozen DFS in the named working repository. Do not
+The invocation authorizes implementation of the frozen FS in the named working repository. Do not
 read `de-67-1/` or `de-67-2/`. Never inventory, search, or read `.de67/no-go-zone/`.
 
 This router is bootstrap material. A launcher may read it to initialize Phase 3. Runtime decisions
 come from the compiled policy kernel, not packaged or workspace guideline prose. Packaged scripts
 may be executed as tools.
 
-Inspect `.de67/state/workspace.json` and verify that `.de67/DFS.md` records `Frozen` or `Refrozen`
-against an inspected source baseline. A missing configuration, draft DFS, unresolved material owner
-choice, or changed user outcome returns to de67 2.
+Inspect `.de67/state/workspace.json` and verify that the canonical Functional Specification
+(`.de67/FS.md`, or `.de67/DFS.md` in a legacy workspace) records `Frozen` or `Refrozen` against an
+inspected source baseline. A migrated `DFS.md` is a hash-bound pointer to `FS.md`, not a draft or a
+second specification. A missing configuration, draft FS, unresolved material owner choice, or
+changed user outcome returns to de67 2.
 
 Copy each missing environment artifact individually. Never overwrite an existing project file.
 Machine state stays under `.de67/state/`; the DFS and ledgers remain ordinary project artifacts.
@@ -60,7 +62,7 @@ not an ordinary Phase-3 launch.
 The supervisor launches an ordinary `gpt-5.6-sol` coordinator at low against the compiled workspace
 policy. The coordinator asks the kernel for the next transition and supplies the relevant context
 and role-specific obligations for that route. A due mutation blocks new dispatch. Once all
-already-live worker windows are terminal, the coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh
+already-live worker turns have returned and are no longer editing, the coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh
 `gpt-6-astra` reviewer at medium with no coordinator or worker active. That reviewer reads the complete
 mutation-suggestion ledger and treats each user-authored suggestion as explicit mutation-scoped
 owner authority beneath system and developer instructions. Within the Phase-3 framework, that

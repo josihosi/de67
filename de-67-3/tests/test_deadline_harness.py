@@ -25,6 +25,7 @@ from deadline_harness import (  # noqa: E402
     protected_method_digest,
     workspace_method_digest,
 )
+from specification import compatibility_pointer  # noqa: E402
 
 
 class DeadlineHarnessTests(unittest.TestCase):
@@ -274,9 +275,9 @@ class DeadlineHarnessTests(unittest.TestCase):
         environment = workspace / ".de67"
         environment.mkdir(parents=True)
         packaged = Path(__file__).resolve().parents[1] / "assets" / "environment"
-        for name in ("orchestrator-guidelines.md", "test-and-task-guidelines.md"):
+        for name in ("test-and-task-guidelines.md",):
             content = (packaged / name).read_text(encoding="utf-8")
-            if name == "orchestrator-guidelines.md":
+            if name == "test-and-task-guidelines.md":
                 content += "\nWorkspace-local guarded rule.\n"
             (environment / name).write_text(content, encoding="utf-8")
 
@@ -291,7 +292,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             )
             candidate_digest = workspace_method_digest(state_path.resolve())
             self.assertIsNotNone(candidate_digest)
-            changed_paths = ["assets/environment/orchestrator-guidelines.md"]
+            changed_paths = ["assets/environment/test-and-task-guidelines.md"]
             contract = {
                 "lineage_id": "project",
                 "task_id": "late",
@@ -402,7 +403,7 @@ class DeadlineHarnessTests(unittest.TestCase):
 
     def record_universal_receipt(self, cycle_number: int = 1) -> str:
         candidate_digest = "a" * 64
-        changed_paths = ["references/kernel.md"]
+        changed_paths = ["scripts/deadline_harness.py"]
         cycle = self.harness.connection.execute(
             """
             SELECT universal_capability_roster_digest
@@ -662,7 +663,7 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertEqual([task["task_id"] for task in payload["tasks"]], ["task"])
 
     def test_list_omits_accepted_tasks_but_keeps_nonaccepted_current_work(self) -> None:
-        with patch("deadline_harness.secrets.randbelow", side_effect=[20, 0]):
+        with patch("deadline_harness.secrets.randbelow", side_effect=[10, 0]):
             self.harness.start_task(
                 "project", "accepted-basis", "R-001", 100, now=0
             )
@@ -767,7 +768,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             self.assertNotIn("long_detail", verdict)
 
     def test_list_keeps_only_ten_recent_short_failure_verdicts(self) -> None:
-        with patch("deadline_harness.secrets.randbelow", side_effect=[20, 0]):
+        with patch("deadline_harness.secrets.randbelow", side_effect=[10, 0]):
             for number in range(1, 13):
                 task_id = f"W-{number:03d}"
                 if number % 2:
@@ -1042,7 +1043,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             )
 
     def test_seven_due_breaches_cannot_crowd_out_pending_incident_reviews(self) -> None:
-        with patch("deadline_harness.secrets.randbelow", side_effect=[20, 0]):
+        with patch("deadline_harness.secrets.randbelow", side_effect=[10, 0]):
             for number in range(1, 8):
                 task_id = f"W-{number:03d}"
                 self.harness.start_task(
@@ -1683,9 +1684,9 @@ class DeadlineHarnessTests(unittest.TestCase):
 
     def test_random_schedule_persists_across_restart_without_redraw(self) -> None:
         with patch(
-            "deadline_harness.secrets.randbelow", side_effect=[4, 1]
+            "deadline_harness.secrets.randbelow", side_effect=[0, 1]
         ) as draw:
-            self.complete_windows(self.harness, 12)
+            self.complete_windows(self.harness, 8)
             self.assertEqual(draw.call_count, 2)
         self.harness.close()
         with patch(
@@ -1693,20 +1694,20 @@ class DeadlineHarnessTests(unittest.TestCase):
             side_effect=AssertionError("persisted schedule must not redraw"),
         ):
             self.harness = DeadlineHarness(self.state_path)
-            self.complete_windows(self.harness, 12, first=13)
+            self.complete_windows(self.harness, 12, first=9)
             schedule = self.harness.list_tasks(now=2)["random_mutation"]
 
-        self.assertEqual(schedule["interval_windows"], 24)
-        self.assertEqual(schedule["selected_lane"], "orchestrator-guidelines.md")
-        self.assertEqual(schedule["completed_terminal_windows"], 24)
+        self.assertEqual(schedule["interval_windows"], 20)
+        self.assertEqual(schedule["selected_lane"], "DFS.md")
+        self.assertEqual(schedule["completed_terminal_windows"], 20)
         self.assertTrue(schedule["due"])
+
 
     def test_random_lane_draw_is_persisted_and_not_cli_controlled(self) -> None:
         self.harness.close()
         for lane_index, lane in enumerate(
             (
                 "test-and-task-guidelines.md",
-                "orchestrator-guidelines.md",
                 "DFS.md",
             )
         ):
@@ -1765,7 +1766,7 @@ class DeadlineHarnessTests(unittest.TestCase):
         )
 
     def test_due_review_blocks_new_dispatch_until_exactly_once_resolution(self) -> None:
-        with patch("deadline_harness.secrets.randbelow", side_effect=[0, 2]):
+        with patch("deadline_harness.secrets.randbelow", side_effect=[0, 1]):
             self.complete_windows(self.harness, 20)
         schedule = self.harness.list_tasks(now=2)["random_mutation"]
         self.assertTrue(schedule["due"])
@@ -1774,7 +1775,7 @@ class DeadlineHarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(DeadlineError, "resolve it before dispatching"):
             self.harness.start_task("project", "blocked", "R-011", 10, now=2)
 
-        with patch("deadline_harness.secrets.randbelow", side_effect=[10, 1]) as draw:
+        with patch("deadline_harness.secrets.randbelow", side_effect=[0, 1]) as draw:
             first = self.harness.resolve_random_mutation(
                 "project",
                 schedule["cycle_number"],
@@ -1798,7 +1799,7 @@ class DeadlineHarnessTests(unittest.TestCase):
         ).fetchone()["total"]
         self.assertEqual(restart_count, 1)
         self.assertEqual(draw.call_count, 2)
-        self.assertEqual(first["random_mutation"]["interval_windows"], 30)
+        self.assertEqual(first["random_mutation"]["interval_windows"], 20)
         self.assertFalse(first["random_mutation"]["due"])
         with self.assertRaisesRegex(DeadlineError, "restart generation 1 is pending"):
             self.harness.start_task("project", "unblocked", "R-011", 10, now=5)
@@ -1955,7 +1956,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             connection.close()
 
         with patch(
-            "deadline_harness.secrets.randbelow", side_effect=[20, 0]
+            "deadline_harness.secrets.randbelow", side_effect=[10, 0]
         ), DeadlineHarness(legacy) as migrated:
             summary = migrated.list_tasks(now=6)
             self.assertEqual(
@@ -2013,7 +2014,7 @@ class DeadlineHarnessTests(unittest.TestCase):
     def test_legacy_terminal_history_seeds_the_first_random_cycle(self) -> None:
         self.harness.close()
         legacy = Path(self.temporary.name) / "legacy-history.sqlite"
-        with patch("deadline_harness.secrets.randbelow", side_effect=[20, 0]), DeadlineHarness(
+        with patch("deadline_harness.secrets.randbelow", side_effect=[0, 0]), DeadlineHarness(
             legacy
         ) as harness:
             for number in range(1, 12):
@@ -2075,13 +2076,13 @@ class DeadlineHarnessTests(unittest.TestCase):
     def test_first_post_upgrade_terminal_window_is_not_skipped(self) -> None:
         self.harness.close()
         legacy = Path(self.temporary.name) / "legacy-running.sqlite"
-        with patch("deadline_harness.secrets.randbelow", side_effect=[20, 0]), DeadlineHarness(
+        with patch("deadline_harness.secrets.randbelow", side_effect=[10, 0]), DeadlineHarness(
             legacy
         ) as harness:
             harness.start_task("project", "running", "R-001", 100, now=0)
         self.strip_random_cadence(legacy)
 
-        with patch("deadline_harness.secrets.randbelow", side_effect=[0, 2]), DeadlineHarness(
+        with patch("deadline_harness.secrets.randbelow", side_effect=[0, 1]), DeadlineHarness(
             legacy
         ) as migrated:
             result = migrated.complete_task(
@@ -2399,6 +2400,32 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.harness.complete_task("project", "closure", "proof complete", now=4)
         return workspace, red_status
 
+    def functional_projection_workspace(self) -> tuple[Path, str]:
+        self.harness.close()
+        workspace = Path(self.temporary.name) / "functional-workspace"
+        environment = workspace / ".de67"
+        environment.mkdir(parents=True)
+        functional_specification = (
+            "# Functional Specification\n\n"
+            "The owner route must retain this functional requirement.\n"
+        )
+        fs_path = environment / "FS.md"
+        fs_path.write_text(functional_specification, encoding="utf-8")
+        (environment / "DFS.md").write_text(
+            compatibility_pointer(fs_path), encoding="utf-8"
+        )
+        (environment / "work-ledger.md").write_text(
+            "# Work ledger\n\n"
+            "- [x] R-001 — Owner assignment remains active.\n"
+            "  - Assignment: closure owner\n"
+            "  - Functional reference: owner route\n",
+            encoding="utf-8",
+        )
+        self.state_path = environment / "state" / "deadlines.sqlite3"
+        self.state_path.parent.mkdir()
+        self.harness = DeadlineHarness(self.state_path)
+        return workspace, functional_specification
+
     def test_acceptance_recovers_missing_baseline_from_committed_dfs(self) -> None:
         workspace, red_status = self.projected_acceptance_workspace(
             commit_red_baseline=True
@@ -2439,6 +2466,69 @@ class DeadlineHarnessTests(unittest.TestCase):
         ).fetchone()
         self.assertIsNone(acceptance)
         self.assertIsNone(gap["closed_at"])
+
+    def test_functional_ledger_reopens_and_removes_durable_acceptance(self) -> None:
+        workspace, functional_specification = self.functional_projection_workspace()
+        self.establish_accepted_claim()
+
+        self.harness.start_task(
+            "project", "closure-check", "R-001", 100, phase="closure", now=6
+        )
+        self.harness.report_worker_finding(
+            "project",
+            "closure-check",
+            "unexpected",
+            "The owner route returns the finished outcome premise is contradicted.",
+            now=7,
+        )
+        reopened = self.harness.reopen_claim_exploration(
+            "project",
+            "R-001",
+            "closure-check",
+            "The owner route returns the finished outcome",
+            now=8,
+        )
+
+        ledger = (workspace / ".de67" / "work-ledger.md").read_text(encoding="utf-8")
+        self.assertEqual(reopened["dfs_status_synchronized"], ["R-001"])
+        self.assertIn("- [ ] R-001 — Owner assignment remains active.", ledger)
+        self.assertIn("  - Assignment: closure owner", ledger)
+        self.assertIn("  - Functional reference: owner route", ledger)
+        self.assertNotIn("Durable acceptance:", ledger)
+        self.assertEqual(
+            (workspace / ".de67" / "FS.md").read_text(encoding="utf-8"),
+            functional_specification,
+        )
+
+    def test_functional_ledger_projects_latest_acceptance_from_bound_lineage(self) -> None:
+        workspace, _functional_specification = self.functional_projection_workspace()
+        self.establish_accepted_claim()
+        self.harness.connection.execute("PRAGMA foreign_keys = OFF")
+        self.harness.connection.execute(
+            """
+            INSERT INTO claim_acceptances (
+                lineage_id, claim_id, acceptance_number, task_id,
+                closure_sequence, accepted_at, evidence
+            ) VALUES ('other', 'R-001', 2, 'other-closure', 1, 6, 'other evidence')
+            """
+        )
+        self.harness.connection.commit()
+        self.harness.connection.execute("PRAGMA foreign_keys = ON")
+        ledger_path = workspace / ".de67" / "work-ledger.md"
+        ledger_path.write_text(
+            "\n".join(
+                line for line in ledger_path.read_text(encoding="utf-8").splitlines()
+                if "Durable acceptance:" not in line
+            ) + "\n",
+            encoding="utf-8",
+        )
+
+        changed = self.harness.synchronize_delivery_statuses()
+
+        ledger = ledger_path.read_text(encoding="utf-8")
+        self.assertEqual(changed, ("R-001",))
+        self.assertIn("Durable acceptance: #1 via `closure`", ledger)
+        self.assertNotIn("Durable acceptance: #2 via `other-closure`", ledger)
 
     def test_failed_late_acceptance_preserves_the_new_deadline_miss(self) -> None:
         self.harness.start_task("project", "explore", "R-LATE", 5, now=0)
@@ -2854,7 +2944,7 @@ class DeadlineHarnessTests(unittest.TestCase):
     def test_interval_thirty_dfs_requires_ordinary_and_universal_before_restart(self) -> None:
         self.write_sol_ultra_capability()
         with patch(
-            "deadline_harness.secrets.randbelow", side_effect=[10, 2, 0, 0]
+            "deadline_harness.secrets.randbelow", side_effect=[10, 1, 0, 0]
         ), patch("deadline_harness.time.time", return_value=12345):
             for number in range(1, 31):
                 self.harness.start_task(
@@ -2912,7 +3002,7 @@ class DeadlineHarnessTests(unittest.TestCase):
 
     def test_rare_trigger_without_due_time_capability_is_visible_and_nonblocking(self) -> None:
         with patch(
-            "deadline_harness.secrets.randbelow", side_effect=[10, 2, 0, 0]
+            "deadline_harness.secrets.randbelow", side_effect=[10, 1, 0, 0]
         ), patch("deadline_harness.time.time", return_value=23456):
             for number in range(1, 31):
                 self.harness.start_task(
@@ -2955,7 +3045,7 @@ class DeadlineHarnessTests(unittest.TestCase):
 
     def test_legacy_ordinary_only_rare_cycle_cannot_become_zero_action_due_gate(self) -> None:
         with patch(
-            "deadline_harness.secrets.randbelow", side_effect=[10, 2, 0, 0]
+            "deadline_harness.secrets.randbelow", side_effect=[10, 1, 0, 0]
         ):
             for number in range(1, 31):
                 self.harness.start_task(
@@ -3067,7 +3157,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             connection.close()
 
         with patch(
-            "deadline_harness.secrets.randbelow", side_effect=[20, 0]
+            "deadline_harness.secrets.randbelow", side_effect=[10, 0]
         ), DeadlineHarness(legacy) as migrated:
             view = migrated.coordinator_view(now=20)
             self.assertEqual(view["pending_incident_reviews"], [])
@@ -3157,7 +3247,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             connection.close()
 
         with patch(
-            "deadline_harness.secrets.randbelow", side_effect=[20, 0]
+            "deadline_harness.secrets.randbelow", side_effect=[10, 0]
         ), DeadlineHarness(legacy) as migrated:
             view = migrated.coordinator_view(now=5)
             self.assertEqual(

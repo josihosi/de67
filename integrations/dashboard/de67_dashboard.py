@@ -161,7 +161,11 @@ def read_sidecar(script: Path, workspace: Path, state: Path, claim: str) -> dict
     return value
 
 
-def render_trajectory(report: dict[str, Any]) -> str:
+def render_trajectory(report: dict[str, Any], briefing: dict[str, Any] | None = None,
+                      *, stale: bool = False, error: str | None = None,
+                      context: dict[str, Any] | None = None) -> str:
+    if briefing is not None and not isinstance(briefing, dict):
+        briefing = {"error": "invalid briefing cache"}
     raw_gaps = report.get("gaps")
     gaps = [
         gap if isinstance(gap, dict) else {"summary": str(gap)}
@@ -173,39 +177,55 @@ def render_trajectory(report: dict[str, Any]) -> str:
         for item in raw_subtasks
     ] if isinstance(raw_subtasks, list) else []
     axes = subtasks or gaps
-    if not axes:
-        return '<section class="trajectory"><h2>Trajectory sidecar</h2><p class="subtle">No closure trajectory.</p></section>'
+    headline, details = briefing_content(briefing or {})
+    live = bool(axes) and not stale and (report.get("latest_task_result") == "active"
+                                      or any(item.get("status") == "active" for item in subtasks))
+    state = ("Last recorded trajectory · update unavailable" if stale else
+             "Active trajectory" if live else "Recorded trajectory" if axes else "No active trajectory")
+    context_label = " · ".join(
+        f"{label} {_escape(value)}" for label, value in (context or {}).items()
+        if value is not None and value != ""
+    )
+    header_label = context_label or (state if axes or stale else "")
+    state_label = f"<span>{header_label}</span>" if header_label else ""
+    notices = []
+    if error and error != "no active claim":
+        notices.append(f'<p class="radar-notice">Trajectory unavailable · {_escape(error)}</p>')
+    if briefing and (briefing.get("stale") or briefing.get("error")):
+        notices.append('<p class="radar-notice">Briefing update unavailable'
+                       + (' · showing the last saved briefing.' if headline else '.') + '</p>')
     return (
-        '<section class="trajectory"><h2>Trajectory sidecar</h2>'
-        f'{render_attention_spider(report, axes, gaps, bool(subtasks))}'
+        '<section class="trajectory"><header class="radar-briefing">'
+        f'<div class="radar-kicker">NAVIGATION {state_label}</div>'
+        f'<h2><strong>{_escape(headline or ("Tracking " + str(report.get("claim", "the current work")) if axes else "Standing by for the next trajectory."))}</strong></h2></header>'
+        f'{"".join(notices)}'
+        f'{render_attention_spider(report, axes, gaps, bool(subtasks), live=live)}'
+        f'<div class="radar-details">{details}</div>'
         '</section>'
     )
 
 
-def render_fratbro_status(value: dict[str, Any]) -> str:
+def briefing_content(value: dict[str, Any]) -> tuple[str, str]:
+    """Keep the recorded headline and every detail in the combined radar panel."""
     summary = value.get("summary") if isinstance(value, dict) else None
     if isinstance(summary, dict) and "headline" in summary:
         fields = "".join(
-            f'<div class="brief-field"><small>{label}</small><p>{_escape(summary.get(key, ""))}</p></div>'
+            f'<div class="radar-detail"><h3>{label}</h3><p>{_escape(summary.get(key, ""))}</p></div>'
             for key, label in (("changed", "What changed"), ("next", "Next"), ("snag", "Obstacle"))
             if summary.get(key)
         )
-        return ('<section class="fratbro"><div class="eyebrow">BRIEFING</div>'
-                f'<h2>{_escape(summary.get("headline", ""))}</h2><div class="brief-grid">{fields}</div></section>')
+        return str(summary.get("headline", "")), fields
     if isinstance(summary, dict):
         parts = [str(summary.get(key, "")).strip()
                  for key in ("cooking", "changed", "snag", "next", "health")
                  if str(summary.get(key, "")).strip()]
     elif isinstance(summary, str):
-        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z])", summary.strip())
+        parts = [part for part in re.split(r"(?<=[.!?])\s+", summary.strip(), maxsplit=1) if part]
     else:
         parts = []
     if not parts:
-        return '<section class="fratbro"><h2>Briefing</h2><p class="subtle">Waiting for a fresh briefing.</p></section>'
-    lead = parts[0]
-    return ('<section class="fratbro"><div class="eyebrow">BRIEFING</div>'
-            f'<h2>At a glance</h2><p class="brief-lead">{_escape(lead)}</p>'
-            f'<a class="text-link" href="/briefing">Read the full briefing ↗</a></section>')
+        return "", ""
+    return parts[0], "".join(f'<p>{_escape(part)}</p>' for part in parts[1:])
 
 
 def worker_dot_positions(count: int) -> list[tuple[float, float]]:
@@ -219,6 +239,21 @@ def worker_dot_positions(count: int) -> list[tuple[float, float]]:
             for i in range(visible)]
 
 
+def solar_filaments() -> str:
+    """A stable magnetic field; activity changes its visibility, not its geometry."""
+    import random
+    rng = random.Random(6701)
+    paths = []
+    def point(radius: float, angle: float) -> str:
+        return f"{160 + radius * math.cos(angle):.2f} {160 + radius * math.sin(angle):.2f}"
+    for index in range(64):
+        angle = math.radians(index * 360 / 64 + rng.uniform(-3, 3))
+        spread = rng.uniform(.025, .12)
+        height = rng.uniform(138, 178)
+        paths.append(f'<path d="M{point(121, angle - spread)} C{point(height, angle - spread * 2)} {point(height, angle + spread * 2)} {point(122, angle + spread)}" stroke-width="{rng.uniform(.6, 1.6):.2f}" opacity="{rng.uniform(.18, .65):.2f}"/>')
+    return ''.join(paths)
+
+
 def render_worker_scale(model: str, counts: dict[str, int]) -> str:
     levels = ("low", "medium", "high", "max")
     total = sum(counts.get(level, 0) for level in levels)
@@ -230,18 +265,18 @@ def render_worker_scale(model: str, counts: dict[str, int]) -> str:
         count = counts.get(level, 0)
         marks.append(f'<circle class="strength-stop" cx="{x}" cy="114" r="2"/>')
         for dx, dy in worker_dot_positions(count):
-            marks.append(f'<circle class="worker-dot" cx="{x + dx:.3f}" cy="{34 + dy:.3f}" r="4.67"><title>{_escape(model.title())} · {level.title()} reasoning</title></circle>')
+            marks.append(f'<circle class="worker-dot" cx="{x + dx:.3f}" cy="{58 + dy:.3f}" r="4.67"><title>{_escape(model.lower())} · {level.lower()} reasoning</title></circle>')
         if count > 12:
             marks.append(f'<text class="strength-overflow" x="{x}" y="8">+{count - 12}</text>')
-        marks.append(f'<text class="strength-label" x="{x}" y="156">{level.title()}</text>')
+        marks.append(f'<text class="strength-label" x="{x}" y="156">{level.lower()}</text>')
     emblem = ('<path fill="#7ee6c2" d="M25 4a14 14 0 1 0 0 28A16 16 0 0 1 25 4Z"/>'
               if model == "luna" else
               '<circle cx="18" cy="18" r="14" fill="#77accb"/><path fill="#cee2e7" d="M9 8Q13 4 18 4L20 7 17 10 18 12 15 14 14 18 11 17 10 13 7 12ZM18 19Q22 17 25 20L25 24 22 27 21 30 19 28 19 24 16 22Z"/><path d="M6 16A12 12 0 0 1 13 7" fill="none" stroke="#e2f1f3" stroke-opacity=".45" stroke-width=".8" stroke-linecap="round"/>')
     return (
-        f'<div class="worker-scale" data-model="{model}"><div class="scale-heading"><strong>{_escape(model.title())}</strong>'
+        f'<div class="worker-scale" data-model="{model}"><div class="scale-heading"><strong>{_escape(model.lower())}</strong>'
         f'<span><b>{total}</b> active</span></div>'
         f'<svg class="model-emblem" viewBox="0 0 36 36" aria-hidden="true">{emblem}</svg>'
-        f'<svg viewBox="0 0 396 170" role="img" aria-label="{_escape(model.title() + ": " + description)}">'
+        f'<svg viewBox="0 0 396 170" role="img" aria-label="{_escape(model.lower() + ": " + description)}">'
         + "".join(marks) + '</svg></div>'
     )
 
@@ -295,6 +330,7 @@ def render_attention_spider(
     axes_data: list[dict[str, Any]],
     gaps: list[dict[str, Any]],
     uses_subtasks: bool = False,
+    *, live: bool = False,
 ) -> str:
     gap_ids = [
         str(axis.get("subtask_id" if uses_subtasks else "gap_id", "?"))
@@ -302,44 +338,53 @@ def render_attention_spider(
     ]
     raw_series = report.get("attention")
     series = [item for item in raw_series if isinstance(item, dict)] if isinstance(raw_series, list) else []
-    radius = max(174, len(gap_ids) * 18)
-    node_radius = radius + 80
-    size = node_radius * 2 + 130
+    radius = max(174, len(gap_ids) * 12)
+    size = radius * 2 + 100
     center = size / 2
 
     def point(index: int, distance: float) -> tuple[float, float]:
-        angle = -math.pi / 2 + (2 * math.pi * index / len(gap_ids))
+        angle = -math.pi / 2 + (2 * math.pi * index / max(1, len(gap_ids)))
         return center + distance * math.cos(angle), center + distance * math.sin(angle)
 
     grid: list[str] = []
     for fraction in (0.25, 0.5, 0.75, 1.0):
-        coordinates = " ".join(
-            f"{x:.1f},{y:.1f}" for x, y in (point(index, radius * fraction) for index in range(len(gap_ids)))
-        )
-        grid.append(f'<polygon points="{coordinates}" />')
+        grid.append(f'<circle cx="{center}" cy="{center}" r="{radius * fraction}" />')
+    for bearing in range(0, 360, 5):
+        angle = math.radians(bearing)
+        inner = radius + (13 if bearing % 30 == 0 else 18)
+        outer = radius + 23
+        grid.append(f'<line x1="{center + inner * math.cos(angle):.1f}" y1="{center + inner * math.sin(angle):.1f}" '
+                    f'x2="{center + outer * math.cos(angle):.1f}" y2="{center + outer * math.sin(angle):.1f}" />')
     axes: list[str] = []
     nodes: list[str] = []
+    node_data: list[tuple[str, str, str, str, str, float, float]] = []
+    cards: dict[str, list[tuple[float, str]]] = {"left": [], "right": []}
     latest_gap = str(report.get("latest_task_gap") or "")
     for index, (gap_id, gap) in enumerate(zip(gap_ids, axes_data)):
         x, y = point(index, radius)
-        node_x, node_y = point(index, node_radius)
         axes.append(f'<line x1="{center:.1f}" y1="{center:.1f}" x2="{x:.1f}" y2="{y:.1f}" />')
         status = str(gap.get("status", "open"))
         active = status == "active" if uses_subtasks else (
             gap_id == latest_gap and report.get("latest_task_result") == "active"
         )
         tone = "active" if active else "proved" if status in {"proved", "done"} else "open"
-        summary = " ".join(str(gap.get("summary", "")).split())
-        nodes.append(
-            f'<g class="trajectory-node {tone}" transform="translate({node_x - 58:.1f} {node_y - 28:.1f})">'
-            f'<title>{_escape(summary)}</title><rect width="116" height="56" rx="8" />'
-            f'<text x="58" y="21">{_escape(gap_id)}'
-            f'{"" if uses_subtasks else " r" + _escape(gap.get("revision", "?"))}</text>'
-            f'<text class="node-state" x="58" y="41">{_escape("active" if active else status)}'
-            f'{"" if uses_subtasks else " · " + _escape(gap.get("attempts", 0)) + " attempts"}</text></g>'
-        )
+        summary = " ".join(str(gap.get("summary", "No explanation recorded.")).split())
+        label = gap_id + ("" if uses_subtasks else " r" + str(gap.get("revision", "?")))
+        state = ("active" if active else status) + ("" if uses_subtasks else " · " + str(gap.get("attempts", 0)) + " attempts")
+        contact = f"{index + 1:02d}"
+        node_data.append((label, state, summary, tone, contact, x, y))
+        side = "left" if x < center - 1 or (abs(x - center) <= 1 and index == 0) else "right"
+        cards[side].append((y,
+            f'<article id="trajectory-contact-{index}" class="radar-contact {tone}" data-radar-index="{index}" style="--contact-order:{index + 1}">'
+            f'<div class="radar-contact-heading"><span class="contact-number">{contact}</span>'
+            f'<span class="contact-id">{_escape(label)}</span></div>'
+            f'<p>{_escape(summary)}</p><span class="contact-state">{_escape(state)}</span></article>'
+        ))
 
     shapes: list[str] = []
+    headings: list[str] = []
+    destinations: list[str] = []
+    measurements: dict[int, list[str]] = {}
     legend: list[str] = []
     available_keys = {"target", "code", "test", "result"}
     for item in series:
@@ -362,23 +407,51 @@ def render_attention_spider(
                 raw = max(0.0, float(entry.get("raw_relation", 0)))
             except (TypeError, ValueError):
                 raw = 0.0
+            measurements.setdefault(index, []).append(
+                f'{item.get("label", key)} · relative {relative:.2f} · cosine {raw:.3f}')
             x, y = point(index, radius * relative)
             coordinates.append(f"{x:.1f},{y:.1f}")
             circles.append(
                 f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3"><title>{_escape(str(item.get("label", key)))} '
                 f'→ {_escape(gap_id)} · relative {relative:.2f} · cosine {raw:.3f}</title></circle>'
             )
+            if key == "target" and relative > 0:
+                course = f'M{center:.1f},{center:.1f} L{x:.1f},{y:.1f}'
+                ship_x, ship_y = point(index, radius * relative * .78)
+                bearing = math.degrees(math.atan2(y - center, x - center)) + 90
+                headings.append(
+                    f'<g class="assigned-bearing{" heading-live" if live else ""}" data-assigned-index="{index}">'
+                    f'<title>{"Assigned to" if live else "Last assignment"} {_escape(gap_id)}</title>'
+                    f'<path class="assigned-course-halo" d="{course}" />'
+                    f'<path class="assigned-course" d="{course}" />'
+                    f'<g class="assigned-ship" transform="translate({ship_x:.1f} {ship_y:.1f}) rotate({bearing:.1f})">'
+                    '<path class="ship-exhaust" d="M-3 9 L0 21 L3 9Z" />'
+                    '<path d="M0 -12 L8 9 L0 5 L-8 9Z" /></g></g>'
+                )
+                destinations.append(f'<a href="#trajectory-contact-{index}">{index + 1:02d} · {_escape(gap_id)}</a>')
         label = str(item.get("label", key))
         source = str(item.get("source", ""))
-        shapes.append(
-            f'<g class="attention-series attention-{css_key}"><polygon points="{" ".join(coordinates)}">'
-            f'<title>{_escape(label)} · {_escape(source)}</title></polygon>{"".join(circles)}</g>'
-        )
+        if key != "target":
+            shapes.append(
+                f'<g class="attention-series attention-{css_key}"><polygon points="{" ".join(coordinates)}">'
+                f'<title>{_escape(label)} · {_escape(source)}</title></polygon>{"".join(circles)}</g>'
+            )
         legend.append(
             f'<span title="{_escape(source)}"><i class="attention-key attention-{css_key}"></i>{_escape(label)}</span>'
         )
+    for index, (label, state, summary, tone, contact, x, y) in enumerate(node_data):
+        # Boundary markers cover maximum-attention points; retain all their values
+        # in the marker tooltip as well as on the individual series points.
+        tooltip = " · ".join([label, state, summary, *measurements.get(index, [])])
+        nodes.append(
+            f'<a href="#trajectory-contact-{index}" class="trajectory-node {tone}">'
+            f'<title>{_escape(tooltip)}</title>'
+            f'<circle data-radar-marker="{index}" cx="{x:.1f}" cy="{y:.1f}" r="15" />'
+            f'<text x="{x:.1f}" y="{y + 4:.1f}">{contact}</text></a>'
+        )
     gap_cards: list[str] = []
-    for gap in gaps:
+    # The side cards already contain gap descriptions unless the map uses subtasks.
+    for gap in gaps if uses_subtasks else []:
         gap_id = str(gap.get("gap_id", "?"))
         summary = " ".join(str(gap.get("summary", "No explanation recorded.")).split())
         status = str(gap.get("status", "open"))
@@ -392,17 +465,29 @@ def render_attention_spider(
         )
     return (
         f'<article class="attention-panel"><div class="attention-heading"><h3>'
-        f'{"Subtask attention" if uses_subtasks else "Attention spider"}</h3>'
+        f'{"Subtask constellation" if uses_subtasks else "Work constellation"}</h3>'
         f'<span>{"Relative pull · not completion" if series else "Waiting for attention data"}</span></div>'
-        f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="Attention distribution across '
+        f'<div class="radar-stage{" radar-idle" if not axes_data else ""}">'
+        '<svg class="radar-links" aria-hidden="true"></svg>'
+        '<div class="radar-scope">'
+        f'<svg class="radar-map" viewBox="0 0 {size} {size}" role="img" aria-label="Attention distribution across '
         f'{"ledger subtasks" if uses_subtasks else "closure gaps"}">'
+        f'<circle class="radar-disc" cx="{center}" cy="{center}" r="{radius + 27}" />'
         f'<g class="attention-grid">{"".join(grid)}{"".join(axes)}</g>'
-        f'{"".join(shapes)}<g class="attention-nodes">{"".join(nodes)}</g></svg>'
+        f'<path class="radar-origin" d="M{center - 8} {center}h16 M{center} {center - 8}v16" />'
+        f'{"".join(shapes)}{"".join(headings)}<g class="attention-nodes">{"".join(nodes)}</g></svg>'
+        f'{"<p class=radar-standby>No active trajectory<br><span>Awaiting work coordinates</span></p>" if not axes_data else ""}'
+        '</div>'
+        f'<div class="radar-contacts radar-left">{"".join(card for _, card in sorted(cards["left"]))}</div>'
+        f'<div class="radar-contacts radar-right">{"".join(card for _, card in sorted(cards["right"]))}</div></div>'
+        + (f'<div class="assigned-destination"><span>{"Assigned to" if live else "Last assignment"}</span>'
+           f'{"".join(destinations)}</div>' if destinations else '') +
         f'<div class="attention-legend">{"".join(legend)}</div>'
-        f'<div class="attention-claim"><strong>{_escape(report.get("claim", "Claim"))}</strong>'
-        f'<span>{_escape(report.get("latest_task") or "No active attempt")}</span></div>'
+        + (f'<div class="attention-claim"><strong>{_escape(report.get("claim", ""))}</strong>'
+           f'<span>{_escape(report.get("latest_task") or "No active attempt")}</span></div>'
+           if report.get("claim") or report.get("latest_task") else '') +
         f'<div class="gap-explanations">{"".join(gap_cards)}</div>'
-        '<p>Each line is scaled to its own strongest gap. Hover a point for raw cosine similarity.</p>'
+        + ('<p>Each line is scaled to its own strongest work item. Hover a point for raw cosine similarity.</p>' if series else '') +
         '</article>'
     )
 
@@ -424,6 +509,29 @@ def _read_snapshot(path: Path) -> tuple[str, dict[str, Any]]:
         "mtime": after.st_mtime,
         "invalid_utf8": invalid_utf8,
     }
+
+
+def _read_specification_snapshot(path: Path) -> tuple[str, dict[str, Any]]:
+    """Read the migrated FS through the shared method resolver, without writes."""
+    if not (path.parent / "FS.md").exists():
+        return _read_snapshot(path)
+    import importlib.util
+    resolver = Path(os.environ.get(
+        "DE67_SPECIFICATION_SCRIPT",
+        str(Path.home() / ".codex/skills/de67/de-67-3/scripts/specification.py"),
+    ))
+    spec = importlib.util.spec_from_file_location("_de67_dashboard_specification", resolver)
+    if spec is None or spec.loader is None:
+        raise OSError("FS resolver is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    selected = module.resolve(path.parent)
+    text, identity = _read_snapshot(selected.path)
+    if text != selected.text:
+        raise OSError("specification changed while it was being read")
+    identity["path"] = str(selected.path)
+    return text, identity
 
 
 def parse_ledger(text: str) -> dict[str, Any]:
@@ -900,7 +1008,8 @@ def _active_worker_claims(workspace: Path) -> dict[str, str] | None:
             "SELECT claim.worker_id, claim.coordinator_session_id "
             "FROM worker_claims AS claim JOIN tasks AS task "
             "ON task.lineage_id = claim.lineage_id AND task.task_id = claim.task_id "
-            f"WHERE claim.released_at IS NULL{where}"
+            f"WHERE claim.lineage_id = ? AND claim.released_at IS NULL{where}",
+            (clock["lineage"],),
         ).fetchall()
         return {str(row["worker_id"]): str(row["coordinator_session_id"]) for row in rows}
     finally:
@@ -1028,6 +1137,159 @@ def _active_coordinator_id(workspace: Path) -> str | None:
     return None
 
 
+def native_mutator_state(workspace: Path, refresh_seconds: int) -> dict[str, Any] | None:
+    config = workspace / ".de67/state/workspace.json"
+    if not config.exists() or json.loads(config.read_text()).get("persistent_mutator") is not True:
+        return None
+    path = workspace / ".de67/state/mutator-session.json"
+    if not path.exists():
+        return {"glowing": False, "status": "idle"}
+    session = json.loads(path.read_text())
+    address = workspace / ".de67/state/mutator-input.json"
+    if session.get("state") == "active" and address.exists():
+        binding = json.loads(address.read_text())
+        if (binding.get("workspace") == str(workspace.resolve())
+                and binding.get("thread_id") == session.get("thread_id")
+                and binding.get("state") == "active"):
+            try:
+                os.kill(binding["runner_pid"], 0)
+                os.kill(binding["server_pid"], 0)
+                return {"glowing": True, "status": session.get("mode", "working")}
+            except ProcessLookupError:
+                pass
+    if (session.get("result") == "completed"
+            and 0 <= time.time() - session.get("updated_at", 0) <= refresh_seconds):
+        return {"glowing": True, "status": "replied"}
+    return {"glowing": False, "status": "idle"}
+
+
+def openclaw_mutator_state(database: Path, refresh_seconds: int) -> dict[str, Any]:
+    """Read the dedicated mutator agent's activity, never its message contents."""
+    uri = f"file:{quote(str(database.resolve()), safe='/:')}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, timeout=0)
+    try:
+        rows = connection.execute(
+            "SELECT windows.status, windows.ended_at FROM session_nodes AS nodes "
+            "JOIN session_windows AS windows ON windows.session_id=nodes.current_session_id "
+            "WHERE nodes.archived_at IS NULL"
+        ).fetchall()
+        queued = connection.execute(
+            "SELECT 1 FROM session_pending_inputs AS inputs "
+            "JOIN session_nodes AS nodes ON inputs.session_id=nodes.current_session_id "
+            "WHERE nodes.archived_at IS NULL AND inputs.state='queued' "
+            "AND inputs.consumed_event_id IS NULL LIMIT 1"
+        ).fetchone()
+    finally:
+        connection.close()
+    if any(status == "running" for status, _ in rows):
+        return {"glowing": True, "status": "working"}
+    if queued:
+        return {"glowing": True, "status": "queued"}
+    # Keep quick replies visible for one normal refresh interval as well.
+    if any(status == "done" and ended is not None
+           and 0 <= time.time() - ended / 1000 <= refresh_seconds for status, ended in rows):
+        return {"glowing": True, "status": "replied"}
+    return {"glowing": False, "status": "idle"}
+
+
+def _reverse_session_lines(path: Path):
+    """Read complete lines backward without a fixed activity-history cutoff."""
+    with path.open("rb") as source:
+        position = source.seek(0, os.SEEK_END)
+        pending = b""
+        while position:
+            size = min(position, 65536)
+            position -= size
+            source.seek(position)
+            lines = (source.read(size) + pending).split(b"\n")
+            pending = lines[0]
+            for line in reversed(lines[1:]):
+                yield line.decode("utf-8", errors="replace")
+        if pending:
+            yield pending.decode("utf-8", errors="replace")
+
+
+def _tool_is_waiting(payload: dict[str, Any]) -> bool:
+    name = str(payload.get("name", "")).rsplit(".", 1)[-1]
+    if name in ("wait_agent", "wait_threads", "sleep", "wait", "request_user_input"):
+        return True
+    try:
+        arguments = json.loads(payload.get("arguments", "{}"))
+    except (ValueError, TypeError):
+        arguments = {}
+    if name == "write_stdin":
+        return not arguments.get("chars")
+    if name == "exec":
+        # Code-mode wraps the same shell call in JavaScript. Decode only its
+        # literal command; never execute trace contents to discover activity.
+        source = str(payload.get("input", ""))
+        match = re.search(r'(?:\bcmd|"cmd")\s*:\s*("(?:\\.|[^"\\])*")', source)
+        if not match or "tools.exec_command(" not in source:
+            if "tools.write_stdin(" not in source:
+                return False
+            chars = re.search(r'(?:\bchars|"chars")\s*:', source)
+            return chars is None or bool(re.match(r'\s*(?:""|\'\')\s*[,}]', source[chars.end():]))
+        try:
+            arguments = {"cmd": json.loads(match[1])}
+        except ValueError:
+            return False
+    elif name != "exec_command":
+        return False
+    try:
+        lexer = shlex.shlex(arguments.get("cmd", ""), posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        argv = list(lexer)
+    except ValueError:
+        return False
+    if (len(argv) < 3 or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", Path(argv[0]).name)
+            or Path(argv[1]).name != "worker_library.py"):
+        return False
+    rest = argv[2:]
+    if len(rest) >= 2 and rest[0] == "--workspace":
+        rest = rest[2:]
+    return bool(rest and rest[0] == "wait" and not any(
+        token in (";", "&&", "||", "|", "&") for token in rest))
+
+
+def _session_activity(path: Path) -> str:
+    """Project the latest execution signal, ignoring accounting and incoming mail."""
+    for line in _reverse_session_lines(path):
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        payload = record.get("payload", {})
+        kind = payload.get("type")
+        if record.get("type") == "event_msg":
+            if kind in ("task_complete", "turn_aborted"):
+                return "waiting"
+            if kind == "task_started":
+                return "working"
+        if record.get("type") != "response_item":
+            continue
+        if kind in ("function_call", "custom_tool_call"):
+            return "waiting" if _tool_is_waiting(payload) else "working"
+        if kind in ("function_call_output", "custom_tool_call_output", "reasoning"):
+            return "working"
+        if kind == "message" and payload.get("role") == "assistant":
+            return "waiting" if payload.get("phase") == "final" else "working"
+    return "unknown"
+
+
+def coordinator_activity(workspace: Path, sessions_root: Path) -> str:
+    session = _active_coordinator_id(workspace)
+    if not session:
+        return "unknown"
+    index = sessions_root.parent / "state_5.sqlite"
+    uri = f"file:{quote(str(index), safe='/:')}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, timeout=0)
+    try:
+        row = connection.execute("SELECT rollout_path FROM threads WHERE id=?", (session,)).fetchone()
+    finally:
+        connection.close()
+    return _session_activity(Path(row[0])) if row else "unknown"
+
+
 def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     """Project active roster subagents from Codex's existing read-only session records."""
     counts = {model: {effort: 0 for effort in ("low", "medium", "high", "max")}
@@ -1043,12 +1305,16 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
         uri = f"file:{quote(str(index), safe='/:')}?mode=ro"
         connection = sqlite3.connect(uri, uri=True, timeout=0)
         try:
+            # Library workers have durable owners but need not have native
+            # spawn edges. Seed their helper trees from those same claims.
+            seeds = sorted(owners | set(active_claims))
+            values = ",".join("(?)" for _ in seeds)
             rows = connection.execute(
-                "WITH RECURSIVE tree(id) AS (SELECT ? UNION "
+                f"WITH RECURSIVE tree(id) AS (VALUES {values} UNION "
                 "SELECT child_thread_id FROM thread_spawn_edges JOIN tree "
                 "ON parent_thread_id=tree.id) "
                 "SELECT rollout_path FROM threads JOIN tree ON threads.id=tree.id",
-                (next(iter(owners)),),
+                seeds,
             ).fetchall()
             paths = [Path(row[0]) for row in rows]
         finally:
@@ -1058,7 +1324,9 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     root_path: Path | None = None
     root: dict[str, Any] = {}
     target = workspace.resolve()
-    active_coordinator_id = _active_coordinator_id(workspace)
+    active_coordinator_id = _active_coordinator_id(workspace) or (
+        next(iter(active_claims.values())) if active_claims else None
+    )
     for path in paths:
         candidate = _session_header(path)
         try:
@@ -1090,9 +1358,8 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
             continue
         candidates.append((path, candidate))
 
-    # Codex owns the real spawn tree. Count all live descendants, including
-    # optional Luna helpers below a primary Terra worker, without creating a
-    # parallel ownership model in DE67.
+    # Durable claims identify current primaries, including reused library
+    # workers. Codex's native spawn tree supplies their helper descendants.
     root_id = str(root["id"])
     descendants = {root_id}
     pending = candidates
@@ -1100,8 +1367,10 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
         next_pending: list[tuple[Path, dict[str, Any]]] = []
         changed = False
         for path, candidate in pending:
-            parent = str(candidate.get("parent", ""))
             candidate_id = str(candidate.get("id", ""))
+            parent = str(candidate.get("parent", ""))
+            if active_claims is not None and candidate_id in active_claims:
+                parent = active_claims[candidate_id]
             if parent not in descendants:
                 next_pending.append((path, candidate))
                 continue
@@ -1121,8 +1390,9 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
                 continue
             if active_claims is not None and parent != root_id and _session_complete(path):
                 continue
-            model = str(candidate.get("model", "")).lower().rsplit("-", 1)[-1]
-            effort = str(candidate.get("effort", "")).lower()
+            context = _trace_fuel(path)
+            model = str(context.get("model", "")).lower().rsplit("-", 1)[-1]
+            effort = str(context.get("effort", "")).lower()
             if model in counts and effort in counts[model]:
                 counts[model][effort] += 1
         if not changed:
@@ -1132,18 +1402,39 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
 
 
 
-_TOKEN_TRACES: dict[str, dict[str, Any]] = {}
+_TOKEN_TRACES: dict[tuple[str, bool], dict[str, Any]] = {}
 
 
-def _trace_fuel(path: Path) -> dict[str, Any]:
-    """Read complete appended token events; never treat absent accounting as zero."""
+def _trace_fuel(path: Path, *, windows: list[tuple[float, float | None]] | None = None) -> dict[str, Any]:
+    """Read appended context and usage; retain the producing model for each delta."""
     from datetime import datetime
-    key = str(path)
+    key = (str(path), windows is not None)
+    selection = None if windows is None else tuple(sorted(set(windows), key=lambda window: (
+        window[0], float("inf") if window[1] is None else window[1])))
     stat = path.stat()
     cached = _TOKEN_TRACES.get(key)
-    if cached is None or stat.st_size < cached["offset"]:
-        cached = {"offset": 0, "fresh": None, "observed": 0, "partial": False, "points": []}
+    if cached is None or stat.st_size < cached["offset"] or cached["windows"] != selection:
+        cached = {"offset": 0, "fresh": None, "observed": 0, "partial": False, "points": [],
+                  "model": None, "effort": None, "worker_points": [], "windows": selection,
+                  "worker_totals": {"terra": 0, "luna": 0, "other": 0}}
         _TOKEN_TRACES[key] = cached
+
+    def record(delta: int, timestamp: float | None = None) -> None:
+        if selection is not None:
+            if timestamp is None:
+                cached["partial"] = True
+                return
+            if not any(start <= timestamp and (end is None or timestamp < end)
+                       for start, end in selection):
+                return
+        model = str(cached["model"]).lower().rsplit("-", 1)[-1]
+        role = model if model in ("terra", "luna") else "other"
+        cached["observed"] += delta
+        cached["worker_totals"][role] += delta
+        if timestamp is not None:
+            cached["points"].append((timestamp, delta))
+            cached["worker_points"].append((timestamp, delta, role))
+
     with path.open("rb") as stream:
         stream.seek(cached["offset"])
         while True:
@@ -1151,11 +1442,15 @@ def _trace_fuel(path: Path) -> dict[str, Any]:
             if not line or not line.endswith(b"\n"):
                 break
             cached["offset"] = stream.tell()
-            if b'"token_count"' not in line:
+            if b'"token_count"' not in line and b'"turn_context"' not in line:
                 continue
             try:
                 item = json.loads(line)
                 payload = item.get("payload", {})
+                if item.get("type") == "turn_context":
+                    cached["model"] = payload.get("model")
+                    cached["effort"] = payload.get("effort")
+                    continue
                 if item.get("type") != "event_msg" or payload.get("type") != "token_count":
                     continue
                 usage = (payload.get("info") or {}).get("total_token_usage") or {}
@@ -1164,6 +1459,13 @@ def _trace_fuel(path: Path) -> dict[str, Any]:
                     continue
                 timestamp = datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")).timestamp()
                 previous = cached["fresh"]
+                if selection is not None and not any(
+                    start <= timestamp and (end is None or timestamp < end) for start, end in selection
+                ):
+                    # Keep the baseline for subsequent deltas, but uncertainty
+                    # in another assignment does not describe this selection.
+                    cached["fresh"] = fresh
+                    continue
                 if previous is None or fresh < previous:
                     # Resuming after compaction can reset cumulative counters.
                     # The latest turn is new use; an inherited baseline is not.
@@ -1172,22 +1474,22 @@ def _trace_fuel(path: Path) -> dict[str, Any]:
                         delta = int(last["input_tokens"]) - int(last["cached_input_tokens"]) + int(last["output_tokens"])
                         if delta < 0:
                             continue
-                        cached["observed"] += delta
-                        cached["points"].append((timestamp, delta))
+                        record(delta, timestamp)
                         cached["partial"] |= fresh != delta
                     else:
                         # Only a cumulative observation is available. Keep it in
                         # the partial total, without inventing an instant burst.
-                        cached["observed"] += fresh
+                        record(fresh)
                         cached["partial"] = True
                 else:
                     delta = fresh - previous
-                    cached["observed"] += delta
-                    cached["points"].append((timestamp, delta))
+                    record(delta, timestamp)
                 cached["fresh"] = fresh
             except (ValueError, TypeError, KeyError):
                 continue
-    cached["points"] = [(t, n) for t, n in cached["points"] if t >= time.time() - 28800]
+    cached["points"] = [(t, n) for t, n in cached["points"] if t >= time.time() - 86400]
+    cached["worker_points"] = [(t, n, role) for t, n, role in cached["worker_points"]
+                               if t >= time.time() - 86400]
     return cached
 
 
@@ -1201,10 +1503,21 @@ def fuel_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
         attempts = connection.execute(
             "SELECT role,run_id FROM supervisor_attempts WHERE lineage_id=?",
             (config["lineage"],)).fetchall()
+        claims = []
+        claim_columns = _table_columns(connection, "worker_claims")
+        claim_windows_unavailable = bool(claim_columns) and not {
+            "lineage_id", "worker_id", "coordinator_session_id", "claimed_at", "released_at"
+        }.issubset(claim_columns)
+        if claim_columns and not claim_windows_unavailable:
+            claims = connection.execute(
+                "SELECT worker_id,coordinator_session_id,claimed_at,released_at "
+                "FROM worker_claims WHERE lineage_id=?",
+                (config["lineage"],),
+            ).fetchall()
     finally:
         connection.close()
     roots = {}
-    missing = 0
+    missing = int(claim_windows_unavailable)
     for role, run_id in attempts:
         try:
             session = (workspace / ".de67/state/coordinator-runs" / run_id / "session_id.txt").read_text().strip()
@@ -1214,9 +1527,17 @@ def fuel_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
                 missing += 1
         except OSError:
             missing += 1
+    # Retain every assignment in this campaign, including released ones.
+    # Reused conversations and their helpers inherit the union of its windows.
+    worker_windows: dict[str, list[tuple[float, float | None]]] = {}
+    for worker, owner, start, end in claims:
+        if roots.get(owner) == "coordinator":
+            roots.setdefault(worker, "workers")
+            worker_windows.setdefault(worker, []).append((float(start), None if end is None else float(end)))
     index = sessions_root.parent / "state_5.sqlite"
     connection = sqlite3.connect(f"file:{quote(str(index), safe='/:')}?mode=ro", uri=True, timeout=0)
     sessions = {}
+    session_windows: dict[str, list[tuple[float, float | None]]] = {}
     try:
         for root, role in roots.items():
             rows = connection.execute(
@@ -1228,28 +1549,38 @@ def fuel_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
                 missing += 1
             for session, path in rows:
                 sessions[session] = (roots.get(session, "astra" if role == "astra" else "workers"), Path(path))
+                if root in worker_windows:
+                    session_windows.setdefault(session, []).extend(worker_windows[root])
     finally:
         connection.close()
-    totals = {"coordinator": 0, "workers": 0, "astra": 0}
+    totals = {"astra": 0, "coordinator": 0, "terra": 0, "luna": 0, "other": 0}
     known = 0
     now = time.time()
-    bins = [0] * 32  # Fifteen-minute display bins over the last eight hours.
-    for role, path in sessions.values():
+    bins = [0] * 24  # One-hour display bins over the last twenty-four hours.
+    series = {role: [0] * len(bins) for role in totals}
+    for session, (role, path) in sessions.items():
         try:
-            usage = _trace_fuel(path)
+            usage = _trace_fuel(path, windows=session_windows.get(session) if role == "workers" else None)
             if usage["fresh"] is None:
                 missing += 1
                 continue
             known += 1
-            totals[role] += usage["observed"]
+            if role == "workers":
+                for worker_role, total in usage["worker_totals"].items():
+                    totals[worker_role] += total
+                points = usage["worker_points"]
+            else:
+                totals[role] += usage["observed"]
+                points = ((stamp, delta, role) for stamp, delta in usage["points"])
             missing += bool(usage["partial"])
-            for stamp, delta in usage["points"]:
-                bucket = int((stamp - (now - 28800)) / 900)
+            for stamp, delta, point_role in points:
+                bucket = int((stamp - (now - 86400)) / 3600)
                 if 0 <= bucket < len(bins):
                     bins[bucket] += delta
+                    series[point_role][bucket] += delta
         except OSError:
             missing += 1
-    return {"available": bool(known), "totals": totals, "bins": bins,
+    return {"available": bool(known), "totals": totals, "bins": bins, "series": series,
             "partial": bool(missing), "sessions": known, "lineage": config["lineage"]}
 
 
@@ -1271,20 +1602,245 @@ def render_fuel(fuel: dict[str, Any]) -> str:
     ceiling = next(step * magnitude for step in (1, 2, 2.5, 5, 10) if step * magnitude >= peak)
     def axis_label(value: float) -> str:
         return f"{value / 1000000:g}m" if value >= 1000000 else f"{value / 1000:g}k" if value >= 1000 else f"{value:g}"
-    points = " ".join(f"{4 + i * 136 / max(1, len(bins)-1):.1f},{49 - value / ceiling * 42:.1f}" for i, value in enumerate(bins))
+    roles = [("astra", "mutator", "#fff0d6"), ("coordinator", "coordinator", "#eabd69"),
+             ("terra", "worker terra", "#77accb"), ("luna", "worker luna", "#82dfbd")]
+    if totals.get("other", 0):
+        roles.append(("other", "other workers", "#9997a0"))
+    cumulative = [0] * len(bins)
+    layers = []
+    def coordinates(values: list[int]) -> list[str]:
+        return [f"{i * 140 / max(1, len(values)-1):.1f},{115 - value / ceiling * 108:.1f}"
+                for i, value in enumerate(values)]
+    for role, label, color in roles:
+        baseline = coordinates(cumulative)
+        cumulative = [a + b for a, b in zip(cumulative, fuel["series"][role])]
+        upper = coordinates(cumulative)
+        layers.append(f'<g class="fuel-series" data-role="{role}" style="color:{color}">'
+                      f'<title>{label}</title><polygon points="{" ".join(upper + baseline[::-1])}" '
+                      f'fill="currentColor" fill-opacity=".72"/></g>')
     ticks = "".join(
-        f'<path d="M144 {y}h3" stroke="currentColor" opacity=".35"/>'
-        f'<text x="152" y="{y}" dominant-baseline="middle">{axis_label(value)}</text>'
-        for value, y in ((ceiling, 7), (ceiling / 2, 28), (0, 49))
+        f'<span style="top:{position}%">{axis_label(value)}</span>'
+        for value, position in ((ceiling, 0), (ceiling / 2, 50), (0, 100))
     )
-    rows = "".join(f'<span>{label}<b>{compact(totals[role])}</b></span>'
-                   for role, label in (("coordinator", "coordinator"), ("workers", "workers"), ("astra", "mutator")))
-    return (f'<aside class="fuel" title="{_escape(title)}"><small>fresh tokens</small>'
-            f'<strong>{compact(total)}{"<sup>~</sup>" if fuel["partial"] else ""}</strong>'
-            f'<span class="fuel-scope">campaign{" · partial" if fuel["partial"] else ""}</span>'
-            f'<svg viewBox="0 0 188 56" role="img" aria-label="Fresh-token burn over the last eight hours. Linear right axis: 0 to {axis_label(ceiling)} tokens per fifteen minutes.">'
-            f'<polyline points="{points}" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M144 7V49" stroke="currentColor" opacity=".2"/>{ticks}</svg>'
-            f'<span class="fuel-period">tokens / 15 min · last 8h</span><div>{rows}</div></aside>')
+    positive_totals = [totals[role] for role, _, _ in roles if totals[role] > 0]
+    smallest, largest = (min(positive_totals), max(positive_totals)) if positive_totals else (1, 10)
+    nice_ticks = [step * 10 ** exponent
+                  for exponent in range(math.floor(math.log10(smallest)) - 1,
+                                        math.ceil(math.log10(largest)) + 2)
+                  for step in (1, 2, 5)]
+    lower = max(value for value in nice_ticks if value <= smallest)
+    upper = min(value for value in nice_ticks if value >= largest)
+    if lower == upper:
+        lower = max(value for value in nice_ticks if value < smallest)
+        upper = min(value for value in nice_ticks if value > largest)
+    log_minimum, log_span = math.log10(lower), math.log10(upper / lower)
+    def total_position(value: float) -> float:
+        return 100 * (math.log10(value) - log_minimum) / log_span
+    interior = [value for value in nice_ticks if lower < value < upper]
+    middle = min(interior, key=lambda value: abs(total_position(value) - 50)) if interior else None
+    total_ticks = (lower, middle, upper) if middle is not None else (lower, upper)
+    bar_axis = '<div class="fuel-bar-axis" aria-label="Role total logarithmic axis">' + "".join(
+        f'<span style="left:{total_position(value):.2f}%">{axis_label(value)}</span>'
+        for value in total_ticks) + '</div>' if positive_totals else ''
+    rocket = ('<svg viewBox="0 0 24 16" aria-hidden="true">'
+              '<path d="M7 5L7 1L13 4M7 11L7 15L13 12" fill="currentColor"/>'
+              '<path d="M6 5Q14 2 22 8Q14 14 6 11Z" fill="currentColor"/>'
+              '<circle cx="15" cy="8" r="2" fill="#101318"/>'
+              '<path d="M5 6L0 8L5 10Z" fill="currentColor" opacity=".55"/></svg>')
+    legend = '<div class="fuel-legend">' + "".join(
+        f'<span><i style="color:{color}" aria-hidden="true"></i>{label.removeprefix("worker ")}</span>'
+        for role, label, color in roles) + '</div>'
+    rows = "".join(
+        f'<span title="{_escape(label)}: {totals[role]:,} fresh tokens" aria-label="{_escape(label)}: {totals[role]:,} fresh tokens">'
+        + (f'<em style="left:{total_position(totals[role]):.2f}%;color:{color}">{rocket}</em>' if totals[role] > 0 else '')
+        + f'<b>{compact(totals[role])}</b></span>'
+        for role, label, color in roles)
+    return (f'<aside class="fuel" title="{_escape(title)}">'
+            f'<div class="fuel-spark" role="img" aria-label="Stacked fresh-token use over the last twenty-four hours; upper edge is the total. Linear right axis: 0 to {axis_label(ceiling)} tokens per hour.">'
+            f'<svg viewBox="0 0 140 122" preserveAspectRatio="none" aria-hidden="true">{"".join(layers)}</svg><div class="fuel-spark-axis">{ticks}</div></div>'
+            f'<span class="fuel-period">tokens / hour · last 24h</span>{legend}<div class="fuel-bars" title="Dot positions use a logarithmic axis spanning the positive role totals. Zero totals have no dot. Tooltips show exact totals."><small>role totals · log scale</small>{rows}{bar_axis}</div>'
+            f'<strong class="fuel-total"><span>total</span>{compact(total)}{"<sup>~</sup>" if fuel["partial"] else ""}</strong>'
+            f'<span class="fuel-scope">campaign{" · partial" if fuel["partial"] else ""}</span></aside>')
+
+
+
+def read_subscription_limits(codex: str, timeout: float = 15) -> dict[str, Any]:
+    """Read account quota over a private stdio connection; never start a model turn."""
+    import queue
+
+    flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+    process = subprocess.Popen(
+        [codex, "app-server", "--listen", "stdio://"], cwd=Path.home(),
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        text=True, encoding="utf-8", **flags,
+    )
+    replies: queue.Queue[Any] = queue.Queue()
+
+    def receive() -> None:
+        try:
+            for line in process.stdout:
+                try:
+                    replies.put(json.loads(line))
+                except ValueError:
+                    continue
+        finally:
+            replies.put(None)
+
+    reader = threading.Thread(target=receive, daemon=True)
+    reader.start()
+    deadline = time.monotonic() + timeout
+
+    def send(message: dict[str, Any]) -> None:
+        process.stdin.write(json.dumps(message) + "\n")
+        process.stdin.flush()
+
+    def response(identifier: int) -> dict[str, Any]:
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError("Subscription read timed out")
+            try:
+                message = replies.get(timeout=left)
+            except queue.Empty:
+                raise TimeoutError("Subscription read timed out") from None
+            if message is None:
+                raise RuntimeError("Subscription connection closed")
+            if isinstance(message, dict) and message.get("id") == identifier:
+                if "error" in message:
+                    raise RuntimeError("Subscription read unavailable")
+                return message["result"]
+
+    try:
+        send({"id": 1, "method": "initialize", "params": {
+            "clientInfo": {"name": "de67_dashboard", "version": "1"}}})
+        response(1)
+        send({"method": "initialized"})
+        send({"id": 2, "method": "account/rateLimits/read"})
+        return response(2)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        reader.join(timeout=1)
+        process.stdin.close()
+        process.stdout.close()
+
+
+def weekly_subscription(result: dict[str, Any], now: float) -> dict[str, Any]:
+    """Select the Codex weekly bucket, not a model-specific or five-hour limit."""
+    buckets = result.get("rateLimitsByLimitId")
+    bucket = buckets.get("codex") if isinstance(buckets, dict) else result.get("rateLimits")
+    if not isinstance(bucket, dict):
+        return {"available": False}
+    for name in ("primary", "secondary"):
+        window = bucket.get(name)
+        if not isinstance(window, dict) or window.get("windowDurationMins") != 10080:
+            continue
+        used = window.get("usedPercent")
+        if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used):
+            continue
+        used = min(100.0, max(0.0, used))
+        reset = window.get("resetsAt")
+        if isinstance(reset, bool) or not isinstance(reset, (int, float)) or not math.isfinite(reset):
+            reset = None
+        seconds = 10080 * 60
+        elapsed = now - (reset - seconds) if reset is not None else None
+        pace = used / (100 * elapsed / seconds) if elapsed is not None and 0 < elapsed < seconds else None
+        return {"available": True, "used": used, "remaining": 100 - used,
+                "reset": reset, "pace": pace, "ngmi": pace is not None and pace > 1,
+                "observed": now}
+    return {"available": False}
+
+
+class SubscriptionUsage:
+    """Optional, cached account read. Network work never holds the dashboard lock."""
+    def __init__(self, codex: str, refresh_seconds: float = 60) -> None:
+        self.codex = codex
+        self.refresh_seconds = refresh_seconds
+        self._lock = threading.Lock()
+        self._state: dict[str, Any] = {"available": False, "loading": True}
+        self._next = 0.0
+        self._running = False
+
+    def _refresh(self) -> None:
+        try:
+            state = weekly_subscription(read_subscription_limits(self.codex), time.time())
+            if not state.get("available"):
+                raise ValueError("Weekly allowance unavailable")
+        except Exception:
+            with self._lock:
+                state = dict(self._state, stale=True, loading=False)
+        with self._lock:
+            self._state = state
+            self._running = False
+            self._next = time.monotonic() + self.refresh_seconds
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            if not self._running and time.monotonic() >= self._next:
+                self._running = True
+                threading.Thread(target=self._refresh, daemon=True).start()
+            state = dict(self._state)
+        if state.get("reset") is not None and state["reset"] <= time.time():
+            state["stale"] = True
+        return state
+
+
+# Trusted widget CSS travels with the fragment so already-open tabs receive visual updates.
+SUBSCRIPTION_STYLE = """<style>.galaxy{height:260px;pointer-events:none}
+.galaxy svg{position:absolute;top:0;left:0;height:500px;pointer-events:auto}
+.subscription{position:absolute;top:125px;left:28px;width:250px;z-index:2;display:grid;gap:7px;color:#bcb2c9}
+.subscription>small{font-size:10px;letter-spacing:.08em}
+.subscription-reading{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.subscription-reading strong{font-size:27px;color:#e8e0ed;font-weight:400;white-space:nowrap}
+.subscription-reading strong span{font-size:inherit;color:inherit;letter-spacing:0}
+.subscription-status{font-size:27px;color:#8ad5b3;font-weight:400;text-transform:none}
+.subscription-tank{height:12px;background:#382c40;border-radius:6px;overflow:hidden;mask-image:repeating-linear-gradient(to right,#000 0,#000 calc(8.333333% - 3px),transparent calc(8.333333% - 3px),transparent 8.333333%)}
+.subscription-tank>i{display:block;height:100%;background:#f7ac66;border-radius:0}
+.subscription{padding:14px 0;width:250px;left:0;top:72px}
+.work-clock{padding-left:0;padding-right:0}
+.work-clock,.mutation-total{border:0;background:transparent;border-radius:0}
+
+.subscription>span{font-size:10px;line-height:1.6;color:#b2a6be}
+.subscription.ngmi .subscription-status{color:#ff787f}
+
+.subscription.stale .subscription-status{color:#c7aa79}
+@media(max-width:650px){
+.galaxy{height:145px}.galaxy svg{height:320px}
+.subscription{position:relative;top:auto;left:0;width:min(100%,300px);margin:0 0 28px}
+}
+</style>"""
+
+
+def render_subscription(state: dict[str, Any] | None) -> str:
+    if state is None:
+        return ""
+    if not state.get("available"):
+        status = "checking allowance…" if state.get("loading") else "usage unavailable"
+        return SUBSCRIPTION_STYLE + f'<aside class="subscription"><small>fuel</small><span>{status}</span></aside>'
+    remaining = state["remaining"]
+    stale = state.get("stale", False)
+    tone = " stale" if stale else " ngmi" if state.get("ngmi") else ""
+    reset = state.get("reset")
+    reset_text = (time.strftime("%d %b", time.localtime(reset))
+                  if reset is not None else "unavailable")
+    pace = state.get("pace")
+    status = "stale reading" if stale else "ngmi" if state.get("ngmi") else "on pace" if pace is not None else "pace unknown"
+    pace_text = f'{pace:.2f}x pace' if pace is not None and not stale else "pace unknown"
+    title = ("Account-wide subscription allowance, including work outside this campaign. "
+             "Pace compares percentage used with percentage of the week elapsed. "
+             "ngmi means continuing that average would exhaust the allowance before reset; it is an estimate.")
+    return (SUBSCRIPTION_STYLE + f'<aside class="subscription{tone}" title="{_escape(title)}">'
+            f'<div class="subscription-reading"><strong><span>fuel</span> {remaining:g}%</strong>'
+            f'<b class="subscription-status">{status}</b></div>'
+            f'<div class="subscription-tank" role="meter" aria-label="Weekly allowance remaining" '
+            f'aria-valuemin="0" aria-valuemax="100" aria-valuenow="{remaining:g}">'
+            f'<i style="width:{remaining:g}%"></i></div>'
+            + f'<span>{pace_text}, reset {reset_text}</span></aside>')
 
 
 class Dashboard:
@@ -1293,7 +1849,9 @@ class Dashboard:
                  sidecar_script: Path | None = None,
                  fratbro_script: Path | None = None,
                  fratbro_cache: Path | None = None,
-                 fratbro_codex: str = "codex") -> None:
+                 fratbro_codex: str = "codex",
+                 mutator_activity_db: Path | None = None,
+                 subscription_codex: str | None = None) -> None:
         self.workspace = workspace
         self.refresh_seconds = refresh_seconds
         self.sessions_root = sessions_root or Path.home() / ".codex/sessions"
@@ -1301,6 +1859,8 @@ class Dashboard:
         self.fratbro_script = fratbro_script
         self.fratbro_cache = fratbro_cache
         self.fratbro_codex = fratbro_codex
+        self.subscription = SubscriptionUsage(subscription_codex) if subscription_codex else None
+        self.mutator_activity_db = mutator_activity_db
         self._lock = threading.Lock()
         self._good: dict[str, dict[str, Any]] = {}
         self._sidecar_signature: tuple[Any, ...] | None = None
@@ -1348,7 +1908,8 @@ class Dashboard:
 
     def _markdown_source(self, name: str, path: Path) -> dict[str, Any]:
         try:
-            text, identity = _read_snapshot(path)
+            text, identity = (_read_specification_snapshot(path) if name == "dfs"
+                              else _read_snapshot(path))
             value = {"text": text, "html": render_markdown(text), "identity": identity,
                      "observed": time.time(), "stale": False, "error": None}
             self._good[name] = value
@@ -1389,10 +1950,9 @@ class Dashboard:
             )
             if signature == self._sidecar_signature and "sidecar" in self._good:
                 return self._good["sidecar"]
-            if not claim:
-                raise ValueError("no active claim")
             value = {
-                "data": read_sidecar(self.sidecar_script, self.workspace, state, claim),
+                "data": (read_sidecar(self.sidecar_script, self.workspace, state, claim)
+                         if claim else {"gaps": [], "subtasks": []}),
                 "observed": time.time(), "stale": False, "error": None,
             }
             self._sidecar_signature = signature
@@ -1441,6 +2001,10 @@ class Dashboard:
             except Exception as error:
                 process, process_error = {}, str(error)
             try:
+                process["activity"] = coordinator_activity(self.workspace, self.sessions_root)
+            except Exception:
+                process["activity"] = "unknown"
+            try:
                 workers = worker_state(self.workspace, self.sessions_root)
             except Exception as error:
                 workers = {"counts": {}, "available": False, "error": str(error)}
@@ -1449,8 +2013,17 @@ class Dashboard:
             except Exception as error:
                 fuel = {"available": False, "error": str(error)}
             fratbro = self._fratbro_source(ledger, clock)
+            try:
+                mutator_activity = native_mutator_state(self.workspace, self.refresh_seconds)
+                if mutator_activity is None and self.mutator_activity_db is not None:
+                    mutator_activity = openclaw_mutator_state(self.mutator_activity_db, self.refresh_seconds)
+                if mutator_activity is None:
+                    mutator_activity = {"glowing": False, "status": "disabled"}
+            except Exception:
+                mutator_activity = {"glowing": False, "status": "unavailable"}
             return {"dfs": dfs, "ledger": ledger, "clock": clock, "sidecar": sidecar,
-                    "fratbro": fratbro, "fuel": fuel,
+                    "fratbro": fratbro, "fuel": fuel, "mutator_activity": mutator_activity,
+                    "subscription": self.subscription.snapshot() if self.subscription else None,
                     "process": process,
                     "workers": workers, "process_error": process_error, "observed": time.time()}
 
@@ -1517,12 +2090,12 @@ class Dashboard:
             "green" if ledger_data["active"] and supervisor == "running" else
             "yellow" if ledger_data["active"] else "grey"
         )
-        nav = '<nav><a class="%s" href="/">Overview</a><a class="%s" href="/dfs">DFS</a><a data-refresh href="?refresh=1">Refresh snapshot ↻</a></nav>' % (
+        nav = '<nav><a class="%s" href="/">Overview</a><a class="%s" href="/dfs">FS</a><a data-refresh href="?refresh=1">Refresh snapshot ↻</a></nav>' % (
             "selected" if tab == "overview" else "", "selected" if tab == "dfs" else "")
         meta = ""  # Explicit refresh keeps reading and navigation stable.
         refresh_label = f'Live · every {self.refresh_seconds}s' if self.refresh_seconds else 'Manual refresh'
         source_bits = ['<span>Snapshot ' + time.strftime("%H:%M:%S") + '</span>']
-        for label, source in (("Markdown", ledger), ("DFS", dfs), ("SQLite", clock)):
+        for label, source in (("Markdown", ledger), ("FS", dfs), ("SQLite", clock)):
             tone = "yellow" if source.get("stale") else "red" if source.get("error") else "green"
             detail = source.get("error") or source.get("identity", {}).get("hash") or "healthy"
             source_bits.append(f'<span><i class="dot {tone}"></i>{_escape(label)} <em>{_escape(detail)}</em></span>')
@@ -1534,7 +2107,7 @@ class Dashboard:
                 summary = "\n\n".join(str(v) for v in summary.values())
             body = '<section class="document"><div class="eyebrow">BRIEFING</div><h2>Full briefing</h2>' + render_markdown(str(summary)) + '</section>'
         elif tab == "dfs":
-            body = f'<section class="document">{dfs.get("html", "<p>DFS unavailable.</p>")}</section>'
+            body = f'<section class="document">{dfs.get("html", "<p>FS unavailable.</p>")}</section>'
         else:
             worker_counts = workers.get("counts", {})
             worker_body = (
@@ -1548,7 +2121,12 @@ class Dashboard:
                          "on" if coordinator == "running" else
                          "waiting" if coordinator == "waiting" else
                          "unknown" if coordinator == "unknown" else "off")
-            astra_state = "on" if mutation_running else "unknown" if clock.get("error") else "off"
+            mutator_activity = state.get("mutator_activity", {})
+            astra_state = "on" if mutation_running or mutator_activity.get("glowing") else "unknown" if clock.get("error") else "off"
+            astra_label = "Astra mutator: " + ("reviewing" if mutation_running else "idle")
+            if mutator_activity.get("status") not in (None, "disabled", "idle"):
+                astra_label += " · conversation " + mutator_activity["status"]
+            sun_activity = process.get("activity", "unknown") if sun_state == "on" else sun_state
             import random
             rng = random.Random(67)
             stars = []
@@ -1556,7 +2134,7 @@ class Dashboard:
             # sparse foreground stars. Refreshing state does not reshuffle the sky.
             for i in range(3600):
                 x = rng.uniform(0, 1100)
-                center = 222 - .13 * x + 15 * math.sin(x / 125) + 6 * math.sin(x / 39)
+                center = 440 - .28 * x + 15 * math.sin(x / 180) + 6 * math.sin(x / 65)
                 width = 19 + 22 * math.exp(-((x - 400) / 230) ** 2) + 7 * math.sin(x / 83) ** 2
                 if i < 2750:
                     arm = -16 if rng.random() < .58 else 19
@@ -1567,10 +2145,10 @@ class Dashboard:
                     radius = rng.uniform(.25, .70)
                     opacity = rng.uniform(.22, .70)
                 else:
-                    y = rng.uniform(8, 312)
+                    y = rng.uniform(8, 492)
                     radius = rng.uniform(.35, 1.05)
                     opacity = rng.uniform(.16, .68)
-                if not 5 < y < 315:
+                if not 5 < y < 495:
                     continue
                 if i % 131 == 0:
                     radius, opacity = 1.25, .95
@@ -1578,7 +2156,7 @@ class Dashboard:
                 # SVG edges, rather than ending the foreground stars in a strip.
                 distance = abs(y - center)
                 envelope = .12 + .88 * math.exp(-(distance / (width * 1.8)) ** 2)
-                edge = min(1.0, y / 45, (320 - y) / 70, x / 45, (1100 - x) / 45)
+                edge = min(1.0, y / 45, (500 - y) / 70, x / 45, (1100 - x) / 45)
                 edge = max(0.0, edge)
                 opacity *= envelope * edge * edge * (3 - 2 * edge)
                 stars.append(f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{radius:.2f}" opacity="{opacity:.2f}"/>')
@@ -1597,20 +2175,31 @@ class Dashboard:
                 f'<strong>work: {_escape(work_value)}</strong><span>deadline: {remaining}</span></div>'
                 f'<div class="mutation-total"><small>mutations</small><strong>{_escape(mutations)}</strong>'
                 f'<span title="{_escape(random_note)}">{_escape(due)}</span></div></div>'
-                f'<div class="galaxy {astra_state}" title="Astra mutation reviewer: {astra_state}" role="img" aria-label="Astra mutation reviewer: {astra_state}">'
-                '<svg viewBox="0 0 1100 320" preserveAspectRatio="none" aria-hidden="true"><defs><filter id="dust"><feGaussianBlur stdDeviation="10"/></filter></defs>'
+                f'<div class="galaxy {astra_state}" title="{_escape(astra_label)}" role="img" aria-label="{_escape(astra_label)}">'
+                '<svg viewBox="0 0 1100 500" preserveAspectRatio="none" aria-hidden="true"><defs><filter id="dust"><feGaussianBlur stdDeviation="10"/></filter></defs>'
                 '<g fill="none" stroke="currentColor" filter="url(#dust)">'
-                '<path d="M-20 207Q100 213 205 179T385 158T570 129T785 97T1120 66" stroke-width="20" opacity=".055"/>'
-                '<path d="M-20 246Q100 262 225 218T405 216T595 166T805 142T1120 110" stroke-width="15" opacity=".045"/>'
+                '<path d="M-20 425Q180 414 380 325T740 235T1120 110" stroke-width="20" opacity=".055"/>'
+                '<path d="M-20 462Q180 454 380 365T740 275T1120 150" stroke-width="15" opacity=".045"/>'
                 '</g>'
                 '<g fill="currentColor">' + "".join(stars) + '</g></svg></div>'
+                f'{render_subscription(state.get("subscription"))}'
                 '<div class="cosmos-deck">'
-                f'<div class="sun {sun_state}" title="Coordinator: {sun_state}" role="img" aria-label="Coordinator: {sun_state}">'
+                f'<div class="sun {sun_state} activity-{_escape(sun_activity)}" title="Coordinator: {_escape(sun_activity)}" role="img" aria-label="Coordinator: {_escape(sun_activity)}">'
                 '<span>coordinator</span><svg viewBox="0 0 320 320" aria-hidden="true">'
-                '<defs><radialGradient id="sun-glow"><stop stop-color="currentColor" stop-opacity=".18"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></radialGradient>'
-                '<linearGradient id="sun-face" x2="0" y2="1"><stop stop-color="currentColor"/><stop offset="1" stop-color="currentColor" stop-opacity=".58"/></linearGradient></defs>'
-                '<circle cx="160" cy="160" r="160" fill="url(#sun-glow)"/><g class="sun-corona" fill="none" stroke="currentColor"><circle cx="160" cy="160" r="127" stroke-width="9" opacity=".12"/><circle cx="160" cy="160" r="135" stroke-width="7" opacity=".055"/><path d="M160 18V29M225 37L220 46M272 83L262 89M301 158L290 158M276 224L265 218M230 274L224 264M158 301V289M91 277L97 266M42 232L53 225M18 164H30M37 96L48 101M86 42L93 53" stroke-width="2" stroke-linecap="round" opacity=".28"/></g>'
+                '<defs><radialGradient id="sun-glow"><stop offset=".55" stop-color="currentColor" stop-opacity=".65"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></radialGradient>'
+                '<radialGradient id="sun-face" cx="38%" cy="32%" r="75%"><stop stop-color="currentColor"/><stop offset=".72" stop-color="currentColor" stop-opacity=".85"/><stop offset="1" stop-color="currentColor" stop-opacity=".5"/></radialGradient>'
+                '<filter id="solar-grain"><feTurbulence type="fractalNoise" baseFrequency=".18" numOctaves="3" seed="67"/><feColorMatrix type="matrix" values="0 0 0 0 .38 0 0 0 0 .18 0 0 0 0 .025 0 0 0 2 -.65"/><feComposite in2="SourceGraphic" operator="in"/></filter>'
+                '<clipPath id="sun-disc"><circle cx="160" cy="160" r="121"/></clipPath></defs>'
+                '<circle class="sun-aura" cx="160" cy="160" r="174" fill="url(#sun-glow)"/>'
+                '<circle class="sun-rim" cx="160" cy="160" r="126" fill="none" stroke="currentColor" stroke-width="2"/>'
+                '<g class="sun-corona" fill="none" stroke="currentColor" stroke-linecap="round">'
+                '<circle cx="160" cy="160" r="131" stroke-width="12" opacity=".14"/>'
+                + solar_filaments()
+                + ''.join(f'<path d="M149 42 C130 24 143 {tip} 163 {tip - 3} C149 13 178 20 172 42" transform="rotate({angle} 160 160)" stroke-width="{width}" opacity="{opacity}"/>'
+                          for angle, tip, width, opacity in ((0, 0, 2.5, .8), (43, 13, 2, .55), (88, -5, 3, .85), (130, 10, 2, .6), (180, 2, 2.5, .75), (229, 15, 2, .55), (273, -2, 3, .9), (319, 9, 2, .65))) + '</g>'
                 '<circle cx="160" cy="160" r="122" fill="url(#sun-face)"/>'
+                '<g class="sun-surface" clip-path="url(#sun-disc)"><circle cx="160" cy="160" r="122" filter="url(#solar-grain)"/>'
+                '<g fill="none" stroke="#fff0c5" opacity=".75"><path d="M74 197C43 168 122 154 88 207M74 197C50 167 105 168 88 207M207 96C188 56 247 87 220 116M207 96C195 74 235 90 220 116" stroke-width="1.5"/></g></g>'
                 '</svg></div>'
                 f'<div class="cosmos-workers">{worker_body}</div>{render_fuel(state.get("fuel", {}))}</div></section>'
             )
@@ -1622,15 +2211,13 @@ class Dashboard:
                 if ledger_data["waiting"] else ""
             )
             blocked_html = render_work_digest(ledger_data["blocked"])
-            if sidecar.get("data"):
-                sidecar_html = render_trajectory(sidecar["data"])
-            elif sidecar.get("error") == "not configured":
-                sidecar_html = ""
-            else:
-                sidecar_html = (
-                    '<section class="trajectory"><h2>Trajectory sidecar</h2>'
-                    f'<p class="subtle">Unavailable · {_escape(sidecar.get("error", "no report"))}</p></section>'
-                )
+            sidecar_html = render_trajectory(
+                sidecar.get("data") or {}, fratbro if self.fratbro_cache else None,
+                context={"claim": active_claim, "deadline generation": deadline.get("generation"),
+                         "restart": restart.get("generation")},
+                stale=bool(sidecar.get("stale")),
+                error=sidecar.get("error") if self.sidecar_script else None,
+            ) if self.sidecar_script or self.fratbro_cache else ""
             details = " · ".join(filter(None, [
                 f'claim {_escape(active_claim)}' if active_claim else "",
                 f'gap {_escape(task.get("closure_gap_id"))} r{_escape(task.get("closure_gap_revision"))}' if task.get("closure_gap_id") else "",
@@ -1645,8 +2232,7 @@ class Dashboard:
                     f'<span>{_escape(finding.get("short_verdict", ""))}</span>'
                     f'<em>{_escape(finding_age)}</em></div>'
                 )
-            fratbro_html = render_fratbro_status(fratbro) if self.fratbro_cache else ""
-            body = f'{cosmos_html}{sidecar_html}{fratbro_html}{finding_html}<section class="work-section"><div class="eyebrow">THE WORK / CURRENT SCOPE</div><h2>Work in focus</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section class="work-section"><div class="eyebrow">ON THE HORIZON</div><h2>Up next</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section class="work-section"><div class="eyebrow">NEEDS ATTENTION</div><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
+            body = f'{cosmos_html}{sidecar_html}{finding_html}<section class="work-section"><div class="eyebrow">THE WORK / CURRENT SCOPE</div><h2>Work in focus</h2><div class="subtle">{details}</div><div class="ledger-list">{active_html}</div></section><section class="work-section"><div class="eyebrow">ON THE HORIZON</div><h2>Up next</h2><div class="ledger-list">{upcoming_html}</div></section>{waiting_html}<section class="work-section"><div class="eyebrow">NEEDS ATTENTION</div><h2>Blocked work</h2><div class="ledger-list">{blocked_html}</div></section>'
         # Stable region IDs let the browser update optional panels in place.
         for css, key in (("cosmos", "campaign"), ("trajectory", "trajectory"),
                          ("fratbro", "briefing"), ("activity", "finding"),
@@ -1753,7 +2339,7 @@ header h1{{font-size:48px;letter-spacing:-3px;color:#626370}}
 header h1.supervisor-running{{color:#cf9bdc;text-shadow:0 0 30px #bc80cf25}}
 header>span{{font-size:10px;max-width:60%;overflow-wrap:anywhere;text-align:right}}
 nav{{margin:16px 0 24px;border-color:#30303b}}nav a{{font-size:11px}}
-.cosmos{{margin:0;padding:0 0 28px;border-bottom:1px solid #30303b}}
+.cosmos{{margin:0;padding:0}}
 .cosmos-meta{{display:flex;justify-content:space-between;gap:28px;align-items:flex-start;position:relative;z-index:1}}
 .work-clock{{border:1px solid #76598066;border-radius:5px;padding:14px 18px;max-width:72%;display:grid;gap:9px}}
 .cosmos small{{font-size:10px;letter-spacing:.08em;margin:0;color:#9893a5}}
@@ -1765,11 +2351,11 @@ nav{{margin:16px 0 24px;border-color:#30303b}}nav a{{font-size:11px}}
 .galaxy{{color:#686976;position:relative;margin:-55px -12px -30px;opacity:.40;pointer-events:auto}}
 .galaxy.on{{color:#fff0d6;opacity:1}}.galaxy.unknown{{opacity:.22}}
 .galaxy svg{{display:block;width:100%;height:180px}}.galaxy>span{{position:absolute;right:5%;top:32%;font-size:10px;letter-spacing:.2em}}
-.cosmos-deck{{display:grid;grid-template-columns:32% minmax(0,1fr);gap:24px;align-items:end}}
+.cosmos-deck{{display:grid;grid-template-columns:minmax(0,.21fr) minmax(0,.49fr) minmax(0,.30fr);gap:32px;align-items:center}}
 .sun{{color:#555761;padding:0 0 28px;text-align:center}}.sun.on{{color:#e9bc70}}.sun.waiting{{color:#a78e66}}.sun.unknown{{color:#41434c}}
 .sun>span{{font-size:12px;letter-spacing:.1em}}.sun svg{{display:block;width:100%;height:auto;margin-top:16px}}
 .cosmos .roster-scales{{grid-template-columns:1fr;gap:4px}}
-.cosmos .worker-scale{{width:min(100%,469px);display:grid;grid-template-columns:minmax(0,1fr) 65px;column-gap:8px;align-items:center}}
+.cosmos .worker-scale{{width:min(100%,469px);justify-self:center;display:grid;grid-template-columns:minmax(0,1fr) 65px;column-gap:8px;align-items:center}}
 .cosmos .worker-scale>svg:not(.model-emblem){{grid-column:1;grid-row:1/3;height:170px;justify-self:start;width:auto;max-width:100%}}
 .cosmos .scale-heading{{grid-column:2;grid-row:1;align-self:end;padding:0;display:block}}
 .cosmos .scale-heading strong{{font-size:13px;font-weight:400;color:#c7ccd7}}
@@ -1786,25 +2372,36 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 }}
 
 
-.cosmos-deck{{grid-template-columns:32% minmax(0,1fr) 160px;gap:24px}}
-.fuel{{align-self:center;color:#b8accb;min-width:0;padding-left:6px}}
-.fuel>small{{font-size:9px;letter-spacing:.1em;color:#96909f}}
-.fuel>strong{{display:block;font-size:34px;font-weight:400;letter-spacing:-.06em;margin:9px 0 3px;color:#d9cbe4}}
-.fuel sup{{font-size:13px;vertical-align:top;letter-spacing:0;margin-left:3px}}
+.fuel{{align-self:center;color:#b8accb;min-width:0;padding:0}}
+.fuel svg{{display:block;width:100%;height:150px;margin:0 0 5px}}
+.fuel-spark{{position:relative;width:calc(100% - 48px);height:150px;margin-bottom:5px}}
+.fuel .fuel-spark svg{{width:100%;height:100%;margin:0}}
+.fuel-spark-axis{{position:absolute;left:100%;top:calc(100% * 7 / 122);bottom:calc(100% * 7 / 122);border-left:1.5px solid #686976;font-size:10px;color:var(--muted)}}
+.fuel-spark-axis span{{position:absolute;left:7px;transform:translateY(-50%);white-space:nowrap}}
+.fuel-spark-axis span::before{{content:"";position:absolute;left:-8px;top:50%;width:3px;border-top:1.5px solid var(--muted)}}
+@media(max-width:650px){{.fuel-spark{{height:190px}}.fuel-spark-axis{{font-size:12px}}}}
+.fuel-bar-axis{{position:relative;height:20px;border-top:1.5px solid #686976;margin-top:1px;color:var(--muted);font-size:10px}}
+.fuel-bar-axis span{{position:absolute;top:5px;transform:translateX(-50%)}}
+.fuel-bar-axis span::before{{content:"";position:absolute;left:50%;top:-6px;height:3px;border-left:1.5px solid var(--muted)}}
+.fuel-bar-axis span:first-child{{transform:none}}.fuel-bar-axis span:last-child{{transform:translateX(-100%)}}
 .fuel>span{{display:block;font-size:9px;color:#777480}}
-.fuel svg{{display:block;width:100%;height:56px;margin:19px 0 4px;opacity:.7}}
-.fuel .fuel-period{{font-size:8px;color:#777480}}
-.fuel>div{{display:grid;gap:9px;margin-top:22px}}
-.fuel>div>span{{display:flex;justify-content:space-between;font-size:9px;color:#96909f}}
-.fuel b{{font-size:10px;font-weight:400;color:#bdb3ca}}
-@media(max-width:900px) and (min-width:651px){{.cosmos-deck{{grid-template-columns:28% minmax(0,1fr) 125px;gap:14px}}.fuel>strong{{font-size:28px}}}}
-@media(max-width:650px){{.cosmos-deck{{grid-template-columns:1fr}}.fuel{{width:100%;padding:14px 0 0;display:grid;grid-template-columns:1fr 1fr;column-gap:24px;align-items:center}}.fuel>small,.fuel>strong,.fuel-scope{{grid-column:1}}.fuel svg{{grid-column:2;grid-row:1/4;margin:0;height:48px}}.fuel .fuel-period{{grid-column:2;text-align:right}}.fuel>div{{grid-column:1/-1;display:flex;gap:24px;margin-top:16px}}.fuel>div>span{{gap:10px}}}}
+.fuel .fuel-period{{font-size:8px;color:#96909f}}
+.fuel .fuel-legend{{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:15px 0 20px;padding:10px;border:1px solid #39313f;border-radius:6px}}
+.fuel-legend>span{{display:flex;align-items:center;gap:6px;font-size:9px;color:#b1a9bb}}
+.fuel-legend i{{display:inline-block;width:20px;height:6px;border-radius:2px;background:currentColor;flex-shrink:0}}
+.fuel-bars{{display:grid;gap:13px;padding-right:48px}}
+.fuel-bars>small{{font-size:8px;color:#96909f;margin:0;white-space:nowrap}}
+.fuel-bars>span{{position:relative;display:flex;align-items:center;height:8px}}
+.fuel-bars em{{position:absolute;width:24px;height:16px;transform:translateX(-50%)}}
+.fuel-bars em svg{{width:24px;height:16px;margin:0;overflow:visible}}
+@media(max-width:650px){{.fuel-bar-axis{{font-size:12px}}}}
+.fuel-bars b{{position:absolute;left:calc(100% + 7px);width:41px;text-align:right;font-size:10px;font-weight:400;color:#c9bfd4}}
+.fuel .fuel-total{{display:flex;align-items:baseline;gap:5px;font-size:17px;font-weight:700;letter-spacing:0;margin:17px 0 4px;padding-top:10px;border-top:1px solid #35303e;color:#dfd4e7}}
+.fuel-total>span{{margin-right:auto;font-size:10px;font-weight:700}}
+.fuel sup{{font-size:10px;vertical-align:top}}
+@media(max-width:900px) and (min-width:651px){{.cosmos-deck{{grid-template-columns:140px minmax(0,1fr) minmax(180px,.85fr);gap:20px}}}}
+@media(max-width:650px){{.cosmos-deck{{grid-template-columns:1fr}}.fuel{{width:100%;padding:14px 0 0;display:block}}.fuel svg{{height:190px}}.fuel .fuel-legend{{gap:10px}}.fuel-legend>span{{font-size:11px}}.fuel .fuel-period{{font-size:9px}}}}
 
-
-.fuel svg text{{fill:currentColor;font-size:8px;opacity:.85}}
-@media(min-width:901px){{.cosmos-deck{{grid-template-columns:32% minmax(0,1fr) 180px;padding-right:12px}}}}
-@media(max-width:900px) and (min-width:651px){{.cosmos-deck{{grid-template-columns:28% minmax(0,1fr) 150px}}}}
-@media(max-width:650px){{.fuel svg{{height:56px}}.fuel .fuel-period{{font-size:7px;white-space:nowrap}}}}
 
 
 .sun>span{{display:inline-block;transform:translateY(7px);font-size:14px}}
@@ -1816,6 +2413,8 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 .cosmos{{isolation:isolate}}
 .galaxy{{margin:-90px -12px -75px;color:#8f8998;opacity:.62;z-index:0}}
 .galaxy.on{{color:#fff0d6;opacity:1}}.galaxy.unknown{{opacity:.30}}
+.galaxy,.outer-stars{{transition:color 1.8s ease,opacity 1.8s ease}}
+@media(prefers-reduced-motion:reduce){{.galaxy,.outer-stars{{transition:none}}}}
 .galaxy svg{{height:260px}}
 .cosmos-deck{{position:relative;z-index:1}}
 .galaxy>span{{top:40%;right:5%}}
@@ -1837,11 +2436,10 @@ main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.wor
 
 .sun{{align-self:center}}
 .sun svg{{width:160px}}
-@media(min-width:651px){{.cosmos-deck{{grid-template-columns:minmax(0,1fr) minmax(0,1.618fr) minmax(0,.618fr)}}}}
 @media(max-width:650px){{.sun svg{{width:120px}}}}
 
 
-@media(min-width:651px){{.sun{{align-self:end;padding-bottom:0;transform:translateY(-28px)}}}}
+@media(min-width:651px){{.cosmos-deck{{transform:translateY(-1cm)}}.sun{{display:flex;flex-direction:column;align-items:center;width:min(100%,180px);justify-self:end;align-self:center;padding:0}}.sun>span{{width:100%;margin-bottom:16px;transform:none}}.sun svg{{width:min(100%,160px);margin:0}}}}
 
 
 header h1{{font-family:var(--terminal)!important;font-weight:400;letter-spacing:0;font-style:normal}}
@@ -1867,7 +2465,84 @@ header h1{{font-family:var(--terminal)!important;font-weight:400;letter-spacing:
 code,pre{{background:#15111b}}
 
 
-.sun .sun-corona{{opacity:0}}.sun.on .sun-corona{{opacity:1}}
+.sun svg{{overflow:visible}}.sun{{transition:color 1.8s ease}}
+.sun .sun-corona{{opacity:0;transform-origin:160px 160px;transform:scale(.78);transition:transform 1.8s ease,opacity 1.8s ease}}
+.sun-aura,.sun-rim{{opacity:0;transition:opacity 1.8s ease}}
+.sun-surface{{opacity:0;transition:opacity 1.8s ease}}.sun.on .sun-surface,.sun.waiting .sun-surface{{opacity:.18}}
+.sun.on.activity-working .sun-surface{{opacity:.7}}
+.sun.on,.sun.waiting{{color:#bf985e}}.sun.on .sun-rim,.sun.waiting .sun-rim{{opacity:.4}}
+.sun.on .sun-aura,.sun.waiting .sun-aura{{opacity:.18}}
+.sun.on.activity-working{{color:#ffd58c}}
+.sun.on.activity-working .sun-corona{{opacity:1;transform:scale(1);animation:solar-breath 7s ease-in-out infinite}}
+.sun.on.activity-working .sun-aura{{opacity:.85}}.sun.on.activity-working .sun-rim{{opacity:.9}}
+@keyframes solar-breath{{0%,100%{{transform:scale(1)}}50%{{transform:scale(1.035)}}}}
+@media(prefers-reduced-motion:reduce){{.sun,.sun .sun-corona,.sun-aura,.sun-rim,.sun-surface{{transition:none;animation:none}}}}
+
+.trajectory{{--radar-font:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;font-family:var(--radar-font);position:relative;padding:28px 28px 20px;background:none;border:0;border-radius:0;margin-top:18.667px}}
+@media(min-width:651px){{.cosmos+.trajectory{{margin-top:calc(18.667px - 0.666667cm)}}}}
+.trajectory::before{{content:"";position:absolute;inset:0;pointer-events:none;border:1px solid #80628d;border-radius:8px;mask:linear-gradient(#000 0 0) left top/26px 22px no-repeat,linear-gradient(#000 0 0) right top/26px 22px no-repeat,linear-gradient(#000 0 0) left bottom/26px 22px no-repeat,linear-gradient(#000 0 0) right bottom/26px 22px no-repeat}}
+.trajectory .radar-briefing{{display:block;margin:0;padding:0 0 22px;border:0}}
+.radar-kicker{{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#caabd6;font-size:10px;letter-spacing:.18em;line-height:1.6;padding-top:12px;border-top:1px solid #594262}}
+.radar-kicker span{{display:inline;color:#a99bad;letter-spacing:.04em;font-size:10px}}
+.trajectory .radar-briefing h2{{font:600 clamp(17px,1.9vw,23px)/1.55 var(--radar-font);letter-spacing:-.025em;max-width:76ch;margin:13px 0 0;overflow-wrap:anywhere}}
+.radar-briefing strong{{font:inherit;color:#eee4f1}}
+.trajectory .attention-panel{{padding:18px 0 0;border:0;border-top:1px solid #46374c;border-radius:0;background:none;overflow:visible}}
+.attention-heading{{gap:12px;flex-wrap:wrap}}.trajectory .attention-heading h3{{font:500 11px/1.5 var(--radar-font);color:#bdaac5;letter-spacing:.08em;text-transform:uppercase}}
+.trajectory .attention-heading>span{{font-size:10px;color:#a69aaa}}
+.radar-stage{{position:relative;isolation:isolate;display:grid;grid-template-areas:"left map right";grid-template-columns:minmax(0,1fr) minmax(240px,1.85fr) minmax(0,1fr);gap:22px;align-items:center;margin:18px 0}}
+.radar-scope{{grid-area:map;min-width:0;position:relative}}
+.trajectory .radar-map{{display:block;width:100%;min-width:0;height:auto;overflow:visible}}
+.trajectory .radar-links{{position:absolute;inset:0;z-index:-1;display:block;width:100%;height:100%;min-width:0;pointer-events:none;overflow:visible}}
+.radar-links path{{fill:none;stroke:#9d77af;stroke-width:1;opacity:.38}}
+.radar-disc{{fill:none;stroke:#8b659655;stroke-width:1}}
+.trajectory .attention-grid circle,.trajectory .attention-grid line{{fill:none;stroke:#755484;stroke-opacity:.32;stroke-width:1}}
+.radar-origin{{fill:none;stroke:#c4a4ce;stroke-width:1;opacity:.65}}
+.assigned-course-halo{{fill:none;stroke:#fff1cf;stroke-width:8;opacity:.09}}
+.assigned-course{{fill:none;stroke:#fff1cf;stroke-width:2.5;stroke-dasharray:9 7;stroke-linecap:round}}
+.assigned-ship{{fill:#fff1cf;stroke:#fffbea;stroke-width:1;filter:drop-shadow(0 0 5px #ffdd9988)}}
+.assigned-ship .ship-exhaust{{fill:#f1bb75;stroke:none;opacity:.7}}
+.heading-live .assigned-course{{animation:course-flow 2s linear infinite}}
+.assigned-destination{{display:flex;justify-content:center;align-items:baseline;flex-wrap:wrap;gap:7px 13px;margin:14px 0 8px;font-size:11px;line-height:1.8;overflow-wrap:anywhere}}
+.assigned-destination span{{color:#c1aa86;font-size:10px;text-transform:uppercase;letter-spacing:.12em}}
+.assigned-destination a{{color:#fff1cf;text-decoration:none;border-bottom:1px solid #9d82524d;min-width:0}}
+.assigned-destination a:hover,.assigned-destination a:focus{{border-color:#fff1cf}}
+.trajectory .attention-key.attention-target{{background:#fff1cf;box-shadow:0 0 5px #ffdb9e66}}
+@keyframes course-flow{{to{{stroke-dashoffset:-32}}}}
+@media(prefers-reduced-motion:reduce){{.heading-live .assigned-course{{animation:none}}}}
+.trajectory .trajectory-node circle{{fill:#211928;stroke:#ba9ac8;stroke-width:1.5}}
+.trajectory .trajectory-node text{{fill:#ddd0e4;font:500 12px var(--radar-font);text-anchor:middle}}
+.trajectory .trajectory-node.active circle{{fill:#50334e;stroke:#f0c6e7;stroke-width:2.5}}
+.trajectory .trajectory-node.proved circle{{stroke:#8acbb0}}.trajectory .trajectory-node.open circle{{stroke:#c9ad7f}}
+.trajectory .trajectory-node:hover circle,.trajectory .trajectory-node:focus circle{{fill:#65476a;stroke:#fff0ff}}
+.radar-contacts{{display:flex;flex-direction:column;gap:14px;min-width:0}}.radar-left{{grid-area:left}}.radar-right{{grid-area:right}}
+.radar-contact{{--contact-line:#55425e;position:relative;min-width:0;padding:13px 14px;border:1px solid var(--contact-line);border-radius:0;background:#211b2977;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,0 100%);overflow-wrap:anywhere;scroll-margin-top:20px}}
+.radar-contact::after{{content:"";position:absolute;right:0;top:0;width:12px;height:12px;pointer-events:none;background:linear-gradient(45deg,transparent 44%,var(--contact-line) 47%,var(--contact-line) 53%,transparent 56%)}}
+.radar-contact.active{{--contact-line:#d9bb89;border-left:3px solid #fff1cf;background:linear-gradient(135deg,#4c3a352e,#251c2c77)}}
+.radar-contact.proved{{border-left:2px solid #8acbb0}}.radar-contact.open{{border-left:2px solid #c9ad7f}}
+.radar-contact:target{{--contact-line:#dec2ea;box-shadow:inset 3px 0 #dec2ea}}
+.radar-contact-heading{{display:flex;align-items:baseline;gap:9px;min-width:0;line-height:1.55}}
+.contact-number{{flex:none;display:inline-grid;place-items:center;min-width:22px;height:22px;border:1px solid var(--contact-line);font-size:10px;color:#c6a9d4}}.contact-id{{font-size:11px;color:#dfcbe8;min-width:0}}
+.radar-contact p{{margin:9px 0 10px;color:#e0d8e5;font-size:12px;line-height:1.7;white-space:normal}}
+.contact-state{{display:block;font-size:10px;line-height:1.6;color:#b9aaba}}.radar-contact.active .contact-state{{color:#efc8df}}
+.trajectory .attention-legend{{font-size:10px;line-height:1.8;gap:6px 14px;margin:16px 0 10px;flex-wrap:wrap}}
+.trajectory .attention-legend span{{white-space:normal;overflow-wrap:anywhere}}
+.trajectory .attention-claim{{flex-wrap:wrap;overflow-wrap:anywhere;line-height:1.7;gap:5px 12px}}
+.trajectory .attention-claim strong{{font:500 12px var(--radar-font);color:#d2b5de}}.trajectory .attention-claim span{{font-size:10px;min-width:0}}
+.trajectory .attention-panel>p{{font-size:10px;line-height:1.8;margin:10px 0;color:#a899b1}}
+.radar-idle{{grid-template-columns:1fr;grid-template-areas:"map";margin:6px 0 12px}}
+.radar-idle .radar-scope{{width:min(100%,350px);margin:auto}}.radar-idle .radar-contacts{{display:none}}.radar-idle .radar-map{{opacity:.45}}
+.radar-standby{{position:absolute;top:52%;left:0;width:100%;margin:0;text-align:center;font-size:12px;color:#d0b6db;line-height:1.9}}
+.radar-standby span{{color:#a997b1;font-size:10px}}
+.radar-details{{margin-top:24px;padding-top:7px;border-top:1px solid #46374c}}.radar-details:empty{{display:none}}
+.radar-detail{{display:grid;grid-template-columns:110px minmax(0,1fr);gap:20px;padding:15px 0}}
+.radar-detail+.radar-detail{{border-top:1px solid #3b2e4233}}
+.trajectory .radar-detail h3{{margin:3px 0 0;font:500 10px/1.8 var(--radar-font);color:#baa1c5;letter-spacing:.08em;text-transform:uppercase}}
+.radar-details p{{font:400 12px/1.9 var(--radar-font);color:#c9becf;margin:0;overflow-wrap:anywhere;white-space:pre-line}}
+.radar-details>p{{margin:14px 0}}.radar-notice{{font-size:11px;line-height:1.7;color:#d9ba8c;overflow-wrap:anywhere}}
+.trajectory .gap-explanation{{min-width:0;border-radius:0;overflow-wrap:anywhere}}.trajectory .gap-explanation div{{flex-wrap:wrap}}.trajectory .gap-explanation div span{{min-width:0}}
+@media(max-width:800px){{.radar-stage{{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"map map" "left right";gap:16px}}.radar-scope{{width:min(100%,430px);margin:auto}}.trajectory .radar-links{{display:none}}.radar-idle{{grid-template-areas:"map";grid-template-columns:1fr}}}}
+@media(max-width:500px){{.trajectory{{padding:20px 16px}}.radar-stage{{display:flex;flex-direction:column;align-items:stretch}}.radar-scope{{order:0}}.radar-contacts{{display:contents}}.radar-contact{{order:var(--contact-order)}}.radar-detail{{grid-template-columns:minmax(0,1fr);gap:6px}}.radar-contact p{{font-size:12px}}.radar-kicker{{gap:6px}}}}
+
 
 </style><script src="/live_refresh.js" defer></script></head><body><main data-dashboard data-refresh-seconds="{self.refresh_seconds}"><header id="dashboard-header"><h1 class="supervisor-{_escape(supervisor)}" title="Supervisor: {_escape(supervisor)}" aria-label="de67 · supervisor {_escape(supervisor)}">de67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}<div id="refresh-status" class="subtle" role="status">{refresh_label}</div><div id="dashboard-content">{body}</div><footer id="dashboard-sources">{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")
@@ -1878,9 +2553,11 @@ def serve(workspace: Path, bind: str, port: int, refresh_seconds: int,
           sidecar_script: Path | None = None,
           fratbro_script: Path | None = None,
           fratbro_cache: Path | None = None,
-          fratbro_codex: str = "codex") -> None:
+          fratbro_codex: str = "codex",
+          mutator_activity_db: Path | None = None,
+          subscription_codex: str | None = None) -> None:
     dashboard = Dashboard(workspace.resolve(), refresh_seconds, sessions_root, sidecar_script,
-                          fratbro_script, fratbro_cache, fratbro_codex)
+                          fratbro_script, fratbro_cache, fratbro_codex, mutator_activity_db, subscription_codex)
 
     class Server(ThreadingHTTPServer):
         def server_bind(self) -> None:
@@ -1941,6 +2618,10 @@ def main() -> None:
                         help="Optional narrator cache outside the configured workspace")
     parser.add_argument("--fratbro-codex", default="codex",
                         help="Codex executable used only by the optional narrator")
+    parser.add_argument("--mutator-activity-db", type=Path, default=None,
+                        help="Optional dedicated OpenClaw mutator agent SQLite store; activity lights the galaxy")
+    parser.add_argument("--subscription-codex", default=None,
+                        help="Optional Codex executable for account-wide weekly quota; no model calls")
     args = parser.parse_args()
     if args.refresh_seconds < 0:
         parser.error("--refresh-seconds cannot be negative")
@@ -1948,7 +2629,7 @@ def main() -> None:
         parser.error("--fratbro-script and --fratbro-cache must be configured together")
     serve(args.workspace, args.bind, args.port, args.refresh_seconds,
           args.codex_sessions, args.sidecar_script, args.fratbro_script, args.fratbro_cache,
-          args.fratbro_codex)
+          args.fratbro_codex, args.mutator_activity_db, args.subscription_codex)
 
 
 if __name__ == "__main__":

@@ -32,9 +32,13 @@ class LiveCoordinationRuntimeTests(unittest.TestCase):
             de67 = workspace / ".de67"
             de67.mkdir()
             (de67 / "work-ledger.md").write_text(
-                "- [ ] R-1 — Observe the production outcome.\n", encoding="utf-8"
+                "- [ ] R-1 — Observe the production outcome.\n"
+                "  - DFS slices: `R-1-S001`\n", encoding="utf-8"
             )
-            (de67 / "DFS.md").write_text("- [ ] 🔴 R-1\n", encoding="utf-8")
+            (de67 / "DFS.md").write_text(
+                "<!-- DE67:DFS-SLICE:BEGIN id=R-1-S001 claim=R-1 -->\n"
+                "- [ ] 🔴 R-1 — Observe the production outcome.\n"
+                "<!-- DE67:DFS-SLICE:END id=R-1-S001 claim=R-1 -->\n", encoding="utf-8")
 
             def decide(now: int) -> dict:
                 result = subprocess.run([
@@ -42,7 +46,8 @@ class LiveCoordinationRuntimeTests(unittest.TestCase):
                     "decide", "--policy", str(ROOT / "assets/environment/phase3-policy.d67"),
                     "--workspace", str(workspace), "--state", str(state),
                     "--lineage", "project", "--now", str(now),
-                ], capture_output=True, text=True, check=True)
+                ], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 return json.loads(result.stdout)
 
             with DeadlineHarness(state) as harness:
@@ -76,7 +81,8 @@ class LiveCoordinationRuntimeTests(unittest.TestCase):
                 self.assertEqual(harness.connection.total_changes, before)
                 checkpoint = harness.checkpoint_worker(
                     "project", "playtest", "worker-player", "progress",
-                    "A new observation changes the next measurement; run remains active.", now=6,
+                    "Partial repair: scroll works; prompt.cancel is wrong_surface. "
+                    "Continue the existing query scope-lifetime investigation.", now=6,
                 )
                 guard.observe(command_event(checkpoint))
                 self.assertEqual(decide(7)["action"], "coordinate_live_work")
@@ -90,6 +96,15 @@ class LiveCoordinationRuntimeTests(unittest.TestCase):
                 guard.observe(command_event(dispatched))
                 guard.observe(handoff("followup_task", "worker-player"))
                 self.assertEqual(guard.unbound_tasks, ("parser-test",))
+                # Continuing the partial defect report preserves worker, task, and clock;
+                # unrelated parser work still receives its own fresh worker below.
+                bound = harness.connection.execute(
+                    "SELECT worker_id, released_at FROM worker_claims WHERE task_id = 'playtest'"
+                ).fetchone()
+                self.assertEqual(tuple(bound), ("worker-player", None))
+                self.assertEqual(original_clock, tuple(harness.connection.execute(
+                    "SELECT started_at, deadline_at FROM claim_clocks WHERE claim_id = 'R-1'"
+                ).fetchone()))
                 guard.observe(handoff("spawn_agent", "worker-parser"))
                 guard.observe(wait_for("worker-player", "worker-parser"))
 

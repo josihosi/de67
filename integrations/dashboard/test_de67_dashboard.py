@@ -15,6 +15,132 @@ SPEC.loader.exec_module(dashboard_module)
 
 
 class DashboardTests(unittest.TestCase):
+    def test_native_persistent_mutator_activity_replaces_legacy_source(self) -> None:
+        state = self.workspace / '.de67/state'
+        state.mkdir(parents=True, exist_ok=True)
+        config_path = state / 'workspace.json'
+        config = json.loads(config_path.read_text()) if config_path.exists() else {}
+        config['persistent_mutator'] = True
+        config_path.write_text(json.dumps(config))
+        self.assertEqual(dashboard_module.native_mutator_state(self.workspace, 30),
+                         {'glowing': False, 'status': 'idle'})
+        session = {'thread_id': 'astra', 'state': 'active', 'mode': 'conversation'}
+        (state / 'mutator-session.json').write_text(json.dumps(session))
+        (state / 'mutator-input.json').write_text(json.dumps({
+            'thread_id': 'astra', 'workspace': str(self.workspace.resolve()), 'state': 'active',
+            'runner_pid': 123, 'server_pid': 456}))
+        with patch.object(dashboard_module.os, 'kill'):
+            self.assertEqual(dashboard_module.native_mutator_state(self.workspace, 30),
+                             {'glowing': True, 'status': 'conversation'})
+        with patch.object(dashboard_module.os, 'kill', side_effect=ProcessLookupError):
+            self.assertEqual(dashboard_module.native_mutator_state(self.workspace, 30),
+                             {'glowing': False, 'status': 'idle'})
+
+    def test_mutator_message_lights_galaxy_until_reply(self) -> None:
+        database = self.workspace / "openclaw-agent.sqlite"
+        connection = sqlite3.connect(database)
+        connection.executescript("""
+            CREATE TABLE session_nodes (current_session_id TEXT, archived_at INTEGER);
+            CREATE TABLE session_windows (session_id TEXT, status TEXT, ended_at INTEGER);
+            CREATE TABLE session_pending_inputs (session_id TEXT, state TEXT, consumed_event_id TEXT);
+            INSERT INTO session_nodes VALUES ('live', NULL), ('archived', 1);
+            INSERT INTO session_windows VALUES ('live', 'running', NULL), ('archived', 'running', NULL), ('old', 'running', NULL);
+        """)
+        connection.close()
+
+        def change(sql):
+            connection = sqlite3.connect(database)
+            connection.executescript(sql)
+            connection.close()
+
+        dashboard = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions,
+                                               mutator_activity_db=database)
+        before = database.read_bytes()
+        self.assertIn('class="galaxy on"', dashboard.render("overview").decode())
+        self.assertEqual(before, database.read_bytes())
+        change("UPDATE session_windows SET status='done', ended_at=100000 WHERE session_id='live'")
+        with patch.object(dashboard_module.time, "time", return_value=101):
+            self.assertEqual(dashboard_module.openclaw_mutator_state(database, 30),
+                             {"glowing": True, "status": "replied"})
+        with patch.object(dashboard_module.time, "time", return_value=131):
+            self.assertIn('class="galaxy off"', dashboard.render("overview").decode())
+        change("INSERT INTO session_pending_inputs VALUES ('live', 'queued', NULL)")
+        self.assertEqual(dashboard_module.openclaw_mutator_state(database, 30),
+                         {"glowing": True, "status": "queued"})
+        change("UPDATE session_pending_inputs SET consumed_event_id='consumed'")
+        for status in ("failed", "killed", "timeout"):
+            change(f"UPDATE session_windows SET status='{status}' WHERE session_id='live'")
+            self.assertIn('class="galaxy off"', dashboard.render("overview").decode())
+        database.unlink()
+        self.assertIn('class="galaxy off"', dashboard.render("overview").decode())
+        self.assertEqual(dashboard.snapshot()["mutator_activity"]["status"], "unavailable")
+
+    def test_coordinator_activity_tracks_wait_and_resume(self) -> None:
+        trace = self.sessions / "activity.jsonl"
+        records = []
+
+        def append(record_type, **payload):
+            records.append({"type": record_type, "payload": payload})
+            trace.write_text("\n".join(json.dumps(row) for row in records), encoding="utf-8")
+
+        append("event_msg", type="task_started")
+        self.assertEqual(dashboard_module._session_activity(trace), "working")
+        append("response_item", type="function_call", name="wait_agent", call_id="wait-1")
+        append("event_msg", type="token_count")
+        append("response_item", type="agent_message")
+        append("response_item", type="agent_message", content="incoming " * 70000)
+        self.assertEqual(dashboard_module._session_activity(trace), "waiting")
+        append("response_item", type="function_call_output", call_id="wait-1", output="agent finished")
+        self.assertEqual(dashboard_module._session_activity(trace), "working")
+        append("response_item", type="custom_tool_call", name="exec", input="do work")
+        self.assertEqual(dashboard_module._session_activity(trace), "working")
+        append("event_msg", type="task_complete")
+        self.assertEqual(dashboard_module._session_activity(trace), "waiting")
+        with trace.open("a", encoding="utf-8") as stream:
+            stream.write('\n{"type":')
+        self.assertEqual(dashboard_module._session_activity(trace), "waiting")
+
+        index = self.sessions.parent / "state_5.sqlite"
+        with sqlite3.connect(index) as connection:
+            connection.execute("CREATE TABLE threads (id TEXT, rollout_path TEXT)")
+            connection.execute("INSERT INTO threads VALUES (?, ?)", ("live", str(trace)))
+        connection.close()
+        with patch.object(dashboard_module, "_active_coordinator_id", return_value="live"):
+            self.assertEqual(dashboard_module.coordinator_activity(self.workspace, self.sessions), "waiting")
+
+    def test_named_worker_wait_and_polling_activity(self) -> None:
+        trace = self.sessions / "named-wait.jsonl"
+        command = "'/opt/python3.14' '/skills/worker_library.py' --workspace '/workspace path' wait auditor --timeout 300"
+        calls = [
+            {"name": "exec_command", "arguments": json.dumps({"cmd": command})},
+            {"name": "exec", "input": "const r = await tools.exec_command({cmd:" + json.dumps(command) + "}); text(r);"},
+            {"name": "exec", "input": "text(await tools.exec_command(" + json.dumps({"cmd": command}) + "));"},
+            {"name": "functions.wait", "arguments": '{"cell_id":"1"}'},
+            {"name": "write_stdin", "arguments": '{"session_id":1,"chars":""}'},
+            {"name": "exec", "input": 'text(await tools.write_stdin({session_id:1}));'},
+            {"name": "exec", "input": 'const r = await tools.write_stdin({session_id:1,chars:"",yield_time_ms:30000}); text(JSON.stringify(r));'},
+        ]
+        for call in calls:
+            with self.subTest(call=call):
+                record = {"type": "response_item", "payload": {"type": "custom_tool_call", **call}}
+                trace.write_text(json.dumps(record))
+                self.assertEqual(dashboard_module._session_activity(trace), "waiting")
+                with trace.open("a") as stream:
+                    stream.write("\n" + json.dumps({"type": "response_item", "payload": {
+                        "type": "reasoning", "summary": []}}))
+                self.assertEqual(dashboard_module._session_activity(trace), "working")
+        for command in ("cat /skills/worker_library.py wait",
+                        "python /skills/worker_library.py --workspace /repo assign auditor",
+                        "python /skills/worker_library.py wait auditor && python work.py"):
+            self.assertFalse(dashboard_module._tool_is_waiting({
+                "name": "exec_command", "arguments": json.dumps({"cmd": command})}))
+        self.assertFalse(dashboard_module._tool_is_waiting({
+            "name": "write_stdin", "arguments": '{"chars":"run"}'}))
+        self.assertFalse(dashboard_module._tool_is_waiting({
+            "name": "exec", "input": 'text(await tools.write_stdin({session_id:1,chars:"run"}));'}))
+        self.assertFalse(dashboard_module._tool_is_waiting({
+            "name": "exec", "input": 'text(await tools.write_stdin({"session_id":1,"chars":"run"}));'}))
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.workspace = Path(self.temporary.name)
@@ -109,43 +235,200 @@ class DashboardTests(unittest.TestCase):
             connection.executescript("CREATE TABLE supervisor_attempts(role TEXT, run_id TEXT, lineage_id TEXT);")
             connection.executemany("INSERT INTO supervisor_attempts VALUES (?,?,?)", [
                 ("coordinator", "run1", "lineage"), ("coordinator", "run1", "lineage"),
-                ("mutation-reviewer", "run2", "lineage"), ("coordinator", "other", "unrelated")])
+                ("mutation-reviewer", "run2", "lineage"), ("coordinator", "run3", "lineage"),
+                ("coordinator", "other", "unrelated")])
+            connection.executescript("""
+                CREATE TABLE worker_claims (
+                    lineage_id TEXT, worker_id TEXT, coordinator_session_id TEXT,
+                    claimed_at REAL, released_at REAL
+                );
+                INSERT INTO worker_claims VALUES
+                    ('lineage','worker','coord',0,NULL),
+                    ('lineage','named','coord',0,NULL),
+                    ('lineage','named','coord2',0,NULL),
+                    ('lineage','named','coord2',0,NULL),
+                    ('unrelated','unrelated','coord',0,NULL),
+                    ('lineage','orphan','unknown-owner',0,NULL);
+            """)
         connection.close()
-        for run, session in (("run1", "coord"), ("run2", "review")):
+        for run, session in (("run1", "coord"), ("run2", "review"), ("run3", "coord2")):
             folder = self.workspace / ".de67/state/coordinator-runs" / run
             folder.mkdir(parents=True)
             (folder / "session_id.txt").write_text(session)
         index = self.sessions.parent / "state_5.sqlite"
         with sqlite3.connect(index) as connection:
             connection.executescript("CREATE TABLE threads(id TEXT, rollout_path TEXT); CREATE TABLE thread_spawn_edges(parent_thread_id TEXT, child_thread_id TEXT);")
-            for session, total in (("coord",100), ("worker",200), ("nested",300), ("review",400), ("unrelated",999)):
+            for session, total in (("coord",100), ("coord2",110), ("worker",200),
+                                   ("nested",300), ("review",400), ("named",500),
+                                   ("named-helper",600), ("unrelated",999), ("orphan",999)):
                 path = self.sessions / (session + ".jsonl")
-                path.write_text(json.dumps({"type":"event_msg", "timestamp":datetime.now(timezone.utc).isoformat(),
+                path.write_text(json.dumps({"type":"turn_context", "payload":{"model":"gpt-5.6-luna" if session in ("nested", "named") else "gpt-5.6-terra"}}) + "\n" + json.dumps({"type":"event_msg", "timestamp":datetime.now(timezone.utc).isoformat(),
                     "payload":{"type":"token_count", "info":{"total_token_usage":{
                     "input_tokens":total,"cached_input_tokens":10,"output_tokens":5},
                     "last_token_usage":{"input_tokens":total,"cached_input_tokens":10,"output_tokens":5}}}}) + "\n")
                 connection.execute("INSERT INTO threads VALUES (?,?)", (session,str(path)))
-            connection.executemany("INSERT INTO thread_spawn_edges VALUES (?,?)", [("coord","worker"),("worker","nested")])
+            connection.executemany("INSERT INTO thread_spawn_edges VALUES (?,?)", [
+                ("coord","worker"), ("worker","nested"), ("named","named-helper")])
         connection.close()
         paths = [p for p in self.workspace.rglob("*") if p.is_file()]
         before = [p.read_bytes() for p in paths]
         fuel = dashboard_module.fuel_state(self.workspace, self.sessions)
-        self.assertEqual(fuel["totals"], {"coordinator":95,"workers":490,"astra":395})
+        self.assertEqual(fuel["totals"], {"coordinator":200,"terra":790,"luna":790,"astra":395,"other":0})
+        self.assertEqual(sum(fuel["bins"]), sum(fuel["totals"].values()))
+        for role in fuel["totals"]:
+            self.assertEqual(sum(fuel["series"][role]), fuel["totals"][role])
         self.assertFalse(fuel["partial"])
-        self.assertEqual(fuel["sessions"], 4)
+        self.assertEqual(fuel["sessions"], 7)
         self.assertEqual(before, [p.read_bytes() for p in paths])
+        with (self.sessions / "named.jsonl").open("a", encoding="utf-8") as trace:
+            for total, added, model in ((700, 200, "terra"), (1000, 300, "luna")):
+                trace.write(json.dumps({"type": "turn_context", "payload": {
+                    "model": "gpt-5.6-" + model, "effort": "high"}}) + "\n")
+                trace.write(json.dumps({"type": "event_msg", "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "payload": {"type": "token_count", "info": {
+                        "total_token_usage": {"input_tokens": total, "cached_input_tokens": 10, "output_tokens": 5},
+                        "last_token_usage": {"input_tokens": added, "cached_input_tokens": 0, "output_tokens": 0}}}}) + "\n")
+        reused = dashboard_module.fuel_state(self.workspace, self.sessions)
+        self.assertEqual(reused["totals"]["luna"], 1090)
+        self.assertEqual(reused["totals"]["terra"], 990)
+        for role in reused["totals"]:
+            self.assertEqual(sum(reused["series"][role]), reused["totals"][role])
+        self.assertEqual(reused["sessions"], 7)
+        self.assertEqual(dashboard_module.fuel_state(self.workspace, self.sessions)["totals"], reused["totals"])
         (self.sessions / "nested.jsonl").unlink()
         self.assertTrue(dashboard_module.fuel_state(self.workspace, self.sessions)["partial"])
 
+    def test_scoped_compactions_only_mark_relevant_usage_partial(self) -> None:
+        from datetime import datetime, timezone
+        base = int(dashboard_module.time.time()) - 100
+        path = self.sessions / "compacted-worker.jsonl"
+
+        def append(offset, total, last=None):
+            info = {"total_token_usage": {
+                "input_tokens": total, "cached_input_tokens": 0, "output_tokens": 0}}
+            if last is not None:
+                info["last_token_usage"] = {
+                    "input_tokens": last, "cached_input_tokens": 0, "output_tokens": 0}
+            with path.open("a") as stream:
+                stream.write(json.dumps({"type": "event_msg", "timestamp": datetime.fromtimestamp(
+                    base + offset, timezone.utc).isoformat(),
+                    "payload": {"type": "token_count", "info": info}}) + "\n")
+
+        for event in ((0, 50, None), (5, 20, 3), (15, 25, 5),
+                      (25, 15, 2), (35, 19, 4), (45, 2, 1)):
+            append(*event)
+        windows = [(base + 10, base + 20), (base + 30, base + 40)]
+        usage = dashboard_module._trace_fuel(path, windows=windows)
+        self.assertEqual(usage["observed"], 9)
+        self.assertFalse(usage["partial"])
+        self.assertTrue(dashboard_module._trace_fuel(path)["partial"])
+        self.assertTrue(dashboard_module._trace_fuel(path, windows=[(base, base + 10)])["partial"])
+        self.assertFalse(dashboard_module._trace_fuel(path, windows=windows)["partial"])
+        append(55, 1, None)
+        self.assertFalse(dashboard_module._trace_fuel(path, windows=windows)["partial"])
+        # A later assignment containing incomplete accounting must remain partial.
+        self.assertTrue(dashboard_module._trace_fuel(path, windows=windows + [(base + 50, None)])["partial"])
+
+    def test_reused_worker_usage_stays_with_its_campaign_assignment_windows(self) -> None:
+        from datetime import datetime, timezone
+        base = int(dashboard_module.time.time()) - 1000
+        clock = self.workspace / ".de67/state/deadlines.sqlite3"
+        with sqlite3.connect(clock) as connection:
+            connection.executescript("""
+                CREATE TABLE supervisor_attempts(role TEXT,run_id TEXT,lineage_id TEXT);
+                INSERT INTO supervisor_attempts VALUES
+                    ('coordinator','run-a','lineage'),('coordinator','run-b','other');
+                CREATE TABLE worker_claims(lineage_id TEXT,worker_id TEXT,
+                    coordinator_session_id TEXT,claimed_at REAL,released_at REAL);
+            """)
+            connection.executemany("INSERT INTO worker_claims VALUES (?,?,?,?,?)", [
+                ("lineage", "named", "owner-a", base + 10, base + 20),
+                ("lineage", "named", "owner-a", base + 30, base + 40),
+                ("lineage", "named", "owner-a", base + 30, base + 40),
+                ("lineage", "named", "owner-a", base + 50, None),
+                ("other", "named", "owner-b", base + 20, base + 30),
+            ])
+        connection.close()
+        for suffix in ("a", "b"):
+            folder = self.workspace / ".de67/state/coordinator-runs" / ("run-" + suffix)
+            folder.mkdir(parents=True)
+            (folder / "session_id.txt").write_text("owner-" + suffix)
+        with sqlite3.connect(self.sessions.parent / "state_5.sqlite") as connection:
+            connection.executescript("""
+                CREATE TABLE threads(id TEXT,rollout_path TEXT);
+                CREATE TABLE thread_spawn_edges(parent_thread_id TEXT,child_thread_id TEXT);
+                INSERT INTO thread_spawn_edges VALUES ('named','helper');
+            """)
+            for name, events in (
+                ("owner-a", [(1, "sol", 1)]), ("owner-b", [(1, "sol", 1)]),
+                ("named", [(0, "luna", 10), (15, "luna", 20), (20, "terra", 7),
+                           (25, "terra", 30), (35, "terra", 40), (45, "luna", 50),
+                           (55, "luna", 60)]),
+                ("helper", [(15, "luna", 5), (25, "luna", 5), (35, "luna", 5)]),
+            ):
+                records, cumulative = [], 0
+                for offset, model, delta in events:
+                    cumulative += delta
+                    records.append({"type": "turn_context", "payload": {
+                        "model": "gpt-5.6-" + model, "effort": "medium"}})
+                    records.append({"type": "event_msg", "timestamp": datetime.fromtimestamp(
+                        base + offset, timezone.utc).isoformat(), "payload": {"type": "token_count", "info": {
+                            "total_token_usage": {"input_tokens": cumulative, "cached_input_tokens": 0, "output_tokens": 0},
+                            "last_token_usage": {"input_tokens": delta, "cached_input_tokens": 0, "output_tokens": 0}}}})
+                path = self.sessions / (name + ".jsonl")
+                path.write_text("".join(json.dumps(row) + "\n" for row in records), encoding="utf-8")
+                connection.execute("INSERT INTO threads VALUES (?,?)", (name, str(path)))
+        connection.close()
+        config_path = self.workspace / ".de67/state/workspace.json"
+        config = json.loads(config_path.read_text())
+        for lineage, luna, terra in (("lineage", 90, 40), ("other", 5, 37), ("lineage", 90, 40)):
+            config["clock"]["lineage"] = lineage
+            config_path.write_text(json.dumps(config))
+            fuel = dashboard_module.fuel_state(self.workspace, self.sessions)
+            self.assertEqual(fuel["totals"], {
+                "coordinator": 1, "luna": luna, "terra": terra, "astra": 0, "other": 0})
+            self.assertEqual(fuel["sessions"], 3)
+            self.assertFalse(fuel["partial"])
+            for role in fuel["totals"]:
+                self.assertEqual(sum(fuel["series"][role]), fuel["totals"][role])
+
     def test_fuel_labels_and_dynamic_axis(self) -> None:
         for peak, label in ((0,"1"),(1800,"2k"),(9000000,"10m")):
-            page = dashboard_module.render_fuel({"available":True,"totals":{"coordinator":1,"workers":2,"astra":3},
-                "bins":[peak] + [0]*31,"partial":True})
-            self.assertIn("coordinator<b>1", page)
-            self.assertIn("mutator<b>3", page)
+            page = dashboard_module.render_fuel({"available":True,"totals":{"coordinator":1,"terra":2,"luna":4,"astra":3,"other":0},
+                "bins":[peak] + [0]*23,"series":{role:[peak if role == "terra" else 0]+[0]*23 for role in ("astra","coordinator","terra","luna","other")},"partial":True})
+            self.assertIn('aria-label="coordinator: 1 fresh tokens"', page)
+            self.assertIn('aria-label="worker terra: 2 fresh tokens"', page)
+            self.assertIn('aria-label="worker luna: 4 fresh tokens"', page)
+            self.assertEqual(page.count('class="fuel-series"'), 4)
+            self.assertLess(page.index("<svg"), page.index('class="fuel-total"'))
+            self.assertIn('aria-label="mutator: 3 fresh tokens"', page)
+            self.assertLess(page.index('</svg>'), page.index('class="fuel-legend"'))
+            self.assertLess(page.index('class="fuel-legend"'), page.index('class="fuel-bars"'))
+            self.assertIn('left:100.00%">5</span>', page)
+            self.assertIn("role totals · log scale", page)
             self.assertIn("campaign · partial", page)
-            self.assertIn("0 to " + label + " tokens per fifteen minutes", page)
-            self.assertIn("last 8h", page)
+            self.assertIn("0 to " + label + " tokens per hour", page)
+            self.assertIn("last 24h", page)
+
+    def test_role_dot_axis_crops_unused_range_and_keeps_role_order(self) -> None:
+        import re
+        roles = ("astra", "coordinator", "terra", "luna")
+        for values in ((13000000, 12000000, 102000000, 5000000), (10, 10, 10, 10), (0, 0, 0, 0)):
+            page = dashboard_module.render_fuel({"available": True,
+                "totals": dict(zip(roles, values)), "bins": [0] * 24,
+                "series": {role: [0] * 24 for role in roles}, "partial": False})
+            plot = page.split('class="fuel-bars"', 1)[1]
+            labels = re.findall(r'aria-label="([^":]+):', plot)
+            self.assertEqual(labels, ["mutator", "coordinator", "worker terra", "worker luna"])
+            positions = [float(value) for value in re.findall(r'<em style="left:([0-9.]+)%', plot)]
+            self.assertEqual(len(positions), sum(value > 0 for value in values))
+            self.assertTrue(all(0 <= value <= 100 for value in positions))
+            self.assertIn('data-role="astra" style="color:#fff0d6"', page)
+            if values[0] == 13000000:
+                self.assertIn('left:0.00%">5m</span>', plot)
+                self.assertIn('left:100.00%">200m</span>', plot)
+            if not any(values):
+                self.assertNotIn('class="fuel-bar-axis"', plot)
 
     def test_refresh_interval_and_local_script_are_explicit(self) -> None:
         for interval in (0, 30, 900):
@@ -202,7 +485,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("<h2>Waiting on event</h2>", page)
         self.assertIn("waiting work", page)
         self.assertIn("<small>mutations</small><strong>3</strong>", page)
-        self.assertIn('aria-label="Astra mutation reviewer: off"', page)
+        self.assertIn('aria-label="Astra mutator: idle"', page)
         self.assertNotIn("<small>Random mutations</small>", page)
         self.assertIn("due in 2 results", page)
         self.assertIn('class="cosmos-workers"', page)
@@ -212,7 +495,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("escaped &lt;finding&gt;", page)
         self.assertNotIn("escaped <finding>", page)
 
-    def test_fratbro_card_is_opt_in_and_directly_below_trajectory(self) -> None:
+    def test_briefing_headline_and_details_surround_the_radar(self) -> None:
         cache = self.workspace / "dashboard-cache/fratbro.json"
         cache.parent.mkdir()
         cache.write_text(json.dumps({"summary": (
@@ -229,8 +512,11 @@ class DashboardTests(unittest.TestCase):
                 sidecar_script=sidecar, fratbro_cache=cache,
             ).render("overview").decode()
 
-        self.assertLess(page.index("Trajectory sidecar"), page.index("BRIEFING"))
-        self.assertLess(page.index("BRIEFING"), page.index("Latest finding"))
+        body = page.split('<body>')[1]
+        self.assertLess(body.index("The worker is testing"), body.index('class="radar-stage"'))
+        self.assertLess(body.index('class="radar-stage"'), body.index("The wall blocked it"))
+        self.assertLess(body.index("The wall blocked it"), body.index("Latest finding"))
+        self.assertNotIn('class="fratbro"', body)
         self.assertIn("The worker is testing whether real smoke escapes a building.", page)
         self.assertNotIn("Fratbro status <em>stale</em>", page)
         self.assertNotIn("Fratbro status", dashboard_module.Dashboard(
@@ -465,7 +751,7 @@ class DashboardTests(unittest.TestCase):
 
         dashboard = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions)
         running = dashboard.render("overview").decode()
-        self.assertIn('aria-label="Astra mutation reviewer: on"', running)
+        self.assertIn('aria-label="Astra mutator: reviewing"', running)
 
         connection = sqlite3.connect(database)
         connection.execute(
@@ -474,7 +760,7 @@ class DashboardTests(unittest.TestCase):
         connection.commit()
         connection.close()
         reviewed = dashboard.render("overview").decode()
-        self.assertIn('aria-label="Astra mutation reviewer: off"', reviewed)
+        self.assertIn('aria-label="Astra mutator: idle"', reviewed)
 
         connection = sqlite3.connect(database)
         connection.execute(
@@ -487,7 +773,7 @@ class DashboardTests(unittest.TestCase):
         connection.commit()
         connection.close()
         off = dashboard.render("overview").decode()
-        self.assertIn('aria-label="Astra mutation reviewer: off"', off)
+        self.assertIn('aria-label="Astra mutator: idle"', off)
 
     def test_terminal_attempt_is_not_shown_as_running_work(self) -> None:
         database = self.workspace / ".de67/state/deadlines.sqlite3"
@@ -689,26 +975,26 @@ class DashboardTests(unittest.TestCase):
             first = dashboard.render("overview").decode()
             second = dashboard.render("overview").decode()
         self.assertEqual(run.call_count, 1)
-        self.assertIn("Trajectory sidecar", first)
+        self.assertIn("NAVIGATION", first)
         self.assertIn("G-002 r41", first)
         self.assertNotIn("What the boxes mean", first)
-        self.assertEqual(first.count('class="gap-explanation '), 2)
-        self.assertEqual(first.count('class="gap-state"'), 2)
+        self.assertEqual(first.count('class="radar-contact '), 2)
+        self.assertEqual(first.count('class="contact-state"'), 2)
         self.assertIn("active · 3 attempts", first)
         self.assertNotIn("code 0.80 · test 0.40", first)
         self.assertNotIn('class="product-vector"', first)
         self.assertNotIn('class="test-vector"', first)
         self.assertNotIn("product surface present", first)
-        self.assertIn("Attention spider", first)
+        self.assertIn("Work constellation", first)
         self.assertIn("Relative pull · not completion", first)
         self.assertIn('class="attention-series attention-code"', first)
         self.assertIn("Current &lt;diff&gt;", first)
-        self.assertIn("Each line is scaled to its own strongest gap", first)
+        self.assertIn("Each line is scaled to its own strongest work item", first)
         self.assertIn('class="attention-claim"', first)
         self.assertEqual(first.count('class="trajectory-node '), 2)
         self.assertIn("&lt;active route&gt;", first)
-        self.assertLess(first.index("cosmos-workers"), first.index("Trajectory sidecar"))
-        self.assertLess(first.index("Trajectory sidecar"), first.index("Latest finding"))
+        self.assertLess(first.index("cosmos-workers"), first.index("NAVIGATION"))
+        self.assertLess(first.index("NAVIGATION"), first.index("Latest finding"))
         self.assertEqual(first.split("<body>")[0], second.split("<body>")[0])
         self.assertEqual(before, set(self.workspace.rglob("*")))
 
@@ -735,10 +1021,11 @@ class DashboardTests(unittest.TestCase):
             ],
         })
         self.assertEqual(many.count('class="trajectory-node open"'), 14)
-        self.assertIn('viewBox="0 0 794 794"', many)
+        self.assertEqual(many.count('class="radar-contact open"'), 14)
 
         empty = dashboard_module.render_trajectory({"claim": "R-EXPLORE", "gaps": []})
-        self.assertIn("No closure trajectory", empty)
+        self.assertIn("No active trajectory", empty)
+        self.assertIn('class="radar-map"', empty)
 
     def test_trajectory_uses_literal_subtasks_as_axes_and_keeps_gap_cards(self) -> None:
         rendered = dashboard_module.render_trajectory({
@@ -758,10 +1045,10 @@ class DashboardTests(unittest.TestCase):
             "attention": [],
         })
 
-        self.assertIn("Subtask attention", rendered)
+        self.assertIn("Subtask constellation", rendered)
         self.assertIn("Attention distribution across ledger subtasks", rendered)
         self.assertEqual(rendered.count('class="trajectory-node '), 4)
-        self.assertIn(">signal</text>", rendered)
+        self.assertIn('class="contact-id">signal</span>', rendered)
         self.assertNotIn("signal r?", rendered)
         self.assertIn("G-001 r2", rendered)
         self.assertEqual(rendered.count('class="gap-explanation '), 1)
@@ -782,6 +1069,20 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(first["data"]["gaps"], [])
         self.assertEqual(second, first)
         self.assertEqual(run.call_count, 1)
+
+    def test_idle_is_the_last_good_trajectory_after_source_failure(self):
+        script = self.workspace / "sidecar.py"
+        script.write_text("# fixture")
+        state = self.workspace / ".de67/state/deadlines.sqlite3"
+        dashboard = dashboard_module.Dashboard(self.workspace, sidecar_script=script)
+        with patch.object(dashboard_module, "read_sidecar", return_value={"gaps": [{"gap_id": "G-old"}]}):
+            dashboard._sidecar_source(state, "R-009")
+            idle = dashboard._sidecar_source(state, None)
+        script.unlink()
+        failed = dashboard._sidecar_source(state, None)
+        self.assertEqual(failed["data"], idle["data"])
+        self.assertEqual(failed["data"]["gaps"], [])
+        self.assertTrue(failed["stale"])
 
     def test_active_workers_are_counted_by_model_and_effort(self) -> None:
         day = self.sessions / "2026/08/18"
@@ -814,8 +1115,8 @@ class DashboardTests(unittest.TestCase):
             self.workspace, sessions_root=self.sessions
         ).render("overview").decode()
         self.assertIn('class="cosmos-workers"', page)
-        self.assertIn('aria-label="Luna: low: 0, medium: 1, high: 0, max: 0"', page)
-        self.assertIn("<strong>Terra</strong>", page)
+        self.assertIn('aria-label="luna: low: 0, medium: 1, high: 0, max: 0"', page)
+        self.assertIn("<strong>terra</strong>", page)
         self.assertNotIn("<strong>Sol</strong>", page)
         self.assertNotIn("Unavailable", page)
 
@@ -1166,6 +1467,65 @@ if __name__ == "__main__":
     unittest.main()
 
 class IndexedWorkerTests(unittest.TestCase):
+    def test_named_workers_and_helpers_follow_current_claim_ownership(self):
+        for recorded_parent in (None, "previous-coordinator"):
+            with self.subTest(parent=recorded_parent), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                sessions = root / "sessions"
+                sessions.mkdir()
+                connection = sqlite3.connect(root / "state_5.sqlite")
+                try:
+                    connection.executescript(
+                        "CREATE TABLE threads(id TEXT, rollout_path TEXT);"
+                        "CREATE TABLE thread_spawn_edges(parent_thread_id TEXT, child_thread_id TEXT);"
+                    )
+                    for session, parent, model, effort, cwd in (
+                        ("owner", None, "sol", "low", root),
+                        ("named", recorded_parent, "luna", "high", root),
+                        ("helper", "named", "luna", "low", root),
+                        ("native", "owner", "terra", "medium", root),
+                        ("idle", None, "luna", "medium", root),
+                        ("foreign", None, "luna", "max", root / "other"),
+                    ):
+                        path = sessions / (session + ".jsonl")
+                        records = [
+                            {"type": "session_meta", "payload": {
+                                "id": session, "parent_thread_id": parent, "cwd": str(cwd)}},
+                            {"type": "turn_context", "payload": {
+                                "model": "gpt-5.6-" + model, "effort": effort}},
+                            {"type": "event_msg", "payload": {"type": "task_started"}},
+                        ]
+                        path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+                        connection.execute("INSERT INTO threads VALUES (?, ?)", (session, str(path)))
+                    connection.executemany("INSERT INTO thread_spawn_edges VALUES (?, ?)", [
+                        ("named", "helper"), ("owner", "native"),
+                        ("previous-coordinator", "named"),
+                    ])
+                    connection.commit()
+                finally:
+                    connection.close()
+                with (patch.object(dashboard_module, "_active_coordinator_id", return_value="owner"),
+                      patch.object(Path, "glob", side_effect=AssertionError("history scan")),
+                      patch.object(dashboard_module, "_active_worker_claims", return_value={
+                          "named": "owner", "native": "owner", "foreign": "owner",
+                      }) as claims):
+                    workers = dashboard_module.worker_state(root, sessions)
+                    self.assertTrue(workers["available"])
+                    self.assertEqual(workers["counts"]["luna"], {
+                        "low": 1, "medium": 0, "high": 1, "max": 0})
+                    self.assertEqual(workers["counts"]["terra"]["medium"], 1)
+                    with (sessions / "named.jsonl").open("a", encoding="utf-8") as trace:
+                        trace.write(json.dumps({"type": "turn_context", "payload": {
+                            "model": "gpt-5.6-terra", "effort": "max"}}) + "\n")
+                    changed = dashboard_module.worker_state(root, sessions)
+                    self.assertEqual(changed["counts"]["luna"]["high"], 0)
+                    self.assertEqual(changed["counts"]["luna"]["low"], 1)
+                    self.assertEqual(changed["counts"]["terra"]["max"], 1)
+                    claims.return_value = {"native": "owner"}
+                    released = dashboard_module.worker_state(root, sessions)
+                    self.assertTrue(all(count == 0 for count in released["counts"]["luna"].values()))
+                    self.assertEqual(released["counts"]["terra"]["medium"], 1)
+
     def test_no_workers_does_not_scan_history(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1202,13 +1562,48 @@ class OverviewDesignTests(unittest.TestCase):
         self.assertIn('href="/ledger"', result)
 
     def test_structured_briefing_escapes_fields_and_omits_empty_obstacle(self):
-        result = dashboard_module.render_fratbro_status({"summary": {
+        result = dashboard_module.render_trajectory({}, {"summary": {
             "headline": "Save <confirmation>", "changed": "A rejected action is visible.",
             "next": "Test the native exit.", "snag": ""}})
         self.assertIn("Save &lt;confirmation&gt;", result)
         self.assertIn("What changed", result)
         self.assertIn("Next", result)
         self.assertNotIn("Obstacle", result)
+
+    def test_idle_and_stale_radar_preserve_briefing_without_inventing_work(self):
+        briefing = {"summary": "Work paused. the next run is awaiting evidence."}
+        result = dashboard_module.render_trajectory({}, briefing)
+        self.assertIn('<strong>Work paused.</strong>', result)
+        self.assertIn("the next run is awaiting evidence.", result)
+        self.assertIn("No active trajectory", result)
+        self.assertNotIn('data-radar-marker=', result)
+        stale = dashboard_module.render_trajectory(
+            {"gaps": [{"gap_id": "G-1", "summary": "<full title>", "status": "open"}]},
+            briefing, stale=True, error="source <offline>")
+        self.assertIn("Last recorded trajectory", stale)
+        self.assertIn("source &lt;offline&gt;", stale)
+        self.assertIn("&lt;full title&gt;", stale)
+
+    def test_invalid_briefing_does_not_hide_the_radar(self):
+        for invalid in (["not an object"], "not an object", 42):
+            result = dashboard_module.render_trajectory({}, invalid)
+            self.assertIn("NAVIGATION", result)
+            self.assertIn("Briefing update unavailable", result)
+
+    def test_assignment_is_directional_and_maximum_measurements_remain_accessible(self):
+        report = {"latest_task_result": "active", "gaps": [{"gap_id": "G-1", "summary": "Work"}],
+                  "attention": [
+                      {"key": "target", "points": [{"gap_id": "G-1", "relative_pull": 1}]},
+                      {"key": "code", "label": "Code", "points": [
+                          {"gap_id": "G-1", "relative_pull": 1, "raw_relation": .625}]}]}
+        result = dashboard_module.render_trajectory(report)
+        self.assertIn('class="assigned-bearing heading-live"', result)
+        self.assertIn('class="assigned-ship"', result)
+        marker = result.split('class="attention-nodes"')[1].split('</a>')[0]
+        self.assertIn("Code · relative 1.00 · cosine 0.625", marker)
+        stale = dashboard_module.render_trajectory(report, stale=True)
+        self.assertIn("Last assignment", stale)
+        self.assertNotIn('class="assigned-bearing heading-live"', stale)
 
 class WorkerScaleTests(unittest.TestCase):
     def test_dots_do_not_overlap_at_each_supported_count(self):

@@ -1,19 +1,49 @@
 # de67 dashboard
 
 This optional package serves a small, read-only view of one de67 workspace. It reads
-`.de67/DFS.md`, `.de67/work-ledger.md`, the deadline SQLite database, and supervisor process state.
-It does not import de67 core, write workspace state, or require OpenClaw.
+the functional specification, `.de67/work-ledger.md`, the deadline SQLite database, and supervisor
+process state. It uses core's read-only resolver for migrated `FS.md`, never writes workspace state,
+and does not require OpenClaw.
+
+## Install
+
+For Codex setting this up for a user: this optional package requires the matching de67 3.0.0 core,
+Python 3.10+, and read access to the project state. The basic website uses only the Python standard
+library. The narrator and subscription display additionally need authenticated Codex; remote
+hosting additionally needs the user's chosen network/authentication service.
+
+Download `de67-3.0.0-dashboard.zip` from the
+[v3.0.0 release](https://github.com/josihosi/de67/releases/tag/v3.0.0), verify its `SHA256SUMS` entry,
+and merge its `de67/` directory into the core installation. Codex can install and launch it after
+learning which project the user wants to observe and whether access should be local or remote.
+Keep credentials and machine-specific service configuration outside the package.
+
+## Run
 
 Run on loopback:
 
 ```sh
-python3 integrations/dashboard/de67_dashboard.py --workspace /path/to/project
+python3 integrations/dashboard/de67_dashboard.py --workspace /path/to/project \
+  --sidecar-script de-67-3/scripts/trajectory_sidecar.py
 ```
 
 Open `http://127.0.0.1:8767`. The visible tab updates in place every 30 seconds without a page reload. Updates pause while
 the tab is hidden or text is selected. The last good view stays visible if the connection fails.
 Use **Refresh snapshot** for an immediate update; `--refresh-seconds 0` disables automatic
 updates. Set another interval, such as `--refresh-seconds 900`, for fifteen-minute updates.
+
+The coordinator sun's corona settles close while it waits and expands gently while it
+works, using its current session's execution signals at the same refresh interval.
+Unavailable activity leaves the corona quiet; reduced-motion preferences disable the transition.
+
+For the optional OpenClaw mutator conversation, add
+`--mutator-activity-db /path/to/agents/MUTATOR/agent/openclaw-agent.sqlite`, pointing to the
+dedicated mutator agent's store. The galaxy glows during mutation reviews, queued messages,
+and conversation work, then fades when activity ends. Quick replies remain visible for one
+refresh interval. The tooltip distinguishes reviewing, queued, working, and replied states.
+This reads only current session activity metadata; it neither sends messages nor changes
+OpenClaw, and message contents stay private. Archived sessions and old session windows do
+not count. A missing or unavailable store leaves normal mutation-review indication intact.
 
 Home-network exposure is explicit:
 
@@ -47,6 +77,19 @@ The report stays in memory until the clock changes. The dashboard does not creat
 snapshots, history files, or refresh artifacts. A missing or failed sidecar cannot stop de67.
 The plot keeps current closure gaps around the claim, draws product and test cosine similarity
 along each spoke, and shows the sidecar's categorical trajectory observations without scoring them.
+
+## Weekly subscription fuel
+
+Add `--subscription-codex /path/to/codex` to show account-wide weekly allowance remaining,
+percentage used, and the reset date in the dashboard host's time zone. This optional source
+reads `account/rateLimits/read` over a private Codex App Server connection once per minute;
+it makes no model requests and does not write the project workspace. The existing campaign
+fresh-token chart remains separate from subscription quota.
+
+The lowercase red `ngmi` means percentage used exceeds percentage of the weekly window elapsed:
+continuing that weekly average would exhaust the allowance before reset. It is a pace estimate,
+not a prediction of future activity. Missing reset data leaves pace unknown. A failed read
+preserves the last good value marked stale and suppresses the pace verdict until a fresh read.
 
 ## Optional Fratbro status
 
@@ -82,9 +125,15 @@ python3 -m unittest integrations/dashboard/test_de67_dashboard.py
 ## Token use
 
 The token panel counts observed campaign usage: input minus cached input plus output.
-It includes coordinator, worker, and mutator sessions, including completed workers.
-Missing session records make the total explicitly partial. The graph shows fifteen-minute
-bins across the last eight hours, with a scale that follows observed use. Narrator and
+It includes coordinator, mutator, Terra-worker, and Luna-worker sessions, including completed
+workers. Other or unknown worker models remain separately accounted for when present.
+Missing session records make the total explicitly partial. The graph stacks the four roles into their combined total in one-hour
+bins across the last 24 hours, with a linear scale that follows observed use.
+Between the plots, a shared color legend identifies each role. A logarithmic dot plot
+compares campaign totals in fixed mutator, coordinator, Terra, Luna order. Its axis rounds
+around the lowest and highest positive totals, omitting the unused low end; zero totals
+retain their numeric label without a dot. Hover for exact counts. The mutator uses the
+lit galaxy's star color throughout both plots. The combined total sits at the bottom. Narrator and
 unrelated sessions are excluded. Accounting uses the local Codex session index and logs;
 unavailable accounting leaves only this panel unavailable.
 
@@ -93,3 +142,19 @@ JavaScript or new model calls are introduced. Narration remains tied to worker l
 For browser integration checks, install `playwright-core` in a test environment and run
 `node integrations/dashboard/test_live_refresh.mjs`. Set `DE67_CHROMIUM` to an installed Chromium
 executable and, if needed, `DE67_PLAYWRIGHT` to the local playwright-core module directory.
+
+## Verify, host, and remove
+
+From the skill root, run `python -X utf8 -m unittest discover -s integrations/dashboard` and open
+the local page. Confirm that FS, ledger, and radar match the selected workspace; unavailable state
+must be shown honestly. The optional subscription source makes no model calls, while narration does.
+
+For private remote access, keep the server on loopback and configure the user's authenticated
+Tailscale Serve or equivalent HTTPS proxy. Verify the local page and then its remote URL from a
+second device. Account login and the intended audience are user choices; no hosting account is
+needed for local use. For a nonstandard flat deployment, set `DE67_SPECIFICATION_SCRIPT` to the
+matching core's `de-67-3/scripts/specification.py`; normal add-on extraction resolves it relatively.
+
+To remove it, stop only its dashboard process/service, remove any optional hosting rule created
+for it, and remove the dashboard code directory. Keep unrelated services and the product's `.de67`
+state intact. The core continues without the dashboard.

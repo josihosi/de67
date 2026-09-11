@@ -1829,7 +1829,7 @@ def render_subscription(state: dict[str, Any] | None) -> str:
     reset_text = (time.strftime("%d %b", time.localtime(reset))
                   if reset is not None else "unavailable")
     pace = state.get("pace")
-    status = "stale reading" if stale else "ngmi" if state.get("ngmi") else "on pace" if pace is not None else "pace unknown"
+    status = "stale reading" if stale else "ngmi" if state.get("ngmi") else "" if pace is not None else "pace unknown"
     pace_text = f'{pace:.2f}x pace' if pace is not None and not stale else "pace unknown"
     title = ("Account-wide subscription allowance, including work outside this campaign. "
              "Pace compares percentage used with percentage of the week elapsed. "

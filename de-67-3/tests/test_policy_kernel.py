@@ -39,9 +39,21 @@ class WorkerCapabilityTests(unittest.TestCase):
                 {'model': 'gpt-5.6-luna', 'reasoning_effort': 'low'},
                 {'model': 'gpt-5.6-terra', 'reasoning_effort': 'xhigh'},
                 {'model': 'gpt-5.6-terra', 'reasoning_effort': 'max'},
+                {'model': 'gpt-6-astra', 'reasoning_effort': 'low'},
             ]
             config.write_text(json.dumps({'worker_capabilities': choices}), encoding='utf-8')
             self.assertEqual(kernel.worker_model_choices(workspace), choices)
+
+    def test_astra_is_limited_to_low_effort(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            config = workspace / '.de67/state/workspace.json'
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps({'worker_capabilities': [
+                {'model': 'gpt-6-astra', 'reasoning_effort': 'medium'},
+            ]}), encoding='utf-8')
+            with self.assertRaisesRegex(kernel.PolicyError, 'ordinary-worker model and reasoning effort'):
+                kernel.worker_model_choices(workspace)
 
 
 CASES = (
@@ -71,6 +83,38 @@ CASES = (
 
 
 class PolicyKernelTests(unittest.TestCase):
+    def test_live_acceptances_cannot_shadow_newest_open_claim(self) -> None:
+        cases = ((None, "project", True), (50, "project", False),
+                 (None, "other-lineage", False))
+        for invalidated, acceptance_lineage, expect_open in cases:
+            with self.subTest(invalidated=invalidated, lineage=acceptance_lineage), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                state = workspace / "clock.sqlite3"
+                with sqlite3.connect(state) as connection:
+                    connection.executescript("""
+                        CREATE TABLE claim_clocks (lineage_id TEXT, claim_id TEXT, phase TEXT, started_at REAL, deadline_at REAL);
+                        CREATE TABLE claim_deadline_generations (lineage_id TEXT, claim_id TEXT, generation INTEGER, started_at REAL, deadline_at REAL, retired_at REAL);
+                        CREATE TABLE claim_acceptances (lineage_id TEXT, claim_id TEXT, invalidated_at REAL);
+                        CREATE TABLE closure_gaps (lineage_id TEXT, claim_id TEXT, closure_sequence INTEGER, gap_id TEXT, closed_at REAL);
+                        CREATE TABLE closure_gap_revisions (lineage_id TEXT, claim_id TEXT, closure_sequence INTEGER, gap_id TEXT, revision INTEGER, proof_route TEXT);
+                        INSERT INTO claim_clocks VALUES ('project','R-031','closure',40,60),('project','R-029','closure',30,60),('project','R-026','closure',20,200),('project','R-OLDER','exploration',10,60);
+                        INSERT INTO claim_deadline_generations VALUES ('project','R-031',5,40,60,NULL),('project','R-029',21,30,60,NULL),('project','R-026',1,20,200,NULL),('project','R-OLDER',1,10,60,NULL);
+                        INSERT INTO closure_gaps VALUES ('project','R-026',1,'native-proof',NULL);
+                        INSERT INTO closure_gap_revisions VALUES ('project','R-026',1,'native-proof',1,'Exercise remaining native route');
+                    """)
+                    connection.executemany("INSERT INTO claim_acceptances VALUES (?,?,?)",
+                        [(acceptance_lineage, claim, invalidated) for claim in ('R-031','R-029')])
+                    connection.commit()
+                    before = connection.total_changes
+                    facts = kernel.workspace_facts(workspace, state, "project", now=100)
+                    self.assertEqual(connection.total_changes, before)
+                    self.assertEqual(connection.execute("SELECT COUNT(*) FROM claim_deadline_generations WHERE retired_at IS NULL").fetchone()[0], 4)
+                self.assertEqual("open_gap" in facts, expect_open)
+                self.assertEqual("executable_route" in facts, expect_open)
+                self.assertEqual("deadline_expired" in facts, not expect_open)
+                if expect_open:
+                    self.assertEqual(kernel.decide(source_policy(), facts).action, "dispatch_closure_worker")
+
     def test_terminal_assignments_do_not_advertise_executable_work(self) -> None:
         cases = (
             ("completed", 20, "project", "R-029-old", False),
@@ -927,7 +971,8 @@ class PolicyKernelTests(unittest.TestCase):
             arguments = calls[0]["example_call"]["arguments"]
             self.assertEqual(arguments["fork_turns"], "none")
             self.assertNotIn("model", arguments)
-            self.assertEqual({c['model'] for c in calls[0]['model_choices']}, {'gpt-5.6-luna','gpt-5.6-terra'})
+            self.assertEqual({c['model'] for c in calls[0]['model_choices']},
+                             {'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-6-astra'})
             for choice in calls[0]['model_choices']:
                 completed_call = {**arguments, **choice}
                 self.assertEqual(completed_call['task_name'], calls[0]['task_name'])

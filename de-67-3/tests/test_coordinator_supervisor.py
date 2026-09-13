@@ -39,6 +39,7 @@ from coordinator_supervisor import (  # noqa: E402
     mutation_reviewer_prompt,
     ordinary_worker_evidence_contract,
     read_clock,
+    runtime_worker_owners,
     run_child,
     run_supervisor,
     supervision_fingerprint,
@@ -576,6 +577,26 @@ class ReviewerLaunchPromotionTests(unittest.TestCase):
 
 
 class CoordinatorSupervisorTests(unittest.TestCase):
+    def test_runtime_ownership_includes_astra_ordinary_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            state = workspace / "codex-state.sqlite"
+            connection = sqlite3.connect(state)
+            connection.executescript("""
+                CREATE TABLE threads (id TEXT, cwd TEXT, model TEXT);
+                CREATE TABLE thread_spawn_edges (child_thread_id TEXT, parent_thread_id TEXT);
+            """)
+            connection.execute("INSERT INTO threads VALUES (?,?,?)",
+                               ("astra-worker", str(workspace), "gpt-6-astra"))
+            connection.execute("INSERT INTO thread_spawn_edges VALUES (?,?)",
+                               ("astra-worker", "sol-coordinator"))
+            connection.commit()
+            connection.close()
+            self.assertEqual(
+                runtime_worker_owners(workspace, {"DE67_CODEX_STATE": str(state)}),
+                {"astra-worker": "sol-coordinator"},
+            )
+
     def test_post_review_projection_loads_the_installed_delivery_writer(self) -> None:
         # A long-lived parent keeps its ordinary import, but the sole
         # post-review projection must use the exact on-disk writer that the
@@ -1265,7 +1286,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("exposes a contradiction or a missing causal step", prompt)
         self.assertIn("Internal machine state and DFS detail", prompt)
         self.assertIn('fork_turns="none"', prompt)
-        self.assertIn("Explicitly choose gpt-5.6-luna or gpt-5.6-terra", prompt)
+        self.assertIn("Choose only available pairs from model_choices", prompt)
         self.assertIn("Never omit model selection", prompt)
         self.assertIn("pass coordinator or predecessor history", prompt)
         # Verify the complete producing contract reaches routing without freezing its prose.

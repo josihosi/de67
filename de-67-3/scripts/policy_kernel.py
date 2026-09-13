@@ -477,8 +477,9 @@ def worker_communication_contract() -> str:
     return (
         "Named workers use the coordinator mailbox command supplied here; native children use "
         "send_message(target=\"/root\", message=...). Share progress or questions that can "
-        "change coordination or another worker's work. During tests, ask the coordinator for help "
-        "when results surprise you, progress stalls, or you are unsure what to try next. Share the "
+        "change coordination or another worker's work. Ask the coordinator for help when results "
+        "surprise you, progress stalls, or uncertainty about where to look, how to approach the task, "
+        "or how to interpret evidence could change your next steps. Share the "
         "relevant actual state, expected behavior, evidence and uncertainty so you can reason "
         "together before repeating an ineffective approach. If retrieval itself is awkward, name "
         "the question the available view could not answer and the relevant evidence handle; let "
@@ -509,7 +510,7 @@ def _write_worker_dispatch_packet(
 
 
 def worker_selection_contract() -> str:
-    return 'Default to Luna for playtesting, clear execution and ordinary repairs. An unknown result or a broad assignment that might need debugging does not itself justify Terra. Use Terra for a concrete hard problem: coupled implementation, difficult diagnosis or demonstrated repair difficulty. After that problem is resolved, give substantial remaining execution to Luna when the handoff saves total work, preserving useful understanding and live ownership. Sol retains coordination; Terra can use Luna helpers without becoming another coordinator. Select model and effort separately: low for clear execution, medium for bounded reasoning, high for competing explanations; Luna also supports xhigh/max. Reassess from results, including helper and handoff costs, without quotas or a selection report. Explicitly choose gpt-5.6-luna or gpt-5.6-terra and effort from model_choices; Sol is not an ordinary worker.'
+    return 'Default to Luna for playtesting, clear execution and ordinary repairs. An unknown result or a broad assignment that might need debugging does not itself justify Terra. Use Terra for a concrete hard problem: coupled implementation, difficult diagnosis or demonstrated repair difficulty. After that problem is resolved, give substantial remaining execution to Luna when the handoff saves total work, preserving useful understanding and live ownership. Sol retains coordination; Terra can use Luna helpers without becoming another coordinator. Select model and effort separately: low for clear execution, medium for bounded reasoning, high for competing explanations; Luna also supports xhigh/max. Reassess from results, including helper and handoff costs, without quotas or a selection report. Choose only available pairs from model_choices. Once verified and enabled through the worker system, gpt-6-astra/low is an optional ordinary worker for challenging coding or high uncertainty when Sol expects better implementation judgment or less rework. This is not a default, required escalation or quota; Luna and Terra remain available. Give Astra a focused self-contained assignment with relevant FS, source, evidence and exclusive ownership, not the persistent mutator conversation. Sol remains coordinator and the Astra mutator remains a separate role. At the first naturally suitable Astra assignment, assess verified result, rework, elapsed time and full-tree usage including helpers/retries/review; disclose accounting gaps and treat quality or savings as hypotheses until observed. Do not manufacture a benchmark or duplicate race. Sol is not an ordinary worker.'
 
 
 def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
@@ -519,6 +520,9 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
     efforts_by_model = {
         "gpt-5.6-luna": ("low", "medium", "high", "xhigh", "max"),
         "gpt-5.6-terra": ("low", "medium", "high"),
+        # Astra is deliberately restricted to its separately verified ordinary
+        # worker route.  The persistent mutator is not a worker capability.
+        "gpt-6-astra": ("low",),
     }
     capabilities = configured if configured is not None else [
         {"model": model, "reasoning_effort": effort}
@@ -528,7 +532,7 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
         raise PolicyError("worker_capabilities must be a list")
     result = []
     for value in capabilities:
-        if not isinstance(value, dict) or value.get("model") not in {"gpt-5.6-luna", "gpt-5.6-terra"}:
+        if not isinstance(value, dict) or value.get("model") not in efforts_by_model:
             continue
         choice = {"model": value["model"], "reasoning_effort": value.get("reasoning_effort", "medium")}
         # Setup records successfully probed pairs; defaults do not restrict that roster.
@@ -536,10 +540,13 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
             r"[A-Za-z0-9][A-Za-z0-9._-]*", choice["reasoning_effort"]
         ):
             raise PolicyError("Unsupported worker reasoning effort")
+        if (choice["model"] == "gpt-6-astra"
+                and choice["reasoning_effort"] not in efforts_by_model[choice["model"]]):
+            raise PolicyError("Unsupported ordinary-worker model and reasoning effort")
         if choice not in result:
             result.append(choice)
     if not result:
-        raise PolicyError("No configured Luna/Terra worker capability is available")
+        raise PolicyError("No configured ordinary-worker capability is available")
     return result
 
 
@@ -1147,7 +1154,14 @@ def workspace_facts(
                     "ORDER BY started_at DESC",
                     (lineage_id,),
                 ).fetchall()
-            clock = next((row for row in clock if str(row["claim_id"]) not in owner_wait_claims), None)
+            accepted_claims = {
+                str(row[0]) for row in connection.execute(
+                    "SELECT claim_id FROM claim_acceptances WHERE lineage_id = ? AND invalidated_at IS NULL",
+                    (lineage_id,),
+                )
+            } if _table_exists(connection, "claim_acceptances") else set()
+            clock = next((row for row in clock
+                          if str(row["claim_id"]) not in owner_wait_claims | accepted_claims), None)
             if clock is not None:
                 current_claim = str(clock["claim_id"])
                 facts.add("open_claim")

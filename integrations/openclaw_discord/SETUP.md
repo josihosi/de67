@@ -4,8 +4,8 @@ For Codex installing this integration for an interested user: explain the requir
 obtain the user's channel/account choices, then perform the authorized setup and verification.
 The package is optional; no Discord account is needed for core de67.
 
-Download `de67-3.0.0-discord.zip` from the [v3.0.0 release](https://github.com/josihosi/de67/releases/tag/v3.0.0),
-verify its entry in `SHA256SUMS`, and merge its `de67/` directory into the **3.0.0 core** installation.
+Download `de67-3.1.0-discord.zip` from the [v3.1.0 release](https://github.com/josihosi/de67/releases/tag/v3.1.0),
+verify its entry in `SHA256SUMS`, and merge its `de67/` directory into the **3.1.0 core** installation.
 The archive contains these distinct routes; enable only the one the user wants:
 
 | Route | Purpose and setup |

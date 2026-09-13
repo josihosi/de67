@@ -23,8 +23,8 @@ this workflow only in the user's intended execution environment.
 
 ## Install the core
 
-1. Download `de67-3.0.0-core.zip` and `SHA256SUMS` from the
-   [v3.0.0 release](https://github.com/josihosi/de67/releases/tag/v3.0.0). Verify its SHA-256 before
+1. Download `de67-3.1.0-core.zip` and `SHA256SUMS` from the
+   [v3.1.0 release](https://github.com/josihosi/de67/releases/tag/v3.1.0). Verify its SHA-256 before
    extraction (`Get-FileHash` on PowerShell or `shasum -a 256` on macOS).
 2. Inspect the user's existing skill installation and changes. Extract the archive's `de67/`
    directory into the configured user skills directory. Keep its complete structure; do not

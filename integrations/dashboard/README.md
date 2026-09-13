@@ -7,13 +7,13 @@ and does not require OpenClaw.
 
 ## Install
 
-For Codex setting this up for a user: this optional package requires the matching de67 3.0.0 core,
+For Codex setting this up for a user: this optional package requires the matching de67 3.1.0 core,
 Python 3.10+, and read access to the project state. The basic website uses only the Python standard
 library. The narrator and subscription display additionally need authenticated Codex; remote
 hosting additionally needs the user's chosen network/authentication service.
 
-Download `de67-3.0.0-dashboard.zip` from the
-[v3.0.0 release](https://github.com/josihosi/de67/releases/tag/v3.0.0), verify its `SHA256SUMS` entry,
+Download `de67-3.1.0-dashboard.zip` from the
+[v3.1.0 release](https://github.com/josihosi/de67/releases/tag/v3.1.0), verify its `SHA256SUMS` entry,
 and merge its `de67/` directory into the core installation. Codex can install and launch it after
 learning which project the user wants to observe and whether access should be local or remote.
 Keep credentials and machine-specific service configuration outside the package.

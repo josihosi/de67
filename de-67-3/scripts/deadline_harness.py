@@ -2491,6 +2491,22 @@ class DeadlineHarness:
                 }
 
         if trigger is None:
+            owner = self.connection.execute(
+                "SELECT basis_task_id, recorded_at, closure_evidence FROM claim_phase_events "
+                "WHERE lineage_id = ? AND claim_id = ? AND phase = 'exploration' "
+                "AND sequence > COALESCE(?, 0) AND recorded_at = ? "
+                "AND basis_task_id = ? AND contradicted_premise IS NULL "
+                "AND ? = 'owner requested reassessment: ' || closure_evidence "
+                "ORDER BY sequence DESC LIMIT 1",
+                (lineage_id, claim_id, acceptance["closure_sequence"],
+                 acceptance["invalidated_at"], acceptance["task_id"],
+                 acceptance["invalidation_reason"]),
+            ).fetchone()
+            if owner is not None:
+                trigger = {"kind": "owner_reopen", "task_id": owner["basis_task_id"],
+                           "recorded_at": owner["recorded_at"],
+                           "owner_request": owner["closure_evidence"]}
+        if trigger is None:
             return None
         return {
             "lineage_id": lineage_id,
@@ -5091,6 +5107,76 @@ class DeadlineHarness:
                 }
             )
             self.connection.commit()
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def reopen_claim_for_owner(
+        self,
+        lineage_id: str,
+        claim_id: str,
+        owner_request: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Reassess accepted work during an owner-authorized exclusive review.
+
+        The caller supplies the owner's decision and its durable source reference.
+        The accepted task remains evidence, not a fabricated worker finding. This
+        does not change deadlines, task history or another claim's acceptance.
+        """
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        claim_id = self._identity(claim_id, "Claim id")
+        owner_request = self._nonempty_text(owner_request, "Owner request and source")
+        reason = f"owner requested reassessment: {owner_request}"
+        recorded_at = self._now(now)
+        self._begin()
+        try:
+            claim = self._claim(lineage_id, claim_id)
+            acceptance = self._latest_acceptance(lineage_id, claim_id)
+            if acceptance is None:
+                raise DeadlineError("Owner reassessment requires an accepted claim")
+            if claim["phase"] == "exploration" and acceptance["invalidation_reason"] == reason:
+                result = dict(claim)
+                result["recorded"] = False
+                self.connection.commit()
+                result["dfs_status_synchronized"] = list(self.synchronize_dfs_statuses())
+                return result
+            if claim["phase"] != "closure" or acceptance["invalidated_at"] is not None:
+                raise DeadlineError("Owner reassessment requires a currently accepted closure")
+            if claim["retired_at"] is None:
+                raise DeadlineError("Owner reassessment requires exclusive mutation clock retirement")
+            live = self.connection.execute(
+                "SELECT 1 FROM worker_claims WHERE lineage_id = ? AND released_at IS NULL LIMIT 1",
+                (lineage_id,),
+            ).fetchone()
+            if live is not None:
+                raise DeadlineError("Owner reassessment requires quiet worker ownership")
+            sequence = self.connection.execute(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM claim_phase_events "
+                "WHERE lineage_id = ? AND claim_id = ?", (lineage_id, claim_id),
+            ).fetchone()[0]
+            self.connection.execute(
+                "INSERT INTO claim_phase_events "
+                "(lineage_id, claim_id, sequence, phase, recorded_at, basis_task_id, closure_evidence) "
+                "VALUES (?, ?, ?, 'exploration', ?, ?, ?)",
+                (lineage_id, claim_id, sequence, recorded_at, acceptance["task_id"], owner_request),
+            )
+            self.connection.execute(
+                "UPDATE claim_clocks SET phase = 'exploration' WHERE lineage_id = ? AND claim_id = ?",
+                (lineage_id, claim_id),
+            )
+            self.connection.execute(
+                "UPDATE claim_acceptances SET invalidated_at = ?, invalidation_reason = ? "
+                "WHERE lineage_id = ? AND claim_id = ? AND invalidated_at IS NULL",
+                (recorded_at, reason, lineage_id, claim_id),
+            )
+            result = dict(self._claim(lineage_id, claim_id))
+            result.update(recorded=True, owner_request=owner_request)
+            self.synchronize_dfs_statuses(persist=False)
+            self.connection.commit()
+            result["dfs_status_synchronized"] = list(self.synchronize_dfs_statuses())
             return result
         except Exception:
             self.connection.rollback()

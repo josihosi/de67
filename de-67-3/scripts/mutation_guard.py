@@ -1112,6 +1112,17 @@ def validate_invalidated_claim_state(
                     acceptance["invalidated_at"],
                 ),
             ).fetchone()
+        if trigger is None and acceptance is not None and acceptance["invalidated_at"] is not None:
+            trigger = connection.execute(
+                "SELECT 'owner_reopen' AS trigger_kind, basis_task_id AS trigger_task_id "
+                "FROM claim_phase_events WHERE lineage_id = ? AND claim_id = ? "
+                "AND phase = 'exploration' AND sequence > COALESCE(?, 0) "
+                "AND recorded_at = ? AND basis_task_id = ? AND contradicted_premise IS NULL "
+                "AND ? = 'owner requested reassessment: ' || closure_evidence LIMIT 1",
+                (lineage_id, expected_claim, acceptance["closure_sequence"],
+                 acceptance["invalidated_at"], acceptance["task_id"],
+                 acceptance["invalidation_reason"]),
+            ).fetchone()
     except sqlite3.Error as error:
         raise GuardError(f"Cannot read claim invalidation state: {error}") from error
     finally:

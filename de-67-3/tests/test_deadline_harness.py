@@ -2467,6 +2467,75 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertIsNone(acceptance)
         self.assertIsNone(gap["closed_at"])
 
+    def test_owner_reopen_preserves_history_and_independent_acceptance(self) -> None:
+        from mutation_guard import validate_invalidated_claim_state
+        self.establish_accepted_claim()
+        self.establish_accepted_claim("R-002", prefix="other-")
+        self.harness.retire_claim_clocks_for_mutation("project", "owner review", now=6)
+        def rows(table):
+            return [dict(row) for row in self.harness.connection.execute(f"SELECT * FROM {table}")]
+        immutable = {table: rows(table) for table in (
+            "tasks", "claim_deadline_generations", "worker_findings", "closure_gaps")}
+        accepted = rows("claim_acceptances")
+        result = self.harness.reopen_claim_for_owner(
+            "project", "R-001", "Owner requests focused reruns; owner-decision.md", now=7)
+        self.assertTrue(result["recorded"])
+        self.assertEqual(result["phase"], "exploration")
+        for table, before in immutable.items():
+            self.assertEqual(rows(table), before)
+        after = rows("claim_acceptances")
+        for old, new in zip(accepted, after):
+            if old["claim_id"] == "R-002":
+                self.assertEqual(old, new)
+            else:
+                self.assertEqual(new["invalidated_at"], 7)
+                for field in old.keys() - {"invalidated_at", "invalidation_reason"}:
+                    self.assertEqual(old[field], new[field])
+        details = self.harness.claim_invalidation_details("project", "R-001")
+        self.assertEqual(details["trigger"]["kind"], "owner_reopen")
+        self.assertEqual(validate_invalidated_claim_state(self.state_path, "project", "R-001"),
+                         ("R-001", "owner_reopen"))
+        phases = rows("claim_phase_events")
+        repeated = self.harness.reopen_claim_for_owner(
+            "project", "R-001", "Owner requests focused reruns; owner-decision.md", now=8)
+        self.assertFalse(repeated["recorded"])
+        self.assertEqual(rows("claim_phase_events"), phases)
+        restart = self.harness.request_coordinator_restart("project", "review complete", now=9)["coordinator_restart"]
+        self.harness.claim_coordinator_restart("project", restart["generation"], "fresh", now=10)
+        self.harness.acknowledge_coordinator_restart("project", restart["generation"], "fresh", now=11)
+        self.harness.start_task("project", "renewed", "R-001", 100, now=12)
+        self.harness.complete_task("project", "renewed", "fresh native proof", now=13)
+        self.harness.transition_claim_to_closure("project", "R-001", "renewed",
+            "Renewed owner outcome", "Fresh independent proof", "Package review", now=14)
+        self.harness.start_task("project", "renewed-closure", "R-001", 100, phase="closure", now=15)
+        self.harness.complete_task("project", "renewed-closure", "reviewed", now=16)
+        self.harness.accept_claim("project", "R-001", "renewed-closure", "new proof", now=17)
+        acceptances = [r for r in rows("claim_acceptances") if r["claim_id"] == "R-001"]
+        self.assertEqual([r["acceptance_number"] for r in acceptances], [1, 2])
+        self.assertIsNotNone(acceptances[0]["invalidated_at"])
+        self.assertIsNone(acceptances[1]["invalidated_at"])
+
+    def test_owner_reopen_projects_functional_ledger_without_worker_finding(self) -> None:
+        workspace, fs = self.functional_projection_workspace()
+        self.establish_accepted_claim()
+        self.harness.retire_claim_clocks_for_mutation("project", "owner review", now=6)
+        result = self.harness.reopen_claim_for_owner("project", "R-001", "Owner decision.md", now=7)
+        self.assertEqual(result["dfs_status_synchronized"], ["R-001"])
+        ledger = (workspace / ".de67/work-ledger.md").read_text()
+        self.assertIn("- [ ] R-001", ledger)
+        self.assertIn("Assignment: closure owner", ledger)
+        self.assertEqual((workspace / ".de67/FS.md").read_text(), fs)
+        self.assertEqual(self.harness.connection.execute("SELECT COUNT(*) FROM worker_findings").fetchone()[0], 0)
+
+    def test_owner_reopen_rejects_missing_decision_or_active_clock(self) -> None:
+        self.establish_accepted_claim()
+        with self.assertRaisesRegex(DeadlineError, "must not be empty"):
+            self.harness.reopen_claim_for_owner("project", "R-001", " ", now=6)
+        with self.assertRaisesRegex(DeadlineError, "clock retirement"):
+            self.harness.reopen_claim_for_owner("project", "R-001", "Owner decision.md", now=6)
+        self.assertIsNone(self.harness.connection.execute(
+            "SELECT invalidated_at FROM claim_acceptances").fetchone()[0])
+
     def test_functional_ledger_reopens_and_removes_durable_acceptance(self) -> None:
         workspace, functional_specification = self.functional_projection_workspace()
         self.establish_accepted_claim()

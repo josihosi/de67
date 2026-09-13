@@ -14,7 +14,7 @@ de67 3   orchestrate implementation, testing, and repair
 
 In Phase 2, Astra turns your intent and the real code into a frozen specification. In Phase 3,
 Astra reviews and refines the delivery method. Sol coordinates the work and judges the evidence;
-Terra and Luna investigate, build, test, and repair, working in parallel where tasks are independent
+Astra, Terra, and Luna investigate, build, test, and repair, working in parallel where tasks are independent
 and retaining useful context across assignments.
 
 de67 trusts agents to choose their approach. When work goes wrong, the workflow traces the context
@@ -30,5 +30,5 @@ the accumulated work, keeping the intended outcome fixed while the route evolves
 - **[Optional Discord connection](integrations/openclaw_discord/SETUP.md)** — prerequisites and agent-led installation.
 - **[Troubleshooting](docs/troubleshooting.md)** — diagnose the actual failing layer.
 - **[Skill router](SKILL.md)** — entrypoints for agents, including release packaging and alignment audit.
-- **[v3.0.0 release notes](docs/releases/3.0.0.md)** — changes, compatibility, and package contents.
+- **[v3.1.0 release notes](docs/releases/3.1.0.md)** — changes and features.
 - **[Credits](docs/credits.md)** · **[Apache 2.0 license](LICENSE)**

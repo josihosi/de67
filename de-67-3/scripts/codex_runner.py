@@ -707,16 +707,18 @@ def run(
         Path(__file__).with_name("codex_app_server_runner.py")
     )
     process_environment = {**selected_environment, "DE67_RUNNER_ACTIVE_DIR": str(run_directory)}
-    recovered_workers = _initial_recovered_workers(selected_environment)
-    loop_guard = CoordinatorLoopGuard(
-        initial_unbound_tasks=_initial_unbound_tasks(selected_environment),
-        initial_pending_delegations=tuple(recovered_workers),
-        recovered_workers=recovered_workers,
-        roster_resolver=_roster_resolver(workspace, selected_environment),
-        roster_validator=_roster_validator(workspace, selected_environment),
-        claim_recorder=_claim_recorder(selected_environment),
-        task_terminal=_task_terminal_resolver(selected_environment),
-    )
+    loop_guard = None
+    if selected_environment.get("DE67_PROCESS_ROLE", "coordinator") == "coordinator":
+        recovered_workers = _initial_recovered_workers(selected_environment)
+        loop_guard = CoordinatorLoopGuard(
+            initial_unbound_tasks=_initial_unbound_tasks(selected_environment),
+            initial_pending_delegations=tuple(recovered_workers),
+            recovered_workers=recovered_workers,
+            roster_resolver=_roster_resolver(workspace, selected_environment),
+            roster_validator=_roster_validator(workspace, selected_environment),
+            claim_recorder=_claim_recorder(selected_environment),
+            task_terminal=_task_terminal_resolver(selected_environment),
+        )
     started = time.monotonic()
     session_id: str | None = None
     process: subprocess.Popen[str] | None = None
@@ -753,17 +755,19 @@ def run(
                 if not isinstance(event, dict):
                     continue
                 try:
-                    loop_guard.observe(event)
+                    if loop_guard is not None:
+                        loop_guard.observe(event)
                 except RunnerError:
-                    tasks_to_abandon = loop_guard.unbound_tasks
+                    tasks_to_abandon = loop_guard.unbound_tasks if loop_guard is not None else ()
                     raise
             exit_code = _reap(process)
             if app_server_transport:
                 from codex_app_server_runner import stop_owned_runtime
                 stop_owned_runtime(process, workspace, run_directory, selected_environment)
             process = None
-            loop_guard.reconcile_handoffs()
-            if loop_guard.unbound_tasks:
+            if loop_guard is not None:
+                loop_guard.reconcile_handoffs()
+            if loop_guard is not None and loop_guard.unbound_tasks:
                 _abandon_unbound_tasks(
                     loop_guard.unbound_tasks, selected_environment
                 )
@@ -773,7 +777,7 @@ def run(
     except Exception as error:
         cleanup_errors: list[str] = []
         if process is not None:
-            tasks_to_abandon = loop_guard.unbound_tasks
+            tasks_to_abandon = loop_guard.unbound_tasks if loop_guard is not None else ()
             try:
                 if app_server_transport:
                     from codex_app_server_runner import stop_owned_runtime

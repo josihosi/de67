@@ -254,31 +254,40 @@ def solar_filaments() -> str:
     return ''.join(paths)
 
 
-def render_worker_scale(model: str, counts: dict[str, int]) -> str:
-    levels = ("low", "medium", "high", "max")
-    total = sum(counts.get(level, 0) for level in levels)
-    description = ", ".join(f"{level}: {counts.get(level, 0)}" for level in levels)
-    # Leave room for worker clusters to float above the reasoning axis.
-    marks = ['<line class="strength-axis" x1="48" y1="114" x2="348" y2="114"/>']
-    for index, level in enumerate(levels):
-        x = 48 + index * 100
-        count = counts.get(level, 0)
-        marks.append(f'<circle class="strength-stop" cx="{x}" cy="114" r="2"/>')
-        for dx, dy in worker_dot_positions(count):
-            marks.append(f'<circle class="worker-dot" cx="{x + dx:.3f}" cy="{58 + dy:.3f}" r="4.67"><title>{_escape(model.lower())} · {level.lower()} reasoning</title></circle>')
-        if count > 12:
-            marks.append(f'<text class="strength-overflow" x="{x}" y="8">+{count - 12}</text>')
-        marks.append(f'<text class="strength-label" x="{x}" y="156">{level.lower()}</text>')
+def worker_emblem(model: str) -> str:
     emblem = ('<path fill="#7ee6c2" d="M25 4a14 14 0 1 0 0 28A16 16 0 0 1 25 4Z"/>'
               if model == "luna" else
               '<circle cx="18" cy="18" r="14" fill="#77accb"/><path fill="#cee2e7" d="M9 8Q13 4 18 4L20 7 17 10 18 12 15 14 14 18 11 17 10 13 7 12ZM18 19Q22 17 25 20L25 24 22 27 21 30 19 28 19 24 16 22Z"/><path d="M6 16A12 12 0 0 1 13 7" fill="none" stroke="#e2f1f3" stroke-opacity=".45" stroke-width=".8" stroke-linecap="round"/>')
-    return (
-        f'<div class="worker-scale" data-model="{model}"><div class="scale-heading"><strong>{_escape(model.lower())}</strong>'
-        f'<span><b>{total}</b> active</span></div>'
-        f'<svg class="model-emblem" viewBox="0 0 36 36" aria-hidden="true">{emblem}</svg>'
-        f'<svg viewBox="0 0 396 170" role="img" aria-label="{_escape(model.lower() + ": " + description)}">'
-        + "".join(marks) + '</svg></div>'
-    )
+    if model == "astra":
+        emblem = '<path fill="#fff0d6" d="m18 2 3.7 11.2L34 13l-9.8 7.4L28 32l-10-6.6L8 32l3.8-11.6L2 13l12.3.2Z"/><circle cx="18" cy="18" r="3" fill="#fffbe5"/>'
+    return emblem
+
+
+def render_worker_scale(counts: dict[str, dict[str, int]]) -> str:
+    models = ("astra", "terra", "luna")
+    levels = ("low", "medium", "high", "max")
+    marks = ['<line class="strength-axis" x1="48" y1="114" x2="348" y2="114"/>']
+    for index, level in enumerate(levels):
+        x = 48 + index * 100
+        active = [model for model in models for _ in range(max(0, counts.get(model, {}).get(level, 0)))]
+        marks.append(f'<circle class="strength-stop" cx="{x}" cy="114" r="2"/>')
+        for model, (dx, dy) in zip(active, worker_dot_positions(len(active))):
+            marks.append(f'<g class="worker-dot" data-model="{model}" transform="translate({x + dx - 6:.3f} {58 + dy - 6:.3f})">'
+                         f'<title>{model} · {level} reasoning</title>'
+                         f'<svg width="12" height="12" viewBox="0 0 36 36">{worker_emblem(model)}</svg></g>')
+        if len(active) > 12:
+            marks.append(f'<text class="strength-overflow" x="{x}" y="8">+{len(active) - 12}</text>')
+        marks.append(f'<text class="strength-label" x="{x}" y="156">{level}</text>')
+    legend = []
+    descriptions = []
+    for model in models:
+        description = model + ": " + ", ".join(f"{level}: {counts.get(model, {}).get(level, 0)}" for level in levels)
+        descriptions.append(description)
+        legend.append(f'<div role="img" aria-label="{_escape(description)}" title="{_escape(description)}"><span>{model}</span>'
+                      f'<svg class="model-emblem" viewBox="0 0 36 36" aria-hidden="true">{worker_emblem(model)}</svg></div>')
+    return ('<div class="worker-scale">'
+            f'<svg class="shared-worker-axis" viewBox="0 0 396 170" role="img" aria-label="{_escape("; ".join(descriptions))}">'
+            + "".join(marks) + '</svg><div class="worker-legend">' + "".join(legend) + '</div></div>')
 
 
 def render_work_digest(text: str) -> str:
@@ -1290,10 +1299,49 @@ def coordinator_activity(workspace: Path, sessions_root: Path) -> str:
     return _session_activity(Path(row[0])) if row else "unknown"
 
 
+def _active_mutator(workspace: Path, sessions_root: Path) -> dict[str, str] | None:
+    """Read the existing persistent session binding; it grants no worker ownership."""
+    binding_path = workspace / ".de67/state/mutator-session.json"
+    if not binding_path.is_file():
+        return None
+    binding = json.loads(binding_path.read_text(encoding="utf-8"))
+    if (binding.get("state") != "active"
+            or Path(binding.get("workspace", "")).resolve() != workspace.resolve()):
+        return None
+    pid = binding.get("runner_pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        pass
+    index = sessions_root.parent / "state_5.sqlite"
+    uri = f"file:{quote(str(index), safe='/:')}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, timeout=0)
+    try:
+        row = connection.execute(
+            "SELECT id, cwd, model, reasoning_effort FROM threads WHERE id = ?",
+            (binding.get("thread_id"),),
+        ).fetchone()
+    finally:
+        connection.close()
+    if row is None or Path(row[1]).resolve() != workspace.resolve():
+        raise ValueError("active mutator session metadata unavailable")
+    if row[2] != "gpt-6-astra" or row[3] not in ("low", "medium", "high", "max"):
+        raise ValueError("active mutator model or reasoning effort unavailable")
+    return {"id": str(row[0]), "effort": str(row[3])}
+
+
 def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     """Project active roster subagents from Codex's existing read-only session records."""
     counts = {model: {effort: 0 for effort in ("low", "medium", "high", "max")}
-              for model in ("luna", "terra", "sol")}
+              for model in ("luna", "terra", "astra", "sol")}
+    mutator = _active_mutator(workspace, sessions_root)
+    counted = {mutator["id"]} if mutator else set()
+    if mutator:
+        counts["astra"][mutator["effort"]] += 1
     active_claims = _active_worker_claims(workspace)
     if active_claims == {}:
         return {"counts": counts, "available": True}
@@ -1393,8 +1441,9 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
             context = _trace_fuel(path)
             model = str(context.get("model", "")).lower().rsplit("-", 1)[-1]
             effort = str(context.get("effort", "")).lower()
-            if model in counts and effort in counts[model]:
+            if model in counts and effort in counts[model] and candidate_id not in counted:
                 counts[model][effort] += 1
+                counted.add(candidate_id)
         if not changed:
             break
         pending = next_pending
@@ -1416,7 +1465,7 @@ def _trace_fuel(path: Path, *, windows: list[tuple[float, float | None]] | None 
     if cached is None or stat.st_size < cached["offset"] or cached["windows"] != selection:
         cached = {"offset": 0, "fresh": None, "observed": 0, "partial": False, "points": [],
                   "model": None, "effort": None, "worker_points": [], "windows": selection,
-                  "worker_totals": {"terra": 0, "luna": 0, "other": 0}}
+                  "worker_totals": {"astra": 0, "terra": 0, "luna": 0, "other": 0}}
         _TOKEN_TRACES[key] = cached
 
     def record(delta: int, timestamp: float | None = None) -> None:
@@ -1428,7 +1477,7 @@ def _trace_fuel(path: Path, *, windows: list[tuple[float, float | None]] | None 
                        for start, end in selection):
                 return
         model = str(cached["model"]).lower().rsplit("-", 1)[-1]
-        role = model if model in ("terra", "luna") else "other"
+        role = model if model in ("astra", "terra", "luna") else "other"
         cached["observed"] += delta
         cached["worker_totals"][role] += delta
         if timestamp is not None:
@@ -1602,7 +1651,7 @@ def render_fuel(fuel: dict[str, Any]) -> str:
     ceiling = next(step * magnitude for step in (1, 2, 2.5, 5, 10) if step * magnitude >= peak)
     def axis_label(value: float) -> str:
         return f"{value / 1000000:g}m" if value >= 1000000 else f"{value / 1000:g}k" if value >= 1000 else f"{value:g}"
-    roles = [("astra", "mutator", "#fff0d6"), ("coordinator", "coordinator", "#eabd69"),
+    roles = [("astra", "astra", "#fff0d6"), ("coordinator", "coordinator", "#eabd69"),
              ("terra", "worker terra", "#77accb"), ("luna", "worker luna", "#82dfbd")]
     if totals.get("other", 0):
         roles.append(("other", "other workers", "#9997a0"))
@@ -2111,9 +2160,7 @@ class Dashboard:
         else:
             worker_counts = workers.get("counts", {})
             worker_body = (
-                '<div class="roster-scales">' + "".join(
-                    render_worker_scale(model, worker_counts.get(model, {}))
-                    for model in ("terra", "luna")) + '</div>'
+                '<div class="roster-scales">' + render_worker_scale(worker_counts) + '</div>'
                 if workers.get("available") else
                 f'<p class="subtle">Workers unavailable · {_escape(workers.get("error", "unknown source"))}</p>'
             )
@@ -2121,11 +2168,11 @@ class Dashboard:
                          "on" if coordinator == "running" else
                          "waiting" if coordinator == "waiting" else
                          "unknown" if coordinator == "unknown" else "off")
-            mutator_activity = state.get("mutator_activity", {})
-            astra_state = "on" if mutation_running or mutator_activity.get("glowing") else "unknown" if clock.get("error") else "off"
-            astra_label = "Astra mutator: " + ("reviewing" if mutation_running else "idle")
-            if mutator_activity.get("status") not in (None, "disabled", "idle"):
-                astra_label += " · conversation " + mutator_activity["status"]
+            astra_counts = worker_counts.get("astra", {})
+            astra_total = sum(astra_counts.values())
+            astra_state = "on" if astra_total else "off" if workers.get("available") else "unknown"
+            astra_label = (f"Astra: {astra_total} active · workers and mutator" if workers.get("available")
+                           else "Astra: activity unavailable")
             sun_activity = process.get("activity", "unknown") if sun_state == "on" else sun_state
             import random
             rng = random.Random(67)
@@ -2356,13 +2403,19 @@ nav{{margin:16px 0 24px;border-color:#30303b}}nav a{{font-size:11px}}
 .sun>span{{font-size:12px;letter-spacing:.1em}}.sun svg{{display:block;width:100%;height:auto;margin-top:16px}}
 .cosmos .roster-scales{{grid-template-columns:1fr;gap:4px}}
 .cosmos .worker-scale{{width:min(100%,469px);justify-self:center;display:grid;grid-template-columns:minmax(0,1fr) 65px;column-gap:8px;align-items:center}}
-.cosmos .worker-scale>svg:not(.model-emblem){{grid-column:1;grid-row:1/3;height:170px;justify-self:start;width:auto;max-width:100%}}
+.cosmos .worker-scale>svg:not(.model-emblem){{grid-column:1;grid-row:1;height:170px;justify-self:start;width:auto;max-width:100%}}
+.worker-legend{{grid-column:2;grid-row:1;display:grid;gap:4px;text-align:center}}
+.worker-legend>div{{display:grid;justify-items:center;gap:3px}}
+.worker-legend span{{font-size:11px;color:#c7ccd7}}
+.cosmos .worker-legend .model-emblem{{grid-column:auto;grid-row:auto;width:30px;height:30px;margin:0}}
 .cosmos .scale-heading{{grid-column:2;grid-row:1;align-self:end;padding:0;display:block}}
 .cosmos .scale-heading strong{{font-size:13px;font-weight:400;color:#c7ccd7}}
 .cosmos .scale-heading span{{display:none}}
 .cosmos .model-emblem{{grid-column:2;grid-row:2;align-self:start;width:30px;height:30px;margin:9px 0 0}}
 .cosmos .worker-scale[data-model="terra"] .worker-dot{{fill:#8abbd6}}
 .cosmos .worker-scale[data-model="luna"] .worker-dot{{fill:#7ee6c2}}
+.cosmos .worker-scale[data-model="astra"] .worker-dot{{fill:#fff0d6;filter:drop-shadow(0 0 4px #ffdc9d)}}
+.cosmos .worker-scale[data-model="astra"] .model-emblem{{filter:drop-shadow(0 0 4px #ffdc9d)}}
 .cosmos .strength-label{{font-size:10px;fill:#9597a5}}.cosmos .strength-axis{{stroke:#42434e}}
 @media(max-width:650px){{
 main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.work-clock{{max-width:68%;padding:12px}}.work-clock strong{{font-size:11px}}.work-clock>span{{font-size:19px}}.mutation-total>span{{max-width:86px;line-height:1.5}}

@@ -470,7 +470,7 @@ def runtime_worker_owners(
     return {
         str(worker): str(parent)
         for worker, parent, model in rows
-        if any(name in str(model or "").lower() for name in ("luna", "terra"))
+        if any(name in str(model or "").lower() for name in ("luna", "terra", "astra"))
     } | owners
 
 
@@ -872,13 +872,11 @@ def worker_handoff_contract() -> str:
         "Before opening focused exploration, record its outcome and exit condition as "
         "`  - Assignment TASK-ID: ...` in the existing ledger; keep independent assignments separate. "
         "Whole-claim assignments remain valid; broader product scope is context for narrower tasks. "
-        "For coding or testing, Sol turns the FS outcome and relevant source knowledge into "
-        "working guidance when it can reduce uncertainty, rework or error. Select what helps: "
-        "existing design, approach, interfaces and invariants for coding; behavior, material "
-        "premises and distinguishing observations for testing. Explain unresolved choices and "
-        "how correctness could be established where useful. Scale detail to uncertainty and "
-        "consequences; skip additional briefing when it adds no value. The FS is outcome authority; "
-        "the brief is revisable engineering guidance, distinguishing facts from hypotheses. "
+        "Give the worker the outcome and, where useful, a short suggested starting approach: "
+        "what you would inspect or try first, why, and what evidence would change that approach. "
+        "Ground suggestions in known source or evidence and distinguish facts from hypotheses. "
+        "The FS remains outcome authority; workers choose and adapt their execution. Omit extra "
+        "advice when you have nothing useful to add. "
         "Use bounded Luna searches when helpful and synthesize their findings rather than forwarding "
         "search history. Carry useful guidance and references through the existing context_library.py "
         "prepare and selected_context route; preserve accepted facts and evidence limits, refresh "
@@ -1068,7 +1066,7 @@ def named_worker_contract(workspace: Path) -> str:
 
 
 def live_coordination_contract() -> str:
-    return "Use worker_library.py message/wait for named workers; use native send_message/followup_task/wait_agent for native children. Native workers address /root. Sol owns direction and scope. While a worker owns execution, resolve an independent source, interface or acceptance question when its answer can change the current work or successor, and send the useful finding through that worker's message route. Preserve exclusive input/edit ownership and do not duplicate the worker's investigation. If no such question remains, waiting is correct. When execution reveals a substantial independent tooling problem, decide who owns it without interrupting useful live state or handing off merely for a changed tactic. After hard diagnosis, reassess whether Luna can perform substantial remaining execution at lower total cost. Apply the returned-work judgment in the result ingress contract before settling consequential changes. Carry forward current findings, retiring source-specific advice once regression proof absorbs it. Notice recurring context/tool obstructions in worker evidence and commission a bounded repair through the existing work ledger; validate that it removes the demonstrated repetition. DE67 method edits retain exclusive mutation/guard ownership. Do not convert worker discovery transcripts into coordinator context or request parallel summaries, periodic reports or new receipts. Use current-root token_usage in work_context as feedback with helper/handoff costs; distinguish expected savings from measured use, never quotas. At worker return or a natural adoption event, reassess remaining whole-claim proof against its immutable deadline; schedule the unmet boundary with an honest estimate. When no useful decision remains, use the worker's wait route, waking no later than the item deadline; apply policy at routing transitions."
+    return "Use worker_library.py message/wait for named workers; use native send_message/followup_task/wait_agent for native children. Native workers address /root. Sol owns direction and scope. While a worker owns execution, resolve an independent source, interface or acceptance question when its answer can change the current work or successor, and send the useful finding through that worker's message route. Preserve exclusive input/edit ownership and do not duplicate the worker's investigation. At useful coordination boundaries, inspect compact CPU, memory pressure/swap and task-owned process state when it can reveal missed cleanup or a stalled operation. Reconcile games, bridges, helpers and builds with active assignments and explicit retained-session purposes. Sol owns noticing and arranging cleanup when a worker forgets; verified finished or unused task-owned processes may be closed through their supported graceful lifecycle without asking again. Check exact PID/birth identity and OS exit, preserving journals, unsaved state and exclusive input ownership. Low CPU, age or RSS alone does not establish disuse; keep active work, Josef's applications, shared services in use and intentionally retained sessions. For a stalled active operation, diagnose the specific process and coordinate bounded recovery with its worker; report an exact unresolved ownership or recovery gap while continuing independent work. Use no monitoring daemon, fixed polling quota or arbitrary kill threshold. If no such question remains, waiting is correct. When execution reveals a substantial independent tooling problem, decide who owns it without interrupting useful live state or handing off merely for a changed tactic. After hard diagnosis, reassess whether Luna can perform substantial remaining execution at lower total cost. Apply the returned-work judgment in the result ingress contract before settling consequential changes. Carry forward current findings, retiring source-specific advice once regression proof absorbs it. Notice recurring context/tool obstructions in worker evidence and commission a bounded repair through the existing work ledger; validate that it removes the demonstrated repetition. DE67 method edits retain exclusive mutation/guard ownership. Do not convert worker discovery transcripts into coordinator context or request parallel summaries, periodic reports or new receipts. Use current-root token_usage in work_context as feedback with helper/handoff costs; distinguish expected savings from measured use, never quotas. At worker return or a natural adoption event, reassess remaining whole-claim proof against its immutable deadline; schedule the unmet boundary with an honest estimate. When no useful decision remains, use the worker's wait route, waking no later than the item deadline; apply policy at routing transitions."
 
 
 def coordinator_continuation_prompt() -> str:

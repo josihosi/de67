@@ -1116,7 +1116,7 @@ class DashboardTests(unittest.TestCase):
         ).render("overview").decode()
         self.assertIn('class="cosmos-workers"', page)
         self.assertIn('aria-label="luna: low: 0, medium: 1, high: 0, max: 0"', page)
-        self.assertIn("<strong>terra</strong>", page)
+        self.assertIn("<span>terra</span>", page)
         self.assertNotIn("<strong>Sol</strong>", page)
         self.assertNotIn("Unavailable", page)
 
@@ -1616,8 +1616,7 @@ class WorkerScaleTests(unittest.TestCase):
                     self.assertGreater(math.dist(left, right), 10.34)
 
     def test_overflow_is_explicit_and_total_remains_exact(self):
-        result = dashboard_module.render_worker_scale("terra", {"max": 15})
+        result = dashboard_module.render_worker_scale({"terra": {"max": 15}})
         self.assertEqual(result.count('class="worker-dot"'), 12)
         self.assertIn("+3", result)
-        self.assertIn("<b>15</b> active", result)
         self.assertIn("max: 15", result)

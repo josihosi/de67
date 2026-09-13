@@ -832,6 +832,44 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertIn("claim database is locked", status["error"])
         self.assertIn("abandon database is locked", status["cleanup_error"])
 
+    def test_reviewer_exit_does_not_enforce_or_abandon_coordinator_handoffs(self) -> None:
+        environment = {**self.environment(), "DE67_PROCESS_ROLE": "mutation-reviewer"}
+        process = FakeProcess([
+            '{"type":"thread.started","thread_id":"reviewer"}\n',
+            '{"type":"turn.completed"}\n',
+        ], 0)
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=process
+        ), patch("codex_runner._initial_unbound_tasks", return_value=("retained-sol-task",)) as initial, patch(
+            "codex_runner._claim_recorder"
+        ) as claim, patch("codex_runner._abandon_unbound_tasks") as abandon:
+            self.assertEqual(codex_runner.run(
+                self.workspace, "Review; preserve the returned Sol-owned task.",
+                environment=environment,
+            ), 0)
+        initial.assert_not_called()
+        claim.assert_not_called()
+        abandon.assert_not_called()
+        status = json.loads(next((self.root / "runs").glob("*/status.json")).read_text())
+        self.assertEqual(status["status"], "done")
+
+    def test_coordinator_exit_accepts_verified_owned_handoff(self) -> None:
+        environment = {**self.environment(), "DE67_PROCESS_ROLE": "coordinator"}
+        process = FakeProcess([
+            '{"type":"thread.started","thread_id":"sol"}\n',
+            '{"type":"turn.completed"}\n',
+        ], 0)
+        resolve = lambda task, started, parent, used: "worker" if parent == "sol" else None
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=process
+        ), patch("codex_runner._initial_unbound_tasks", return_value=("owned-task",)), patch(
+            "codex_runner._roster_resolver", return_value=resolve
+        ), patch("codex_runner._claim_recorder", return_value=lambda *args: None), patch(
+            "codex_runner._abandon_unbound_tasks"
+        ) as abandon:
+            self.assertEqual(codex_runner.run(self.workspace, "Continue", environment=environment), 0)
+        abandon.assert_not_called()
+
     def test_runner_cannot_publish_success_with_an_unbound_attempt(self) -> None:
         process = FakeProcess([], 0)
         with patch("codex_runner.shutil.which", return_value="codex"), patch(

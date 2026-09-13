@@ -118,6 +118,15 @@ class WorkerFixture:
 
 
 class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
+    def test_astra_low_dispatches_exact_app_server_input(self):
+        worker = self.worker(model="gpt-6-astra", effort="low")
+        self.assertEqual(worker["model"], "gpt-6-astra")
+        self.assign()
+        self.dispatcher.process_pending()
+        starts = [params for method, params in self.rpc.calls if method == "thread/start"]
+        self.assertEqual(starts[-1]["model"], "gpt-6-astra")
+        self.assertEqual(starts[-1]["config"]["model_reasoning_effort"], "low")
+
     def prepared_text(self, task_id, owner, constraint="Current constraint version one"):
         from worker_packet import standing_section
         return ("Current assigned task: " + task_id + "\nCurrent owner instructions: " + owner + "\n"

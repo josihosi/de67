@@ -10,7 +10,18 @@ de67 2   inspect the code and freeze the specification
 de67 3   orchestrate implementation, testing, and repair
 ```
 
-[![The de67 dashboard showing agents, token use, and the current work's radar.](docs/assets/dashboard-overview.png)](integrations/dashboard/README.md)
+[![The complete de67 dashboard showing agents, token use, and the current work's radar.](docs/assets/dashboard-overview.png)](docs/assets/dashboard-overview.png)
+
+In Phase 2, Astra turns your intent and the real code into a frozen specification. In Phase 3,
+Astra reviews and refines the delivery method. Sol coordinates the work and judges the evidence;
+Terra and Luna investigate, build, test, and repair, working in parallel where tasks are independent
+and retaining useful context across assignments.
+
+de67 trusts agents to choose their approach. When work goes wrong, the workflow traces the context
+behind the decision and improves the input, removing misleading instructions instead of reflexively
+adding rules. Tests and durable records support evidence and continuity. Scheduled, incident-driven,
+or owner-requested reviews give Astra a quiet point to revise the method before a fresh Sol resumes
+the accumulated work, keeping the intended outcome fixed while the route evolves.
 
 - **[Install and upgrade](docs/install.md)** — requirements, platform support, and setup for Codex.
 - **[How it works](docs/how-de67-works.md)** — phases, durable state, workers, and mutation review.

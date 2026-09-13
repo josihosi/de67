@@ -10,11 +10,13 @@
   [@aienginerd](https://x.com/aienginerd).
 - Phase 1's question-driven flow was inspired by
   [Jekudy's GrillMe](https://github.com/Jekudy/grillme-skill).
+- Some workflow concepts were loosely borrowed from
+  [Superpowers](https://github.com/obra/superpowers).
 - [Absurd](https://github.com/earendil-works/absurd) by Earendil Works influenced de67's
   database-owned durable workflow state and inspectable agent-loop design. de67's implementation is
   independent and contains no Absurd code.
 - The trajectory sidecar was inspired by [Slopo](https://github.com/rafal-qa/slopo). Its
   implementation is independent and contains no Slopo code.
-- SolAdvisor influenced the advisory approach to agent reasoning and review.
+- [SolAdvisor](https://github.com/DannyMac180/sol-advisor) influenced the advisory approach to agent reasoning and review.
 
 Licensed under the [Apache License 2.0](../LICENSE).

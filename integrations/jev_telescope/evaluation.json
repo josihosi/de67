@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "label_method": "Human-readable source anchors chosen from the actual de67 implementation. Coverage is conditional on this candidate pool, not whole-repository recall. Review labels when source changes.",
+  "cases": [
+    {
+      "id": "worker-unload-and-reuse",
+      "query": "Where do completed named workers release their subscriptions, and how is the same conversation resumed?",
+      "hypothesis": "A worker conversation is deleted when the worker finishes.",
+      "paths": ["de-67-3/scripts/worker_library.py", "de-67-3/tests/test_worker_library.py"],
+      "terms": ["thread/unsubscribe", "thread/resume", "thread/start"],
+      "important_anchors": ["self.rpc.call(\"thread/unsubscribe\"", "self.rpc.call(\"thread/resume\" if worker"],
+      "counter_anchors": ["self.rpc.call(\"thread/unsubscribe\""]
+    },
+    {
+      "id": "owner-message-bootstrap",
+      "query": "Does a resumed persistent mutator receive the owner bootstrap again? Find the implementation and the regression assertion.",
+      "hypothesis": "Owner guidance is always prepended to every Discord message.",
+      "paths": ["de-67-3/scripts/codex_app_server_runner.py", "de-67-3/tests/test_codex_app_server_runner.py"],
+      "terms": ["session and resume", "User Message: retain me"],
+      "important_anchors": ["if session and resume:", "self.assertEqual(turn['input'], [{'type': 'text', 'text': 'User Message: retain me'}])"],
+      "counter_anchors": ["if session and resume:"]
+    },
+    {
+      "id": "wec-misleading-hypothesis",
+      "query": "Which part of WEC is passed to Phase 3, and what happens to an unmarked WEC?",
+      "hypothesis": "Phase 3 always receives the complete WEC, including old Phase-2 instructions.",
+      "paths": ["de-67-3/scripts/policy_kernel.py", "de-67-3/tests/test_policy_kernel.py"],
+      "terms": ["unmarked WEC", "Phase-2 discussion", "current_owner_contract_uses"],
+      "important_anchors": ["An unmarked WEC belongs to Phase 2.", "self.assertEqual(kernel.current_owner_contract(workspace), \"\")"],
+      "counter_anchors": ["An unmarked WEC belongs to Phase 2."]
+    },
+    {
+      "id": "irrelevant-candidates",
+      "query": "Where is NPC pathfinding terrain traversal cost calculated?",
+      "hypothesis": "Terrain costs are calculated by the de67 symbol codec.",
+      "paths": ["de-67-3/scripts/symbol_codec.py"],
+      "terms": ["def"],
+      "important_anchors": [],
+      "counter_anchors": []
+    }
+  ]
+}

@@ -6,6 +6,88 @@ state. Only the repository owner or an agent directly tasked with maintaining th
 
 ## Pending
 
+### Playtest token consumption — human maintenance queue (2026-09-18)
+
+Owner: Josef; explicitly promote individual items before implementation. This is a
+parked maintenance queue, not a new worker assignment or permission to change live runs.
+Implement in the order below. Harness paths are relative to
+`/Volumes/CodexBulk/Schanigarten/workspaces/Cataclysm-AOL-hostile-ecology-dev`;
+Telescope paths are relative to this de67 repository.
+
+Evidence: September 16 trace of Terra worker `01a0a87a-17d2-74e0-ae34-d072dc3043aa`.
+Counts below are command occurrences, not proven redundant work or token savings.
+The broader audit is `docs/token-audit-2026-09-16.md`.
+
+- [ ] **1. Keep pending-response waits inside one tool execution.**
+  Target: `tools/openclaw_harness/play_cli.py`, `PlayerClient.collect` and
+  `--wait-seconds` (currently defaults to one second), plus the playtest worker's
+  invocation guidance. Observed 245 collect commands; 70 corresponding outputs
+  still contained pending state. First use the existing wait option within the
+  task's remaining deadline; keep shell launch and necessary process polling in
+  one `functions.exec`. Only add runtime glue if that route cannot do the job.
+  Return on response, terminal process/bridge failure, or deadline; never resubmit
+  the action. Check delayed success, process death and deadline expiry. Compare
+  model turns spent waiting on the same delayed-response workload before/after.
+
+- [ ] **2. Remove redundant action-to-look round trips.**
+  Target: playtest worker invocation guidance and `play_cli.py` response collection
+  around `gameplay_display.display`; `gameplay_display.py` already emits deltas.
+  Observed 508 look commands. An explicit `game.observe` forces a display refresh.
+  Inspect consecutive action-to-look pairs and reuse the action's returned frame
+  when it provides valid current authority and the needed facts. Keep look for
+  missing/stale frames, reentry and real refresh needs. Do not blindly batch moves.
+  Check prompt transitions, rejected actions, reentry and stale-frame recovery;
+  compare observation calls and displayed bytes on the same action sequence.
+
+- [ ] **3. Make filtered, projected evidence the default investigation example.**
+  Target: `play_cli.py:PlayerClient.evidence`, `evidence_events.py:query` and worker
+  examples. Use exact run/request/actor/event filters and `--select` before paging
+  raw records. For rejection diagnosis project identity, time, error, accepted,
+  rejection_reason and outcome fields; recover larger details through source handles.
+  Do not include whole nested receipts when individual fields suffice. In the live
+  sample, 12 original response files were 410,922 bytes; all 16 projected event rows
+  were 28,117 bytes, without model selection. These are bytes, not model tokens.
+  Check that the projected answer preserves the same acceptance/rejection meaning,
+  identities and verifiable citations; absent fields must remain explicitly unknown.
+
+- [ ] **4. Keep Jev out of deterministic lookups.**
+  Target: `integrations/jev_telescope/README.md`, discovery guidance in
+  `de-67-3/scripts/instruction_context.py`, and any future harness routing glue.
+  Route known request IDs, explicit failure flags and exact rejection strings to
+  existing deterministic filters. Reserve Telescope for ambiguous semantic evidence
+  selection and contradictory explanations. Trial: 12 submitted candidates occupied
+  19,685 bytes; Jev selected six failure rows occupying 10,684 bytes, using 15,498
+  input plus 819 output provider tokens, with no fallback. That is NOT evidence of
+  net savings. Compare exact-filter and Jev routes on the same frozen evidence;
+  count provider tokens, agent fresh tokens and follow-up retrievals together.
+
+- [ ] **5. Improve the adapter's candidate pool before increasing its limits.**
+  Target: `integrations/jev_telescope/harness_adapter.py:search` and
+  `test_harness_adapter.py`. The trial snapshot contained 16 rows but only the first
+  12 were submitted; truncation was correctly reported. Build a question-specific
+  shortlist after exact identity filters; deduplicate equivalent evidence before
+  provider submission, preserving distinct observations, time and contradictions.
+  Use small explicit field projections. Do not silently drop unmatched rows or
+  impose an arbitrary product cap. Test a relevant late row, an early irrelevant
+  prefix, duplicates, absent matches and counterevidence. Measure coverage and
+  total cost; fewer selected rows alone is not success.
+
+- [ ] **6. Carry a small continuation note across context resets.**
+  Target: playtest worker continuation/recovery guidance and its existing checkpoint
+  surface; identify that surface before adding storage. Observed 26 controls commands
+  (~168K output characters); the earlier audit counted 40 context resets for this
+  worker. Retain current session/binding, pending request ID, evidence handles,
+  unresolved question and next decision. Reuse static controls guidance, but verify
+  current advertised actions and evidence freshness. Test resumption with a pending
+  request and with a changed session generation: neither may replay input or reuse
+  stale authority. Compare repeated controls/source reads across a context reset.
+
+Completion evidence for each promoted item: comparable completed playtest outcomes,
+correct citations/contradictions and native authority, fresh agent tokens plus Jev
+tokens, tool/model-turn counts, follow-up reads and elapsed time. Keep comparisons
+local and read-only where possible. Do not claim improvement from lower hourly burn
+caused by doing less useful work. No game build is needed for this backlog entry.
+
 - Add a low-maintenance, read-only de67 dashboard for the repository owner.
 
   Purpose and boundary:

@@ -316,7 +316,7 @@ def _referenced_entrypoints(*values: str) -> list[str]:
 
 
 def current_owner_contract(workspace: Path) -> str:
-    """Carry the current owner-authored handoff verbatim, with source identity."""
+    """Carry explicit delivery corrections, never the Phase-2 WEC handoff."""
     path = workspace / ".de67/WEC.md"
     if not path.is_file():
         return ""
@@ -324,8 +324,8 @@ def current_owner_contract(workspace: Path) -> str:
     source = source_bytes.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     begin, end = "<!-- DE67:OWNER-CONTRACT:BEGIN -->", "<!-- DE67:OWNER-CONTRACT:END -->"
     if begin not in source and end not in source:
-        # Legacy workspaces still use the complete WEC as the authority source.
-        body = source.strip()
+        # The FS is Phase 3's contract. An unmarked WEC belongs to Phase 2.
+        return ""
     else:
         if source.count(begin) != 1 or source.count(end) != 1:
             raise PolicyError("Owner contract requires one complete marked section")
@@ -335,8 +335,8 @@ def current_owner_contract(workspace: Path) -> str:
             raise PolicyError("Owner contract markers are empty or out of order")
         body = body.strip()
     return (
-        "Current owner contract (.de67/WEC.md sha256 "
-        + hashlib.sha256(source_bytes).hexdigest() + "):\n" + body + "\n"
+        "Current owner contract (.de67/WEC.md marked section sha256 "
+        + hashlib.sha256(body.encode("utf-8")).hexdigest() + "):\n" + body + "\n"
         "Apply these current constraints to this assignment and every helper handoff. "
         "They govern generic repair/finding permissions and supersede historical strategy, "
         "including no-replay advice where the owner requires fresh proof. Acknowledge relevant pending "

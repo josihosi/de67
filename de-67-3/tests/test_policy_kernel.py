@@ -879,7 +879,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "- [ ] R-008 — Complete the outcome,\n  including both profiles.\n"
                 "  - Proof: every branch has independent evidence.\n"
                 "<!-- DE67:DFS-SLICE:END id=R-008-S001 claim=R-008 -->\n")
-            (workspace / ".de67/WEC.md").write_text("Only owner promotion authorizes gameplay repair.")
+            (workspace / ".de67/WEC.md").write_text("<!-- DE67:OWNER-CONTRACT:BEGIN -->\nOnly owner promotion authorizes gameplay repair.\n<!-- DE67:OWNER-CONTRACT:END -->")
             facts = kernel.workspace_facts(workspace, state, "project", now=5)
             decision = kernel.decide(source_policy(), facts)
             calls = kernel.unbound_worker_spawns(workspace, state, "project")
@@ -1021,7 +1021,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-CAMP-S001 claim=R-CAMP -->\n"
                 "- [ ] 🔴 R-CAMP — Native establishment, independent of mission.\n"
                 "<!-- DE67:DFS-SLICE:END id=R-CAMP-S001 claim=R-CAMP -->\n")
-            (de67 / "WEC.md").write_text("Preserve independent accepted mission proof.")
+            (de67 / "WEC.md").write_text("<!-- DE67:OWNER-CONTRACT:BEGIN -->\nPreserve independent accepted mission proof.\n<!-- DE67:OWNER-CONTRACT:END -->")
             state = workspace / "state.sqlite3"
             task = "R-CAMP-001"
             with DeadlineHarness(state) as harness:
@@ -1181,12 +1181,16 @@ class PolicyKernelTests(unittest.TestCase):
             workspace = Path(directory)
             (workspace / ".de67").mkdir()
             source = workspace / ".de67/WEC.md"
+            source.write_text("Phase-2 discussion and handoff only.")
+            self.assertEqual(kernel.current_owner_contract(workspace), "")
             source.write_text("old phase instructions\n<!-- DE67:OWNER-CONTRACT:BEGIN -->\n"
                               "Fresh testing; only owner promotion permits gameplay repair.\n"
                               "<!-- DE67:OWNER-CONTRACT:END -->\nold launch instructions")
             first = kernel.current_owner_contract(workspace)
             self.assertIn("Fresh testing; only owner promotion", first)
             self.assertNotIn("old launch instructions", first)
+            source.write_text(source.read_text().replace("old launch instructions", "changed phase-2 history"))
+            self.assertEqual(first, kernel.current_owner_contract(workspace))
             source.write_text(source.read_text().replace("Fresh testing", "Revised fresh testing"))
             self.assertNotEqual(first, kernel.current_owner_contract(workspace))
             source.write_text("<!-- DE67:OWNER-CONTRACT:BEGIN -->\nincomplete")

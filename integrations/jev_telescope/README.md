@@ -73,6 +73,33 @@ builder for Sol and workers. Nothing runs automatically. The optional integratio
 folder must accompany the de67 installation. Existing running role contexts pick up
 the discovery hint on their next normal prompt generation, not by forced restart.
 
+## Retained playtest evidence
+
+`harness_adapter.py` selects exact rows from an existing `play_cli evidence`
+snapshot. First use the harness's run/request/actor filters and `--select` to retain
+a compact candidate pool. Add both `.userdata/openclaw_harness/evidence-display`
+and the original log directories to the configured `paths`; every source must be
+inside the workspace and allowed. Then invoke:
+
+```sh
+python3 /path/to/de67/integrations/jev_telescope/harness_adapter.py \
+  --workspace /path/to/project --snapshot SNAPSHOT_SHA256 \
+  --query 'Which events explain the rejected movement?' \
+  --hypothesis 'The movement request was accepted'
+```
+
+The adapter verifies the retained snapshot and original record byte spans before
+selection and again before returning evidence. Handles preserve the snapshot row,
+source path, offset, length and SHA-256. Appending a log keeps old records valid;
+changed or deleted records are omitted. Original bindings and statuses remain in
+the exact JSON row. Historical records never become fresh gameplay proof.
+
+Off/shadow/on, counterevidence, caching and provider failure behavior are shared
+with Telescope. Oversized rows are omitted visibly, so narrow the harness projection
+or explicitly increase `candidate_bytes`. Selection covers only the bounded submitted
+pool; it is not an exhaustive search. This command does not drive the game or run
+automatically. Token savings need an end-to-end playtest comparison.
+
 ## Credentials, limits and failures
 
 Set `TYPESAFE_API_KEY` in the environment of the process invoking Telescope. A key in

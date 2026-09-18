@@ -422,7 +422,7 @@ def save_json(path, value):
             os.unlink(temporary)
 
 
-def evaluate(workspace, query, hypothesis, candidates, info, config, *, call=bounded_provider, started=None):
+def evaluate(workspace, query, hypothesis, candidates, info, config, *, call=bounded_provider, started=None, assembler=assemble):
     started = time.monotonic() if started is None else started
     deadline = started + config["elapsed_seconds"]
     baseline = [{"id": c["id"], "category": "baseline_match"} for c in candidates]
@@ -474,7 +474,7 @@ def evaluate(workspace, query, hypothesis, candidates, info, config, *, call=bou
             fallback = "provider_http_" + str(error.code)
         except (OSError, ValueError, KeyError, TypeError, EOFError) as error:
             fallback = str(error) if isinstance(error, TelescopeError) else "provider_failure_or_invalid_output"
-    packet = assemble(workspace, candidates, selected, config)
+    packet = assembler(workspace, candidates, selected, config)
     packet.update(mode=mode, fallback=fallback, cache_hit=cached, provider_calls=calls,
                   provider_usage={} if cached else usage, cached_evaluation_usage=usage if cached else {},
                   candidates_considered=len(candidates), retrieval=info,

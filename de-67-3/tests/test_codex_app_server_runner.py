@@ -229,8 +229,19 @@ class AppServerTransportTests(unittest.TestCase):
             self.assertEqual((launch[0], launch[1]['threadId']), ('thread/resume', 'owner-thread'))
             turn = next(params for method, params in calls if method == 'turn/start')
             self.assertEqual(turn['clientUserMessageId'], 'owner:1')
-            self.assertIn({'type': 'text', 'text': 'User Message: retain me'}, turn['input'])
+            self.assertEqual(turn['input'], [{'type': 'text', 'text': 'User Message: retain me'}])
             self.assertEqual(json.loads(receipt.read_text())['state'], 'submitted')
+
+            # A genuinely new owner conversation still receives the bootstrap.
+            session.path.unlink()
+            calls.clear()
+            with patch.dict(os.environ, owner_env, clear=True), patch.object(transport.sys, 'platform', 'darwin'), \
+                 patch.object(transport.signal, 'signal'), patch.object(transport.subprocess, 'Popen', Server), \
+                 patch.object(transport, 'Rpc', Client), redirect_stdout(io.StringIO()):
+                self.assertEqual(transport.run('codex', workspace, 'owner guidance'), 0)
+            turn = next(params for method, params in calls if method == 'turn/start')
+            self.assertEqual(turn['input'], [{'type': 'text', 'text': 'owner guidance'},
+                                             {'type': 'text', 'text': 'User Message: retain me'}])
 
     def test_lock_prevents_a_second_mutation_owner(self):
         with tempfile.TemporaryDirectory() as directory:

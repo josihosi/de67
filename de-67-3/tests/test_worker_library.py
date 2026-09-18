@@ -46,6 +46,8 @@ class FakeRpc:
             return {"turn": {"id": "turn-" + str(self.turn_count), "status": "inProgress"}}
         if method == "turn/steer":
             return {"turnId": params["expectedTurnId"]}
+        if method == "thread/unsubscribe":
+            return {"status": "unsubscribed"}
         raise AssertionError("Unexpected RPC: " + method)
 
 
@@ -319,10 +321,15 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         self.dispatcher.process_pending()
         self.assertEqual(self.rpc.turn_count, 1)
         self.assertEqual(self.rpc.calls[-1][0], "turn/steer")
+        self.assertFalse(any(method == "thread/unsubscribe" for method, _ in self.rpc.calls))
         self.returned()
+        worker_id = library.describe(self.workspace, "pilot")["thread_id"]
+        self.assertEqual(self.rpc.calls[-1], ("thread/unsubscribe", {"threadId": worker_id}))
         library.message(self.workspace, "pilot", "Continue with the existing evidence", environment=self.env)
         self.dispatcher.process_pending()
         self.assertEqual(self.rpc.turn_count, 2)
+        resumed = [params for method, params in self.rpc.calls if method == "thread/resume"]
+        self.assertEqual(resumed[-1]["threadId"], worker_id)
         delegated = self.harness.connection.execute("SELECT COUNT(*) FROM worker_checkpoints WHERE kind='delegated'").fetchone()[0]
         self.assertEqual(delegated, 1)
 

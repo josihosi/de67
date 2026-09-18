@@ -250,6 +250,10 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
             turn_params = {"threadId": thread_id, "effort": effort,
                            "input": [{"type": "text", "text": prompt}]}
             if initial:
+                # A resumed owner conversation already carries its standing guidance.
+                # Supervisor review prompts (without initial input) remain per-invocation.
+                if session and resume:
+                    turn_params["input"] = []
                 turn_params["input"].extend(initial["input"])
                 turn_params["clientUserMessageId"] = initial["client_id"]
                 atomic_json(Path(initial["receipt_path"]), {"state": "submitting", "thread_id": thread_id})

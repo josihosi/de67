@@ -773,6 +773,14 @@ class WorkerDispatcher:
             self._checkpoint(assignment, "worker-return", evidence)
             self._notice(assignment, "Worker " + assignment["name"] + " " + status + " on task " + assignment["task_id"]
                          + ". Result: " + str(artifact) + ". This is nonterminal evidence; inspect it and use the existing receipt/task lifecycle.")
+            if status in {"returned", "failed", "interrupted"}:
+                # Preserve the durable conversation; release our live subscription so
+                # App Server can evict it after its idle grace period. Reuse resumes it.
+                try:
+                    self.rpc.call("thread/unsubscribe", {"threadId": worker_id})
+                except Exception as error:
+                    self._audit(assignment, {"method": "de67/workerUnload/failed",
+                                "params": {"threadId": worker_id, "error": str(error)}})
         return True
 
     def has_active_turns(self) -> bool:

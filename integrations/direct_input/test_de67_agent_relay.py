@@ -3,6 +3,7 @@ import queue
 import io
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -48,6 +49,12 @@ class RelayTests(unittest.TestCase):
 
     def message(self, id, text):
         return {"id": str(id), "content": text, "author": {"id": "11"}, "channel_id": "22"}
+
+    def image_message(self, id):
+        message = self.message(id, "inspect this image")
+        message["attachments"] = [{"id": "33", "filename": "image.jpg", "size": 5,
+            "content_type": "image/jpeg", "url": "https://cdn.discordapp.com/attachments/image.jpg"}]
+        return message
 
     def binding(self, role, thread="fresh"):
         return {"thread_id": thread, "turn_id": "turn", "run_id": "run", "role": role}
@@ -136,6 +143,93 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(started, ['2'])
         self.assertEqual(len(self.sent), 1)
         self.assertIn('no usable input', self.sent[0][0])
+
+    def test_attachment_download_declares_user_agent_and_reuses_verified_file(self):
+        self.relay.accept(self.image_message(1))
+        job = self.relay.jobs['1']
+        with patch('de67_agent_relay.urllib.request.urlopen', return_value=io.BytesIO(b'image')) as download:
+            inputs = self.relay.input_for(job)
+            self.assertEqual(self.relay.input_for(job), inputs)
+            del job['input']
+            self.assertEqual(self.relay.input_for(job), inputs)
+        download.assert_called_once()
+        request = download.call_args.args[0]
+        self.assertEqual(request.full_url, job['attachments'][0]['url'])
+        self.assertEqual(request.get_header('User-agent'), 'DE67AgentInput/1.0')
+        self.assertIsNone(request.get_header('Authorization'))
+        self.assertEqual(inputs[1]['type'], 'localImage')
+        self.assertEqual(Path(inputs[1]['path']).read_bytes(), b'image')
+
+    def test_incomplete_attachment_is_not_cached_or_submitted(self):
+        self.relay.accept(self.image_message(1))
+        job = self.relay.jobs['1']
+        with patch('de67_agent_relay.urllib.request.urlopen', return_value=io.BytesIO(b'bad')):
+            with self.assertRaisesRegex(ValueError, 'Attachment download was incomplete'):
+                self.relay.input_for(job)
+        self.assertNotIn('input', job)
+        self.assertFalse((self.relay.root / 'media/1/33-image.jpg').exists())
+        self.assertEqual(job['status'], 'pending')
+
+    def assert_attachment_failure_does_not_block_next_message(self, active, error):
+        atomic_json(self.relay.workspace / '.de67/state/workspace.json', {'persistent_mutator': True})
+        self.relay.accept(self.image_message(1))
+        self.relay.accept(self.message(2, 'You good?'))
+        rpc = FakeRpc()
+        self.relay.connect = lambda role: (self.binding(role), rpc) if active else None
+        self.relay.history_connection = lambda: None
+        class Process:
+            pid = 12345
+            stdin = io.StringIO()
+            def poll(self): return None
+            def terminate(self): pass
+            def wait(self): return 0
+        with patch('de67_agent_relay.urllib.request.urlopen', side_effect=error), \
+                patch('de67_agent_relay.subprocess.Popen', return_value=Process()) as spawn:
+            self.relay.reconcile()
+        first = self.relay.jobs['1']
+        self.assertEqual(first['status'], 'failed')
+        self.assertNotIn('thread_id', first)
+        self.assertNotIn('launch_dir', first)
+        self.assertTrue(first['error_notified'])
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn('Message was not delivered: Could not prepare message input:', self.sent[0][0])
+        self.assertEqual(self.sent[0][1], '1')
+        second = self.relay.jobs['2']
+        if active:
+            spawn.assert_not_called()
+            self.assertEqual(second['status'], 'submitted')
+            steers = [params for method, params in rpc.calls if method == 'turn/steer']
+            self.assertEqual(len(steers), 1)
+            self.assertEqual(steers[0]['clientUserMessageId'], 'discord:2')
+        else:
+            spawn.assert_called_once()
+            self.assertEqual(second['status'], 'starting')
+            initial = json.loads((Path(second['launch_dir']) / 'input.json').read_text())
+            self.assertEqual(initial['client_id'], 'discord:2')
+
+    def test_rejected_attachment_does_not_block_next_active_message(self):
+        self.assert_attachment_failure_does_not_block_next_message(True,
+            urllib.error.HTTPError('https://cdn.discordapp.com/image.jpg', 403, 'Forbidden', {}, None))
+
+    def test_rejected_attachment_does_not_block_next_initial_message(self):
+        self.assert_attachment_failure_does_not_block_next_message(False,
+            urllib.error.HTTPError('https://cdn.discordapp.com/image.jpg', 403, 'Forbidden', {}, None))
+
+    def test_attachment_io_failure_does_not_block_next_active_message(self):
+        self.assert_attachment_failure_does_not_block_next_message(True, OSError('Connection lost'))
+
+    def test_attachment_io_failure_does_not_block_next_initial_message(self):
+        self.assert_attachment_failure_does_not_block_next_message(False, OSError('Connection lost'))
+
+    def test_native_submission_io_failure_remains_uncertain(self):
+        self.relay.accept(self.message(1, 'hello'))
+        rpc = FakeRpc()
+        rpc.error = OSError('Connection lost after sending')
+        self.relay.connect = lambda role: (self.binding(role), rpc)
+        self.relay.reconcile()
+        self.assertEqual(self.relay.jobs['1']['status'], 'uncertain')
+        self.assertEqual(sum(method == 'turn/steer' for method, _ in rpc.calls), 1)
+        self.assertIn('Delivery could not be confirmed', self.sent[0][0])
 
     def test_input_enters_only_selected_context_without_starting_a_session(self):
         self.relay.accept(self.message(1, "coordinator: hello"))

@@ -21,7 +21,7 @@ class EffectiveRoleContextTests(unittest.TestCase):
             de67 = workspace / '.de67'
             (de67 / 'state').mkdir(parents=True)
             (de67 / 'work-ledger.md').write_text('- [ ] R-CAMP — Prove a native camp.\n  - DFS slices: `R-CAMP-S001`\n')
-            (de67 / 'DFS.md').write_text(
+            (de67 / 'FS.md').write_text(
                 '<!-- DE67:DFS-SLICE:BEGIN id=R-CAMP-S001 claim=R-CAMP -->\n'
                 '- [ ] 🔴 R-CAMP — Prove a native camp.\n'
                 '<!-- DE67:DFS-SLICE:END id=R-CAMP-S001 claim=R-CAMP -->\n')

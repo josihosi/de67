@@ -122,7 +122,7 @@ class WorkContextTests(unittest.TestCase):
                 '  - DFS slices: `R-CONT-S001`\n'
                 '  - Known footing: independently accepted branch-a work.\n'
                 '  - Current handoff: Continue `sessions/branch-a`.\n')
-            (de67/'DFS.md').write_text('<!-- DE67:DFS-SLICE:BEGIN id=R-CONT-S001 claim=R-CONT -->\n'
+            (de67/'FS.md').write_text('<!-- DE67:DFS-SLICE:BEGIN id=R-CONT-S001 claim=R-CONT -->\n'
                 'Observe independent natural response.\n<!-- DE67:DFS-SLICE:END id=R-CONT-S001 claim=R-CONT -->\n')
             call=policy_kernel.unbound_worker_spawns(root,state,'project')[0]
             packet=Path(call['dispatch_packet']['path']).read_text()

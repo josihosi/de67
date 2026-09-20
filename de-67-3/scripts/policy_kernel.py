@@ -375,7 +375,7 @@ def _worker_read_plan(
         })
     plan.extend([
         {
-            "source": f".de67/FS.md slice for {claim_id} (legacy DFS.md resolver compatible)",
+            "source": f".de67/FS.md slice for {claim_id}",
             "reason": "read on demand if the compact packet leaves the product or proof boundary ambiguous",
         },
         {
@@ -396,7 +396,7 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
     ledger = ledger_path.read_text(encoding="utf-8")
     # Assignments are nested under the owning active claim item; cross-reference
     # mentions elsewhere must not become an assignment route.  The guard owns
-    # parsing of active blocks and validation of their DFS selector line.
+    # parsing of active blocks and validation of their FS selector line.
     claim_blocks = [
         (reference, block)
         for reference, block in _active_work_blocks(ledger)
@@ -420,7 +420,7 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
         )
     reference, owning_route = owning_blocks[0]
     # Keep independent same-claim ledger frontiers visible in the packet while
-    # taking DFS content only from the selected owner block.
+    # taking FS content only from the selected owner block.
     route = "\n\n".join(block for _, block in claim_blocks)
     try:
         slice_ids = _ledger_slice_ids(owning_route, reference)
@@ -432,7 +432,7 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
         raise PolicyError(str(error)) from error
     if not selected.strip():
         raise PolicyError(
-            f"Unbound exploration task {task_id} has empty selected DFS slices for {claim_id}"
+            f"Unbound exploration task {task_id} has empty selected FS slices for {claim_id}"
         )
     return route.strip(), selected.strip()
 
@@ -626,7 +626,7 @@ def unbound_worker_spawns(
                         specification.text, re.DOTALL,
                     )
                     if match is None:
-                        raise PolicyError(f"Closure task {task_id} has no current DFS slice")
+                        raise PolicyError(f"Closure task {task_id} has no current FS slice")
                     proof_route = _dfs_worker_boundary(match.group(1)) + "\nAssigned closure route:\n" + proof_route
             elif phase == "exploration":
                 ledger_route, dfs_slice = _exploration_route(
@@ -1307,8 +1307,7 @@ def workspace_facts(
             facts.add("pending_suggestions")
     try:
         specification = resolve(workspace / ".de67")
-        open_work = ("🔴" in specification.text if specification.legacy
-                     else bool(_active_work_blocks(ledger_text)))
+        open_work = "🔴" in specification.text or bool(_active_work_blocks(ledger_text))
     except SpecificationError:
         open_work = False
     facts.add("red_dfs_work" if open_work else "dfs_complete")

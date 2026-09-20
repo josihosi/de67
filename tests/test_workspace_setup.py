@@ -28,7 +28,7 @@ from workspace_setup import (  # noqa: E402
 )
 import workspace_setup  # noqa: E402
 from instruction_context import common_guidance  # noqa: E402
-from specification import compatibility_pointer, render_functional_specification  # noqa: E402
+from specification import render_functional_specification  # noqa: E402
 
 MODULE_PATH = Path(workspace_setup.__file__).resolve()
 
@@ -87,7 +87,7 @@ class WorkspaceSetupTests(unittest.TestCase):
 
     def freeze_dfs(self) -> None:
         (self.workspace / ".de67").mkdir(exist_ok=True)
-        (self.workspace / ".de67/DFS.md").write_text(
+        (self.workspace / ".de67/FS.md").write_text(
             "# Feature DFS\n\nStatus: Frozen against inspected source baseline\n",
             encoding="utf-8",
         )
@@ -95,7 +95,7 @@ class WorkspaceSetupTests(unittest.TestCase):
     def accepted_projection(self) -> None:
         self.freeze_dfs()
         environment = self.workspace / ".de67"
-        (environment / "DFS.md").write_text(
+        (environment / "FS.md").write_text(
             "# DFS\nStatus: Refrozen\n"
             "<!-- DE67:DFS-SLICE:BEGIN id=R-001-S001 claim=R-001 -->\n"
             "Current contract remains outside the historical projection.\n"
@@ -108,7 +108,7 @@ class WorkspaceSetupTests(unittest.TestCase):
         (environment / "work-ledger.md").write_text(
             "- [x] R-001 — Historical proof accepted.\n", encoding="utf-8"
         )
-        self.git(self.workspace, "add", ".de67/DFS.md")
+        self.git(self.workspace, "add", ".de67/FS.md")
         self.git(self.workspace, "commit", "-m", "red baseline")
         with workspace_setup._deadline_harness_class()(
             self.workspace / DEADLINE_STATE_RELATIVE_PATH
@@ -125,20 +125,18 @@ class WorkspaceSetupTests(unittest.TestCase):
 
     def migrate_specification(self) -> None:
         environment = self.workspace / ".de67"
-        dfs = environment / "DFS.md"
+        dfs = environment / "FS.md"
         fs = environment / "FS.md"
         fs.write_text(
             render_functional_specification(dfs.read_text(encoding="utf-8")),
             encoding="utf-8",
         )
-        dfs.write_text(compatibility_pointer(fs), encoding="utf-8")
 
-    def test_migrated_fs_setup_preserves_bound_acceptance_and_authoring_files(self) -> None:
+    def test_fs_only_setup_preserves_bound_acceptance_and_authoring_files(self) -> None:
         self.accepted_projection()
         self.migrate_specification()
         environment = self.workspace / ".de67"
-        paths = [environment / name for name in ("FS.md", "DFS.md", "work-ledger.md")]
-        paths.append(environment / "state/dfs-status-baselines.json")
+        paths = [environment / name for name in ("FS.md", "work-ledger.md")]
         before = {path: path.read_bytes() for path in paths}
         self.assertNotIn("Implementation status:", paths[0].read_text(encoding="utf-8"))
         state = self.workspace / DEADLINE_STATE_RELATIVE_PATH
@@ -156,16 +154,16 @@ class WorkspaceSetupTests(unittest.TestCase):
         with closing(sqlite3.connect(state)) as connection:
             self.assertEqual(sorted(connection.iterdump()), accepted_before)
 
-    def test_migrated_fs_setup_rejects_stale_pointer_before_binding_or_push(self) -> None:
+    def test_fs_only_setup_rejects_missing_fs_before_binding_or_push(self) -> None:
         self.accepted_projection()
         self.migrate_specification()
         fs = self.workspace / ".de67/FS.md"
-        fs.write_text(fs.read_text(encoding="utf-8") + "Changed contract.\n", encoding="utf-8")
+        fs.unlink()
         state = self.workspace / DEADLINE_STATE_RELATIVE_PATH
         before = state.read_bytes()
 
         with patch.object(workspace_setup, "push_checkpoints") as push:
-            with self.assertRaisesRegex(SetupError, "compatibility pointer does not match FS.md"):
+            with self.assertRaisesRegex(SetupError, "Missing functional specification"):
                 configure(
                     self.workspace, [("origin", "dev")], bind_clock=True,
                     worker_capabilities=VERIFIED_WORKERS,
@@ -177,12 +175,12 @@ class WorkspaceSetupTests(unittest.TestCase):
 
     def test_refreeze_setup_rejects_incompatible_projection_before_push(self) -> None:
         self.accepted_projection()
-        dfs = self.workspace / ".de67/DFS.md"
-        dfs.write_text(dfs.read_text().replace("Implementation status:", "Historical acceptance:"))
+        ledger = self.workspace / ".de67/work-ledger.md"
+        ledger.write_text("# Ledger\n")
         state = self.workspace / DEADLINE_STATE_RELATIVE_PATH
         before = state.read_bytes()
         with patch.object(workspace_setup, "push_checkpoints") as push:
-            with self.assertRaisesRegex(SetupError, "no implementation status block for R-001"):
+            with self.assertRaisesRegex(SetupError, "Accepted claim R-001 lacks a work-ledger projection"):
                 configure(self.workspace, [("origin", "dev")], bind_clock=True,
                           worker_capabilities=VERIFIED_WORKERS)
         push.assert_not_called()
@@ -193,22 +191,22 @@ class WorkspaceSetupTests(unittest.TestCase):
         self.accepted_projection()
         environment = self.workspace / ".de67"
         (environment / "work-ledger.md").write_text(
-            "- [ ] 🔴 R-002 — Fresh campaign proof remains open.\n"
+            "- [x] R-001 — Historical proof accepted.\n"
+            "- [ ] R-002 — Fresh campaign proof remains open.\n"
         )
-        paths = [environment / "DFS.md", environment / "work-ledger.md",
-                 self.workspace / DEADLINE_STATE_RELATIVE_PATH,
-                 environment / "state/dfs-status-baselines.json"]
+        paths = [environment / "FS.md", environment / "work-ledger.md",
+                 self.workspace / DEADLINE_STATE_RELATIVE_PATH]
         before = {path: path.read_bytes() for path in paths}
-        workspace_setup._validate_dfs_projection(self.workspace, paths[2])
+        workspace_setup._validate_delivery_projection(self.workspace, paths[2])
         self.assertEqual({path: path.read_bytes() for path in paths}, before)
 
-    def test_refreeze_preflight_recovers_committed_baseline_only_in_copy(self) -> None:
+    def test_refreeze_preflight_requires_no_legacy_status_baseline(self) -> None:
         self.accepted_projection()
         baseline = self.workspace / ".de67/state/dfs-status-baselines.json"
-        baseline.unlink()
+        self.assertFalse(baseline.exists())
         state = self.workspace / DEADLINE_STATE_RELATIVE_PATH
         before = state.read_bytes()
-        workspace_setup._validate_dfs_projection(self.workspace, state)
+        workspace_setup._validate_delivery_projection(self.workspace, state)
         self.assertFalse(baseline.exists())
         self.assertEqual(state.read_bytes(), before)
 
@@ -586,7 +584,7 @@ class WorkspaceSetupTests(unittest.TestCase):
 
     def test_phase_two_setup_binds_clock_after_frozen_dfs(self) -> None:
         (self.workspace / ".de67").mkdir()
-        (self.workspace / ".de67/DFS.md").write_text(
+        (self.workspace / ".de67/FS.md").write_text(
             "# Feature DFS\n\nStatus: Refrozen against inspected source baseline\n",
             encoding="utf-8",
         )
@@ -810,7 +808,7 @@ class WorkspaceSetupTests(unittest.TestCase):
     def test_default_lineage_uses_primary_upstream_when_origin_is_absent(self) -> None:
         self.git(self.workspace, "remote", "rename", "origin", "primary")
         (self.workspace / ".de67").mkdir()
-        (self.workspace / ".de67/DFS.md").write_text(
+        (self.workspace / ".de67/FS.md").write_text(
             "# Feature DFS\n\nStatus: Frozen against inspected source baseline\n",
             encoding="utf-8",
         )

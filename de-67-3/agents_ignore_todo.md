@@ -93,7 +93,7 @@ caused by doing less useful work. No game build is needed for this backlog entry
   Purpose and boundary:
 
   - Host a small home-network website on the machine that owns the long-lived de67 workspaces.
-  - Show the authoritative `.de67/DFS.md`, active and blocked `.de67/work-ledger.md` items, and a
+  - Show the authoritative `.de67/FS.md`, active and blocked `.de67/work-ledger.md` items, and a
     compact projection of SQLite clock, deadline-generation, restart, supervisor, and optional
     sidecar state.
   - Do not use a coordinator, worker, observer, or language-model call to render or refresh it.
@@ -104,7 +104,7 @@ caused by doing less useful work. No game build is needed for this backlog entry
 
   Recommended architecture:
 
-  - Use a standalone read-only process that reads the DFS and ledger directly and queries SQLite
+  - Use a standalone read-only process that reads the FS and ledger directly and queries SQLite
     through a strictly read-only connection and transaction.
   - Build an immutable in-memory projection and atomically swap it only after a refresh attempt has
     produced a usable result. Keep the last good projection for each source independently.
@@ -136,7 +136,7 @@ caused by doing less useful work. No game build is needed for this backlog entry
 
   Failure behavior:
 
-  - A malformed or partially written DFS or ledger leaves its last good panel visible with a clear
+  - A malformed or partially written FS or ledger leaves its last good panel visible with a clear
     stale/error notice while other panels continue updating.
   - A locked, missing, replaced, newer-schema, or temporarily unavailable database leaves the last
     good clock panel visible and never waits behind or writes to the operational owner.
@@ -159,7 +159,7 @@ caused by doing less useful work. No game build is needed for this backlog entry
   Smallest honest vertical slice:
 
   - One standard-library service, one configured workspace, and one server-rendered overview.
-  - DFS status and claim navigation; active and blocked ledger items; current task and deadline
+  - FS status and claim navigation; active and blocked ledger items; current task and deadline
     generation; compact restart/supervisor state; per-source freshness and errors.
   - Immutable in-memory last-good projection, loopback-only initial service, no workspace writes,
     and no OpenClaw dependency.

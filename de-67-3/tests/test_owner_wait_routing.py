@@ -19,7 +19,7 @@ class OwnerWaitTests(unittest.TestCase):
         self.workspace = Path(self.tmp.name)
         self.state = self.workspace / 'state.sqlite3'
         (self.workspace / '.de67').mkdir()
-        (self.workspace / '.de67/DFS.md').write_text('- [ ] 🔴 R-031\n- [ ] 🔴 R-029\n')
+        (self.workspace / '.de67/FS.md').write_text('- [ ] 🔴 R-031\n- [ ] 🔴 R-029\n')
         self.ledger = self.workspace / '.de67/work-ledger.md'
         self.ledger.write_text('## Current delivery frontier\n- Active work: `G` proof boundary; required mechanism.\n')
         self.h = DeadlineHarness(self.state)

@@ -25,7 +25,6 @@ from deadline_harness import (  # noqa: E402
     protected_method_digest,
     workspace_method_digest,
 )
-from specification import compatibility_pointer  # noqa: E402
 
 
 class DeadlineHarnessTests(unittest.TestCase):
@@ -907,7 +906,7 @@ class DeadlineHarnessTests(unittest.TestCase):
         )
 
         self.harness.complete_task(
-            "project", "attempt-3", "The DFS claim is now proven.", now=6
+            "project", "attempt-3", "The FS claim is now proven.", now=6
         )
         self.assertEqual(
             [task["task_id"] for task in self.harness.list_tasks(now=7)["tasks"]],
@@ -1116,7 +1115,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             "task",
             "deadline_miss",
             "test overdefined",
-            "The intended proof required behavior outside the DFS claim.",
+            "The intended proof required behavior outside the FS claim.",
             now=112,
         )
         repeated = self.harness.diagnose_incident(
@@ -1124,7 +1123,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             "task",
             "deadline_miss",
             "test overdefined",
-            "The intended proof required behavior outside the DFS claim.",
+            "The intended proof required behavior outside the FS claim.",
             now=113,
         )
 
@@ -1163,7 +1162,7 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertEqual(payload["incidents"][0]["short_verdict"], "test overdefined")
         self.assertEqual(
             payload["incidents"][0]["long_detail"],
-            "The intended proof required behavior outside the DFS claim.",
+            "The intended proof required behavior outside the FS claim.",
         )
 
     def test_documented_diagnose_cli_records_exact_incident_review(self) -> None:
@@ -1309,7 +1308,7 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.harness.start_task("project", "task", "R-1", 10, now=100)
 
         reported = self.harness.report_worker_finding(
-            "project", "task", "unexpected", "runtime contradicts DFS", now=110
+            "project", "task", "unexpected", "runtime contradicts FS", now=110
         )
         repeated_expiry = self.harness.expire_task("project", "task", now=500)
 
@@ -1583,7 +1582,7 @@ class DeadlineHarnessTests(unittest.TestCase):
                         "--lineage",
                         "project",
                         "--reason",
-                        "guarded DFS expansion",
+                        "guarded FS expansion",
                     ]
                 ),
                 0,
@@ -1825,12 +1824,12 @@ class DeadlineHarnessTests(unittest.TestCase):
             first = self.harness.resolve_random_mutation(
                 "project",
                 schedule["cycle_number"],
-                "guard accepted exact DFS no-op; ledger review retained",
+                "guard accepted exact FS no-op; ledger review retained",
             )
             repeated = self.harness.resolve_random_mutation(
                 "project",
                 schedule["cycle_number"],
-                "guard accepted exact DFS no-op; ledger review retained",
+                "guard accepted exact FS no-op; ledger review retained",
             )
         self.assertTrue(first["recorded"])
         self.assertFalse(repeated["recorded"])
@@ -2375,77 +2374,6 @@ class DeadlineHarnessTests(unittest.TestCase):
         )
         self.assertTrue(accepted["recorded"])
 
-    def projected_acceptance_workspace(self, *, commit_red_baseline: bool) -> tuple[Path, str]:
-        self.harness.close()
-        workspace = Path(self.temporary.name) / "workspace"
-        environment = workspace / ".de67"
-        environment.mkdir(parents=True)
-        red_status = "- [ ] 🔴 R-001 — Proof remains open."
-        receipt = (
-            "  - Durable acceptance: #1 via `closure`; "
-            "SQLite evidence is authoritative."
-        )
-        checked_ledger = (
-            "- [x] R-001 — Proof is accepted.\n"
-            "  - DFS slices: `R-001-S001`\n"
-            f"{receipt} Existing projection failure note."
-        )
-        red_dfs = (
-            "# Frozen DFS\n\n"
-            "<!-- DE67:DFS-SLICE:BEGIN id=R-001-S001 claim=R-001 -->\n"
-            "Implementation status:\n\n"
-            "<!-- DE67:DELIVERY-STATUS:BEGIN claim=R-001 -->\n"
-            f"{red_status}\n"
-            "<!-- DE67:DELIVERY-STATUS:END -->\n"
-            "<!-- DE67:DFS-SLICE:END id=R-001-S001 claim=R-001 -->\n"
-        )
-        (environment / "DFS.md").write_text(red_dfs, encoding="utf-8")
-        (environment / "work-ledger.md").write_text(
-            checked_ledger + "\n", encoding="utf-8"
-        )
-        if commit_red_baseline:
-            subprocess.run(["git", "init", "--quiet", str(workspace)], check=True)
-            subprocess.run(
-                ["git", "-C", str(workspace), "config", "user.email", "test@example.invalid"],
-                check=True,
-            )
-            subprocess.run(
-                ["git", "-C", str(workspace), "config", "user.name", "Harness Test"],
-                check=True,
-            )
-            subprocess.run(
-                ["git", "-C", str(workspace), "add", ".de67/DFS.md"], check=True
-            )
-            subprocess.run(
-                ["git", "-C", str(workspace), "commit", "--quiet", "-m", "red baseline"],
-                check=True,
-            )
-        projected = (
-            "# Frozen DFS\n\n"
-            "<!-- DE67:DFS-SLICE:BEGIN id=R-001-S001 claim=R-001 -->\n"
-            "Implementation status:\n\n"
-            "<!-- DE67:DELIVERY-STATUS:BEGIN claim=R-001 -->\n"
-            "- [x] 🟢 R-001 — Earlier accepted projection.\n"
-            f"{receipt}\n"
-            "<!-- DE67:DELIVERY-STATUS:END -->\n"
-            "<!-- DE67:DFS-SLICE:END id=R-001-S001 claim=R-001 -->\n"
-        )
-        (environment / "DFS.md").write_text(projected, encoding="utf-8")
-        self.state_path = environment / "state" / "deadlines.sqlite3"
-        self.state_path.parent.mkdir()
-        self.harness = DeadlineHarness(self.state_path)
-        self.harness.start_task("project", "explore", "R-001", 100, now=0)
-        self.harness.complete_task("project", "explore", "route proved", now=1)
-        self.harness.transition_claim_to_closure(
-            "project", "R-001", "explore", "Close it.", "Run it.",
-            "One proof remains.", now=2,
-        )
-        self.harness.start_task(
-            "project", "closure", "R-001", 100, phase="closure", now=3
-        )
-        self.harness.complete_task("project", "closure", "proof complete", now=4)
-        return workspace, red_status
-
     def functional_projection_workspace(self) -> tuple[Path, str]:
         self.harness.close()
         workspace = Path(self.temporary.name) / "functional-workspace"
@@ -2457,9 +2385,6 @@ class DeadlineHarnessTests(unittest.TestCase):
         )
         fs_path = environment / "FS.md"
         fs_path.write_text(functional_specification, encoding="utf-8")
-        (environment / "DFS.md").write_text(
-            compatibility_pointer(fs_path), encoding="utf-8"
-        )
         (environment / "work-ledger.md").write_text(
             "# Work ledger\n\n"
             "- [x] R-001 — Owner assignment remains active.\n"
@@ -2472,46 +2397,25 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.harness = DeadlineHarness(self.state_path)
         return workspace, functional_specification
 
-    def test_acceptance_recovers_missing_baseline_from_committed_dfs(self) -> None:
-        workspace, red_status = self.projected_acceptance_workspace(
-            commit_red_baseline=True
-        )
-
-        accepted = self.harness.accept_claim(
-            "project", "R-001", "closure", "accepted proof", now=5
-        )
-
-        baselines = json.loads(
-            (workspace / ".de67/state/dfs-status-baselines.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.assertTrue(accepted["recorded"])
-        self.assertEqual(baselines["R-001"], red_status)
-        projected = (workspace / ".de67/DFS.md").read_text(encoding="utf-8")
-        self.assertEqual(
-            projected.count(
-                "Durable acceptance: #1 via `closure`; SQLite evidence is authoritative."
-            ),
-            1,
-        )
-
     def test_projection_failure_does_not_partially_accept_claim(self) -> None:
-        self.projected_acceptance_workspace(commit_red_baseline=False)
-
-        with self.assertRaisesRegex(DeadlineError, "DFS baseline is missing"):
-            self.harness.accept_claim(
-                "project", "R-001", "closure", "accepted proof", now=5
-            )
-
-        acceptance = self.harness.connection.execute(
+        workspace, _ = self.functional_projection_workspace()
+        self.harness.start_task("project", "explore", "R-001", 100, now=0)
+        self.harness.complete_task("project", "explore", "route proved", now=1)
+        self.harness.transition_claim_to_closure(
+            "project", "R-001", "explore", "Close it.", "Run it.",
+            "One proof remains.", now=2,
+        )
+        self.harness.start_task("project", "closure", "R-001", 100, phase="closure", now=3)
+        self.harness.complete_task("project", "closure", "proof complete", now=4)
+        (workspace / ".de67/work-ledger.md").write_text("# Ledger\n")
+        with self.assertRaisesRegex(DeadlineError, "lacks a work-ledger projection"):
+            self.harness.accept_claim("project", "R-001", "closure", "accepted proof", now=5)
+        self.assertIsNone(self.harness.connection.execute(
             "SELECT 1 FROM claim_acceptances WHERE claim_id = 'R-001'"
-        ).fetchone()
-        gap = self.harness.connection.execute(
+        ).fetchone())
+        self.assertIsNone(self.harness.connection.execute(
             "SELECT closed_at FROM closure_gaps WHERE claim_id = 'R-001'"
-        ).fetchone()
-        self.assertIsNone(acceptance)
-        self.assertIsNone(gap["closed_at"])
+        ).fetchone()["closed_at"])
 
     def test_functional_ledger_reopens_and_removes_durable_acceptance(self) -> None:
         workspace, functional_specification = self.functional_projection_workspace()
@@ -3004,7 +2908,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             ordinary = self.harness.resolve_random_mutation(
                 "project",
                 1,
-                "ordinary DFS mutation guarded",
+                "ordinary FS mutation guarded",
                 component="ordinary",
                 now=31,
             )
@@ -3062,7 +2966,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             self.write_sol_ultra_capability()
             frozen = self.harness.coordinator_view(now=31)["random_mutation"]
             resolved = self.harness.resolve_random_mutation(
-                "project", 1, "ordinary DFS mutation guarded",
+                "project", 1, "ordinary FS mutation guarded",
                 component="ordinary", now=31,
             )
 

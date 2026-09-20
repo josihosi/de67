@@ -516,7 +516,7 @@ def _resolve_specification(workspace: Path) -> Any:
         raise SetupError(str(error)) from error
 
 
-def _require_frozen_dfs(workspace: Path) -> None:
+def _require_frozen_fs(workspace: Path) -> None:
     specification = _resolve_specification(workspace)
     if re.search(
         r"(?mi)^\s*(?:-\s*)?Status:\s*`?(?:Frozen|Refrozen)\b", specification.text
@@ -553,7 +553,7 @@ def _prepare_phase3_environment(workspace: Path) -> dict[str, list[str]]:
     return {"copied": copied, "preserved": preserved}
 
 
-def _validate_dfs_projection(workspace: Path, state_path: Path) -> None:
+def _validate_delivery_projection(workspace: Path, state_path: Path) -> None:
     """Exercise the delivery projection on a snapshot, never on authoring state."""
     if not state_path.is_file():
         return
@@ -564,26 +564,17 @@ def _validate_dfs_projection(workspace: Path, state_path: Path) -> None:
             environment = Path(directory) / ".de67"
             copied_state = environment / "state" / "deadlines.sqlite3"
             copied_state.parent.mkdir(parents=True)
-            names = ("DFS.md", "work-ledger.md")
-            if not specification.legacy:
-                names += (specification.path.name,)
+            names = (specification.path.name, "work-ledger.md")
             for name in names:
                 shutil.copy2(workspace / ".de67" / name, environment / name)
-            baseline = state_path.parent / "dfs-status-baselines.json"
-            if baseline.is_file():
-                shutil.copy2(baseline, copied_state.parent / baseline.name)
             with closing(sqlite3.connect(state_path.as_uri() + "?mode=ro", uri=True)) as source:
                 with closing(sqlite3.connect(copied_state)) as destination:
                     source.backup(destination)
-            # Projection may read HEAD to recover a missing red baseline. This gitfile
-            # permits that read; projection writes only the disposable documents/state.
-            git_dir = _git_text(workspace, ["rev-parse", "--absolute-git-dir"])
-            (Path(directory) / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
             with harness_class(copied_state) as harness:
                 if harness.connection.execute("SELECT 1 FROM claim_acceptances LIMIT 1").fetchone():
-                    harness.synchronize_dfs_statuses()
+                    harness.synchronize_delivery_statuses()
     except Exception as error:
-        raise SetupError(f"DFS cannot project durable acceptance: {error}") from error
+        raise SetupError(f"FS cannot project durable acceptance: {error}") from error
 
 
 def configure(
@@ -623,12 +614,12 @@ def configure(
         )
     selected_lineage: str | None = None
     if bind_clock:
-        _require_frozen_dfs(workspace)
+        _require_frozen_fs(workspace)
         phase3_environment = _prepare_phase3_environment(workspace)
         guidance = _reconcile_guidance(
             workspace, guidance_source, (existing_config or {}).get("guidance")
         )
-        _validate_dfs_projection(workspace, state_path)
+        _validate_delivery_projection(workspace, state_path)
         requested_lineage = None if lineage is None else lineage.strip()
         if lineage is not None and not requested_lineage:
             raise SetupError("Lineage must not be empty")

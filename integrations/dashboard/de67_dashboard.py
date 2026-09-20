@@ -1770,7 +1770,7 @@ class Dashboard:
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             root = self.workspace / ".de67"
-            dfs = self._markdown_source("dfs", root / "DFS.md")
+            dfs = self._markdown_source("dfs", root / "FS.md")
             ledger = self._markdown_source("ledger", root / "work-ledger.md")
             clock = self._clock_source()
             clock_data = clock.get("data", {})
@@ -1884,12 +1884,12 @@ class Dashboard:
             "green" if ledger_data["active"] and supervisor == "running" else
             "yellow" if ledger_data["active"] else "grey"
         )
-        nav = '<nav><a class="%s" href="/">Overview</a><a class="%s" href="/dfs">DFS</a><a data-refresh href="?refresh=1">Refresh snapshot ↻</a></nav>' % (
+        nav = '<nav><a class="%s" href="/">Overview</a><a class="%s" href="/dfs">FS</a><a data-refresh href="?refresh=1">Refresh snapshot ↻</a></nav>' % (
             "selected" if tab == "overview" else "", "selected" if tab == "dfs" else "")
         meta = ""  # Explicit refresh keeps reading and navigation stable.
         refresh_label = f'Live · every {self.refresh_seconds}s' if self.refresh_seconds else 'Manual refresh'
         source_bits = ['<span>Snapshot ' + time.strftime("%H:%M:%S") + '</span>']
-        for label, source in (("Markdown", ledger), ("DFS", dfs), ("SQLite", clock)):
+        for label, source in (("Markdown", ledger), ("FS", dfs), ("SQLite", clock)):
             tone = "yellow" if source.get("stale") else "red" if source.get("error") else "green"
             detail = source.get("error") or source.get("identity", {}).get("hash") or "healthy"
             source_bits.append(f'<span><i class="dot {tone}"></i>{_escape(label)} <em>{_escape(detail)}</em></span>')
@@ -1901,7 +1901,7 @@ class Dashboard:
                 summary = "\n\n".join(str(v) for v in summary.values())
             body = '<section class="document"><div class="eyebrow">BRIEFING</div><h2>Full briefing</h2>' + render_markdown(str(summary)) + '</section>'
         elif tab == "dfs":
-            body = f'<section class="document">{dfs.get("html", "<p>DFS unavailable.</p>")}</section>'
+            body = f'<section class="document">{dfs.get("html", "<p>FS unavailable.</p>")}</section>'
         else:
             worker_counts = workers.get("counts", {})
             worker_body = (

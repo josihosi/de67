@@ -60,7 +60,7 @@ de67 3   build, test, and repair against it
 | Phase | What happens | What carries forward |
 | --- | --- | --- |
 | **[1 · Discuss](de-67-1/SKILL.md)** | Focused questions clarify the experience, language, and owner choices. | `WEC.md`: intent, before implementation choices take over. |
-| **[2 · Specify](de-67-2/SKILL.md)** | A fresh owner inspects the repository and resolves the functional contract. | Frozen `.de67/DFS.md` and initialized clock state. |
+| **[2 · Specify](de-67-2/SKILL.md)** | A fresh owner inspects the repository and resolves the functional contract. | Frozen `.de67/FS.md` and initialized clock state. |
 | **[3 · Deliver](de-67-3/SKILL.md)** | A coordinator assigns workers, interprets results, and continues through investigation, implementation, and repair. | Durable findings and evidence for the requested outcome. |
 
 **[See the complete lifecycle and diagrams →](docs/how-de67-works.md)**
@@ -101,7 +101,7 @@ guarded review route, and returns control to a fresh coordinator.
 
 ## Watch it work
 
-The optional dashboard provides a read-only view of the live DFS, work ledger, deadline clock,
+The optional dashboard provides a read-only view of the live FS, work ledger, deadline clock,
 coordinator, workers, mutation state, and recent evidence. It cannot control or stop delivery.
 
 Run the dashboard from this checkout:
@@ -125,7 +125,7 @@ library; the optional narrator makes model calls only when configured.
 | Installation, requirements, and routing | [Skill router](SKILL.md) |
 | The complete delivery and mutation lifecycle | [How de67 works](docs/how-de67-works.md) |
 | Discussion and the WEC | [de67 1](de-67-1/SKILL.md) |
-| Repository inspection and frozen DFS | [de67 2](de-67-2/SKILL.md) |
+| Repository inspection and frozen FS | [de67 2](de-67-2/SKILL.md) |
 | Autonomous delivery and mutation | [de67 3](de-67-3/SKILL.md) |
 | A manual review of workflow friction | [Alignment audit](alignment-audit/SKILL.md) |
 | Minimal-work reasoning | [MSW kernel](references/msw-kernel.md) |

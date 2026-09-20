@@ -216,8 +216,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                     raise SystemExit(9)
                 if event_count == 6:
                     complete_owned("post-mutation", "post-mutation recovery proof")
-                    (root / "DFS.md").write_text(
-                        "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+                    (root / "FS.md").write_text(
+                        "# FS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
                         encoding="utf-8",
                     )
                     (root / "work-ledger.md").write_text(
@@ -239,8 +239,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                 os.environ["DE67_COORDINATOR_RUN_ID"],
             )
             root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
-            (root / "DFS.md").write_text(
-                "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+            (root / "FS.md").write_text(
+                "# FS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
                 encoding="utf-8",
             )
             (root / "work-ledger.md").write_text(
@@ -274,8 +274,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             os.environ["DE67_COORDINATOR_RUN_ID"],
         )
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
-        (root / "DFS.md").write_text(
-            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+        (root / "FS.md").write_text(
+            "# FS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
             encoding="utf-8",
         )
         (root / "work-ledger.md").write_text(
@@ -317,8 +317,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                 os.environ["DE67_COORDINATOR_RUN_ID"],
             )
             root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
-            (root / "DFS.md").write_text(
-                "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+            (root / "FS.md").write_text(
+                "# FS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
                 encoding="utf-8",
             )
             (root / "work-ledger.md").write_text(
@@ -329,8 +329,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             os.environ["DE67_LINEAGE"], "seed", "final proof"
         )
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
-        (root / "DFS.md").write_text(
-            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+        (root / "FS.md").write_text(
+            "# FS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
             encoding="utf-8",
         )
         (root / "work-ledger.md").write_text(
@@ -339,8 +339,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
         )
     elif mode == "leave-task-and-close-work":
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
-        (root / "DFS.md").write_text(
-            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+        (root / "FS.md").write_text(
+            "# FS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
             encoding="utf-8",
         )
         (root / "work-ledger.md").write_text(
@@ -363,8 +363,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                 os.environ["DE67_LINEAGE"], "seed", "final proof"
             )
             root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
-            (root / "DFS.md").write_text(
-                "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+            (root / "FS.md").write_text(
+                "# FS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
                 encoding="utf-8",
             )
             (root / "work-ledger.md").write_text(
@@ -388,8 +388,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
                     generation,
                     os.environ["DE67_COORDINATOR_RUN_ID"],
                 )
-            (root / "DFS.md").write_text(
-                "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+            (root / "FS.md").write_text(
+                "# FS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
                 encoding="utf-8",
             )
             (root / "work-ledger.md").write_text(
@@ -404,8 +404,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
         harness.start_task(os.environ["DE67_LINEAGE"], "recovery", "R-001", 3600)
         harness.complete_task(os.environ["DE67_LINEAGE"], "recovery", "successor proof")
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
-        (root / "DFS.md").write_text(
-            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+        (root / "FS.md").write_text(
+            "# FS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
             encoding="utf-8",
         )
         (root / "work-ledger.md").write_text(
@@ -457,8 +457,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             raise AssertionError("worker recovery must keep the coordinator generation")
         complete_owned("seed", "worker result ingested")
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
-        (root / "DFS.md").write_text(
-            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 N{EM DASH} Done\n",
+        (root / "FS.md").write_text(
+            "# FS\n\nStatus: Frozen\n\n- [x] R-001 N{EM DASH} Done\n",
             encoding="utf-8",
         )
         (root / "work-ledger.md").write_text(
@@ -473,8 +473,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
         harness.start_task(os.environ["DE67_LINEAGE"], "recovery", "R-001", 3600)
         harness.complete_task(os.environ["DE67_LINEAGE"], "recovery", "successor proof")
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
-        (root / "DFS.md").write_text(
-            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+        (root / "FS.md").write_text(
+            "# FS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
             encoding="utf-8",
         )
         (root / "work-ledger.md").write_text(
@@ -506,8 +506,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
         )
         if generation == 2:
             root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
-            (root / "DFS.md").write_text(
-                "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+            (root / "FS.md").write_text(
+                "# FS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
                 encoding="utf-8",
             )
             (root / "work-ledger.md").write_text(
@@ -527,8 +527,8 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
         harness.start_task(os.environ["DE67_LINEAGE"], "recovery", "R-001", 3600)
         harness.complete_task(os.environ["DE67_LINEAGE"], "recovery", "matrix recovery proof")
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
-        (root / "DFS.md").write_text(
-            "# DFS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
+        (root / "FS.md").write_text(
+            "# FS\n\nStatus: Frozen\n\n- [x] R-001 \N{EM DASH} Done\n",
             encoding="utf-8",
         )
         (root / "work-ledger.md").write_text(
@@ -1175,8 +1175,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         state_root.mkdir(exist_ok=True)
         claim = "- [ ] \N{LARGE RED CIRCLE} R-001 \N{EM DASH} Open\n" if red else "- [x] R-001 \N{EM DASH} Done\n"
         item = "- [ ] R-001 \N{EM DASH} Current route\n" if active else ""
-        (state_root / "DFS.md").write_text(
-            "# DFS\n\nStatus: Frozen\n\n" + claim,
+        (state_root / "FS.md").write_text(
+            "# FS\n\nStatus: Frozen\n\n" + claim,
             encoding="utf-8",
         )
         (state_root / "work-ledger.md").write_text(
@@ -1228,7 +1228,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("explain what happened and why it matters", prompt)
         self.assertIn("state what remains or happens next", prompt)
         self.assertIn("exposes a contradiction or a missing causal step", prompt)
-        self.assertIn("Internal machine state and DFS detail", prompt)
+        self.assertIn("Internal machine state and FS detail", prompt)
         self.assertIn('fork_turns="none"', prompt)
         self.assertIn("Explicitly choose gpt-5.6-luna or gpt-5.6-terra", prompt)
         self.assertIn("Never omit model selection", prompt)
@@ -1404,7 +1404,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertNotIn("Read the exact live selected mutation target", prompt)
         self.assertNotIn("deadline_harness.py", prompt)
         self.assertNotIn("mutation guard", prompt)
-        self.assertNotIn("DFS candidates", prompt)
+        self.assertNotIn("FS candidates", prompt)
 
     def test_supervisor_exports_exact_compiled_policy_decision_command(self) -> None:
         self.write_work_documents(red=True, active=True)
@@ -1945,8 +1945,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
                         state = case_root / "deadlines.sqlite3"
                         runs = case_root / "runs"
                         events = case_root / "events.jsonl"
-                        (state_root / "DFS.md").write_text(
-                            "# DFS\n\nStatus: Frozen\n\n- [ ] \N{LARGE RED CIRCLE} R-001 \N{EM DASH} Open\n",
+                        (state_root / "FS.md").write_text(
+                            "# FS\n\nStatus: Frozen\n\n- [ ] \N{LARGE RED CIRCLE} R-001 \N{EM DASH} Open\n",
                             encoding="utf-8",
                         )
                         (state_root / "work-ledger.md").write_text(
@@ -2159,7 +2159,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("Durably close or block", corrective_prompt)
         self.assertIn("SQL schemas, queries, migrations", corrective_prompt)
         self.assertIn("SQLite-backed harness transitions", corrective_prompt)
-        self.assertIn("DFS red lamps:\n- [ ] 🔴 R-001 — Open", corrective_prompt)
+        self.assertIn("FS red lamps:\n- [ ] 🔴 R-001 — Open", corrective_prompt)
         self.assertIn(
             "Ledger executable entries:\n- [ ] R-001 — Current route",
             corrective_prompt,

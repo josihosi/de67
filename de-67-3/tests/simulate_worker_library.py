@@ -129,8 +129,6 @@ def prepare(workspace: Path, first_stage: str | None = None):
                   "evidence limits. No native game execution or product-source edits.\n"
                   f"<!-- DE67:DFS-SLICE:END id={claim}-S001 claim={claim} -->\n")
     (de67 / "FS.md").write_text("\n".join(fs), encoding="utf-8")
-    from specification import compatibility_pointer
-    (de67 / "DFS.md").write_text(compatibility_pointer(de67 / "FS.md"), encoding="utf-8")
     (de67 / "work-ledger.md").write_text("# Current simulation assignments\n", encoding="utf-8")
     for name in ("phase3-policy.d67", "phase3-policy.json", "phase3-contracts.json"):
         shutil.copyfile(ROOT / "assets/environment" / name, de67 / name)
@@ -152,7 +150,7 @@ def prepare(workspace: Path, first_stage: str | None = None):
     subprocess.run(["git", "init", "--quiet", "--initial-branch=codex/worker-library-simulation"],
                    cwd=workspace, check=True, capture_output=True, text=True)
     subprocess.run(["git", "add", "--", "AGENTS.md", ".gitignore", ".de67/WEC.md", ".de67/FS.md",
-                    ".de67/DFS.md", ".de67/work-ledger.md", ".de67/phase3-policy.d67",
+                    ".de67/FS.md", ".de67/work-ledger.md", ".de67/phase3-policy.d67",
                     ".de67/phase3-policy.json", ".de67/phase3-contracts.json"],
                    cwd=workspace, check=True, capture_output=True, text=True)
     subprocess.run(["git", "-c", "user.name=DE67 Simulation", "-c", "user.email=simulation@localhost",

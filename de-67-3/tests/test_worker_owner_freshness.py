@@ -18,7 +18,7 @@ class WorkerOwnerFreshnessTests(WorkerFixture, unittest.TestCase):
         self.worker()
         self.owner = self.workspace / '.de67/WEC.md'
         self.owner.write_text('<!-- DE67:OWNER-CONTRACT:BEGIN -->\nObserve the route without changing source.\n<!-- DE67:OWNER-CONTRACT:END -->\n', encoding='utf-8')
-        (self.workspace / '.de67/DFS.md').write_text(
+        (self.workspace / '.de67/FS.md').write_text(
             '<!-- DE67:DFS-SLICE:BEGIN id=R-008-S001 claim=R-008 -->\n'
             '- [ ] R-008 — Observe the route at its available evidence ceiling.\n'
             '<!-- DE67:DFS-SLICE:END id=R-008-S001 claim=R-008 -->\n', encoding='utf-8')

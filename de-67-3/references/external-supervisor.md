@@ -14,7 +14,7 @@ The normalization epoch also consumes all prior worker-result routing events. Ad
 `restart_normalized` attempts are terminal history, not fresh completion, finding, or abandonment
 events for the new coordinator to ingest.
 
-Normalization preserves project truth and durable evidence: `.de67/DFS.md`, the work ledger, the
+Normalization preserves project truth and durable evidence: `.de67/FS.md`, the work ledger, the
 mutation-suggestion ledger, completed attempts, findings, incidents, mutation state, and semantic
 restart generations. The fresh coordinator reads those artifacts and may dispatch new attempts for
 unfinished ledger work.
@@ -30,7 +30,7 @@ files, creates no empty commit, pushes only the single target in `workspace.json
 remote ref. Its stable SQLite checkpoint identity is also written as a Git trailer. An unfinished
 allocation is resumed from the trailer on `HEAD`, so a crash after commit cannot duplicate the
 checkpoint. Commit, hook, push, or verification failure leaves the tree recoverable and stops the
-next model interval; a checkpoint is durability only, never DFS acceptance or proof.
+next model interval; a checkpoint is durability only, never FS acceptance or proof.
 
 Use `supervisor_service.py status` and `stop` for observation and shutdown. A stopped service never
-implies that DFS or ledger work is complete.
+implies that FS or ledger work is complete.

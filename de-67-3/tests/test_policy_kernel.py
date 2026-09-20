@@ -115,7 +115,6 @@ class PolicyKernelTests(unittest.TestCase):
                     connection.close()
 
     def test_canonical_fs_open_work_comes_from_the_ledger(self) -> None:
-        from specification import compatibility_pointer
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             root = workspace / ".de67"
@@ -124,7 +123,6 @@ class PolicyKernelTests(unittest.TestCase):
             sqlite3.connect(state).close()
             fs = root / "FS.md"
             fs.write_text("# Functional contract\nBehavior remains after delivery.\n")
-            (root / "DFS.md").write_text(compatibility_pointer(fs))
             ledger = root / "work-ledger.md"
             ledger.write_text("# Ledger\n- [ ] R-001 — Remaining behavior\n")
             facts = kernel.workspace_facts(workspace, state, "project", now=0)
@@ -583,7 +581,7 @@ class PolicyKernelTests(unittest.TestCase):
             (de67 / "mutation-suggestions.md").write_text(
                 "## Pending suggestions\n\n- owner item\n", encoding="utf-8"
             )
-            (de67 / "DFS.md").write_text("- [ ] 🔴 R-1\n", encoding="utf-8")
+            (de67 / "FS.md").write_text("- [ ] 🔴 R-1\n", encoding="utf-8")
             state = workspace / "state.sqlite3"
             connection = sqlite3.connect(state)
             connection.executescript(
@@ -627,7 +625,7 @@ class PolicyKernelTests(unittest.TestCase):
             de67 = workspace / ".de67"
             de67.mkdir()
             (de67 / "work-ledger.md").write_text("", encoding="utf-8")
-            (de67 / "DFS.md").write_text("- [ ] 🔴 R-1\n", encoding="utf-8")
+            (de67 / "FS.md").write_text("- [ ] 🔴 R-1\n", encoding="utf-8")
             suggestions = de67 / "mutation-suggestions.md"
             suggestions.write_text(
                 "## Pending suggestions\n\n- [defer]: review this later\n"
@@ -668,7 +666,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "- Next executable route: inspect the production owners.\n",
                 encoding="utf-8",
             )
-            (de67 / "DFS.md").write_text("- [ ] 🔴 R-004\n", encoding="utf-8")
+            (de67 / "FS.md").write_text("- [ ] 🔴 R-004\n", encoding="utf-8")
             state = workspace / "state.sqlite3"
             connection = sqlite3.connect(state)
             connection.executescript(
@@ -709,7 +707,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "- Active work: `R-014-other-gap` is unrelated.\n",
                 encoding="utf-8",
             )
-            (de67 / "DFS.md").write_text("- [ ] 🔴 R-008\n", encoding="utf-8")
+            (de67 / "FS.md").write_text("- [ ] 🔴 R-008\n", encoding="utf-8")
             state = workspace / "state.sqlite3"
             connection = sqlite3.connect(state)
             connection.executescript(
@@ -760,7 +758,7 @@ class PolicyKernelTests(unittest.TestCase):
             (de67 / "work-ledger.md").write_text(
                 "## R-008\n- Active gap\n- Next executable route\n", encoding="utf-8"
             )
-            (de67 / "DFS.md").write_text("- [ ] 🔴 R-008\n", encoding="utf-8")
+            (de67 / "FS.md").write_text("- [ ] 🔴 R-008\n", encoding="utf-8")
             state = workspace / "state.sqlite3"
             connection = sqlite3.connect(state)
             connection.executescript(
@@ -874,7 +872,7 @@ class PolicyKernelTests(unittest.TestCase):
                 )
 
             (workspace / ".de67").mkdir(exist_ok=True)
-            (workspace / ".de67/DFS.md").write_text(
+            (workspace / ".de67/FS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-008-S001 claim=R-008 -->\n"
                 "- [ ] R-008 — Complete the outcome,\n  including both profiles.\n"
                 "  - Proof: every branch has independent evidence.\n"
@@ -986,7 +984,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "prove one fresh gameplay frame.\n  - DFS slices: `R-NEW-S001`\n\n- [ ] R-OTHER — Unrelated work.\n",
                 encoding="utf-8",
             )
-            (de67 / "DFS.md").write_text(
+            (de67 / "FS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-NEW-S001 claim=R-NEW -->\n"
                 "- [ ] 🔴 R-NEW — Native launch must reach gameplay without injected state.\n"
                 "<!-- DE67:DFS-SLICE:END id=R-NEW-S001 claim=R-NEW -->\n",
@@ -1017,7 +1015,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "- [ ] R-CAMP — Prove native establishment using `skill.md`.\n"
                 "  - DFS slices: `R-CAMP-S001`\n"
                 "  - Current handoff: OLD INVESTIGATION JOURNEY\n")
-            (de67 / "DFS.md").write_text(
+            (de67 / "FS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-CAMP-S001 claim=R-CAMP -->\n"
                 "- [ ] 🔴 R-CAMP — Native establishment, independent of mission.\n"
                 "<!-- DE67:DFS-SLICE:END id=R-CAMP-S001 claim=R-CAMP -->\n")
@@ -1069,7 +1067,7 @@ class PolicyKernelTests(unittest.TestCase):
             (de67 / "work-ledger.md").write_text(
                 f"- [ ] R-LARGE — {large_route}\n  - DFS slices: `R-LARGE-S001`\n", encoding="utf-8"
             )
-            (de67 / "DFS.md").write_text(
+            (de67 / "FS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-LARGE-S001 claim=R-LARGE -->\n"
                 "- [ ] 🔴 R-LARGE — Prove the large route.\n"
                 "<!-- DE67:DFS-SLICE:END id=R-LARGE-S001 claim=R-LARGE -->\n",
@@ -1119,7 +1117,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "    - [open] witness :: Prove the live boundary.\n",
                 encoding="utf-8",
             )
-            (de67 / "DFS.md").write_text(
+            (de67 / "FS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-HISTORY-S001 claim=R-HISTORY -->\n"
                 "Prove the relevant mechanism and live boundary.\n"
                 "<!-- DE67:DFS-SLICE:END id=R-HISTORY-S001 claim=R-HISTORY -->\n",
@@ -1215,7 +1213,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "    - [open] response :: Observe response.\n",
                 encoding="utf-8",
             )
-            (de67 / "DFS.md").write_text(
+            (de67 / "FS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-CONT-S001 claim=R-CONT -->\n"
                 "- Acceptance: Observe a real response.\n"
                 "Implementation status:\n"
@@ -1318,7 +1316,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "  - Current uncertainty: Preserve the other platform boundary.\n",
                 encoding="utf-8",
             )
-            (de67 / "DFS.md").write_text(
+            (de67 / "FS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-029-S001 claim=R-029 -->\n"
                 "Prove the assigned response through its actual owner.\n"
                 "<!-- DE67:DFS-SLICE:END id=R-029-S001 claim=R-029 -->\n",
@@ -1349,7 +1347,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "  - DFS slices: `R-1-S001`\n",
                 encoding="utf-8",
             )
-            (de67 / "DFS.md").write_text(
+            (de67 / "FS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-10-S001 claim=R-10 -->\n"
                 "- [ ] 🔴 R-10 — Wrong longer-prefix slice.\n"
                 "<!-- DE67:DFS-SLICE:END id=R-10-S001 claim=R-10 -->\n"
@@ -1376,7 +1374,7 @@ class PolicyKernelTests(unittest.TestCase):
                 "  - DFS slices: `R-ORDER-S002`, `R-ORDER-S003`\n"
                 "  - Assignment R-ORDER-task: Deliver packet.\n"
             )
-            (de67 / "DFS.md").write_text(
+            (de67 / "FS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-ORDER-S001 claim=R-ORDER -->\nOLD\n<!-- DE67:DFS-SLICE:END id=R-ORDER-S001 claim=R-ORDER -->\n"
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-ORDER-S002 claim=R-ORDER -->\nSECOND\n<!-- DE67:DFS-SLICE:END id=R-ORDER-S002 claim=R-ORDER -->\n"
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-ORDER-S003 claim=R-ORDER -->\nTHIRD\n<!-- DE67:DFS-SLICE:END id=R-ORDER-S003 claim=R-ORDER -->\n"
@@ -1429,7 +1427,7 @@ class AssignmentTests(unittest.TestCase):
             workspace=Path(directory);de67=workspace/'.de67';de67.mkdir()
             ledger='- [ ] R-029 — Prove natural discovery through return.\n  - DFS slices: `R-029-S001`\n  - Assignment recovery: Restore runnable Fight test; exit after verified native Fight and ordinary turns.\n  - Current uncertainty: Scout/report connection remains unproved.\n'
             (de67/'work-ledger.md').write_text(ledger)
-            (de67/'DFS.md').write_text('<!-- DE67:DFS-SLICE:BEGIN id=R-029-S001 claim=R-029 -->\nProve discovery, dispatch and return.\n<!-- DE67:DFS-SLICE:END id=R-029-S001 claim=R-029 -->\n')
+            (de67/'FS.md').write_text('<!-- DE67:DFS-SLICE:BEGIN id=R-029-S001 claim=R-029 -->\nProve discovery, dispatch and return.\n<!-- DE67:DFS-SLICE:END id=R-029-S001 claim=R-029 -->\n')
             state=workspace/'state.sqlite3'
             with DeadlineHarness(state) as h:h.start_task('project','recovery','R-029',100,now=1)
             call=kernel.unbound_worker_spawns(workspace,state,'project')[0]

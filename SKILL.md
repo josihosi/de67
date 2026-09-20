@@ -10,7 +10,7 @@ This file routes; it does not run a phase.
 Match the user's command and read exactly one entrypoint:
 
 - `de67 1`: read `de-67-1/SKILL.md` for the current-chat discussion and WEC.
-- `de67 2`: read `de-67-2/SKILL.md` for code inspection and DFS authoring.
+- `de67 2`: read `de-67-2/SKILL.md` for code inspection and FS authoring.
 - `de67 3`: read `de-67-3/SKILL.md` for implementation, deadlines, and mutation.
 - `de67 alignment audit`: read `alignment-audit/SKILL.md` for a manual, read-only review of
   agent-facing instructions, machine responses, and active workflow tests.
@@ -20,7 +20,7 @@ background or completeness. These reading boundaries apply when running a phase.
 to inspect or improve the workflow may follow the relevant surfaces without starting those phases.
 
 The handoff artifacts are the interface: phase 2 receives `WEC.md`;
-phase 3 receives the frozen `DFS.md` and Phase-2-initialized `.de67/` clock state.
+phase 3 receives the frozen `FS.md` and Phase-2-initialized `.de67/` clock state.
 
 ## Execution placement
 

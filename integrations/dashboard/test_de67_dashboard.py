@@ -153,7 +153,7 @@ class DashboardTests(unittest.TestCase):
             "clock": {"state": str(state / "deadlines.sqlite3"), "lineage": "lineage"},
         }), encoding="utf-8")
         (self.workspace / ".de67/DFS.md").write_text(
-            "# DFS\n\nStatus: Frozen\n\n<script>alert(1)</script>\n\n"
+            "# FS\n\nStatus: Frozen\n\n<script>alert(1)</script>\n\n"
             "- [ ] R-009 — active work\n"
             "- [ ] R-010 — waiting on an event\n"
             "- [ ] 🔴 R-011 — upcoming work\n"
@@ -590,7 +590,7 @@ class DashboardTests(unittest.TestCase):
             "## Blocked work\n- Blocked: R-004 — blocked\n"
         )
         dfs = (
-            "# DFS\n\nStatus: Refrozen\n\n"
+            "# FS\n\nStatus: Refrozen\n\n"
             "- [ ] 🔴 R-002 — active\n"
             "- [ ] 🔴 R-003 — waiting\n"
             "- [ ] 🔴 R-004 — blocked\n"
@@ -623,7 +623,7 @@ class DashboardTests(unittest.TestCase):
         ):
             with self.subTest(status=status):
                 upcoming = dashboard_module.upcoming_dfs_work(
-                    f"# DFS\n\n{status}\n\n- [ ] 🔴 R-next_1 — upcoming\n",
+                    f"# FS\n\n{status}\n\n- [ ] 🔴 R-next_1 — upcoming\n",
                     ledger,
                     "R-002",
                 )
@@ -633,7 +633,7 @@ class DashboardTests(unittest.TestCase):
         ledger = dashboard_module.parse_ledger("## Active work\n- [ ] R-002 — active\n")
 
         upcoming = dashboard_module.upcoming_dfs_work(
-            "# DFS\n\nStatus: Draft\n\n"
+            "# FS\n\nStatus: Draft\n\n"
             "~~~markdown\nStatus: Frozen\n~~~\n"
             "## Freeze record\n\nStatus: Refrozen\n\n"
             "- [ ] 🔴 R-003 — not authoritative\n",
@@ -649,7 +649,7 @@ class DashboardTests(unittest.TestCase):
             "~~~markdown\n- [ ] R-fenced — example only\n~~~\n"
         )
         dfs = (
-            "# DFS\n\nStatus: Frozen\n\n"
+            "# FS\n\nStatus: Frozen\n\n"
             "- [ ] 🔴 R-FOO — distinct uppercase claim\n"
             "- [ ] 🔴 R-fenced — not owned by the ledger example\n"
         )
@@ -787,7 +787,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('<strong>work: R-009</strong>', page)
 
     def test_invalid_utf8_is_visible_without_raw_failure(self) -> None:
-        (self.workspace / ".de67/DFS.md").write_bytes(b"# DFS\n\xff")
+        (self.workspace / ".de67/DFS.md").write_bytes(b"# FS\n\xff")
         state = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).snapshot()
         self.assertTrue(state["dfs"]["identity"]["invalid_utf8"])
         self.assertIn("�", state["dfs"]["html"])
@@ -806,7 +806,7 @@ class DashboardTests(unittest.TestCase):
         second = dashboard.snapshot()
         self.assertFalse(first["dfs"]["stale"])
         self.assertTrue(second["dfs"]["stale"])
-        self.assertIn("<h1>DFS</h1>", second["dfs"]["html"])
+        self.assertIn("<h1>FS</h1>", second["dfs"]["html"])
 
     def test_last_good_clock_survives_malformed_workspace_configuration(self) -> None:
         dashboard = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions)

@@ -1,32 +1,34 @@
-import hashlib
 import tempfile
 import unittest
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from specification import SpecificationError, compatibility_pointer, render_functional_specification, resolve
+from specification import SpecificationError, render_functional_specification, resolve, resolve_path
 
 
 class SpecificationMigrationTests(unittest.TestCase):
-    def test_hash_bound_pointer_resolves_fs_and_rejects_stale_pointer(self):
+    def test_fs_resolves_without_companion_file_and_can_be_refrozen(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fs = root / "FS.md"
-            fs.write_text("# Functional\n<!-- DE67:DFS-SLICE:BEGIN claim=R-X -->\nImplementation status:\n- [ ] stale\n<!-- DE67:DFS-SLICE:END claim=R-X -->\n", encoding="utf-8")
-            (root / "DFS.md").write_text(compatibility_pointer(fs), encoding="utf-8")
-            self.assertFalse(resolve(root).legacy)
-            fs.write_text(fs.read_text(encoding="utf-8") + "x", encoding="utf-8")
-            with self.assertRaises(SpecificationError):
-                resolve(root)
+            fs.write_text("# Functional\nStatus: Frozen\n", encoding="utf-8")
+            self.assertEqual(resolve(root).path, fs)
+            fs.write_text("# Functional\nStatus: Refrozen\n", encoding="utf-8")
+            self.assertIn("Refrozen", resolve(root).text)
+            self.assertFalse((root / "DFS.md").exists())
 
-    def test_dual_mutable_content_and_missing_pointer_fail_closed(self):
+    def test_legacy_file_is_never_a_specification_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "FS.md").write_text("# FS\n", encoding="utf-8")
-            (root / "DFS.md").write_text("# DFS\n", encoding="utf-8")
-            with self.assertRaises(SpecificationError):
+            legacy = root / "DFS.md"
+            legacy.write_text("# Historical content\n", encoding="utf-8")
+            with self.assertRaisesRegex(SpecificationError, "Missing functional specification"):
                 resolve(root)
+            with self.assertRaisesRegex(SpecificationError, "Use FS.md"):
+                resolve_path(legacy)
+            (root / "FS.md").write_text("# Canonical content\n", encoding="utf-8")
+            self.assertEqual(resolve(root).text, "# Canonical content\n")
 
     def test_functional_render_removes_delivery_status_only(self):
         text = "# FS\nImplementation status:\n- [x] delivered\n<!-- DE67:DFS-SLICE:END claim=R-X -->\n"

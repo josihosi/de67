@@ -1,7 +1,7 @@
 # de67 dashboard
 
 This optional package serves a small, read-only view of one de67 workspace. It reads
-`.de67/DFS.md`, `.de67/work-ledger.md`, the deadline SQLite database, and supervisor process state.
+`.de67/FS.md`, `.de67/work-ledger.md`, the deadline SQLite database, and supervisor process state.
 It does not import de67 core, write workspace state, or require OpenClaw.
 
 Run on loopback:

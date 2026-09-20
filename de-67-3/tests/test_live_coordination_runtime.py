@@ -35,7 +35,7 @@ class LiveCoordinationRuntimeTests(unittest.TestCase):
                 "- [ ] R-1 — Observe the production outcome.\n"
                 "  - DFS slices: `R-1-S001`\n", encoding="utf-8"
             )
-            (de67 / "DFS.md").write_text(
+            (de67 / "FS.md").write_text(
                 "<!-- DE67:DFS-SLICE:BEGIN id=R-1-S001 claim=R-1 -->\n"
                 "- [ ] 🔴 R-1 — Observe the production outcome.\n"
                 "<!-- DE67:DFS-SLICE:END id=R-1-S001 claim=R-1 -->\n", encoding="utf-8")

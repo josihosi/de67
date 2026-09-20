@@ -515,7 +515,7 @@ def supervision_fingerprint(
         specification = resolve(workspace / ".de67")
         specification_document = str(specification.path.relative_to(workspace))
     except SpecificationError:
-        specification_document = ".de67/DFS.md"
+        specification_document = ".de67/FS.md"
     for relative in (
         specification_document,
         ".de67/work-ledger.md",
@@ -702,7 +702,7 @@ def work_is_complete(
     state_path: Path,
     lineage_id: str,
 ) -> bool:
-    """Derive completion from the DFS, current ledger, and live clock gates."""
+    """Derive completion from the FS, current ledger, and live clock gates."""
     ledger = workspace / ".de67" / "work-ledger.md"
     if not ledger.is_file() or not state_path.is_file():
         return False
@@ -710,7 +710,7 @@ def work_is_complete(
         specification = resolve(workspace / ".de67")
     except SpecificationError:
         return False
-    if specification.legacy and RED_DFS_CLAIM.search(specification.text):
+    if RED_DFS_CLAIM.search(specification.text):
         return False
     if ACTIVE_LEDGER_ITEM.search(ledger.read_text(encoding="utf-8")):
         return False
@@ -738,7 +738,7 @@ def work_is_complete(
     if restart is not None and restart["pending"]:
         return False
 
-    # The DFS is the product contract. A cadence that became due on its final
+    # The FS is the product contract. A cadence that became due on its final
     # terminal window cannot manufacture work after that contract is all green.
     return True
 
@@ -811,8 +811,8 @@ def dfs_has_open_work(workspace: Path) -> bool:
         specification = resolve(workspace / ".de67")
     except SpecificationError:
         return False
-    if specification.legacy:
-        return RED_DFS_CLAIM.search(specification.text) is not None
+    if RED_DFS_CLAIM.search(specification.text):
+        return True
     ledger = workspace / ".de67" / "work-ledger.md"
     return ledger.is_file() and ACTIVE_LEDGER_ITEM.search(
         ledger.read_text(encoding="utf-8")
@@ -905,7 +905,7 @@ def worker_handoff_contract() -> str:
 
 def nested_worker_contract() -> str:
     return ('Sol and primary workers may use native Luna helpers with fork_turns="none", '
-            'an explicit model and suitable effort. Helpers need no deadline task, DFS slice, '
+            'an explicit model and suitable effort. Helpers need no deadline task, FS slice, '
             'ledger entry or claim, and never own coordinator state. If unavailable, use bounded '
             'local retrieval. The caller owns the result and collects or stops helpers before return.')
 
@@ -972,10 +972,10 @@ def recovery_frontier_snapshot(workspace: Path) -> str:
     try:
         specification = resolve(workspace / ".de67")
         dfs_text = specification.text
-        label = "DFS" if specification.legacy else "FS"
+        label = "FS"
     except SpecificationError:
         dfs_text = ""
-        label = "FS/DFS"
+        label = "FS"
     ledger = workspace / ".de67" / "work-ledger.md"
     red_lamps = (
         [line for line in dfs_text.splitlines()
@@ -1022,7 +1022,7 @@ def coordinator_recovery_contract(opportunity: int, workspace: Path) -> str:
         "task/packet identity through named-worker assign or the concrete native spawn_agent call. Waiting, exiting, or calling an internal "
         "delegation/harness defect a blocker without first repairing it is another failed "
         "decision. Durably close or block existing work only when evidence proves completion "
-        "or a genuinely external blocker. A durable external blocker, proved DFS completion, or no red lamp and no "
+        "or a genuinely external blocker. A durable external blocker, proved FS completion, or no red lamp and no "
         "executable ledger entry remains a valid stop."
         + final
     )
@@ -1103,7 +1103,7 @@ def coordinator_prompt(
         "The hash-bound .de67/phase3-policy.d67 file is the machine-canonical routing policy.",
         "Before each coordinator routing transition, execute the argument array in DE67_POLICY_DECIDE_ARGV_JSON as a subprocess without a shell.",
         current_owner_contract(workspace),
-        "The FS (Functional Specification, resolved from .de67/FS.md with legacy .de67/DFS.md compatibility) defines code behavior; the ledger owns delivery assignments and evidence references. Read the relevant contract and reconcile changed outcomes. Historical acceptance retains its scope; the current owner contract decides fresh proof.",
+        "The FS (Functional Specification, in .de67/FS.md) defines code behavior; the ledger owns delivery assignments and evidence references. Read the relevant contract and reconcile changed outcomes. Historical acceptance retains its scope; the current owner contract decides fresh proof.",
         coordinator_context_contract(),
         "Current work, independent task results, receipt search, recorded dispatch relationships and runner "
         "metadata and latest-assigned coordinator-tree token usage are available from this argument array: " + json.dumps([
@@ -1117,7 +1117,7 @@ def coordinator_prompt(
         "does not establish predecessor authority. Missing context remains visible and merits targeted discovery.",
         live_coordination_contract(),
         named_worker_contract(workspace),
-        "Write every owner-facing text field rendered on the hosted dashboard in simple English. This includes ledger items, latest findings, waiting work, mutation or incident summaries, and any DFS summary that the dashboard displays. First explain what happened and why it matters in terms any reader can understand. Then preserve the necessary technical identifiers and evidence, state what remains or happens next, and use one concrete statement per sentence. If the simple explanation exposes a contradiction or a missing causal step, record that problem instead of hiding it behind technical language. Internal machine state and DFS detail that the dashboard does not display do not need this rewrite.",
+        "Write every owner-facing text field rendered on the hosted dashboard in simple English. This includes ledger items, latest findings, waiting work, mutation or incident summaries, and any FS summary that the dashboard displays. First explain what happened and why it matters in terms any reader can understand. Then preserve the necessary technical identifiers and evidence, state what remains or happens next, and use one concrete statement per sentence. If the simple explanation exposes a contradiction or a missing causal step, record that problem instead of hiding it behind technical language. Internal machine state and FS detail that the dashboard does not display do not need this rewrite.",
         "Never review, apply, or resolve a mutation. When the compiled policy says retire_for_mutation_review, dispatch no worker, make no guidance change, and exit immediately so the external supervisor can run the exclusive reviewer.",
         "Do not infer policy from workspace guideline prose; those files are legacy differential fixtures on this branch.",
         worker_selection_contract(),
@@ -1137,7 +1137,7 @@ def coordinator_prompt(
         )
         lines.append(
             "The mutation retired every earlier claim deadline. Read the current ledger and "
-            "remaining DFS route, then set one new whole-item deadline you can honestly deliver. "
+            "remaining FS route, then set one new whole-item deadline you can honestly deliver. "
             "Include worker startup, diagnosis, implementation, repair, build, rerun, evidence "
             "return, coordination, known unknowns, and an uncertainty margin; inherit no prior duration."
         )
@@ -1146,7 +1146,7 @@ def coordinator_prompt(
                 "Treat this exact owner-authorized restart reason as current input: "
                 + restart_reason
             )
-    lines.append("Continue from the durable accepted frontier until the next required retirement or DFS completion.")
+    lines.append("Continue from the durable accepted frontier until the next required retirement or FS completion.")
     return "\n".join(lines) + "\n"
 
 
@@ -1209,7 +1209,7 @@ def mutation_reviewer_prompt(
             "Trust the agent to choose the evidence and implementation route and exercise judgment within the requested outcome.",
             mutation_maintenance_contract(),
             "Disposition every pending owner entry. Rejecting one explanation does not settle the concern. Retrieve detail when it can change the diagnosis or correction; written guidance alone proves neither delivery nor use. Separate immediate recovery from repeatable method correction; prove the correction with a reproduction or counterexample. Measure full-tree use including helper/retry cost, disclose accounting gaps and distinguish measured reductions from expected savings. Allocation preferences are not quotas.",
-            "For a periodic review, the stored random lane is legacy metadata, not a prescribed investigation target. Repeated actions can be justified by changed inputs or evidence. Stop when the concern is explained, a supported correction is validated, or uncertainty is bounded and does not justify intervention; state which applies. A guarded no-op need not prove the whole workflow optimal. No finding quota, mandatory full trace or new checklist. Validate local guidelines and same-outcome DFS refinements together through random-review and broader permitted changes through its method-candidate validation. Preserve accepted proof, owner intent, accounting and exclusive review/restart ownership; speculative uncertainty must not strand delivery.",
+            "For a periodic review, the stored random lane is legacy metadata, not a prescribed investigation target. Repeated actions can be justified by changed inputs or evidence. Stop when the concern is explained, a supported correction is validated, or uncertainty is bounded and does not justify intervention; state which applies. A guarded no-op need not prove the whole workflow optimal. No finding quota, mandatory full trace or new checklist. Validate local guidelines and same-outcome FS refinements together through random-review and broader permitted changes through its method-candidate validation. Preserve accepted proof, owner intent, accounting and exclusive review/restart ownership; speculative uncertainty must not strand delivery.",
             "If changing the active ledger, preserve accepted proof and recoverable work, independent same-claim assignments and the existing subdivision syntax. Its full coordinator-facing contract is coordinator_ledger_contract() in coordinator_supervisor.py; inspect that contract when a ledger change makes it relevant.",
             "If uncertainty prevents proving a necessary correction, preserve that entry and state the exact gap. Unproved speculative attribution alone does not strand an otherwise supported correction. Resolve the gate only after every pending entry is dispositioned, record the review evidence and request one fresh coordinator restart. The external supervisor alone launches the successor; an owner-ordered stop remains in force until an authorized start.",
         ]

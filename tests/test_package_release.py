@@ -33,6 +33,7 @@ class ReleasePackageTests(unittest.TestCase):
                 "integrations/openclaw_discord/SETUP.md": "discord setup\n",
                 "integrations/jev_telescope/README.md": "telescope setup\n",
                 "integrations/jev_telescope/telescope.py": "telescope code\n",
+                "integrations/jev_telescope/provider_guard.py": "guard code\n",
                 "integrations/jev_pit_crew/README.md": "pit crew setup\n",
                 "integrations/jev_pit_crew/pit_crew.py": "pit crew code\n",
                 "docs/verification/history.md": "local development evidence\n",
@@ -79,6 +80,7 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertNotIn("de67/integrations/jev_pit_crew/pit_crew.py", archive.namelist())
             with zipfile.ZipFile(first / "de67-3.0.0-jev-pit-crew.zip") as archive:
                 self.assertIn("de67/integrations/jev_pit_crew/pit_crew.py", archive.namelist())
+                self.assertIn("de67/integrations/jev_telescope/provider_guard.py", archive.namelist())
                 self.assertNotIn("de67/integrations/jev_telescope/telescope.py", archive.namelist())
 
     def test_unclassified_and_runtime_paths_fail_instead_of_shipping(self):

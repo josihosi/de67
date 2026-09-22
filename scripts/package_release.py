@@ -69,6 +69,9 @@ def build(root: Path, ref: str, version: str, output: Path) -> dict:
         if package is None:
             continue
         packages[package][path] = value
+        if path == "integrations/jev_telescope/provider_guard.py":
+            # Pit Crew calls the credential-free guard without the Telescope adapter.
+            packages["jev-pit-crew"][path] = value
         if package != "core" and path.endswith(".md"):
             # Core users can read optional setup instructions without installing executable add-ons.
             packages["core"][path] = value

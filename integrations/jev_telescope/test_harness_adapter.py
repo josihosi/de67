@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import harness_adapter as h
 import telescope as t
@@ -10,7 +11,10 @@ from test_telescope import response
 
 class HarnessAdapterTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        self._ordinary_fixture_roots = patch.object(t.pg, "_disposable_context_roots", return_value=())
+        self._ordinary_fixture_roots.start()
+        self.addCleanup(self._ordinary_fixture_roots.stop)
+        self.temp = tempfile.TemporaryDirectory(prefix=".provider-guard-test-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.log = self.root / "run.jsonl"
@@ -20,7 +24,12 @@ class HarnessAdapterTests(unittest.TestCase):
         self.row = dict(event_id="e1", run_id="run1", request_id="r1", event="move_rejected", source=source,
                         payload=json.loads(self.raw), wall_time={"unix_seconds":123})
         self.snapshot = self.save([self.row])
-        self.config = dict(mode="on", paths=["run.jsonl", ".userdata/openclaw_harness/evidence-display"], cache_seconds=0)
+        self.guard = dict(mode="on", scope_id="harness-adapter-tests",
+                          state_path=str(self.root / "owner" / "provider.sqlite3"), max_calls=100,
+                          max_request_bytes=100000, max_in_flight=2, timeout_seconds=5,
+                          max_retries=0, retry_backoff_seconds=0)
+        self.config = dict(mode="on", paths=["run.jsonl", ".userdata/openclaw_harness/evidence-display"],
+                           cache_seconds=0, provider_guard=self.guard)
 
     def save(self, rows):
         raw = t.encoded({"rows":rows})
@@ -58,8 +67,10 @@ class HarnessAdapterTests(unittest.TestCase):
 
     def test_off_shadow_and_provider_failure_preserve_baseline(self):
         def forbidden(*args): self.fail("off made a call")
-        off=h.search(self.root,self.snapshot,"question",config={**self.config,"mode":"off"},call=forbidden)
-        shadow=h.search(self.root,self.snapshot,"question",config={**self.config,"mode":"shadow"},call=lambda b,t:response(b))
+        off=h.search(self.root,self.snapshot,"question",config={**self.config,"mode":"off",
+                 "provider_guard":{**self.guard,"mode":"off"}},call=forbidden)
+        shadow=h.search(self.root,self.snapshot,"question",config={**self.config,"mode":"shadow",
+                    "provider_guard":{**self.guard,"mode":"shadow"}},call=lambda b,t:response(b))
         self.assertEqual(off["items"],shadow["items"])
         def fail(*args): raise TimeoutError()
         fallback=h.search(self.root,self.snapshot,"question",config=self.config,call=fail)

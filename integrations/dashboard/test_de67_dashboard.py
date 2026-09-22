@@ -152,7 +152,7 @@ class DashboardTests(unittest.TestCase):
             "version": 1,
             "clock": {"state": str(state / "deadlines.sqlite3"), "lineage": "lineage"},
         }), encoding="utf-8")
-        (self.workspace / ".de67/DFS.md").write_text(
+        (self.workspace / ".de67/FS.md").write_text(
             "# FS\n\nStatus: Frozen\n\n<script>alert(1)</script>\n\n"
             "- [ ] R-009 — active work\n"
             "- [ ] R-010 — waiting on an event\n"
@@ -397,8 +397,8 @@ class DashboardTests(unittest.TestCase):
             page = dashboard_module.render_fuel({"available":True,"totals":{"coordinator":1,"terra":2,"luna":4,"astra":3,"other":0},
                 "bins":[peak] + [0]*23,"series":{role:[peak if role == "terra" else 0]+[0]*23 for role in ("astra","coordinator","terra","luna","other")},"partial":True})
             self.assertIn('aria-label="coordinator: 1 fresh tokens"', page)
-            self.assertIn('aria-label="worker Terra: 2 fresh tokens"', page)
-            self.assertIn('aria-label="worker Luna: 4 fresh tokens"', page)
+            self.assertIn('aria-label="worker terra: 2 fresh tokens"', page)
+            self.assertIn('aria-label="worker luna: 4 fresh tokens"', page)
             self.assertEqual(page.count('class="fuel-series"'), 4)
             self.assertLess(page.index("<svg"), page.index('class="fuel-total"'))
             self.assertIn('aria-label="mutator: 3 fresh tokens"', page)
@@ -419,7 +419,7 @@ class DashboardTests(unittest.TestCase):
                 "series": {role: [0] * 24 for role in roles}, "partial": False})
             plot = page.split('class="fuel-bars"', 1)[1]
             labels = re.findall(r'aria-label="([^":]+):', plot)
-            self.assertEqual(labels, ["mutator", "coordinator", "worker Terra", "worker Luna"])
+            self.assertEqual(labels, ["mutator", "coordinator", "worker terra", "worker luna"])
             positions = [float(value) for value in re.findall(r'<em style="left:([0-9.]+)%', plot)]
             self.assertEqual(len(positions), sum(value > 0 for value in values))
             self.assertTrue(all(0 <= value <= 100 for value in positions))
@@ -441,7 +441,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("Manual refresh" if not interval else f"Live · every {interval}s", page)
 
     def test_projection_is_read_only_and_escapes_workspace_html(self) -> None:
-        paths = [self.workspace / ".de67/DFS.md", self.workspace / ".de67/work-ledger.md",
+        paths = [self.workspace / ".de67/FS.md", self.workspace / ".de67/work-ledger.md",
                  self.workspace / ".de67/state/deadlines.sqlite3"]
         before = [path.read_bytes() for path in paths]
         page = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).render("dfs").decode()
@@ -787,7 +787,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('<strong>work: R-009</strong>', page)
 
     def test_invalid_utf8_is_visible_without_raw_failure(self) -> None:
-        (self.workspace / ".de67/DFS.md").write_bytes(b"# FS\n\xff")
+        (self.workspace / ".de67/FS.md").write_bytes(b"# FS\n\xff")
         state = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).snapshot()
         self.assertTrue(state["dfs"]["identity"]["invalid_utf8"])
         self.assertIn("�", state["dfs"]["html"])
@@ -802,7 +802,7 @@ class DashboardTests(unittest.TestCase):
     def test_last_good_panel_survives_source_disappearance(self) -> None:
         dashboard = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions)
         first = dashboard.snapshot()
-        (self.workspace / ".de67/DFS.md").unlink()
+        (self.workspace / ".de67/FS.md").unlink()
         second = dashboard.snapshot()
         self.assertFalse(first["dfs"]["stale"])
         self.assertTrue(second["dfs"]["stale"])
@@ -1115,8 +1115,8 @@ class DashboardTests(unittest.TestCase):
             self.workspace, sessions_root=self.sessions
         ).render("overview").decode()
         self.assertIn('class="cosmos-workers"', page)
-        self.assertIn('aria-label="Luna: low: 0, medium: 1, high: 0, max: 0"', page)
-        self.assertIn("<strong>Terra</strong>", page)
+        self.assertIn('aria-label="luna: low: 0, medium: 1, high: 0, max: 0"', page)
+        self.assertIn("<span>terra</span>", page)
         self.assertNotIn("<strong>Sol</strong>", page)
         self.assertNotIn("Unavailable", page)
 
@@ -1616,8 +1616,7 @@ class WorkerScaleTests(unittest.TestCase):
                     self.assertGreater(math.dist(left, right), 10.34)
 
     def test_overflow_is_explicit_and_total_remains_exact(self):
-        result = dashboard_module.render_worker_scale("terra", {"max": 15})
+        result = dashboard_module.render_worker_scale({"terra": {"max": 15}})
         self.assertEqual(result.count('class="worker-dot"'), 12)
         self.assertIn("+3", result)
-        self.assertIn("<b>15</b> active", result)
         self.assertIn("max: 15", result)

@@ -30,6 +30,12 @@ If online research was run, list only evidence that changed the wording or bound
 - what changed: `<short outcome>`
 - resulting frontier action: `<additional decision | added question | no change>`
 
+## Open choices and current proposals
+
+<For a draft, separate unresolved owner choices and provisional proposals from settled decisions.
+Record the next useful question or reaction test so the conversation can resume without replay.
+Omit this section when no material choice remains.>
+
 ## Prototype or reaction questions
 
 Questions that require a concrete example, prototype, or user reaction rather than more discussion.

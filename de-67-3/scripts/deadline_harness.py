@@ -20,6 +20,11 @@ from typing import Any
 SCRIPT_ROOT = str(Path(__file__).resolve().parent)
 if SCRIPT_ROOT not in sys.path:
     sys.path.insert(0, SCRIPT_ROOT)
+from specification import SpecificationError, resolve
+
+SCRIPT_ROOT = str(Path(__file__).resolve().parent)
+if SCRIPT_ROOT not in sys.path:
+    sys.path.insert(0, SCRIPT_ROOT)
 from worker_receipt import (
     WorkerReceiptError,
     compact_worker_receipt,
@@ -30,30 +35,25 @@ from worker_receipt import (
 
 RANDOM_INTERVAL_MIN = 20
 RANDOM_INTERVAL_MAX = 50
+CADENCE_VERSION = 3
 UNIVERSAL_RANDOM_INTERVAL = 30
 RANDOM_MUTATION_LANES = (
     "test-and-task-guidelines.md",
-    "orchestrator-guidelines.md",
     "DFS.md",
 )
 RECENT_FAILURE_VERDICT_LIMIT = 10
 INCIDENT_KINDS = ("deadline_miss", "integrity_breach")
 METHOD_IGNORED_PARTS = {".git", "__pycache__", ".pytest_cache"}
 NORMAL_METHOD_PROTECTED_FILES = (
-    "references/kernel.md",
     "scripts/deadline_harness.py",
     "scripts/mutation_guard.py",
     "tests/test_deadline_harness.py",
     "tests/test_mutation_guard.py",
 )
 WORKSPACE_METHOD_GUIDELINE_FILES = (
-    "orchestrator-guidelines.md",
     "test-and-task-guidelines.md",
 )
 ACTIVE_SKILL_ROOT = Path(__file__).resolve().parents[1]
-
-DFS_STATUS_BEGIN = "<!-- DE67:DELIVERY-STATUS:BEGIN"
-DFS_STATUS_END = "<!-- DE67:DELIVERY-STATUS:END -->"
 
 
 def _workspace_for_state(state_path: Path | None) -> Path | None:
@@ -75,66 +75,17 @@ def _ledger_claim_block(ledger: str, claim_id: str) -> str | None:
     return match.group(0).rstrip() if match else None
 
 
-def _dfs_claim_status_span(dfs: str, claim_id: str) -> tuple[int, int, str] | None:
-    slice_pattern = re.compile(
-        r"<!-- DE67:DFS-SLICE:BEGIN[^>]*claim=" + re.escape(claim_id)
-        + r"(?=\s|-->)[^>]*-->\n(?P<body>.*?)\n"
-        r"<!-- DE67:DFS-SLICE:END[^>]*-->",
-        re.DOTALL,
-    )
-    slice_match = slice_pattern.search(dfs)
-    if slice_match is None:
-        return None
-    body = slice_match.group("body")
-    heading = re.search(r"(?m)^Implementation status:\s*$", body)
-    if heading is None:
-        return None
-    start = slice_match.start("body") + heading.end()
-    while start < len(dfs) and dfs[start] == "\n":
-        start += 1
-    end = slice_match.end("body")
-    return start, end, dfs[start:end].rstrip()
+def _replace_ledger_claim_block(ledger: str, claim_id: str, replacement: str) -> str:
+    current = _ledger_claim_block(ledger, claim_id)
+    if current is None:
+        raise DeadlineError(f"Claim {claim_id} has no work-ledger projection")
+    return ledger.replace(current, replacement.rstrip(), 1)
 
 
-def _open_dfs_status_baseline(status: str, claim_id: str) -> str | None:
-    """Return the red claim content, unwrapping a phase-authored status marker."""
-    content = status
-    if DFS_STATUS_BEGIN in status or DFS_STATUS_END in status:
-        marker = re.fullmatch(
-            re.escape(f"{DFS_STATUS_BEGIN} claim={claim_id} -->")
-            + r"\n(?P<body>.*?)\n"
-            + re.escape(DFS_STATUS_END),
-            status,
-            re.DOTALL,
-        )
-        if marker is None:
-            return None
-        content = marker.group("body").rstrip()
-    open_claim = re.search(
-        r"(?m)^- \[ \] 🔴 " + re.escape(claim_id) + r"(?=[ \t]+—|[ \t]*$)",
-        content,
-    )
-    return content if open_claim is not None and content.strip() else None
-
-
-def _committed_dfs_claim_baseline(workspace: Path, claim_id: str) -> str | None:
-    """Recover an unprojected claim block from the current committed DFS."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(workspace), "show", "HEAD:.de67/DFS.md"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-        )
-    except (OSError, UnicodeError):
-        return None
-    if result.returncode != 0:
-        return None
-    span = _dfs_claim_status_span(result.stdout, claim_id)
-    if span is None:
-        return None
-    return _open_dfs_status_baseline(span[2], claim_id)
+def _open_ledger_baseline(block: str) -> str:
+    """Recover a reopenable open projection without treating FS prose as evidence."""
+    block = re.sub(r"(?m)^  - Durable acceptance:.*\n?", "", block)
+    return re.sub(r"\A- \[x\] ", "- [ ] ", block, count=1)
 
 
 def _method_files(root: Path) -> dict[str, bytes]:
@@ -323,6 +274,9 @@ class DeadlineHarness:
                 cycle_number INTEGER NOT NULL CHECK (cycle_number > 0),
                 interval_windows INTEGER NOT NULL CHECK (
                     interval_windows BETWEEN 10 AND 50
+                ),
+                cadence_version INTEGER NOT NULL DEFAULT 3 CHECK (
+                    cadence_version IN (1, 2, 3)
                 ),
                 due_after_terminal_windows INTEGER NOT NULL CHECK (
                     due_after_terminal_windows >= interval_windows
@@ -877,7 +831,15 @@ class DeadlineHarness:
             )
             SELECT lineage_id, claim_id, 1, source_task_id, recorded_at,
                    short_verdict, long_detail, reviewed_at, restart_generation
-            FROM claim_deadline_incidents
+            FROM claim_deadline_incidents AS legacy
+            WHERE NOT EXISTS (
+                SELECT 1 FROM claim_deadline_generation_incidents AS current
+                WHERE current.lineage_id = legacy.lineage_id
+                  AND current.claim_id = legacy.claim_id
+                  AND current.generation > 1
+                  AND current.source_task_id = legacy.source_task_id
+                  AND current.recorded_at = legacy.recorded_at
+            )
             """
         )
         self.connection.execute(
@@ -886,8 +848,13 @@ class DeadlineHarness:
                 lineage_id, claim_id, generation, component, resolved_at,
                 evidence, receipt_id
             )
-            SELECT lineage_id, claim_id, 1, component, resolved_at, evidence, receipt_id
-            FROM deadline_generation_mutation_components
+            SELECT legacy.lineage_id, legacy.claim_id, 1, legacy.component,
+                   legacy.resolved_at, legacy.evidence, legacy.receipt_id
+            FROM deadline_mutation_components AS legacy
+            JOIN claim_deadline_generation_incidents AS incident
+              ON incident.lineage_id = legacy.lineage_id
+             AND incident.claim_id = legacy.claim_id
+             AND incident.generation = 1
             """
         )
         integrity_component_columns = {
@@ -977,6 +944,11 @@ class DeadlineHarness:
         if "restart_generation" not in random_columns:
             self.connection.execute(
                 "ALTER TABLE random_mutation_cycles ADD COLUMN restart_generation INTEGER"
+            )
+        if "cadence_version" not in random_columns:
+            self.connection.execute(
+                "ALTER TABLE random_mutation_cycles "
+                "ADD COLUMN cadence_version INTEGER NOT NULL DEFAULT 1"
             )
         self._migrate_random_interval_constraint()
         receipt_columns = {
@@ -1158,6 +1130,15 @@ class DeadlineHarness:
         )
         self._migrate_task_terminal_kind_triggers()
         self._migrate_v2_closure_gaps()
+        self._migrate_random_cadence()
+        revision_columns = {
+            row[1] for row in self.connection.execute("PRAGMA table_info(closure_gap_revisions)")
+        }
+        if "route_kind" not in revision_columns:
+            self.connection.execute(
+                "ALTER TABLE closure_gap_revisions ADD COLUMN route_kind TEXT NOT NULL "
+                "DEFAULT 'executable' CHECK (route_kind IN ('executable', 'owner_wait'))"
+            )
         self.connection.execute("PRAGMA user_version = 5")
         self.connection.commit()
 
@@ -1199,7 +1180,8 @@ class DeadlineHarness:
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'random_mutation_cycles'"
         ).fetchone()
         schema = str(row["sql"] if row is not None else "").lower()
-        if "interval_windows between 10 and 30" not in " ".join(schema.split()):
+        if ("interval_windows between 10 and 50" in " ".join(schema.split())
+                and re.search(r"cadence_version\s+in\s*\(\s*1\s*,\s*2\s*,\s*3\s*\)", schema)):
             return
         self.connection.commit()
         self.connection.execute("PRAGMA foreign_keys = OFF")
@@ -1212,6 +1194,9 @@ class DeadlineHarness:
                     cycle_number INTEGER NOT NULL CHECK (cycle_number > 0),
                     interval_windows INTEGER NOT NULL CHECK (
                         interval_windows BETWEEN 10 AND 50
+                    ),
+                    cadence_version INTEGER NOT NULL DEFAULT 1 CHECK (
+                        cadence_version IN (1, 2, 3)
                     ),
                     due_after_terminal_windows INTEGER NOT NULL CHECK (
                         due_after_terminal_windows >= interval_windows
@@ -1245,7 +1230,7 @@ class DeadlineHarness:
                 """
             )
             columns = (
-                "lineage_id, cycle_number, interval_windows, due_after_terminal_windows, "
+                "lineage_id, cycle_number, interval_windows, cadence_version, due_after_terminal_windows, "
                 "selected_lane, due_task_id, resolution_evidence, ordinary_resolution_evidence, "
                 "universal_required, universal_resolution_evidence, universal_receipt_id, "
                 "universal_capability_status, universal_capability_reason, "
@@ -1254,7 +1239,13 @@ class DeadlineHarness:
             )
             self.connection.execute(
                 f"INSERT INTO random_mutation_cycles_wider ({columns}) "
-                f"SELECT {columns} FROM random_mutation_cycles"
+                f"SELECT lineage_id, cycle_number, interval_windows, cadence_version, "
+                f"due_after_terminal_windows, selected_lane, due_task_id, "
+                f"resolution_evidence, ordinary_resolution_evidence, universal_required, "
+                f"universal_resolution_evidence, universal_receipt_id, "
+                f"universal_capability_status, universal_capability_reason, "
+                f"universal_capability_checked_at, universal_capability_roster_digest, "
+                f"restart_generation FROM random_mutation_cycles"
             )
             self.connection.execute("DROP TABLE random_mutation_cycles")
             self.connection.execute(
@@ -1269,6 +1260,29 @@ class DeadlineHarness:
         violations = self.connection.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
             raise DeadlineError("Random cadence migration broke persisted foreign keys")
+
+    def _migrate_random_cadence(self) -> None:
+        """Adopt current bounds without resetting progress or postponing due reviews."""
+        rows = self.connection.execute(
+            "SELECT * FROM random_mutation_cycles "
+            "WHERE resolution_evidence IS NULL AND cadence_version < ?",
+            (CADENCE_VERSION,),
+        ).fetchall()
+        for row in rows:
+            if (row["due_task_id"] is not None or
+                    self._terminal_window_count(row["lineage_id"]) >=
+                    row["due_after_terminal_windows"]):
+                continue
+            interval = min(RANDOM_INTERVAL_MAX,
+                           max(RANDOM_INTERVAL_MIN, row["interval_windows"]))
+            cycle_start = row["due_after_terminal_windows"] - row["interval_windows"]
+            self.connection.execute(
+                "UPDATE random_mutation_cycles SET interval_windows = ?, "
+                "due_after_terminal_windows = ?, cadence_version = ? "
+                "WHERE lineage_id = ? AND cycle_number = ?",
+                (interval, cycle_start + interval, CADENCE_VERSION,
+                 row["lineage_id"], row["cycle_number"]),
+            )
 
     def _migrate_v1_state(self) -> None:
         """Project v1 task clocks into v2 claim state without rewriting v1 rows."""
@@ -1529,113 +1543,69 @@ class DeadlineHarness:
                     ),
                 )
 
-    def synchronize_dfs_statuses(self, *, persist: bool = True) -> tuple[str, ...]:
-        """Project durable claim acceptance into agent-facing DFS status blocks."""
+    def synchronize_delivery_statuses(self, *, persist: bool = True) -> tuple[str, ...]:
+        """Project durable acceptance into the ledger without changing FS.md."""
         workspace = _workspace_for_state(self.state_path)
         if workspace is None:
             return ()
-        dfs_path = workspace / ".de67" / "DFS.md"
+        try:
+            resolve(workspace / ".de67")
+        except SpecificationError as error:
+            raise DeadlineError(str(error)) from error
         ledger_path = workspace / ".de67" / "work-ledger.md"
-        if not dfs_path.is_file() or not ledger_path.is_file():
-            raise DeadlineError("DFS status projection requires DFS.md and work-ledger.md")
-        dfs = dfs_path.read_text(encoding="utf-8")
+        if not ledger_path.is_file():
+            raise DeadlineError("FS status projection requires work-ledger.md")
         ledger = ledger_path.read_text(encoding="utf-8")
         rows = self.connection.execute(
             """
             SELECT accepted.* FROM claim_acceptances AS accepted
             JOIN (
-              SELECT claim_id, MAX(acceptance_number) AS acceptance_number
-              FROM claim_acceptances GROUP BY claim_id
-            ) AS latest
-              ON latest.claim_id = accepted.claim_id
-             AND latest.acceptance_number = accepted.acceptance_number
-            WHERE accepted.lineage_id = ?
-            ORDER BY accepted.claim_id
+              SELECT lineage_id, claim_id, MAX(acceptance_number) AS acceptance_number
+              FROM claim_acceptances
+              WHERE lineage_id = ?
+              GROUP BY lineage_id, claim_id
+            ) AS latest ON latest.lineage_id = accepted.lineage_id
+             AND latest.claim_id = accepted.claim_id
+              AND latest.acceptance_number = accepted.acceptance_number
+            WHERE accepted.lineage_id = ? ORDER BY accepted.claim_id
             """,
-            (self._bound_lineage_id(),),
+            (self._bound_lineage_id(), self._bound_lineage_id()),
         ).fetchall()
-        if not rows:
-            return ()
-        baseline_path = self.state_path.parent / "dfs-status-baselines.json"
-        try:
-            baselines = json.loads(baseline_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            baselines = {}
-        except (OSError, UnicodeError, json.JSONDecodeError) as error:
-            raise DeadlineError(f"DFS status baseline is unreadable: {error}") from error
-        if not isinstance(baselines, dict):
-            raise DeadlineError("DFS status baseline must be an object")
         changed: list[str] = []
         for acceptance in rows:
             claim_id = str(acceptance["claim_id"])
-            span = _dfs_claim_status_span(dfs, claim_id)
-            if span is None:
-                raise DeadlineError(f"DFS has no implementation status block for {claim_id}")
-            start, end, current = span
-            if DFS_STATUS_BEGIN not in current:
-                open_baseline = _open_dfs_status_baseline(current, claim_id)
-                if open_baseline is not None:
-                    baselines[claim_id] = open_baseline
-            baseline = baselines.get(claim_id)
-            if not isinstance(baseline, str) or not baseline.strip():
-                recovered = _committed_dfs_claim_baseline(workspace, claim_id)
-                if recovered is not None:
-                    baselines[claim_id] = recovered
-                    baseline = recovered
-            if not isinstance(baseline, str) or not baseline.strip():
-                raise DeadlineError(f"DFS baseline is missing for {claim_id}")
+            current = _ledger_claim_block(ledger, claim_id)
+            if current is None:
+                raise DeadlineError(f"Accepted claim {claim_id} lacks a work-ledger projection")
+            receipt = (
+                f"  - Durable acceptance: #{acceptance['acceptance_number']} via "
+                f"`{acceptance['task_id']}`; SQLite evidence is authoritative."
+            )
             if acceptance["invalidated_at"] is None:
-                ledger_block = _ledger_claim_block(ledger, claim_id)
-                receipt = (
-                    f"  - Durable acceptance: #{acceptance['acceptance_number']} via "
-                    f"`{acceptance['task_id']}`; SQLite evidence is authoritative."
-                )
-                if ledger_block is not None and ledger_block.startswith(
-                    f"- [x] {claim_id}"
-                ):
-                    projected_body = ledger_block
-                    if receipt not in projected_body:
-                        projected_body += f"\n{receipt}"
-                    projected = (
-                        f"{DFS_STATUS_BEGIN} claim={claim_id} -->\n"
-                        f"{projected_body}\n{DFS_STATUS_END}"
-                    )
-                elif (
-                    current.startswith(f"{DFS_STATUS_BEGIN} claim={claim_id} -->")
-                    and f"- [x] {claim_id}" in current
-                    and receipt in current
-                ):
-                    # The active ledger may compact accepted historical work after
-                    # the machine has already projected its durable receipt into DFS.
-                    projected = current
-                else:
+                if not current.startswith(f"- [x] {claim_id}"):
                     raise DeadlineError(
                         f"Accepted claim {claim_id} lacks a checked work-ledger projection"
                     )
+                projected = current if receipt in current else current + "\n" + receipt
             else:
-                projected = baseline.rstrip()
-            if current != projected:
-                dfs = dfs[:start] + projected + dfs[end:]
+                projected = _open_ledger_baseline(current)
+            if projected != current:
+                ledger = _replace_ledger_claim_block(ledger, claim_id, projected)
                 changed.append(claim_id)
-        if not persist:
-            return tuple(changed)
-        if changed:
-            temporary = dfs_path.with_name(f".{dfs_path.name}.{os.getpid()}.tmp")
-            temporary.write_text(dfs, encoding="utf-8")
-            os.replace(temporary, dfs_path)
-        baseline_temporary = baseline_path.with_name(
-            f".{baseline_path.name}.{os.getpid()}.tmp"
-        )
-        baseline_temporary.write_text(
-            json.dumps(baselines, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        os.replace(baseline_temporary, baseline_path)
+        if persist and changed:
+            temporary = ledger_path.with_name(f".{ledger_path.name}.{os.getpid()}.tmp")
+            temporary.write_text(ledger, encoding="utf-8")
+            os.replace(temporary, ledger_path)
         return tuple(changed)
+
+    def synchronize_dfs_statuses(self, *, persist: bool = True) -> tuple[str, ...]:
+        """Historical API name; delivery status always projects into the ledger."""
+        return self.synchronize_delivery_statuses(persist=persist)
 
     def _bound_lineage_id(self) -> str:
         rows = self.connection.execute("SELECT lineage_id FROM lineage_binding").fetchall()
         if len(rows) != 1:
-            raise DeadlineError("DFS status projection requires one bound lineage")
+            raise DeadlineError("Delivery status projection requires one bound lineage")
         return str(rows[0][0])
 
     def close(self) -> None:
@@ -1746,14 +1716,18 @@ class DeadlineHarness:
                 """
                 SELECT task_id FROM tasks
                 WHERE lineage_id = ? AND attempt_terminal_at IS NULL
-                ORDER BY started_at, task_id LIMIT 1
+                ORDER BY started_at, task_id
                 """,
                 (lineage_id,),
-            ).fetchone()
-            if running is not None:
+            ).fetchall()
+            from worker_library import returned_assignments
+            workspace = _workspace_for_state(self.state_path)
+            returned = returned_assignments(workspace, self.state_path, lineage_id) if workspace else set()
+            running = [row for row in running if row["task_id"] not in returned]
+            if running:
                 raise DeadlineError(
                     "Mutation cannot retire clocks while a worker attempt is running: "
-                    + str(running["task_id"])
+                    + str(running[0]["task_id"])
                 )
             cursor = self.connection.execute(
                 """
@@ -2237,6 +2211,7 @@ class DeadlineHarness:
                     "revision": revision["revision"],
                     "description": revision["description"],
                     "proof_route": revision["proof_route"],
+                    "route_kind": revision["route_kind"],
                     "status": "closed" if gap["closed_at"] is not None else "open",
                     "successor_of_gap_id": gap["successor_of_gap_id"],
                     "successor_of_revision": gap["successor_of_revision"],
@@ -2338,6 +2313,22 @@ class DeadlineHarness:
                     "finding_evidence": reopened["evidence"],
                 }
 
+        if trigger is None:
+            owner = self.connection.execute(
+                "SELECT basis_task_id, recorded_at, closure_evidence FROM claim_phase_events "
+                "WHERE lineage_id = ? AND claim_id = ? AND phase = 'exploration' "
+                "AND sequence > COALESCE(?, 0) AND recorded_at = ? "
+                "AND basis_task_id = ? AND contradicted_premise IS NULL "
+                "AND ? = 'owner requested reassessment: ' || closure_evidence "
+                "ORDER BY sequence DESC LIMIT 1",
+                (lineage_id, claim_id, acceptance["closure_sequence"],
+                 acceptance["invalidated_at"], acceptance["task_id"],
+                 acceptance["invalidation_reason"]),
+            ).fetchone()
+            if owner is not None:
+                trigger = {"kind": "owner_reopen", "task_id": owner["basis_task_id"],
+                           "recorded_at": owner["recorded_at"],
+                           "owner_request": owner["closure_evidence"]}
         if trigger is None:
             return None
         return {
@@ -2465,8 +2456,16 @@ class DeadlineHarness:
         if row is None and (generation is None or generation == 1):
             legacy = self.connection.execute(
                 """
-                SELECT * FROM claim_deadline_incidents
+                SELECT * FROM claim_deadline_incidents AS legacy
                 WHERE lineage_id = ? AND claim_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM claim_deadline_generation_incidents AS current
+                      WHERE current.lineage_id = legacy.lineage_id
+                        AND current.claim_id = legacy.claim_id
+                        AND current.generation > 1
+                        AND current.source_task_id = legacy.source_task_id
+                        AND current.recorded_at = legacy.recorded_at
+                  )
                 """,
                 (lineage_id, claim_id),
             ).fetchone()
@@ -2531,11 +2530,19 @@ class DeadlineHarness:
     def _pending_deadline_mutations(self, lineage_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(
             """
-            SELECT claim_id, generation, source_task_id, recorded_at, reviewed_at,
-                   restart_generation
-            FROM claim_deadline_generation_incidents
-            WHERE lineage_id = ?
-            ORDER BY recorded_at, claim_id
+            SELECT incident.claim_id, incident.generation, incident.source_task_id,
+                   incident.recorded_at, incident.reviewed_at, incident.restart_generation
+            FROM claim_deadline_generation_incidents AS incident
+            WHERE incident.lineage_id = ?
+              AND NOT (incident.generation = 1 AND EXISTS (
+                  SELECT 1 FROM claim_deadline_generation_incidents AS current
+                  WHERE current.lineage_id = incident.lineage_id
+                    AND current.claim_id = incident.claim_id
+                    AND current.generation > 1
+                    AND current.source_task_id = incident.source_task_id
+                    AND current.recorded_at = incident.recorded_at
+              ))
+            ORDER BY incident.recorded_at, incident.claim_id
             """,
             (lineage_id,),
         ).fetchall()
@@ -2919,13 +2926,15 @@ class DeadlineHarness:
             """
             INSERT INTO random_mutation_cycles (
                 lineage_id, cycle_number, interval_windows,
-                due_after_terminal_windows, selected_lane, universal_required
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                cadence_version, due_after_terminal_windows, selected_lane,
+                universal_required
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 lineage_id,
                 number,
                 interval,
+                CADENCE_VERSION,
                 cycle_start + interval,
                 lane,
                 0,
@@ -2997,6 +3006,7 @@ class DeadlineHarness:
         return {
             "cycle_number": row["cycle_number"],
             "interval_windows": row["interval_windows"],
+            "cadence_version": row["cadence_version"],
             "due_after_terminal_windows": row["due_after_terminal_windows"],
             "selected_lane": row["selected_lane"],
             "completed_terminal_windows": completed,
@@ -3737,7 +3747,16 @@ class DeadlineHarness:
                 for item in existing
                 if item["receipt"].get("disposition") != "checkpoint"
             ]
-            if terminal_receipts and disposition != "checkpoint":
+            # A returned worker turn can be resumed without terminalizing the
+            # task.  In that case an earlier non-checkpoint receipt is durable
+            # ingress, but it must not prevent the still-live attempt from
+            # recording its eventual terminal result.  Once the task itself
+            # is terminal, keep the one-terminal-receipt invariant.
+            if (
+                terminal_receipts
+                and disposition != "checkpoint"
+                and task["attempt_terminal_kind"] is not None
+            ):
                 raise DeadlineError("Worker attempt already has a terminal result receipt")
             terminal_kind = task["attempt_terminal_kind"]
             if terminal_kind is not None and disposition not in {
@@ -4257,6 +4276,8 @@ class DeadlineHarness:
                         phase_sequence,
                         selected_gap_id,
                     )
+                    if revision["route_kind"] == "owner_wait" and existing is None:
+                        raise DeadlineError("Closure gap awaits an explicit owner decision; no worker route is authorized")
                     selected_gap_revision = int(revision["revision"])
                 if existing is None:
                     prior = self.connection.execute(
@@ -4923,6 +4944,76 @@ class DeadlineHarness:
             self.connection.rollback()
             raise
 
+    def reopen_claim_for_owner(
+        self,
+        lineage_id: str,
+        claim_id: str,
+        owner_request: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Reassess accepted work during an owner-authorized exclusive review.
+
+        The caller supplies the owner's decision and its durable source reference.
+        The accepted task remains evidence, not a fabricated worker finding. This
+        does not change deadlines, task history or another claim's acceptance.
+        """
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        claim_id = self._identity(claim_id, "Claim id")
+        owner_request = self._nonempty_text(owner_request, "Owner request and source")
+        reason = f"owner requested reassessment: {owner_request}"
+        recorded_at = self._now(now)
+        self._begin()
+        try:
+            claim = self._claim(lineage_id, claim_id)
+            acceptance = self._latest_acceptance(lineage_id, claim_id)
+            if acceptance is None:
+                raise DeadlineError("Owner reassessment requires an accepted claim")
+            if claim["phase"] == "exploration" and acceptance["invalidation_reason"] == reason:
+                result = dict(claim)
+                result["recorded"] = False
+                self.connection.commit()
+                result["dfs_status_synchronized"] = list(self.synchronize_dfs_statuses())
+                return result
+            if claim["phase"] != "closure" or acceptance["invalidated_at"] is not None:
+                raise DeadlineError("Owner reassessment requires a currently accepted closure")
+            if claim["retired_at"] is None:
+                raise DeadlineError("Owner reassessment requires exclusive mutation clock retirement")
+            live = self.connection.execute(
+                "SELECT 1 FROM worker_claims WHERE lineage_id = ? AND released_at IS NULL LIMIT 1",
+                (lineage_id,),
+            ).fetchone()
+            if live is not None:
+                raise DeadlineError("Owner reassessment requires quiet worker ownership")
+            sequence = self.connection.execute(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM claim_phase_events "
+                "WHERE lineage_id = ? AND claim_id = ?", (lineage_id, claim_id),
+            ).fetchone()[0]
+            self.connection.execute(
+                "INSERT INTO claim_phase_events "
+                "(lineage_id, claim_id, sequence, phase, recorded_at, basis_task_id, closure_evidence) "
+                "VALUES (?, ?, ?, 'exploration', ?, ?, ?)",
+                (lineage_id, claim_id, sequence, recorded_at, acceptance["task_id"], owner_request),
+            )
+            self.connection.execute(
+                "UPDATE claim_clocks SET phase = 'exploration' WHERE lineage_id = ? AND claim_id = ?",
+                (lineage_id, claim_id),
+            )
+            self.connection.execute(
+                "UPDATE claim_acceptances SET invalidated_at = ?, invalidation_reason = ? "
+                "WHERE lineage_id = ? AND claim_id = ? AND invalidated_at IS NULL",
+                (recorded_at, reason, lineage_id, claim_id),
+            )
+            result = dict(self._claim(lineage_id, claim_id))
+            result.update(recorded=True, owner_request=owner_request)
+            self.synchronize_dfs_statuses(persist=False)
+            self.connection.commit()
+            result["dfs_status_synchronized"] = list(self.synchronize_dfs_statuses())
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
     def reopen_claim_exploration(
         self,
         lineage_id: str,
@@ -5192,6 +5283,8 @@ class DeadlineHarness:
         proof_route: str,
         *,
         now: float | None = None,
+        route_kind: str = "executable",
+        owner_decision: str | None = None,
     ) -> dict[str, Any]:
         """Append a changed causal contract after one terminal gap attempt."""
 
@@ -5201,6 +5294,8 @@ class DeadlineHarness:
         basis_task_id = self._identity(basis_task_id, "Basis task id")
         description = self._nonempty_text(description, "Closure gap description")
         proof_route = self._nonempty_text(proof_route, "Closure gap proof route")
+        if route_kind not in {"executable", "owner_wait"}:
+            raise DeadlineError("Closure route kind must be executable or owner_wait")
         recorded_at = self._now(now)
         self._begin()
         try:
@@ -5217,11 +5312,19 @@ class DeadlineHarness:
             current = self._latest_gap_revision(
                 lineage_id, claim_id, int(closure["sequence"]), gap_id
             )
+            owner_release = (current["route_kind"] == "owner_wait"
+                             and route_kind == "executable"
+                             and bool(owner_decision and owner_decision.strip())
+                             and basis_task_id == current["basis_task_id"])
+            if current["route_kind"] == "owner_wait" and not owner_release:
+                raise DeadlineError("Releasing an owner wait requires an explicit owner decision")
+            if owner_decision is not None and not owner_release:
+                raise DeadlineError("Owner decision may only release the current owner wait")
             if (
                 task["claim_id"] != claim_id
                 or task["phase_sequence_at_dispatch"] != closure["sequence"]
                 or task["closure_gap_id"] != gap_id
-                or task["closure_gap_revision"] != current["revision"]
+                or (task["closure_gap_revision"] != current["revision"] and not owner_release)
                 or task["attempt_terminal_kind"]
                 not in {"finding", "completed", "integrity_breach"}
             ):
@@ -5231,7 +5334,8 @@ class DeadlineHarness:
             normalized_description = " ".join(description.split()).casefold()
             normalized_proof_route = " ".join(proof_route.split()).casefold()
             if (
-                normalized_description
+                route_kind == current["route_kind"]
+                and normalized_description
                 == " ".join(str(current["description"]).split()).casefold()
                 and normalized_proof_route
                 == " ".join(str(current["proof_route"]).split()).casefold()
@@ -5245,8 +5349,8 @@ class DeadlineHarness:
                 INSERT INTO closure_gap_revisions (
                     lineage_id, claim_id, closure_sequence, gap_id,
                     revision, recorded_at, basis_task_id,
-                    description, proof_route
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    description, proof_route, route_kind
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     lineage_id,
@@ -5257,7 +5361,8 @@ class DeadlineHarness:
                     recorded_at,
                     basis_task_id,
                     description,
-                    proof_route,
+                    proof_route + ("\nExplicit owner decision: " + owner_decision if owner_release else ""),
+                    route_kind,
                 ),
             )
             result = {
@@ -5269,6 +5374,8 @@ class DeadlineHarness:
                 "basis_task_id": basis_task_id,
                 "description": description,
                 "proof_route": proof_route,
+                "route_kind": route_kind,
+                "owner_decision": owner_decision,
             }
             self.connection.commit()
             return result
@@ -7087,7 +7194,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         help=(
             "Evidence-derived estimate for this attempt; the first attempt also "
-            "uses it to arm the immutable claim deadline"
+            "uses it to arm each fresh immutable claim deadline generation"
         ),
     )
     start.add_argument("--phase", choices=("exploration", "closure"))
@@ -7190,6 +7297,8 @@ def build_parser() -> argparse.ArgumentParser:
     revise_gap.add_argument("--basis-task", required=True)
     revise_gap.add_argument("--description", required=True)
     revise_gap.add_argument("--proof-route", required=True)
+    revise_gap.add_argument("--route-kind", choices=("executable", "owner_wait"), default="executable")
+    revise_gap.add_argument("--owner-decision", help="Exact received owner decision authorizing release of the current wait")
 
     reopen = commands.add_parser(
         "reopen-exploration", help="Reopen from a closure finding"
@@ -7429,9 +7538,12 @@ def main(argv: list[str] | None = None) -> int:
                             int(claim["deadline_generation"]),
                         )
                         may_advance_generation = (
-                            incident is not None
-                            and not harness._deadline_mutation_pending(
-                                arguments.lineage, arguments.claim
+                            claim["retired_at"] is not None
+                            or (
+                                incident is not None
+                                and not harness._deadline_mutation_pending(
+                                    arguments.lineage, arguments.claim
+                                )
                             )
                         )
                         if not may_advance_generation:
@@ -7500,6 +7612,8 @@ def main(argv: list[str] | None = None) -> int:
                         arguments.basis_task,
                         arguments.description,
                         arguments.proof_route,
+                        route_kind=arguments.route_kind,
+                        owner_decision=arguments.owner_decision,
                     )
                 elif arguments.command == "reopen-exploration":
                     result = harness.reopen_claim_exploration(

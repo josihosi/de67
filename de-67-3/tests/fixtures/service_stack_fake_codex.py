@@ -89,8 +89,8 @@ with DeadlineHarness(state) as harness:
         harness.complete_task(lineage, "post-mutation", "fresh coordinator proof")
         with product.open("a", encoding="utf-8") as output:
             output.write("post-mutation worker result\n")
-        (workspace / ".de67/DFS.md").write_text(
-            "# DFS\n\nStatus: Frozen\n\n- [x] R-STACK — Stack complete\n",
+        (workspace / ".de67/FS.md").write_text(
+            "# FS\n\nStatus: Frozen\n\n- [x] R-STACK — Stack complete\n",
             encoding="utf-8",
         )
         ledger.write_text("# Work ledger\n\n## Active work\n", encoding="utf-8")

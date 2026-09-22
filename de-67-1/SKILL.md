@@ -1,60 +1,56 @@
 ---
 name: de-67-1
-description: Explicit first phase of de67. Use when the user says `de67 1` to shape an idea through current-chat multiple choice and produce a user-owned WEC intent and language brief. Do not start specification authoring, coordination, workers, implementation, or mutation.
+description: Develop an idea with the user through active discussion, concrete proposals, and focused questions, preserving an evolving WEC intent brief. Use for de67 1; do not start specification or delivery.
 ---
 
-# de67 1 — discussion
+# de67 1 — develop the idea together
 
-Work only in the current user-facing chat. Do not create or delegate to an external discussion bot,
-coordinator, reviewer, or worker. Do not read `de-67-2/` or `de-67-3/`.
+Stay in the current user-facing conversation. The result is `WEC.md`, subtitled **user intent and
+language brief**. The user owns the intended outcome and language. This phase does not delegate the
+conversation, inspect production call paths, or authorize specification, implementation, or mutation.
 
-Before any discussion, read `../references/imagination-round.md`,
-`../references/msw-kernel.md`, and `../references/controlled-english.md` completely. Execute the
-first two exactly as written. They are verbatim foundations; do not paraphrase, summarize, refactor,
-or replace their wording. Apply the controlled-English guideline to owner questions and the WEC.
+Use the shared [framing](../references/imagination-round.md) and
+[MSW decision rule](../references/msw-kernel.md) when they are not already in context. Keep questions
+and summaries in clear, natural language; consult the [writing guidance](../references/controlled-english.md)
+only when an artifact needs it.
 
-The outcome is `WEC.md`: an unexpanded WEC, subtitled **user intent and language brief**. It captures
-what should exist and how the project should talk about it. It is not a functional specification or
-a disguised task list.
+## Advance the conversation
 
-## Grill the idea
+Contribute thinking as well as questions. Turn the user's idea into a provisional picture of the
+experience, offer a concrete example or possibility, and explain the consequential tradeoff or
+hidden assumption it exposes. Invite correction. Distinguish the user's decisions from your
+proposals; agreement with one example does not settle every detail around it.
 
-Maintain a small decision frontier: only choices whose answers could materially change the desired
-experience, boundary, terminology, implementation language, or later specification.
+Explore the layers that could change this idea: the normal user journey, the difficult case,
+interacting responsibilities, what would make the result convincing, and where a small prototype
+could settle uncertainty. For agentic work, consider what an agent must know at the decision point,
+what can be retrieved later, and what must survive interruption or handoff. Follow the relevant
+thread; these are lenses, not a checklist to run on every idea. Leave production ownership and
+implementation design to phase 2 unless the user is explicitly choosing a product constraint.
 
-For each unresolved choice:
+Mix open conversation with structured multiple-choice questions. Use choices when concrete
+alternatives help the user decide; offer a reasoned recommendation and allow a free answer. Use an
+open invitation when the user is still discovering the idea. Ask the next consequential question
+instead of handing the user a questionnaire or making them supply all the momentum. Answer the
+user's own question before advancing yours.
 
-1. Use already-visible project facts or a narrow read-only lookup when that directly answers the
-   choice. Do not trace production ownership, call paths, or implementation gaps; that is phase 2.
-2. Ask one question at a time with the structured multiple-choice UI when available.
-3. Offer two or three mutually exclusive choices. Put the recommended choice first and explain its
-   consequence in one sentence. The user may always answer freely.
-4. Reflect the answer briefly, update the frontier, and ask only the next dependent question.
+Use visible project facts or a narrow read-only lookup when they settle a discussion choice. Research
+only when its result could change the intended behavior, terminology, or boundary. Do not begin code
+ownership tracing or fill missing product intent with an implementation you imagined.
 
-Do not impose a round count. Stop when deleting every remaining question would leave the intended
-outcome and language unchanged. If a question cannot be answered by discussion, record a small
-prototype or reaction check in the WEC instead of grilling indefinitely.
+## Preserve progress before the conversation is complete
 
-Prefer concrete user-visible contrasts over abstract architecture questions. Ask about internal
-mechanics only when the user owns that choice; otherwise leave phase 2 to inspect the code and choose
-the smallest compatible mechanism.
+Keep a concise evolving synthesis in the conversation: settled intent, proposed ideas, consequential
+open choices, and the next useful question or reaction test. Refresh it when the idea materially
+changes or the user pauses, asks for a draft, or returns later. Resume from that synthesis rather
+than restarting the interview. Do not require every question to be answered before giving the user
+a useful WEC draft. Label unresolved choices and assumptions visibly; do not turn them into consent.
 
-Before writing the WEC, do one bounded research checkpoint if needed:
+When the intended outcome and boundaries are clear enough for code-grounded specification, use
+[the WEC template](assets/WEC.md) to present the brief. Include only sections that help preserve this
+idea. Carry prototype questions forward when further abstract discussion would not settle them.
+No fixed question count or exhaustive discovery exercise is required.
 
-1. Keep a short frontier of only research-valid questions (terminology edge cases, policy precedent,
-   or comparable behavior from other repositories).
-2. Run a tiny online/GitHub research sweep only for those frontier questions.
-3. If the evidence changes intent or required wording, add the missing items as another
-   `Decisions` entry or `Prototype or reaction question` and continue grilling.
-4. If the evidence does not change scope, keep a short `Research outcome` note in the WEC and proceed.
-
-## Write the WEC
-
-When the frontier is empty, read `assets/WEC.md` and fill its sections in concise Markdown. Preserve
-the user's own words for names, tone, and important constraints. Separate settled decisions from
-prototype questions. Do not invent requirements to make the document look complete.
-
-Show the finished WEC in chat. If a file handoff is requested, save it as `WEC.md` outside the target
-repository or at that repository's top level—never directly as `.de67/WEC.md`. Phase 2 owns moving
-or importing it to `.de67/WEC.md`. End after the WEC; invoking phase 1 does not authorize phase 2 or
-phase 3.
+Show the brief in chat. Save a file only when requested, as `WEC.md` outside the target repository or
+at its top level, never directly as `.de67/WEC.md`. Phase 2 owns importing it. A draft or completed
+WEC does not start phase 2 or phase 3.

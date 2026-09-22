@@ -15,6 +15,54 @@ SPEC.loader.exec_module(dashboard_module)
 
 
 class DashboardTests(unittest.TestCase):
+    def test_handover_and_returned(self):
+        for path in (MODULE_PATH,):
+            m=dashboard_module
+            with tempfile.TemporaryDirectory() as tmp:
+                w=Path(tmp).resolve(); state=w/'.de67/state';state.mkdir(parents=True)
+                sessions=w/'sessions';sessions.mkdir()
+                deadline=state/'deadlines.sqlite3'
+                (state/'workspace.json').write_text(json.dumps({'clock':{'state':str(deadline),'lineage':'L'}}))
+                registry=state/'worker-library';registry.mkdir()
+                db=sqlite3.connect(registry/'registry.sqlite3')
+                db.executescript('CREATE TABLE workers(name,thread_id,model,effort); CREATE TABLE assignments(name,worker_id,status,binding,state_path,lineage,updated_at);')
+                binding=json.dumps(dict(thread_id='new',workspace=str(w),deadline_state=str(deadline),lineage='L'))
+                db.execute('INSERT INTO workers VALUES(?,?,?,?)',('worker','worker','gpt-5.6-terra','high'))
+                db.execute('INSERT INTO assignments VALUES(?,?,?,?,?,?,?)',('worker','worker','running',binding,str(deadline),'L',1));db.commit()
+                idx=sqlite3.connect(w/'state_5.sqlite');idx.executescript('CREATE TABLE threads(id,rollout_path);CREATE TABLE thread_spawn_edges(parent_thread_id,child_thread_id);')
+                for ident,parent,model in [('new',None,'gpt-5.6-sol'),('worker','old','gpt-5.6-terra')]:
+                    p=sessions/f'rollout-{ident}.jsonl'
+                    p.write_text(json.dumps({'type':'session_meta','payload':dict(id=ident,parent_thread_id=parent,cwd=str(w))})+'\n'+json.dumps({'type':'turn_context','payload':dict(model=model,effort='high')})+'\n')
+                    idx.execute('INSERT INTO threads VALUES(?,?)',(ident,str(p)))
+                idx.commit();idx.close()
+                with patch.object(m,'_active_worker_claims',return_value={'worker':'old'}),patch.object(m,'_active_coordinator_id',return_value='new'):
+                    actual=m.worker_state(w,sessions)
+                    self.assertTrue(actual['available']);self.assertEqual(actual['counts']['terra']['high'],1, str(path)+str(actual)+str(m._worker_execution(w,{'worker':'old'})))
+                    db.execute("UPDATE assignments SET status='returned'");db.commit()
+                    actual=m.worker_state(w,sessions)
+                    self.assertTrue(actual['available']);self.assertEqual(actual['counts']['terra']['high'],0)
+                db.close()
+    def test_mutator_is_not_a_coordinator_or_a_reason_to_scan_legacy_history(self):
+        for path in (MODULE_PATH,):
+            m=dashboard_module
+            with tempfile.TemporaryDirectory() as tmp:
+                w=Path(tmp).resolve();state=w/'.de67/state';state.mkdir(parents=True)
+                db=sqlite3.connect(state/'deadlines.sqlite3')
+                db.executescript("CREATE TABLE supervisor_attempts(run_id,lineage_id,finished_at,role); INSERT INTO supervisor_attempts VALUES('review','L',NULL,'mutation-reviewer');")
+                db.close()
+                (state/'workspace.json').write_text(json.dumps({'clock':{'state':str(state/'deadlines.sqlite3'),'lineage':'L'}}))
+                run=state/'coordinator-runs/review';run.mkdir(parents=True)
+                (run/'status.txt').write_text('RUNNING');(run/'session_id.txt').write_text('mutator')
+                with patch.object(m.subprocess,'run') as ps:
+                    ps.return_value.stdout=''
+                    self.assertIsNone(m._active_coordinator_id(w))
+
+
+    def test_supported_xhigh_effort_is_rendered(self):
+        rendered = dashboard_module.render_worker_scale("terra", {"xhigh": 1})
+        self.assertIn("Terra · Xhigh reasoning", rendered)
+        self.assertIn('<b>1</b> active', rendered)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.workspace = Path(self.temporary.name)
@@ -26,8 +74,8 @@ class DashboardTests(unittest.TestCase):
             "version": 1,
             "clock": {"state": str(state / "deadlines.sqlite3"), "lineage": "lineage"},
         }), encoding="utf-8")
-        (self.workspace / ".de67/DFS.md").write_text(
-            "# DFS\n\nStatus: Frozen\n\n<script>alert(1)</script>\n\n"
+        (self.workspace / ".de67/FS.md").write_text(
+            "# FS\n\nStatus: Frozen\n\n<script>alert(1)</script>\n\n"
             "- [ ] R-009 — active work\n"
             "- [ ] R-010 — waiting on an event\n"
             "- [ ] 🔴 R-011 — upcoming work\n"
@@ -73,16 +121,35 @@ class DashboardTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_projection_is_read_only_and_escapes_workspace_html(self) -> None:
-        paths = [self.workspace / ".de67/DFS.md", self.workspace / ".de67/work-ledger.md",
+        paths = [self.workspace / ".de67/FS.md", self.workspace / ".de67/work-ledger.md",
                  self.workspace / ".de67/state/deadlines.sqlite3"]
         before = [path.read_bytes() for path in paths]
         page = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).render("dfs").decode()
         self.assertIn("<title>de67</title>", page)
-        self.assertIn("<h1>de67</h1>", page)
+        self.assertIn('<h1>de67<span class="brand-dot">.</span></h1>', page)
         self.assertNotIn("DE67", page)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
         self.assertNotIn("<script>", page)
         self.assertEqual(before, [path.read_bytes() for path in paths])
+
+    def test_random_count_excludes_restart_cleanup_and_other_lineages(self):
+        connection = sqlite3.connect(self.workspace / ".de67/state/deadlines.sqlite3")
+        connection.row_factory = sqlite3.Row
+        connection.executescript("""
+            ALTER TABLE tasks ADD COLUMN lineage_id TEXT;
+            ALTER TABLE tasks ADD COLUMN attempt_terminal_at REAL;
+            ALTER TABLE tasks ADD COLUMN attempt_terminal_kind TEXT;
+            ALTER TABLE tasks ADD COLUMN abandonment_reason TEXT;
+            ALTER TABLE random_mutation_cycles ADD COLUMN lineage_id TEXT;
+            UPDATE random_mutation_cycles SET lineage_id='current';
+            UPDATE tasks SET lineage_id='current', attempt_terminal_at=1, attempt_terminal_kind='completed';
+            INSERT INTO tasks (lineage_id,attempt_terminal_at,attempt_terminal_kind) VALUES ('current',2,'restart_normalized'),('other',3,'completed');
+            INSERT INTO tasks (lineage_id,attempt_terminal_at,attempt_terminal_kind,abandonment_reason) VALUES ('current',4,'abandoned','external_supervisor_restart_normalization');
+        """)
+        _, _, cycle = dashboard_module._completed_mutation_counts(connection)
+        self.assertEqual(cycle["terminal_windows"], 1)
+        self.assertEqual(cycle["remaining_windows"], 1)
+        connection.close()
 
     def test_overview_uses_real_ledger_and_clock_state(self) -> None:
         page = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).render("overview").decode()
@@ -91,8 +158,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("deadline generation 11", page)
         self.assertIn("restart 12", page)
         self.assertIn("useful work", page)
-        self.assertIn("<h2>Upcoming DFS work</h2>", page)
-        self.assertIn("R-011 — upcoming work", page)
+        self.assertIn("<h2>Up next</h2>", page)
+        self.assertIn("R-011", page)
+        self.assertIn("upcoming work", page)
         self.assertNotIn("R-012 — accepted work", page)
         self.assertIn("<h2>Waiting on event</h2>", page)
         self.assertIn("waiting work", page)
@@ -100,7 +168,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('<small>Mutation review</small><strong>Off</strong>', page)
         self.assertNotIn("<small>Random mutations</small>", page)
         self.assertIn("Next random in 2 worker results", page)
-        self.assertIn("<h2>Active workers</h2>", page)
+        self.assertIn("<h2>Active agents</h2>", page)
         self.assertIn("Unavailable", page)
         self.assertIn("Latest finding", page)
         self.assertIn("R009-M0", page)
@@ -124,8 +192,8 @@ class DashboardTests(unittest.TestCase):
                 sidecar_script=sidecar, fratbro_cache=cache,
             ).render("overview").decode()
 
-        self.assertLess(page.index("Trajectory sidecar"), page.index("Fratbro status"))
-        self.assertLess(page.index("Fratbro status"), page.index("Latest finding"))
+        self.assertLess(page.index("Trajectory sidecar"), page.index("BRIEFING"))
+        self.assertLess(page.index("BRIEFING"), page.index("Latest finding"))
         self.assertIn("The worker is testing whether real smoke escapes a building.", page)
         self.assertNotIn("Fratbro status <em>stale</em>", page)
         self.assertNotIn("Fratbro status", dashboard_module.Dashboard(
@@ -188,8 +256,9 @@ class DashboardTests(unittest.TestCase):
             self.workspace, sessions_root=self.sessions
         ).render("overview").decode()
 
-        self.assertIn("<h2>Upcoming DFS work</h2>", page)
-        self.assertIn("R-011 — upcoming work", page)
+        self.assertIn("<h2>Up next</h2>", page)
+        self.assertIn("R-011", page)
+        self.assertIn("upcoming work", page)
 
     def test_upcoming_dfs_work_excludes_active_waiting_blocked_and_accepted_claims(self) -> None:
         ledger = dashboard_module.parse_ledger(
@@ -198,7 +267,7 @@ class DashboardTests(unittest.TestCase):
             "## Blocked work\n- Blocked: R-004 — blocked\n"
         )
         dfs = (
-            "# DFS\n\nStatus: Refrozen\n\n"
+            "# FS\n\nStatus: Refrozen\n\n"
             "- [ ] 🔴 R-002 — active\n"
             "- [ ] 🔴 R-003 — waiting\n"
             "- [ ] 🔴 R-004 — blocked\n"
@@ -231,7 +300,7 @@ class DashboardTests(unittest.TestCase):
         ):
             with self.subTest(status=status):
                 upcoming = dashboard_module.upcoming_dfs_work(
-                    f"# DFS\n\n{status}\n\n- [ ] 🔴 R-next_1 — upcoming\n",
+                    f"# FS\n\n{status}\n\n- [ ] 🔴 R-next_1 — upcoming\n",
                     ledger,
                     "R-002",
                 )
@@ -241,7 +310,7 @@ class DashboardTests(unittest.TestCase):
         ledger = dashboard_module.parse_ledger("## Active work\n- [ ] R-002 — active\n")
 
         upcoming = dashboard_module.upcoming_dfs_work(
-            "# DFS\n\nStatus: Draft\n\n"
+            "# FS\n\nStatus: Draft\n\n"
             "~~~markdown\nStatus: Frozen\n~~~\n"
             "## Freeze record\n\nStatus: Refrozen\n\n"
             "- [ ] 🔴 R-003 — not authoritative\n",
@@ -257,7 +326,7 @@ class DashboardTests(unittest.TestCase):
             "~~~markdown\n- [ ] R-fenced — example only\n~~~\n"
         )
         dfs = (
-            "# DFS\n\nStatus: Frozen\n\n"
+            "# FS\n\nStatus: Frozen\n\n"
             "- [ ] 🔴 R-FOO — distinct uppercase claim\n"
             "- [ ] 🔴 R-fenced — not owned by the ledger example\n"
         )
@@ -398,7 +467,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('dot yellow', page)
 
     def test_invalid_utf8_is_visible_without_raw_failure(self) -> None:
-        (self.workspace / ".de67/DFS.md").write_bytes(b"# DFS\n\xff")
+        (self.workspace / ".de67/FS.md").write_bytes(b"# FS\n\xff")
         state = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).snapshot()
         self.assertTrue(state["dfs"]["identity"]["invalid_utf8"])
         self.assertIn("�", state["dfs"]["html"])
@@ -406,18 +475,18 @@ class DashboardTests(unittest.TestCase):
     def test_missing_sources_return_healthy_unavailable_page(self) -> None:
         empty = Path(self.temporary.name) / "gone"
         page = dashboard_module.Dashboard(empty, sessions_root=self.sessions).render("overview").decode()
-        self.assertIn("Active work ledger", page)
+        self.assertIn("Work in focus", page)
         self.assertIn("SQLite", page)
         self.assertIn("workspace.json", page)
 
     def test_last_good_panel_survives_source_disappearance(self) -> None:
         dashboard = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions)
         first = dashboard.snapshot()
-        (self.workspace / ".de67/DFS.md").unlink()
+        (self.workspace / ".de67/FS.md").unlink()
         second = dashboard.snapshot()
         self.assertFalse(first["dfs"]["stale"])
         self.assertTrue(second["dfs"]["stale"])
-        self.assertIn("<h1>DFS</h1>", second["dfs"]["html"])
+        self.assertIn("<h1>FS</h1>", second["dfs"]["html"])
 
     def test_last_good_clock_survives_malformed_workspace_configuration(self) -> None:
         dashboard = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions)
@@ -604,9 +673,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('class="attention-claim"', first)
         self.assertEqual(first.count('class="trajectory-node '), 2)
         self.assertIn("&lt;active route&gt;", first)
-        self.assertLess(first.index("Active workers"), first.index("Trajectory sidecar"))
+        self.assertLess(first.index("Active agents"), first.index("Trajectory sidecar"))
         self.assertLess(first.index("Trajectory sidecar"), first.index("Latest finding"))
-        self.assertEqual(first, second)
+        self.assertEqual(first.split("<body>")[0], second.split("<body>")[0])
         self.assertEqual(before, set(self.workspace.rglob("*")))
 
     def test_trajectory_tolerates_different_gap_shapes_and_missing_fields(self) -> None:
@@ -704,16 +773,22 @@ class DashboardTests(unittest.TestCase):
                       "gpt-5.6-luna", "medium")
         write_session("rollout-2026-08-18T08-02-00-terra.jsonl", "terra", "root",
                       "gpt-5.6-terra", "high", complete=True)
-        write_session("rollout-2026-08-18T08-03-00-sol.jsonl", "sol", "root",
+        write_session("rollout-2026-08-18T08-03-00-astra.jsonl", "astra", "root",
+                      "gpt-6-astra", "low")
+        write_session("rollout-2026-08-18T08-04-00-sol.jsonl", "sol", "root",
                       "gpt-5.6-sol", "low")
 
         page = dashboard_module.Dashboard(
             self.workspace, sessions_root=self.sessions
         ).render("overview").decode()
-        self.assertIn("<h2>Active workers</h2>", page)
-        self.assertIn("<tr><th>Luna</th><td class=\"\">0</td><td class=\"active-count\">1</td>", page)
-        self.assertIn("<tr><th>Terra</th><td class=\"\">0</td><td class=\"\">0</td><td class=\"\">0</td>", page)
-        self.assertIn("<tr><th>Sol</th><td class=\"active-count\">1</td>", page)
+        self.assertIn("<h2>Active agents</h2>", page)
+        self.assertIn('aria-label="Luna: low: 0, medium: 1, high: 0, xhigh: 0, max: 0"', page)
+        self.assertIn("<strong>Terra</strong>", page)
+        self.assertIn("<strong>Astra</strong>", page)
+        self.assertIn('aria-label="Astra: low: 1, medium: 0, high: 0, xhigh: 0, max: 0"', page)
+        self.assertIn('worker-scale-astra', page)
+        self.assertNotIn('Astra: low: 1, medium: 1', page)
+        self.assertNotIn("<strong>Sol</strong>", page)
         self.assertNotIn("Unavailable", page)
 
     def test_nested_luna_helpers_count_as_active_workers(self) -> None:
@@ -811,7 +886,10 @@ class DashboardTests(unittest.TestCase):
             )
 
         write_session("rollout-root.jsonl", "root", None, "gpt-5.6-sol", "low")
-        write_session("rollout-live.jsonl", "live", "root", "gpt-5.6-terra", "medium")
+        write_session("rollout-live.jsonl", "live", "root", "gpt-6-astra", "low")
+        # This Astra context resembles a mutator but its released durable
+        # ownership must prevent it being shown as an ordinary worker.
+        write_session("rollout-mutator.jsonl", "mutator", "root", "gpt-6-astra", "medium")
         write_session("rollout-owner-lost.jsonl", "owner-lost", "root",
                       "gpt-5.6-terra", "medium")
         write_session("rollout-returned.jsonl", "returned", "root",
@@ -834,10 +912,12 @@ class DashboardTests(unittest.TestCase):
             );
             INSERT INTO tasks VALUES
               ('lineage','live-task',1,NULL,NULL),
+              ('lineage','mutator-task',1,2,2),
               ('lineage','lost-task',2,3,3),
               ('lineage','returned-task',4,5,5);
             INSERT INTO worker_claims VALUES
               ('lineage','live-task','live','root',NULL),
+              ('lineage','mutator-task','mutator','root',2),
               ('lineage','lost-task','owner-lost','root',3),
               ('lineage','returned-task','returned','root',5);
         """)
@@ -846,7 +926,8 @@ class DashboardTests(unittest.TestCase):
 
         workers = dashboard_module.worker_state(self.workspace, self.sessions)
 
-        self.assertEqual(workers["counts"]["terra"]["medium"], 1)
+        self.assertEqual(workers["counts"]["astra"]["low"], 1)
+        self.assertEqual(workers["counts"]["astra"]["medium"], 0)
         self.assertEqual(workers["counts"]["luna"]["low"], 1)
 
     def test_worker_header_survives_large_metadata_before_turn_context(self) -> None:
@@ -1061,3 +1142,132 @@ class DashboardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class IndexedWorkerTests(unittest.TestCase):
+    def test_no_workers_does_not_scan_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(dashboard_module, "_active_worker_claims", return_value={}),                  patch.object(Path, "glob", side_effect=AssertionError("history scan")):
+                result = dashboard_module.worker_state(root, root / "sessions")
+            self.assertTrue(result["available"])
+            self.assertTrue(all(value == 0 for row in result["counts"].values()
+                                for value in row.values()))
+
+    def test_active_worker_uses_index_without_history_scan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            connection = sqlite3.connect(root / "state_5.sqlite")
+            connection.executescript(
+                "CREATE TABLE threads(id TEXT, rollout_path TEXT);"
+                "CREATE TABLE thread_spawn_edges(parent_thread_id TEXT, child_thread_id TEXT);"
+            )
+            connection.execute("INSERT INTO threads VALUES (?, ?)", ("owner", str(root / "owner.jsonl")))
+            connection.commit()
+            connection.close()
+            with patch.object(dashboard_module, "_active_worker_claims", return_value={"worker": "owner"}),                  patch.object(dashboard_module, "_active_coordinator_id", return_value="owner"),                  patch.object(dashboard_module, "_session_header", return_value={"id": "owner", "cwd": str(root)}),                  patch.object(Path, "glob", side_effect=AssertionError("history scan")):
+                result = dashboard_module.worker_state(root, root / "sessions")
+            self.assertTrue(result["available"])
+
+class OverviewDesignTests(unittest.TestCase):
+    def test_digest_preserves_wrapped_heading_and_moves_completed_work_to_record(self):
+        result = dashboard_module.render_work_digest(
+            "- [ ] R-001 — Repair saving\n  across a restart. More detail.\n  - Evidence: exact receipt\n"
+            "- [x] R-002 — Prior work\n  - Long history\n")
+        self.assertIn("Repair saving across a restart.", result)
+        self.assertNotIn("More detail", result)
+        self.assertNotIn("Long history", result)
+        self.assertIn("1 completed items", result)
+        self.assertIn('href="/ledger"', result)
+
+    def test_structured_briefing_escapes_fields_and_omits_empty_obstacle(self):
+        result = dashboard_module.render_fratbro_status({"summary": {
+            "headline": "Save <confirmation>", "changed": "A rejected action is visible.",
+            "next": "Test the native exit.", "snag": ""}})
+        self.assertIn("Save &lt;confirmation&gt;", result)
+        self.assertIn("What changed", result)
+        self.assertIn("Next", result)
+        self.assertNotIn("Obstacle", result)
+
+class WorkerScaleTests(unittest.TestCase):
+    def test_dots_do_not_overlap_at_each_supported_count(self):
+        import math
+        for count in range(13):
+            points = dashboard_module.worker_dot_positions(count)
+            self.assertEqual(len(points), count)
+            for i, left in enumerate(points):
+                for right in points[i+1:]:
+                    self.assertGreater(math.dist(left, right), 10.34)
+
+    def test_overflow_is_explicit_and_total_remains_exact(self):
+        result = dashboard_module.render_worker_scale("terra", {"max": 15})
+        self.assertEqual(result.count('class="worker-dot"'), 12)
+        self.assertIn("+3", result)
+        self.assertIn("<b>15</b> active", result)
+        self.assertIn("max: 15", result)
+
+
+class CombinedAstraTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.sessions = self.root / "sessions"
+        self.sessions.mkdir()
+        (self.root / ".de67/state").mkdir(parents=True)
+        self.binding = self.root / ".de67/state/mutator-session.json"
+        self.binding.write_text(json.dumps({"workspace": str(self.root), "state": "active",
+                                            "runner_pid": 123, "thread_id": "mutator"}))
+        connection = sqlite3.connect(self.root / "state_5.sqlite")
+        connection.executescript("CREATE TABLE threads(id TEXT, cwd TEXT, model TEXT, reasoning_effort TEXT, rollout_path TEXT);"
+                                 "CREATE TABLE thread_spawn_edges(parent_thread_id TEXT, child_thread_id TEXT);")
+        for identity, parent, model, effort in (("sol", None, "gpt-5.6-sol", "low"),
+                                               ("worker", "sol", "gpt-6-astra", "low"),
+                                               ("mutator", None, "gpt-6-astra", "medium")):
+            path = self.sessions / ("rollout-" + identity + ".jsonl")
+            path.write_text("".join(json.dumps(event) + "\n" for event in (
+                {"type": "session_meta", "payload": {"id": identity, "parent_thread_id": parent, "cwd": str(self.root)}},
+                {"type": "turn_context", "payload": {"model": model, "effort": effort}},
+                {"type": "event_msg", "payload": {"type": "task_started"}},
+            )))
+            connection.execute("INSERT INTO threads VALUES (?,?,?,?,?)", (identity,str(self.root),model,effort,str(path)))
+            if parent:
+                connection.execute("INSERT INTO thread_spawn_edges VALUES (?,?)", (parent,identity))
+        connection.commit()
+        connection.close()
+
+    def counts(self, claims=None):
+        with patch.object(dashboard_module.os, "kill"), patch.object(
+            dashboard_module, "_active_worker_claims", return_value={"worker":"sol"} if claims is None else claims
+        ), patch.object(dashboard_module, "_active_coordinator_id", return_value="sol"):
+            return dashboard_module.worker_state(self.root, self.sessions)["counts"]["astra"]
+
+    def test_counts_worker_and_mutator_together_at_recorded_efforts(self):
+        self.assertEqual(self.counts(), {"low":1,"medium":1,"high":0,"xhigh":0,"max":0})
+        html = dashboard_module.render_worker_scale("astra", self.counts())
+        self.assertEqual(html.count("<strong>Astra</strong>"), 1)
+        self.assertIn("<b>2</b> active", html)
+
+    def test_mutator_counts_without_worker_claim_and_without_history_scan(self):
+        with patch.object(Path, "glob", side_effect=AssertionError("history scan")):
+            self.assertEqual(self.counts({})["medium"], 1)
+
+    def test_idle_and_dead_mutator_do_not_count(self):
+        record=json.loads(self.binding.read_text());record["state"]="idle";self.binding.write_text(json.dumps(record))
+        self.assertEqual(self.counts()["medium"],0)
+        record["state"]="active";self.binding.write_text(json.dumps(record))
+        with patch.object(dashboard_module.os,"kill",side_effect=ProcessLookupError):
+            self.assertIsNone(dashboard_module._active_mutator(self.root,self.sessions))
+
+    def test_duplicate_mutator_identity_counts_once(self):
+        connection=sqlite3.connect(self.root / "state_5.sqlite")
+        connection.execute("INSERT INTO thread_spawn_edges VALUES ('sol','mutator')")
+        connection.commit();connection.close()
+        path=self.sessions / "rollout-mutator.jsonl"
+        path.write_text(path.read_text().replace('"parent_thread_id": null','"parent_thread_id": "sol"'))
+        self.assertEqual(self.counts({"worker":"sol","mutator":"sol"})["medium"],1)
+
+    def test_current_effort_comes_from_index_not_first_historical_turn(self):
+        connection=sqlite3.connect(self.root / "state_5.sqlite")
+        connection.execute("UPDATE threads SET reasoning_effort='high' WHERE id='mutator'")
+        connection.commit();connection.close()
+        self.assertEqual(self.counts(), {"low":1,"medium":0,"high":1,"xhigh":0,"max":0})

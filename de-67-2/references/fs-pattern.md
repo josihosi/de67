@@ -1,6 +1,6 @@
-# Portable DFS pattern
+# Portable FS pattern
 
-The DFS translates user-owned intent into a code-grounded behavioral contract. It states what the
+The FS translates user-owned intent into a code-grounded behavioral contract. It states what the
 product must do, which production mechanisms own it, what is missing, and what evidence proves it.
 It is not a worker plan.
 
@@ -35,6 +35,24 @@ Each requirement should name, where applicable:
 
 Do not prescribe a new function merely for symmetry. Name a new symbol only when the inspected code
 has no suitable owner and the contract needs one.
+
+## Preserve usable design reasoning
+
+Transfer the understanding a later agent needs to make a good next decision. For a consequential
+mechanism, explain the causal relationship, why the proposed change fits the inspected code, and
+which competing explanation or tempting shortcut would fail the outcome. State the observation
+that would invalidate the design or require reinspection. A worked transition or counterexample is
+useful when it conveys this more clearly than another list of requirements.
+
+Keep requirements and acceptance strength distinct from implementation tactics. Workers may change
+tactics inside the frozen contract. Record a concrete starting route without making its command
+order, helper names, or incidental steps additional acceptance gates.
+
+Make this reasoning available where it is used: keep a red claim's mechanism, relevant owner
+relationships, proof route, and source references together or linked by stable IDs. Reference shared
+facts once. Omit unrelated implementation history, speculative alternatives, and empty template
+fields. Concision means preserving decision value, not compressing away the explanation. Do not add
+another handoff schema or prescribe the coordinator's context-management procedure.
 
 ## Resolve competing owners
 
@@ -85,23 +103,26 @@ credit, or a competing owner advancing the transition.
 ## Freeze and refreeze
 
 Record `Draft` while resolving code evidence and user-owned choices; record `Frozen` only after the
-DFS is internally consistent and bound to an inspected source baseline.
+FS is internally consistent and bound to an inspected source baseline. On refreeze, preserve stable claim and slice identities, durable acceptance history, and
+its checked work-ledger entries. Delivery projection writes the ledger, never the frozen FS.
+Historical acceptance retains its original scope; new proof obligations remain open in the ledger.
+The workspace-setup compatibility check exercises the real projection against copied durable state.
 
 After its named proof passes, automation may close an existing red item by changing it to `[x]` and
 removing `🔴`. It may also make an evidence-implied nonmaterial clarification to an
 existing red item, then must refreeze.
 
-A phase-3 coordinator may also expand a frozen DFS when direct worker evidence reveals a blocker or
+A phase-3 coordinator may also expand a frozen FS when direct worker evidence reveals a blocker or
 unexpected production result that no current claim classifies. Before doing so, re-inspect the exact
 owner, helpers, callers, competing readers and writers, tests, relevant history, and natural route;
-name the first contradicted DFS premise. Expansion is append-only with respect to existing stable
+name the first contradicted FS premise. Expansion is append-only with respect to existing stable
 claims and may add only the uniquely implied same-contract mechanism, ownership or precedence fact,
 proof route, and necessary new `- [ ] 🔴 R-...` claim. Preserve accepted work and immediately
-refreeze. The worker reports the finding but cannot edit the DFS.
+refreeze. The worker reports the finding but cannot edit the FS.
 
 These exceptions cannot change product intent, vocabulary, permissions, required behavior, balance,
 or acceptance strength. Multiple materially different designs, changed user-visible behavior, or an
 ambiguous refinement requires DE-67-2 and the user.
 
 Keep worker selection, task batching, deadlines, dispatch, mutation, and review procedure out of
-the DFS. In particular, do not reproduce a multi-row coordination projection or handoff schema.
+the FS. In particular, do not reproduce a multi-row coordination projection or handoff schema.

@@ -170,9 +170,57 @@ class CoordinatorLoopRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(guard.unbound_tasks, ("route-b",))
 
+    def test_live_worker_followup_does_not_claim_queued_independent_work(self) -> None:
+        claims: list[tuple[str, str, str | None]] = []
+        guard = CoordinatorLoopGuard(claim_recorder=lambda *claim: claims.append(claim))
+        guard.observe({"type": "thread.started", "thread_id": "coordinator-a"})
+        guard.observe(task_start("playtest"))
+        guard.observe(handoff("spawn_agent", "worker-player"))
+        guard.observe(task_start("independent-repair"))
+
+        # Live replies, idle-turn continuations, and receiver-less messages must
+        # all preserve the current assignment and leave independent work queued.
+        for tool, receiver in (
+            ("send_message", "worker-player"),
+            ("followup_task", "worker-player"),
+            ("followup_task", ""),
+        ):
+            guard.observe(handoff(tool, receiver))
+        guard.observe(wait_for("worker-player"))
+
+        self.assertEqual(guard.unbound_tasks, ("independent-repair",))
+        self.assertEqual(claims, [("playtest", "worker-player", "coordinator-a")])
+        guard.observe(handoff("spawn_agent", "worker-repair"))
+        self.assertEqual(guard.unbound_tasks, ())
+        self.assertEqual(claims[-1], ("independent-repair", "worker-repair", "coordinator-a"))
+
+    def test_receiverless_followup_cannot_stand_in_for_a_worker_handoff(self) -> None:
+        with self.assertRaisesRegex(RunnerError, "repair.*no roster worker"):
+            self.replay(
+                task_start("playtest"),
+                handoff("spawn_agent", "worker-player"),
+                task_start("repair"),
+                handoff("followup_task", ""),
+                task_terminal("playtest"),
+                wait_for(),
+            )
+
     def test_resume_cannot_wait_on_an_unbound_durable_task(self) -> None:
         with self.assertRaisesRegex(RunnerError, "closure-004.*no roster worker"):
             self.replay(wait_for(), initial_tasks=("R-008-closure-004",))
+
+    def test_idle_followup_without_receiver_can_await_roster_visibility(self) -> None:
+        visible = False
+        guard = CoordinatorLoopGuard(
+            initial_unbound_tasks=("repair",),
+            roster_resolver=lambda *_args: "worker-repair" if visible else None,
+        )
+        guard.observe(handoff("followup_task", ""))
+        guard.observe(wait_for())
+        self.assertEqual(guard.unbound_tasks, ("repair",))
+        visible = True
+        guard.reconcile_handoffs()
+        self.assertEqual(guard.unbound_tasks, ())
 
     def test_mutation_retirement_may_terminalize_without_spawning(self) -> None:
         self.replay(

@@ -7,11 +7,11 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
-
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts" / "mutation_guard.py"
@@ -32,11 +32,7 @@ DEADLINE_SPEC.loader.exec_module(deadline)
 TASK_GUIDANCE = guard.read_markdown(
     guard.CANONICAL_GUIDELINES_ROOT / guard.TASK_GUIDELINES
 )
-ORCHESTRATOR_GUIDANCE = guard.read_markdown(
-    guard.CANONICAL_GUIDELINES_ROOT / guard.ORCHESTRATOR_GUIDELINES
-)
 SKILL_TEXT = (ROOT / "SKILL.md").read_text(encoding="utf-8")
-KERNEL_TEXT = (ROOT / "references" / "kernel.md").read_text(encoding="utf-8")
 WORK_LEDGER_TEXT = (
     ROOT / "assets" / "environment" / "work-ledger.md"
 ).read_text(encoding="utf-8")
@@ -50,11 +46,11 @@ class MutationGuardTests(unittest.TestCase):
         self.candidate = self.root / "candidate"
         self.baseline.mkdir()
         self.candidate.mkdir()
-        self.write_guidelines(self.baseline, TASK_GUIDANCE, ORCHESTRATOR_GUIDANCE)
-        self.write_guidelines(self.candidate, TASK_GUIDANCE, ORCHESTRATOR_GUIDANCE)
+        self.write_guidelines(self.baseline, TASK_GUIDANCE)
+        self.write_guidelines(self.candidate, TASK_GUIDANCE)
         dfs_text = self.expansion_dfs(new_claim="")
-        (self.baseline / guard.DFS_FILE).write_text(dfs_text, encoding="utf-8")
-        (self.candidate / guard.DFS_FILE).write_text(dfs_text, encoding="utf-8")
+        (self.baseline / guard.FS_FILE).write_text(dfs_text, encoding="utf-8")
+        (self.candidate / guard.FS_FILE).write_text(dfs_text, encoding="utf-8")
         self.empty_ledger = self.root / guard.MUTATION_LEDGER
         self.empty_ledger.write_text(
             guard.read_markdown(
@@ -69,12 +65,33 @@ class MutationGuardTests(unittest.TestCase):
     def test_canonical_work_ledger_template_has_no_fake_active_item(self) -> None:
         self.assertEqual(guard.active_work_items(WORK_LEDGER_TEXT), ())
 
-    @staticmethod
-    def write_guidelines(root: Path, task_text: str, orchestrator_text: str) -> None:
-        (root / guard.TASK_GUIDELINES).write_text(task_text, encoding="utf-8")
-        (root / guard.ORCHESTRATOR_GUIDELINES).write_text(
-            orchestrator_text, encoding="utf-8"
+    def test_removed_guidance_is_not_required_for_a_stored_legacy_lane(self) -> None:
+        self.assertFalse((ROOT / "references" / "kernel.md").exists())
+        self.assertFalse((self.baseline / "orchestrator-guidelines.md").exists())
+        self.mutate_task()
+        changed = guard.validate_random_review_mutation(
+            self.baseline, self.candidate, selected_lane="orchestrator-guidelines.md"
         )
+        self.assertEqual(changed, (guard.TASK_GUIDELINES,))
+        self.assertEqual(len(guard.protected_method_digest()), 64)
+
+    def test_legacy_random_lane_resolves_and_guards_the_canonical_target(self) -> None:
+        source = self.expansion_dfs(new_claim="")
+        for root in (self.baseline, self.candidate):
+            fs = root / "FS.md"
+            fs.write_text(source, encoding="utf-8")
+        candidate_fs = self.candidate / "FS.md"
+        candidate_fs.write_text(source + "\nChanged canonical contract.\n", encoding="utf-8")
+
+        with self.assertRaises(guard.GuardError) as rejected:
+            guard.validate_random_review_mutation(
+                self.baseline, self.candidate, selected_lane=guard.DFS_FILE
+            )
+        self.assertNotIn("must contain exactly one", str(rejected.exception))
+
+    @staticmethod
+    def write_guidelines(root: Path, task_text: str) -> None:
+        (root / guard.TASK_GUIDELINES).write_text(task_text, encoding="utf-8")
 
     def mutate_task(self) -> None:
         path = self.candidate / guard.TASK_GUIDELINES
@@ -83,17 +100,11 @@ class MutationGuardTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def mutate_orchestrator(self) -> None:
-        path = self.candidate / guard.ORCHESTRATOR_GUIDELINES
-        path.write_text(
-            ORCHESTRATOR_GUIDANCE + "\nPrefer a current compact state query before dispatch.\n",
-            encoding="utf-8",
-        )
 
     def test_guideline_heading_change_is_allowed(self) -> None:
         path = self.candidate / guard.TASK_GUIDELINES
         path.write_text(
-            TASK_GUIDANCE.replace("## Own the assigned outcome", "## Own useful work"),
+            TASK_GUIDANCE.replace("## Own the outcome", "## Own useful work"),
             encoding="utf-8",
         )
         self.assertEqual(
@@ -104,7 +115,7 @@ class MutationGuardTests(unittest.TestCase):
         )
 
     def test_changed_baseline_heading_does_not_block_a_real_mutation(self) -> None:
-        corrupt = TASK_GUIDANCE.replace("## Own the assigned outcome", "## Own useful work")
+        corrupt = TASK_GUIDANCE.replace("## Own the outcome", "## Own useful work")
         baseline_corrupt = corrupt
         candidate_corrupt = corrupt + "\nPreserve the useful local context.\n"
         (self.baseline / guard.TASK_GUIDELINES).write_text(
@@ -128,16 +139,16 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(changed, (guard.TASK_GUIDELINES,))
 
         self.setUp_candidate_again()
-        self.mutate_orchestrator()
+        self.mutate_task()
         changed = guard.validate_guideline_mutation(
             self.baseline, self.candidate, broader_mutation=True
         )
-        self.assertEqual(changed, (guard.ORCHESTRATOR_GUIDELINES,))
+        self.assertEqual(changed, (guard.TASK_GUIDELINES,))
 
     def test_incident_mutations_reject_whitespace_only_ledger_consumption(self) -> None:
         task_path = self.candidate / guard.TASK_GUIDELINES
         task_path.write_text(
-            TASK_GUIDANCE.replace("Start from the assigned", "Start  from the assigned"),
+            TASK_GUIDANCE.replace("# Test and task guidelines", "# Test  and task guidelines"),
             encoding="utf-8",
         )
         with self.assertRaisesRegex(guard.GuardError, "whitespace-only"):
@@ -145,9 +156,9 @@ class MutationGuardTests(unittest.TestCase):
                 self.baseline, self.candidate, broader_mutation=False
             )
 
-        orchestrator_path = self.candidate / guard.ORCHESTRATOR_GUIDELINES
+        orchestrator_path = self.candidate / guard.TASK_GUIDELINES
         orchestrator_path.write_text(
-            ORCHESTRATOR_GUIDANCE.replace("Read the compact", "Read  the compact"),
+            TASK_GUIDANCE.replace("# Test and task guidelines", "# Test  and task guidelines"),
             encoding="utf-8",
         )
         with self.assertRaisesRegex(guard.GuardError, "whitespace-only"):
@@ -162,7 +173,7 @@ class MutationGuardTests(unittest.TestCase):
             )
 
         self.mutate_task()
-        self.mutate_orchestrator()
+        self.mutate_task()
         changed = guard.validate_guideline_mutation(
             self.baseline,
             self.candidate,
@@ -334,13 +345,13 @@ class MutationGuardTests(unittest.TestCase):
     def test_guidelines_cli_derives_integrity_scope(self) -> None:
         state = self.incident_state()
         self.mutate_task()
-        self.mutate_orchestrator()
+        self.mutate_task()
 
         result, output = self.run_guidelines_cli(
             state, "breach", "integrity_breach"
         )
         self.assertEqual(result, 0, output)
-        self.assertIn(guard.ORCHESTRATOR_GUIDELINES, output)
+        self.assertIn(guard.TASK_GUIDELINES, output)
 
     def test_guidelines_cli_rejects_missing_or_mismatched_incident(self) -> None:
         state = self.incident_state()
@@ -373,7 +384,7 @@ class MutationGuardTests(unittest.TestCase):
         self.assertIn("independent short and long diagnosis", output)
 
     def write_dfs(self, text: str, *, with_slices: bool = True) -> Path:
-        path = self.root / "DFS.md"
+        path = self.root / "FS.md"
         if with_slices:
             rendered: list[str] = []
             for line in text.splitlines(keepends=True):
@@ -415,7 +426,7 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_work_ledger_has_no_arbitrary_active_item_limit(self) -> None:
         dfs = self.write_dfs(
-            "# DFS\n\n"
+            "# FS\n\n"
             + "".join(f"- [ ] 🔴 R-{number:03d} — Work {number}\n" for number in range(1, 12))
         )
         ten = self.write_ledger(
@@ -433,7 +444,7 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_work_ledger_rejects_missing_and_non_red_claims(self) -> None:
         dfs = self.write_dfs(
-            "# DFS\n\n"
+            "# FS\n\n"
             "- [ ] 🔴 R-001 — Still open\n"
             "- [x] R-002 — Already accepted\n"
         )
@@ -451,7 +462,7 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_exact_red_syntax_matches_an_active_item(self) -> None:
         dfs = self.write_dfs(
-            "# DFS\n\n- [ ] 🔴 R-001 — Missing production behavior\n"
+            "# FS\n\n- [ ] 🔴 R-001 — Missing production behavior\n"
         )
         ledger = self.write_ledger(
             "# Work ledger\n\n## Active work\n\n"
@@ -461,7 +472,7 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(items, ("R-001 — Implement the red claim",))
 
     def test_work_ledger_accepts_independent_items_for_one_claim(self) -> None:
-        dfs = self.write_dfs("# DFS\n\n- [ ] 🔴 R-001 — Still open\n")
+        dfs = self.write_dfs("# FS\n\n- [ ] 🔴 R-001 — Still open\n")
         ledger = self.write_ledger(
             "# Work ledger\n\n## Active work\n\n"
             "- [ ] R-001 — First route\n\n"
@@ -473,8 +484,8 @@ class MutationGuardTests(unittest.TestCase):
             ("R-001 — First route", "R-001 — Second route"),
         )
 
-    def test_work_ledger_rejects_multiple_stored_task_identities(self) -> None:
-        dfs = self.write_dfs("# DFS\n\n- [ ] 🔴 R-001 — Still open\n")
+    def test_work_ledger_preserves_multiple_same_claim_task_identities(self) -> None:
+        dfs = self.write_dfs("# FS\n\n- [ ] 🔴 R-001 — Still open\n")
         state = self.root / "ledger-history.sqlite"
         with deadline.DeadlineHarness(state) as harness:
             harness.start_task("project", "R001-M1", "R-001", 10, now=0)
@@ -488,10 +499,12 @@ class MutationGuardTests(unittest.TestCase):
             "- [ ] R-001 — Still open\n\n"
             "  R001-M1 found the old premise. R001-M2 is the current route.\n"
         )
-        with self.assertRaisesRegex(guard.GuardError, "multiple task identities"):
+        self.assertEqual(
             guard.validate_work_ledger(
                 historical, dfs, state=state, lineage_id="project"
-            )
+            ),
+            ("R-001 — Still open",),
+        )
 
         current = self.write_ledger(
             "# Work ledger\n\n## Active work\n\n"
@@ -507,7 +520,7 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_work_ledger_rejects_task_owned_by_another_claim(self) -> None:
         dfs = self.write_dfs(
-            "# DFS\n\n"
+            "# FS\n\n"
             "- [ ] 🔴 R-001 — First\n"
             "- [ ] 🔴 R-002 — Second\n"
         )
@@ -519,14 +532,14 @@ class MutationGuardTests(unittest.TestCase):
             "- [ ] R-001 — First\n\n  Active route: second-task.\n"
         )
 
-        with self.assertRaisesRegex(guard.GuardError, "another DFS claim"):
+        with self.assertRaisesRegex(guard.GuardError, "another FS claim"):
             guard.validate_work_ledger(
                 ledger, dfs, state=state, lineage_id="project"
             )
 
     def slice_dfs(self) -> Path:
         return self.write_dfs(
-            "# DFS\n\n"
+            "# FS\n\n"
             "Shared contract.\n"
             "Shared proof rule.\n\n"
             "- [ ] 🔴 R-001 — First outcome\n"
@@ -552,7 +565,7 @@ class MutationGuardTests(unittest.TestCase):
         extracted = guard.extract_dfs_slices(dfs, "R-001", allocated)
         self.assertEqual(
             extracted,
-            os.linesep.join(
+            "\n".join(
                 (
                     "Shared contract.",
                     "Shared proof rule.",
@@ -584,11 +597,23 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual({item.slice_id for item in slices}, {"R-001-S001", "R-002-S001"})
         self.assertEqual(
             guard.extract_dfs_slices(dfs, "R-002", ("R-002-S001",)),
-            os.linesep.join(("Shared contract.", "Shared proof rule.", "")),
+            "\n".join(("Shared contract.", "Shared proof rule.", "")),
         )
 
         with self.assertRaisesRegex(guard.GuardError, "crosses existing slice"):
             guard.insert_dfs_slices(dfs, dfs, "R-003", ((4, 5),))
+
+    def test_maintenance_slice_keeps_durable_identity_and_binding_checks(self):
+        text = ("<!-- DE67:DFS-SLICE:BEGIN id=DE67-MAINT-CADENCE-S001 claim=DE67-MAINT-CADENCE -->\n"
+                "- [ ] DE67-MAINT-CADENCE — Retain counted progress.\n"
+                "<!-- DE67:DFS-SLICE:END id=DE67-MAINT-CADENCE-S001 claim=DE67-MAINT-CADENCE -->\n")
+        slices = guard.parse_dfs_slices(text)
+        self.assertEqual(slices[0].claim_id, "DE67-MAINT-CADENCE")
+        self.assertEqual(guard._selected_claim_id("DE67-MAINT-CADENCE"), "DE67-MAINT-CADENCE")
+        with self.assertRaises(guard.GuardError):
+            guard.parse_dfs_slices(text.replace("claim=DE67-MAINT-CADENCE", "claim=DE67-MAINT-OTHER", 1))
+        with self.assertRaises(guard.GuardError):
+            guard.parse_dfs_slices(text.replace("DE67-MAINT-", "UNBOUND-"))
 
     def test_dfs_slice_parser_rejects_crossed_duplicate_and_fenced_markers(self) -> None:
         crossed = (
@@ -644,7 +669,7 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(
             guard.dfs_slice_status(pointerless, dfs)[0][1], "missing"
         )
-        with self.assertRaisesRegex(guard.GuardError, "has no DFS slices"):
+        with self.assertRaisesRegex(guard.GuardError, "has no FS slices"):
             guard.validate_work_ledger(pointerless, dfs)
 
         completed_pointer_is_not_in_active_block = self.write_ledger(
@@ -680,7 +705,7 @@ class MutationGuardTests(unittest.TestCase):
             with_slices=False,
         )
         self.assertEqual(guard.dfs_slice_status(missing, dfs)[0][1], "invalid")
-        with self.assertRaisesRegex(guard.GuardError, "missing DFS slice"):
+        with self.assertRaisesRegex(guard.GuardError, "missing FS slice"):
             guard.validate_work_ledger(missing, dfs)
 
         guard.insert_dfs_slices(dfs, dfs, "R-002", ((7, 7),))
@@ -717,7 +742,7 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(
             stdout.getvalue(),
-            os.linesep.join(("- [ ] 🔴 R-001 — First outcome", "")),
+            "\n".join(("- [ ] 🔴 R-001 — First outcome", "")),
         )
 
         ledger = self.write_ledger(
@@ -793,11 +818,11 @@ class MutationGuardTests(unittest.TestCase):
         before = self.root / "before.md"
         after = self.root / "after.md"
         before.write_text(
-            "# DFS\n\n- [ ] 🔴 R-001 — First\n- [ ] 🔴 R-002 — Second\n",
+            "# FS\n\n- [ ] 🔴 R-001 — First\n- [ ] 🔴 R-002 — Second\n",
             encoding="utf-8",
         )
         after.write_text(
-            "# DFS\n\n- [x] R-001 — First\n- [ ] 🔴 R-002 — Second\n",
+            "# FS\n\n- [x] R-001 — First\n- [ ] 🔴 R-002 — Second\n",
             encoding="utf-8",
         )
         completed = guard.validate_dfs_completion(before, after, "R-001 — First")
@@ -807,11 +832,11 @@ class MutationGuardTests(unittest.TestCase):
         before = self.root / "before.md"
         after = self.root / "after.md"
         before.write_text(
-            "# DFS\n\n- [ ] 🔴 R-001 — First\n- [ ] 🔴 R-002 — Second\n",
+            "# FS\n\n- [ ] 🔴 R-001 — First\n- [ ] 🔴 R-002 — Second\n",
             encoding="utf-8",
         )
         after.write_text(
-            "# DFS revised\n\n- [x] R-001 — First\n- [ ] 🔴 R-002 — Second\n",
+            "# FS revised\n\n- [x] R-001 — First\n- [ ] 🔴 R-002 — Second\n",
             encoding="utf-8",
         )
         with self.assertRaisesRegex(guard.GuardError, "must only change"):
@@ -820,8 +845,8 @@ class MutationGuardTests(unittest.TestCase):
     def completion_files(self) -> tuple[Path, Path]:
         before = self.root / "state-before.md"
         after = self.root / "state-after.md"
-        before.write_text("# DFS\n\n- [ ] 🔴 R-001 — First\n", encoding="utf-8")
-        after.write_text("# DFS\n\n- [x] R-001 — First\n", encoding="utf-8")
+        before.write_text("# FS\n\n- [ ] 🔴 R-001 — First\n", encoding="utf-8")
+        after.write_text("# FS\n\n- [x] R-001 — First\n", encoding="utf-8")
         return before, after
 
     def deadline_state(
@@ -936,14 +961,14 @@ class MutationGuardTests(unittest.TestCase):
         before = self.root / "reopen-before.md"
         after = self.root / "reopen-after.md"
         before.write_text(
-            "# DFS\n\n"
+            "# FS\n\n"
             "The product outcome and proof route stay unchanged.\n\n"
             "- [x] R-001 — First\n"
             "- [x] R-002 — Other accepted claim\n",
             encoding="utf-8",
         )
         candidate = (
-            "# DFS\n\n"
+            "# FS\n\n"
             "The product outcome and proof route stay unchanged.\n\n"
             "- [ ] 🔴 R-001 — First\n"
             "- [x] R-002 — Other accepted claim\n"
@@ -1125,7 +1150,7 @@ class MutationGuardTests(unittest.TestCase):
     @staticmethod
     def expansion_dfs(*, new_claim: str = "- [ ] 🔴 R-003 — New prerequisite\n") -> str:
         return (
-            "# DFS\n\n"
+            "# FS\n\n"
             "## Functional contract\n\n"
             "The existing behavior remains the contract.\n\n"
             "## Project language and terminology\n\n"
@@ -1254,7 +1279,7 @@ class MutationGuardTests(unittest.TestCase):
         wrong_claim = self.finding_state("wrong-claim", claim="R-999")
         result, output = self.run_expand_cli(wrong_claim)
         self.assertEqual(result, 1)
-        self.assertIn("not exactly one still-red DFS claim", output)
+        self.assertIn("not exactly one still-red FS claim", output)
 
     def test_expand_dfs_preserves_protected_sections_exactly(self) -> None:
         before, candidate = self.expansion_files(
@@ -1355,7 +1380,7 @@ class MutationGuardTests(unittest.TestCase):
             connection.close()
         result, output = self.run_expand_cli(state)
         self.assertEqual(result, 1)
-        self.assertIn("completed task cannot authorize DFS expansion", output)
+        self.assertIn("completed task cannot authorize FS expansion", output)
 
         closed = self.expansion_dfs().replace(
             "- [ ] 🔴 R-001 — Worker found a blocker",
@@ -1371,7 +1396,7 @@ class MutationGuardTests(unittest.TestCase):
         with patch.object(
             deadline.secrets, "randbelow", side_effect=[0, lane_index]
         ), deadline.DeadlineHarness(state) as harness:
-            for number in range(1, 21):
+            for number in range(1, deadline.RANDOM_INTERVAL_MIN + 1):
                 task = f"terminal-{number}"
                 harness.start_task("project", task, f"R-{number:03d}", 10, now=0)
                 harness.complete_task("project", task, "green", now=1)
@@ -1415,10 +1440,20 @@ class MutationGuardTests(unittest.TestCase):
 
         self.setUp_candidate_again()
         state, cycle = self.random_review_state(1)
-        self.mutate_orchestrator()
+        self.mutate_task()
         result, output = self.run_random_review_cli(state, cycle)
         self.assertEqual(result, 0, output)
-        self.assertIn(guard.ORCHESTRATOR_GUIDELINES, output)
+        self.assertIn(guard.TASK_GUIDELINES, output)
+
+    def test_random_trajectory_can_change_both_guidelines_and_refine_dfs(self) -> None:
+        state, cycle = self.random_review_state(0)
+        self.mutate_task()
+        self.mutate_task()
+        (self.candidate / guard.FS_FILE).write_text(self.expansion_dfs(), encoding="utf-8")
+        result, output = self.run_random_review_cli(state, cycle)
+        self.assertEqual(result, 0, output)
+        for name in (*guard.GUIDELINE_FILES, guard.FS_FILE):
+            self.assertIn(name, output)
 
     def test_random_guideline_review_accepts_exact_guarded_noop(self) -> None:
         for lane_index in (0, 1):
@@ -1429,23 +1464,23 @@ class MutationGuardTests(unittest.TestCase):
                 self.assertIn("guarded no-op", output)
 
     def setUp_candidate_again(self) -> None:
-        self.write_guidelines(self.candidate, TASK_GUIDANCE, ORCHESTRATOR_GUIDANCE)
-        (self.candidate / guard.DFS_FILE).write_text(
+        self.write_guidelines(self.candidate, TASK_GUIDANCE)
+        (self.candidate / guard.FS_FILE).write_text(
             self.expansion_dfs(new_claim=""), encoding="utf-8"
         )
 
-    def test_random_review_rejects_wrong_lane_and_whitespace_only_change(self) -> None:
+    def test_random_review_accepts_cross_lane_but_rejects_whitespace_only_change(self) -> None:
         state, cycle = self.random_review_state(1)
         self.mutate_task()
         result, output = self.run_random_review_cli(state, cycle)
-        self.assertEqual(result, 1)
-        self.assertIn("selected orchestrator-guidelines.md", output)
+        self.assertEqual(result, 0, output)
+        self.assertIn(guard.TASK_GUIDELINES, output)
 
         self.setUp_candidate_again()
         state, cycle = self.random_review_state(0)
         path = self.candidate / guard.TASK_GUIDELINES
         path.write_text(
-            TASK_GUIDANCE.replace("Start from the assigned", "Start  from the assigned"),
+            TASK_GUIDANCE.replace("# Test and task guidelines", "# Test  and task guidelines"),
             encoding="utf-8",
         )
         result, output = self.run_random_review_cli(state, cycle)
@@ -1453,8 +1488,8 @@ class MutationGuardTests(unittest.TestCase):
         self.assertIn("whitespace-only", output)
 
     def test_random_dfs_review_accepts_safe_expansion_or_exact_guarded_noop(self) -> None:
-        state, cycle = self.random_review_state(2)
-        (self.candidate / guard.DFS_FILE).write_text(
+        state, cycle = self.random_review_state(1)
+        (self.candidate / guard.FS_FILE).write_text(
             self.expansion_dfs(), encoding="utf-8"
         )
         result, output = self.run_random_review_cli(state, cycle)
@@ -1462,18 +1497,38 @@ class MutationGuardTests(unittest.TestCase):
         self.assertIn("changed DFS.md", output)
 
         self.setUp_candidate_again()
-        state, cycle = self.random_review_state(2)
+        state, cycle = self.random_review_state(1)
         result, output = self.run_random_review_cli(state, cycle)
         self.assertEqual(result, 0, output)
         self.assertIn("guarded no-op", output)
 
+    def test_random_review_repairs_missing_status_delimiter_without_new_work(self) -> None:
+        state, cycle = self.random_review_state(1)
+        original = (self.baseline / guard.FS_FILE).read_text(encoding="utf-8")
+        original += (
+            "\n<!-- DE67:DFS-SLICE:BEGIN id=R-099-S001 claim=R-099 -->\n"
+            "Required behavior and proof remain unchanged.\n\n"
+            "- [ ] 🔴 R-099 — Existing unaccepted outcome.\n"
+            "<!-- DE67:DFS-SLICE:END id=R-099-S001 claim=R-099 -->\n"
+        )
+        (self.baseline / guard.FS_FILE).write_text(original, encoding="utf-8")
+        repaired = original.replace("- [ ] 🔴 R-099", "Implementation status:\n\n- [ ] 🔴 R-099")
+        (self.candidate / guard.FS_FILE).write_text(repaired, encoding="utf-8")
+        result, output = self.run_random_review_cli(state, cycle)
+        self.assertEqual(result, 0, output)
+        for invalid in (repaired.replace("[ ] 🔴 R-099", "[x] R-099"),
+                        repaired.replace("proof remain unchanged", "proof is waived")):
+            (self.candidate / guard.FS_FILE).write_text(invalid, encoding="utf-8")
+            result, output = self.run_random_review_cli(state, cycle)
+            self.assertEqual(result, 1, output)
+
     def test_random_dfs_review_preserves_frozen_contract(self) -> None:
-        state, cycle = self.random_review_state(2)
+        state, cycle = self.random_review_state(1)
         candidate = self.expansion_dfs().replace(
             "The existing behavior remains the contract.",
             "The behavior is now broader.",
         )
-        (self.candidate / guard.DFS_FILE).write_text(candidate, encoding="utf-8")
+        (self.candidate / guard.FS_FILE).write_text(candidate, encoding="utf-8")
         result, output = self.run_random_review_cli(state, cycle)
         self.assertEqual(result, 1)
         self.assertIn("Functional contract", output)
@@ -1562,8 +1617,8 @@ class MutationGuardTests(unittest.TestCase):
         )
         original = guideline.read_text(encoding="utf-8")
         mutations = (
-            ("rename", "## Own the assigned outcome", "## Own useful outcomes"),
-            ("delete", "## Own the assigned outcome\n", ""),
+            ("rename", "## Own the outcome", "## Own useful outcomes"),
+            ("delete", "## Own the outcome\n", ""),
         )
         for name, old, new in mutations:
             with self.subTest(name=name):
@@ -1581,9 +1636,9 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_universal_method_candidate_may_challenge_the_hard_kernel(self) -> None:
         baseline, candidate = self.method_candidate_roots()
-        kernel = candidate / "references" / "kernel.md"
+        kernel = candidate / "scripts" / "deadline_harness.py"
         kernel.write_text(
-            kernel.read_text(encoding="utf-8") + "\n<!-- universal candidate -->\n",
+            kernel.read_text(encoding="utf-8") + "\n# universal candidate\n",
             encoding="utf-8",
         )
 
@@ -1591,10 +1646,10 @@ class MutationGuardTests(unittest.TestCase):
             baseline, candidate, universal=True
         )
 
-        self.assertEqual(changed, ("references/kernel.md",))
+        self.assertEqual(changed, ("scripts/deadline_harness.py",))
 
     def universal_review_state(
-        self, lane_index: int = 2, *, capability_effort: str = "ultra"
+        self, lane_index: int = 1, *, capability_effort: str = "ultra"
     ) -> tuple[Path, int]:
         (self.root / "workspace.json").write_text(
             json.dumps(
@@ -1612,7 +1667,7 @@ class MutationGuardTests(unittest.TestCase):
         )
         state = self.root / f"universal-{lane_index}-{capability_effort}.sqlite"
         with patch.object(
-            deadline.secrets, "randbelow", side_effect=[10, lane_index]
+            deadline.secrets, "randbelow", side_effect=[deadline.UNIVERSAL_RANDOM_INTERVAL - deadline.RANDOM_INTERVAL_MIN, lane_index]
         ), deadline.DeadlineHarness(state) as harness:
             for number in range(1, 31):
                 task = f"terminal-{number}"
@@ -1670,9 +1725,9 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_universal_review_cli_requires_exact_k30_dfs_signature(self) -> None:
         baseline, candidate = self.method_candidate_roots()
-        kernel = candidate / "references" / "kernel.md"
+        kernel = candidate / "scripts" / "deadline_harness.py"
         kernel.write_text(
-            kernel.read_text(encoding="utf-8") + "\n<!-- isolated redesign -->\n",
+            kernel.read_text(encoding="utf-8") + "\n# isolated redesign\n",
             encoding="utf-8",
         )
 
@@ -1684,12 +1739,12 @@ class MutationGuardTests(unittest.TestCase):
         self.assertIn("universal review cycle", output)
         self.assertRegex(output, r"receipt [0-9a-f]{64}")
 
-        state, cycle = self.universal_review_state(lane_index=1)
+        state, cycle = self.universal_review_state(lane_index=0)
         result, output = self.run_universal_review_cli(
             state, cycle, baseline, candidate
         )
         self.assertEqual(result, 1)
-        self.assertIn("persisted 30-attempt DFS draw", output)
+        self.assertIn("persisted 30-attempt FS draw", output)
 
         state, cycle = self.universal_review_state(capability_effort="xhigh")
         result, output = self.run_universal_review_cli(
@@ -1701,9 +1756,9 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_universal_receipt_is_atomic_immutable_and_required_for_resolution(self) -> None:
         baseline, candidate = self.method_candidate_roots()
-        kernel = candidate / "references" / "kernel.md"
+        kernel = candidate / "scripts" / "deadline_harness.py"
         kernel.write_text(
-            kernel.read_text(encoding="utf-8") + "\n<!-- receipt candidate -->\n",
+            kernel.read_text(encoding="utf-8") + "\n# receipt candidate\n",
             encoding="utf-8",
         )
         state, cycle = self.universal_review_state()
@@ -1740,7 +1795,7 @@ class MutationGuardTests(unittest.TestCase):
             )
             self.assertEqual(
                 json.loads(receipt["changed_paths"]),
-                ["references/kernel.md"],
+                ["scripts/deadline_harness.py"],
             )
             self.assertEqual(len(receipt["candidate_digest"]), 64)
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
@@ -1805,9 +1860,9 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_universal_review_uses_frozen_due_time_capability_snapshot(self) -> None:
         baseline, candidate = self.method_candidate_roots()
-        kernel = candidate / "references" / "kernel.md"
+        kernel = candidate / "scripts" / "deadline_harness.py"
         kernel.write_text(
-            kernel.read_text(encoding="utf-8") + "\n<!-- frozen snapshot -->\n",
+            kernel.read_text(encoding="utf-8") + "\n# frozen snapshot\n",
             encoding="utf-8",
         )
         state, cycle = self.universal_review_state()
@@ -1872,13 +1927,9 @@ class MutationGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(guard.GuardError, "accepted claim R-000"):
             guard.validate_universal_dfs_mutation(before, candidate)
 
-    def test_runtime_guidance_keeps_mutation_local_and_nonblocking(self) -> None:
-        self.assertIn("workspace-local files", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("no change required", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("may freeze ordinary delivery indefinitely", ORCHESTRATOR_GUIDANCE)
 
     def test_ordinary_task_results_keep_the_same_coordinator(self) -> None:
-        combined = SKILL_TEXT + "\n" + KERNEL_TEXT + "\n" + ORCHESTRATOR_GUIDANCE
+        combined = SKILL_TEXT + "\n" + TASK_GUIDANCE
         normalized = " ".join(combined.split())
         self.assertNotIn("dispatch wave complete", combined)
         self.assertNotIn("One coordinator owns one dispatch wave", combined)
@@ -1886,34 +1937,16 @@ class MutationGuardTests(unittest.TestCase):
             "stay with the same coordinator",
             normalized,
         )
-        self.assertIn("Mutation completion is the only planned fresh-coordinator boundary", combined)
+        self.assertIn("Mutation completion is the only planned fresh-coordinator boundary", normalized)
 
     def test_worker_lifecycle_is_not_a_task_requirement(self) -> None:
-        combined = SKILL_TEXT + "\n" + KERNEL_TEXT + "\n" + TASK_GUIDANCE
+        combined = SKILL_TEXT + "\n" + TASK_GUIDANCE
         self.assertNotIn("Every task uses a fresh", combined)
         self.assertNotIn("one fresh worker thread", combined)
         self.assertNotIn("terminal task retires", combined)
         self.assertNotIn("worker retirement", combined)
 
-    def test_each_spawned_worker_owns_one_random_mutation_window(self) -> None:
-        normalized = " ".join(ORCHESTRATOR_GUIDANCE.split())
-        self.assertIn("Before spawning a worker, start one unique deadline-harness task", normalized)
-        self.assertIn("spawned only to verify its model or suitability still owns a window", normalized)
-        self.assertIn("terminalize that task as abandoned", normalized)
-        self.assertIn("record exactly one completion, finding, or abandonment", normalized)
-        self.assertIn("A coordinator start, exit, or restart does not itself create", normalized)
 
-    def test_worker_model_guidance_isolates_new_workers_and_reserves_sol(self) -> None:
-        self.assertIn("Sol is not an ordinary worker", TASK_GUIDANCE)
-        self.assertIn("Luna for clear execution", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("Terra for debugging/discovery", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("lowest sufficient", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("complexity/research", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("reviewer at high", ORCHESTRATOR_GUIDANCE)
-        self.assertIn('`fork_turns="none"`', ORCHESTRATOR_GUIDANCE)
-        self.assertIn("explicitly selects Luna or Terra", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("new worker never", ORCHESTRATOR_GUIDANCE)
-        self.assertIn("receives the coordinator or predecessor transcript", ORCHESTRATOR_GUIDANCE)
 
 
 if __name__ == "__main__":

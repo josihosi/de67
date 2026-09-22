@@ -1,13 +1,13 @@
-# Task Framing
+# Task framing
 
-At the beginning of reasoning, do an imagination round and answer it to Josef. Imagine why he asked, what workflow he is trying to reach, what a real user would do, what would feel fake or broken, and which edge case proves the work is not done.
+Before choosing a route, imagine the user's intended experience: the state before the work, the
+first encounter, ordinary use, and the meaningful difficult case. Notice what would only look
+complete. Treat imagined solutions as hypotheses, not requirements.
 
-Then extract:
+Use that picture to identify the requested outcome, real constraints, material uncertainty, and the
+smallest useful way to test progress. Scale this preparation to the task. Share the resulting
+proposal, relevant assumptions, and useful questions; do not turn internal deliberation into a
+ritual the user must read.
 
-- goal
-- requirements
-- acceptance checks
-- failure cases
-- smallest useful vertical slice
-
-Turn that into a practical plan. Attack the plan yourself before trusting it.
+Revise the route when observations contradict it. The commitment is to the user's outcome, not the
+first plan. Existing host guidance may already supply this framing; do not repeat it for ceremony.

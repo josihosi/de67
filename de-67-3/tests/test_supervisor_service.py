@@ -3,6 +3,8 @@ import json, os, shlex, shutil, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"; sys.path.insert(0, str(SCRIPTS))
+if sys.platform == "win32":
+    raise unittest.SkipTest("The macOS supervisor service requires POSIX process and locking APIs")
 import supervisor_service  # noqa: E402
 from deadline_harness import DeadlineHarness  # noqa: E402
 from policy_kernel import workspace_facts  # noqa: E402
@@ -20,6 +22,31 @@ class SupervisorServiceTests(unittest.TestCase):
         self.legacy_loaded = patch("supervisor_service._legacy_loaded", return_value=False)
         self.legacy_loaded.start()
     def tearDown(self): self.legacy_loaded.stop(); self.platform.stop(); self.temp.cleanup()
+
+    def test_cleanup_removes_stale_binding_and_preserves_owner_conversation(self):
+        with patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}):
+            socket = self.root / "codex/state/de67-input/0123456789abcdef.sock"
+            socket.parent.mkdir(parents=True)
+            socket.touch()
+            address = self.workspace / ".de67/state/coordinator-input.json"
+            address.write_text(json.dumps({"workspace": str(self.workspace),
+                                          "runner_pid": 12345, "socket": str(socket)}))
+            owner = self.workspace / ".de67/state/mutator-input.json"
+            owner.write_text('{"owner": true}')
+            with patch("codex_app_server_runner.process_snapshot", return_value={}):
+                captured = supervisor_service._capture_coordinator_runtime(self.workspace)
+                supervisor_service._cleanup_coordinator_runtime(self.workspace, captured)
+            self.assertFalse(socket.exists())
+            self.assertFalse(address.exists())
+            self.assertEqual(owner.read_text(), '{"owner": true}')
+            self.assertIsNone(supervisor_service._capture_coordinator_runtime(self.workspace))
+
+    def test_capture_rejects_socket_outside_owned_directory(self):
+        address = self.workspace / ".de67/state/coordinator-input.json"
+        address.write_text(json.dumps({"workspace": str(self.workspace),
+                                      "runner_pid": 12345,
+                                      "socket": str(self.root / "0123456789abcdef.sock")}))
+        self.assertIsNone(supervisor_service._capture_coordinator_runtime(self.workspace))
 
     @patch("supervisor_service.shutil.which")
     def test_spec_preserves_environment_without_auto_restart(self, which):
@@ -156,7 +183,7 @@ class SupervisorServiceTests(unittest.TestCase):
         remove.assert_not_called()
 
     def test_explicit_start_normalizes_runtime_ownership_but_preserves_project_truth(self):
-        dfs = self.workspace / ".de67/DFS.md"
+        dfs = self.workspace / ".de67/FS.md"
         ledger = self.workspace / ".de67/work-ledger.md"
         mutations = self.workspace / ".de67/mutation-suggestions.md"
         dfs.write_text("frozen product truth\n")
@@ -382,7 +409,7 @@ class SupervisorServiceTests(unittest.TestCase):
             workspace = (base / "workspace").resolve()
             state_root = workspace / ".de67/state"
             state_root.mkdir(parents=True)
-            shutil.copy2(environment_root / "DFS.md", workspace / ".de67/DFS.md")
+            shutil.copy2(environment_root / "FS.md", workspace / ".de67/FS.md")
             shutil.copy2(environment_root / "work-ledger.md", workspace / ".de67/work-ledger.md")
             shutil.copy2(
                 environment_root / "mutation-suggestions.md",
@@ -522,7 +549,7 @@ class SupervisorServiceTests(unittest.TestCase):
                 "mutation reviewer inspected editable state",
                 "post-mutation worker result",
             ])
-            self.assertIn("- [x] R-STACK", (workspace / ".de67/DFS.md").read_text())
+            self.assertIn("- [x] R-STACK", (workspace / ".de67/FS.md").read_text())
             self.assertNotIn("- [ ]", (workspace / ".de67/work-ledger.md").read_text())
             self.assertIn("Consumed by stack mutation reviewer", (
                 workspace / ".de67/mutation-suggestions.md").read_text())

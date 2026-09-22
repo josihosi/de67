@@ -268,6 +268,7 @@ def compact_worker_receipt(
         "finding_kind": receipt.get("finding_kind"),
         "verdict": receipt["verdict"],
         "summary": receipt["summary"],
+        "evidence_ceiling": receipt["evidence_ceiling"],
         "bindings": receipt["bindings"],
         "first_divergence": receipt["first_divergence"],
         "accepted_no_replay": receipt["accepted_no_replay"],
@@ -284,3 +285,73 @@ def compact_worker_receipt(
     if recorded_at is not None:
         result["recorded_at"] = recorded_at
     return result
+
+
+def prepare_worker_receipt(value, *, state: Path, lineage_id: str, task_id: str,
+                           workspace: Path) -> dict[str, Any]:
+    """Complete mechanical fields in a draft; preserve all agent judgment and reject conflicts."""
+    import copy
+    import sqlite3
+    draft = copy.deepcopy(value)
+    if not isinstance(draft, dict):
+        raise WorkerReceiptError("Receipt draft must be an object")
+    connection = sqlite3.connect(state.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        row = connection.execute(
+            "SELECT task.claim_id, worker.worker_id FROM tasks AS task "
+            "JOIN worker_claims AS worker ON worker.lineage_id = task.lineage_id "
+            "AND worker.task_id = task.task_id WHERE task.lineage_id = ? AND task.task_id = ?",
+            (lineage_id, task_id),
+        ).fetchone()
+    finally:
+        connection.close()
+    if row is None:
+        raise WorkerReceiptError("Task has no durable worker binding")
+    expected = {"schema": SCHEMA, "lineage_id": lineage_id, "task_id": task_id,
+                "claim_id": row[0], "worker_id": row[1]}
+    for key, actual in expected.items():
+        if key in draft and draft[key] != actual:
+            raise WorkerReceiptError(f"Draft {key} conflicts with durable binding")
+        draft[key] = actual
+    for index, artifact in enumerate(draft.get("artifacts", [])):
+        if not isinstance(artifact, dict) or not isinstance(artifact.get("path"), str):
+            raise WorkerReceiptError(f"artifacts[{index}] needs a path and role")
+        path = Path(artifact["path"])
+        path = (workspace / path).resolve() if not path.is_absolute() else path.resolve()
+        try:
+            path.relative_to(workspace.resolve())
+        except ValueError as error:
+            raise WorkerReceiptError("Artifact must stay inside the workspace") from error
+        if not path.is_file():
+            raise WorkerReceiptError(f"Missing artifact: {artifact['path']}")
+        # Never replace a supplied digest: normalization below detects mismatch.
+        if "sha256" not in artifact:
+            artifact["sha256"] = _sha256(path)
+    return normalize_worker_receipt(draft, lineage_id=lineage_id, task_id=task_id,
+                                    claim_id=row[0], worker_id=row[1], workspace=workspace)
+
+
+def main() -> int:
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    prepare = commands.add_parser("prepare", help="Collect durable identities and missing artifact hashes; validate without recording or closing work")
+    for flag in ("state", "workspace", "draft", "output"):
+        prepare.add_argument("--" + flag, type=Path, required=True)
+    for flag in ("lineage", "task"):
+        prepare.add_argument("--" + flag, required=True)
+    args = parser.parse_args()
+    try:
+        receipt = prepare_worker_receipt(json.loads(args.draft.read_text(encoding="utf-8")), state=args.state,
+                                        lineage_id=args.lineage, task_id=args.task, workspace=args.workspace)
+        # Immutable output avoids destroying an earlier receipt or the input draft.
+        with args.output.open("x", encoding="utf-8") as stream:
+            stream.write(json.dumps(receipt, indent=2, ensure_ascii=False) + "\n")
+        print(json.dumps({"ok": True, "receipt_id": receipt_id(receipt), "path": str(args.output)}))
+    except (WorkerReceiptError, OSError, ValueError) as error:
+        parser.exit(1, str(error) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

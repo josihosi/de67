@@ -37,10 +37,10 @@ Each phase ends with a durable artifact. You decide when to begin the next phase
 
 - **[de67 2 — Specify](de-67-2/SKILL.md)**
   A fresh specification owner inspects the actual repository and turns the WEC into a frozen,
-  code-grounded `.de67/DFS.md`.
+  code-grounded `.de67/FS.md`.
 
 - **[de67 3 — Deliver](de-67-3/SKILL.md)**
-  Coordinators and workers autonomously implement the frozen DFS, test production routes, preserve
+  Coordinators and workers autonomously implement the frozen FS, test production routes, preserve
   evidence, and continue until the requested outcome is proved.
 
 **[See the complete de67 lifecycle and diagrams →](docs/how-de67-works.md)**
@@ -78,7 +78,7 @@ coordinator. This is the main steering wheel for Phase 3.
 
 ## Watch it work
 
-Phase 3 includes an optional passive website showing the live DFS, ledger, clock, workers,
+Phase 3 includes an optional passive website showing the live FS, ledger, clock, workers,
 coordinator, mutation state, and recent evidence. The dashboard cannot control or stop delivery.
 
 [![de67 dashboard overview](integrations/dashboard/dashboard.png)](integrations/dashboard/README.md)
@@ -95,7 +95,7 @@ coordinator, mutation state, and recent evidence. The dashboard cannot control o
 | Complete lifecycle and diagrams | [How de67 works](docs/how-de67-works.md) |
 | Installation and skill routing | [Skill router](SKILL.md) |
 | Discussion and the WEC | [de67 1](de-67-1/SKILL.md) |
-| Repository inspection and frozen DFS | [de67 2](de-67-2/SKILL.md) |
+| Repository inspection and frozen FS | [de67 2](de-67-2/SKILL.md) |
 | Autonomous delivery and mutation | [de67 3](de-67-3/SKILL.md) |
 | Steering a live Phase 3 run | [Mutation review](docs/how-de67-works.md#mutation-without-losing-the-work) |
 | Minimal-work reasoning | [MSW kernel](references/msw-kernel.md) |
@@ -113,6 +113,9 @@ Promote stable changes deliberately into the public release. Never overwrite the
 with a lab worktree. See [release promotion](RELEASE_PROMOTION.md).
 
 ## Credits
+
+- [@morganlinton](https://x.com/morganlinton) shared the VulcanBench comparison that informed
+  the advisory thinking-effort preferences.
 
 - Josef Horvath directed the product and method, contributed the imagination round, and supplied
   the live Cataclysm-AOL proving ground.

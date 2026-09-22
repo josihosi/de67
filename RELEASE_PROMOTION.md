@@ -26,6 +26,9 @@ into project `.de67/` state.
   coordinator runs, SQLite files, caches, and machine-specific paths may not.
 - Optional integrations remain optional. Core tests and ordinary supervision must pass with each
   integration absent, unconfigured, and broken.
+- A promoted Pit Crew candidate includes its `integrations/jev_pit_crew/` source, controlled
+  comparison fixture, focused tests, and a clean-copy check. It must remain provider-free by
+  default, coordinator-only, and isolated from the accepted Jev Telescope guard/package candidate.
 - Release-facing version notes and the new release tag are created in `de67`, not retroactively in
   lab history.
 

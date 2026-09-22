@@ -183,7 +183,7 @@ class SupervisorServiceTests(unittest.TestCase):
         remove.assert_not_called()
 
     def test_explicit_start_normalizes_runtime_ownership_but_preserves_project_truth(self):
-        dfs = self.workspace / ".de67/DFS.md"
+        dfs = self.workspace / ".de67/FS.md"
         ledger = self.workspace / ".de67/work-ledger.md"
         mutations = self.workspace / ".de67/mutation-suggestions.md"
         dfs.write_text("frozen product truth\n")
@@ -409,7 +409,7 @@ class SupervisorServiceTests(unittest.TestCase):
             workspace = (base / "workspace").resolve()
             state_root = workspace / ".de67/state"
             state_root.mkdir(parents=True)
-            shutil.copy2(environment_root / "DFS.md", workspace / ".de67/DFS.md")
+            shutil.copy2(environment_root / "FS.md", workspace / ".de67/FS.md")
             shutil.copy2(environment_root / "work-ledger.md", workspace / ".de67/work-ledger.md")
             shutil.copy2(
                 environment_root / "mutation-suggestions.md",
@@ -549,7 +549,7 @@ class SupervisorServiceTests(unittest.TestCase):
                 "mutation reviewer inspected editable state",
                 "post-mutation worker result",
             ])
-            self.assertIn("- [x] R-STACK", (workspace / ".de67/DFS.md").read_text())
+            self.assertIn("- [x] R-STACK", (workspace / ".de67/FS.md").read_text())
             self.assertNotIn("- [ ]", (workspace / ".de67/work-ledger.md").read_text())
             self.assertIn("Consumed by stack mutation reviewer", (
                 workspace / ".de67/mutation-suggestions.md").read_text())

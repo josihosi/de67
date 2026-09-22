@@ -9,7 +9,7 @@ durable artifact instead of inheriting an expanding conversation.
 flowchart LR
     Idea([Idea]) --> P1["de67 1<br/>Discuss"]
     P1 -->|WEC.md| P2["de67 2<br/>Specify"]
-    P2 -->|Frozen DFS.md| P3["de67 3<br/>Deliver"]
+    P2 -->|Frozen FS.md| P3["de67 3<br/>Deliver"]
     P3 --> Product([Working, proven software])
 ```
 
@@ -25,15 +25,15 @@ evidence, and restart generations across process boundaries.
 ```mermaid
 flowchart TD
     S[External supervisor] --> C[Coordinator]
-    C --> K{Read policy, DFS,<br/>ledger, and clock}
+    C --> K{Read policy, FS,<br/>ledger, and clock}
     K -->|executable work| T[Open or select task]
-    T --> W[Spawn Luna or Terra worker]
+    T --> W[Spawn Luna or Sol worker]
     W --> R[Durable worker result]
     R --> C
     C -->|gap remains or switch route| K
     C -->|live worker or external wait| Wait[Wait for an event]
     Wait --> C
-    C -->|DFS proved| Done([Complete])
+    C -->|FS proved| Done([Complete])
     C -->|mutation is due| Retire[Retire coordinator]
     Retire --> S
 ```

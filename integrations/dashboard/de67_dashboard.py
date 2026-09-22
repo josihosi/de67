@@ -257,18 +257,21 @@ def solar_filaments() -> str:
 def worker_emblem(model: str) -> str:
     emblem = ('<path fill="#7ee6c2" d="M25 4a14 14 0 1 0 0 28A16 16 0 0 1 25 4Z"/>'
               if model == "luna" else
-              '<circle cx="18" cy="18" r="14" fill="#77accb"/><path fill="#cee2e7" d="M9 8Q13 4 18 4L20 7 17 10 18 12 15 14 14 18 11 17 10 13 7 12ZM18 19Q22 17 25 20L25 24 22 27 21 30 19 28 19 24 16 22Z"/><path d="M6 16A12 12 0 0 1 13 7" fill="none" stroke="#e2f1f3" stroke-opacity=".45" stroke-width=".8" stroke-linecap="round"/>')
+              '<circle cx="18" cy="18" r="10" fill="#f2bd63"/>'
+              '<path d="M18 1v5m0 24v5M1 18h5m24 0h5M6 6l4 4m16 16 4 4M30 6l-4 4M10 26l-4 4" '
+              'stroke="#ffe0a1" stroke-width="2" stroke-linecap="round"/>'
+              if model == "sol" else '')
     if model == "astra":
         emblem = '<path fill="#fff0d6" d="m18 2 3.7 11.2L34 13l-9.8 7.4L28 32l-10-6.6L8 32l3.8-11.6L2 13l12.3.2Z"/><circle cx="18" cy="18" r="3" fill="#fffbe5"/>'
     return emblem
 
 
 def render_worker_scale(counts: dict[str, dict[str, int]]) -> str:
-    models = ("astra", "terra", "luna")
-    levels = ("low", "medium", "high", "max")
+    models = ("astra", "sol", "luna")
+    levels = ("low", "medium", "high", "xhigh", "max")
     marks = ['<line class="strength-axis" x1="48" y1="114" x2="348" y2="114"/>']
     for index, level in enumerate(levels):
-        x = 48 + index * 100
+        x = 48 + index * 300 // (len(levels) - 1)
         active = [model for model in models for _ in range(max(0, counts.get(model, {}).get(level, 0)))]
         marks.append(f'<circle class="strength-stop" cx="{x}" cy="114" r="2"/>')
         for model, (dx, dy) in zip(active, worker_dot_positions(len(active))):
@@ -521,25 +524,9 @@ def _read_snapshot(path: Path) -> tuple[str, dict[str, Any]]:
 
 
 def _read_specification_snapshot(path: Path) -> tuple[str, dict[str, Any]]:
-    """Read the migrated FS through the shared method resolver, without writes."""
-    if not (path.parent / "FS.md").exists():
-        return _read_snapshot(path)
-    import importlib.util
-    resolver = Path(os.environ.get(
-        "DE67_SPECIFICATION_SCRIPT",
-        str(Path.home() / ".codex/skills/de67/de-67-3/scripts/specification.py"),
-    ))
-    spec = importlib.util.spec_from_file_location("_de67_dashboard_specification", resolver)
-    if spec is None or spec.loader is None:
-        raise OSError("FS resolver is unavailable")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    selected = module.resolve(path.parent)
-    text, identity = _read_snapshot(selected.path)
-    if text != selected.text:
-        raise OSError("specification changed while it was being read")
-    identity["path"] = str(selected.path)
+    """Read the canonical FS with the same visible decode errors as other panels."""
+    text, identity = _read_snapshot(path)
+    identity["path"] = str(path)
     return text, identity
 
 
@@ -1336,8 +1323,8 @@ def _active_mutator(workspace: Path, sessions_root: Path) -> dict[str, str] | No
 
 def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     """Project active roster subagents from Codex's existing read-only session records."""
-    counts = {model: {effort: 0 for effort in ("low", "medium", "high", "max")}
-              for model in ("luna", "terra", "astra", "sol")}
+    counts = {model: {effort: 0 for effort in ("low", "medium", "high", "xhigh", "max")}
+              for model in ("luna", "sol", "astra")}
     mutator = _active_mutator(workspace, sessions_root)
     counted = {mutator["id"]} if mutator else set()
     if mutator:
@@ -1465,7 +1452,7 @@ def _trace_fuel(path: Path, *, windows: list[tuple[float, float | None]] | None 
     if cached is None or stat.st_size < cached["offset"] or cached["windows"] != selection:
         cached = {"offset": 0, "fresh": None, "observed": 0, "partial": False, "points": [],
                   "model": None, "effort": None, "worker_points": [], "windows": selection,
-                  "worker_totals": {"astra": 0, "terra": 0, "luna": 0, "other": 0}}
+                  "worker_totals": {"astra": 0, "sol": 0, "luna": 0, "other": 0}}
         _TOKEN_TRACES[key] = cached
 
     def record(delta: int, timestamp: float | None = None) -> None:
@@ -1477,7 +1464,7 @@ def _trace_fuel(path: Path, *, windows: list[tuple[float, float | None]] | None 
                        for start, end in selection):
                 return
         model = str(cached["model"]).lower().rsplit("-", 1)[-1]
-        role = model if model in ("astra", "terra", "luna") else "other"
+        role = model if model in ("astra", "sol", "luna") else "other"
         cached["observed"] += delta
         cached["worker_totals"][role] += delta
         if timestamp is not None:
@@ -1602,7 +1589,7 @@ def fuel_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
                     session_windows.setdefault(session, []).extend(worker_windows[root])
     finally:
         connection.close()
-    totals = {"astra": 0, "coordinator": 0, "terra": 0, "luna": 0, "other": 0}
+    totals = {"astra": 0, "coordinator": 0, "sol": 0, "luna": 0, "other": 0}
     known = 0
     now = time.time()
     bins = [0] * 24  # One-hour display bins over the last twenty-four hours.
@@ -1652,7 +1639,7 @@ def render_fuel(fuel: dict[str, Any]) -> str:
     def axis_label(value: float) -> str:
         return f"{value / 1000000:g}m" if value >= 1000000 else f"{value / 1000:g}k" if value >= 1000 else f"{value:g}"
     roles = [("astra", "astra", "#fff0d6"), ("coordinator", "coordinator", "#eabd69"),
-             ("terra", "worker terra", "#77accb"), ("luna", "worker luna", "#82dfbd")]
+             ("sol", "worker sol", "#f2bd63"), ("luna", "worker luna", "#82dfbd")]
     if totals.get("other", 0):
         roles.append(("other", "other workers", "#9997a0"))
     cumulative = [0] * len(bins)
@@ -2024,7 +2011,7 @@ class Dashboard:
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             root = self.workspace / ".de67"
-            dfs = self._markdown_source("dfs", root / "DFS.md")
+            dfs = self._markdown_source("dfs", root / "FS.md")
             ledger = self._markdown_source("ledger", root / "work-ledger.md")
             clock = self._clock_source()
             clock_data = clock.get("data", {})
@@ -2170,9 +2157,18 @@ class Dashboard:
                          "unknown" if coordinator == "unknown" else "off")
             astra_counts = worker_counts.get("astra", {})
             astra_total = sum(astra_counts.values())
-            astra_state = "on" if astra_total else "off" if workers.get("available") else "unknown"
-            astra_label = (f"Astra: {astra_total} active · workers and mutator" if workers.get("available")
-                           else "Astra: activity unavailable")
+            mutator_activity = state.get("mutator_activity") or {}
+            if mutation_running:
+                astra_state, astra_label = "on", "Astra mutator: reviewing"
+            elif mutator_activity.get("glowing"):
+                astra_state = "on"
+                astra_label = "Astra mutator: " + str(mutator_activity.get("status", "working"))
+            elif astra_total:
+                astra_state, astra_label = "on", f"Astra: {astra_total} active"
+            elif workers.get("available") or mutator_activity.get("status") in {"idle", "disabled"}:
+                astra_state, astra_label = "off", "Astra mutator: idle"
+            else:
+                astra_state, astra_label = "unknown", "Astra: activity unavailable"
             sun_activity = process.get("activity", "unknown") if sun_state == "on" else sun_state
             import random
             rng = random.Random(67)
@@ -2412,7 +2408,7 @@ nav{{margin:16px 0 24px;border-color:#30303b}}nav a{{font-size:11px}}
 .cosmos .scale-heading strong{{font-size:13px;font-weight:400;color:#c7ccd7}}
 .cosmos .scale-heading span{{display:none}}
 .cosmos .model-emblem{{grid-column:2;grid-row:2;align-self:start;width:30px;height:30px;margin:9px 0 0}}
-.cosmos .worker-scale[data-model="terra"] .worker-dot{{fill:#8abbd6}}
+.cosmos .worker-scale[data-model="sol"] .worker-dot{{fill:#f2bd63}}
 .cosmos .worker-scale[data-model="luna"] .worker-dot{{fill:#7ee6c2}}
 .cosmos .worker-scale[data-model="astra"] .worker-dot{{fill:#fff0d6;filter:drop-shadow(0 0 4px #ffdc9d)}}
 .cosmos .worker-scale[data-model="astra"] .model-emblem{{filter:drop-shadow(0 0 4px #ffdc9d)}}

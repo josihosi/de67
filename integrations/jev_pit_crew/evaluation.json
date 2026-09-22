@@ -1,0 +1,41 @@
+{
+  "schema": "de67.pit-crew-evaluation.v1",
+  "cases": [
+    {
+      "id": "relevant-new-evidence",
+      "scenario": "relevant_new_evidence",
+      "independent_labels": ["relevant_new_evidence"],
+      "stub_choices": ["relevant_new_evidence"],
+      "stub_usage": {"calls": 1, "input_tokens": 18, "output_tokens": 3},
+      "effort": {"baseline_follow_up_minutes": 8, "advisory_follow_up_minutes": 5},
+      "outcome": "The controlled on arm would enqueue one coordinator advisory."
+    },
+    {
+      "id": "duplicated-investigation",
+      "scenario": "duplicated_investigation",
+      "independent_labels": ["duplicated_investigation"],
+      "stub_choices": [],
+      "stub_usage": {"calls": 1, "input_tokens": 16, "output_tokens": 2},
+      "effort": {"baseline_follow_up_minutes": 6, "advisory_follow_up_minutes": 6},
+      "outcome": "The controlled stub misses the independently labeled duplicate; no benefit is claimed."
+    },
+    {
+      "id": "challenged-assumption",
+      "scenario": "challenged_assumption",
+      "independent_labels": ["challenged_assumption"],
+      "stub_choices": ["challenged_assumption"],
+      "stub_usage": {"calls": 1, "input_tokens": 20, "output_tokens": 4},
+      "effort": {"baseline_follow_up_minutes": 10, "advisory_follow_up_minutes": 7},
+      "outcome": "The controlled on arm would preserve a challenge advisory for coordinator review."
+    },
+    {
+      "id": "irrelevant-control",
+      "scenario": "irrelevant_control",
+      "independent_labels": [],
+      "stub_choices": ["relevant_new_evidence"],
+      "stub_usage": {"calls": 1, "input_tokens": 12, "output_tokens": 2},
+      "effort": {"baseline_follow_up_minutes": 0, "advisory_follow_up_minutes": 3},
+      "outcome": "The controlled stub emits an irrelevant relationship; the comparison retains that negative result."
+    }
+  ]
+}

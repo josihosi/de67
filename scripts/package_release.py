@@ -19,7 +19,9 @@ ROOT_FILES = {"SKILL.md", "README.md", "LICENSE", "RELEASE_PROMOTION.md"}
 CORE_ROOTS = {"agents", "references", "de-67-1", "de-67-2", "de-67-3",
               "alignment-audit", "release-packaging", "scripts", "tests", "docs"}
 ADDONS = {"dashboard": {"dashboard"},
-          "discord": {"openclaw_discord", "direct_input", "openclaw_advisory"}}
+          "discord": {"openclaw_discord", "direct_input", "openclaw_advisory"},
+          "jev-telescope": {"jev_telescope"},
+          "jev-pit-crew": {"jev_pit_crew"}}
 
 
 def package_for(path: str) -> str | None:

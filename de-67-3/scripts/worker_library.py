@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from contextlib import closing
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,42 @@ BINDING_FIELDS = ("workspace", "run_id", "thread_id", "runner_pid", "server_pid"
 
 def _root(workspace: Path) -> Path:
     return Path(workspace).resolve() / ".de67/state/worker-library"
+
+
+def _pit_crew_boundary(workspace: Path, assignment: Mapping[str, Any]) -> None:
+    """Offer one completed audit append to the optional Pit Crew package.
+
+    The core worker library must remain ordinary and usable when the optional
+    package is absent, malformed, disabled, or otherwise unavailable.  This
+    deliberately gives Pit Crew no RPC, harness, or coordinator object.
+    """
+    try:
+        config_path = Path(workspace).resolve() / ".de67/state/workspace.json"
+        value = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+        config = value.get("jev_pit_crew") if isinstance(value, dict) else None
+        if not isinstance(config, dict) or config.get("mode") not in {"shadow", "on"}:
+            return
+        source = Path(__file__).resolve().parents[2] / "integrations/jev_pit_crew/pit_crew.py"
+        if not source.is_file():
+            return
+        module_name = "_de67_optional_pit_crew_" + hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
+        module = sys.modules.get(module_name)
+        if module is None:
+            spec = importlib.util.spec_from_file_location(module_name, source)
+            if spec is None or spec.loader is None:
+                return
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            try:
+                spec.loader.exec_module(module)
+            except Exception:
+                sys.modules.pop(module_name, None)
+                return
+        module.observe_boundary(Path(workspace), dict(assignment))
+    except Exception:
+        # An optional advisory must never block an audit event or alter worker
+        # dispatch semantics.  Its own durable state is inspectable when enabled.
+        return
 
 
 def _connect(workspace: Path, *, write: bool = False) -> sqlite3.Connection | None:
@@ -365,7 +402,8 @@ def retire(workspace: Path, name: str, *, environment: Mapping[str, str] | None 
 
 
 def owned_assignments(workspace: Path, state: Path, lineage: str,
-                      coordinator_session_id: str | None = None) -> dict[str, str]:
+                      coordinator_session_id: str | None = None, *,
+                      execution_supervisor_id: str | None = None) -> dict[str, str]:
     """Return registry-backed durable ownership, not a process-liveness claim."""
     result: dict[str, str] = {}
     db = _connect(workspace)
@@ -377,7 +415,14 @@ def owned_assignments(workspace: Path, state: Path, lineage: str,
             (str(Path(state).resolve()), lineage)).fetchall()
         for row in rows:
             binding = json.loads(row["binding"])
+            if (binding.get("workspace") != str(Path(workspace).resolve())
+                    or binding.get("deadline_state") != str(Path(state).resolve())
+                    or binding.get("lineage") != lineage):
+                continue
             if coordinator_session_id is not None and binding["thread_id"] != coordinator_session_id:
+                continue
+            if (execution_supervisor_id is not None
+                    and str(binding["supervisor_id"]) != str(execution_supervisor_id)):
                 continue
             task = _task(state, lineage, row["task_id"])
             if (task["attempt_terminal_at"] is None and task["released_at"] is None
@@ -419,10 +464,12 @@ def worker_owners(workspace: Path, state: Path, lineage: str) -> dict[str, str]:
 
 
 def owns_assignment(workspace: Path, task_id: str, worker_id: str, coordinator_session_id: str,
-                    state: Path | None = None, lineage: str | None = None) -> bool:
+                    state: Path | None = None, lineage: str | None = None, *,
+                    execution_supervisor_id: str | None = None) -> bool:
     if state is None or lineage is None:
         return False
-    return owned_assignments(workspace, state, lineage, coordinator_session_id).get(task_id) == worker_id
+    return owned_assignments(workspace, state, lineage, coordinator_session_id,
+                             execution_supervisor_id=execution_supervisor_id).get(task_id) == worker_id
 
 
 def request_status(workspace: Path, request_id: str) -> dict[str, Any]:
@@ -503,6 +550,7 @@ class WorkerDispatcher:
         with path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"worker_name": assignment["name"], "task_id": assignment["task_id"],
                                      "observed_at": time.time(), **message}, ensure_ascii=False) + "\n")
+        _pit_crew_boundary(self.workspace, assignment)
 
     def _prepared_delivery(self, assignment: Mapping[str, Any], worker_id: str | None) -> tuple[str, dict[str, Any]]:
         from worker_packet import delivery_text
@@ -800,6 +848,14 @@ class WorkerDispatcher:
             self._checkpoint(assignment, "worker-return", evidence)
             self._notice(assignment, "Worker " + assignment["name"] + " " + status + " on task " + assignment["task_id"]
                          + ". Result: " + str(artifact) + ". This is nonterminal evidence; inspect it and use the existing receipt/task lifecycle.")
+            if status in {"returned", "failed", "interrupted"}:
+                # Preserve the durable conversation; release our live subscription so
+                # App Server can evict it after its idle grace period. Reuse resumes it.
+                try:
+                    self.rpc.call("thread/unsubscribe", {"threadId": worker_id})
+                except Exception as error:
+                    self._audit(assignment, {"method": "de67/workerUnload/failed",
+                                "params": {"threadId": worker_id, "error": str(error)}})
         return True
 
     def has_active_turns(self) -> bool:

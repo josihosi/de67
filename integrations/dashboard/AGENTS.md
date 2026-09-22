@@ -8,6 +8,8 @@
 - A source failure must degrade only its own panel. Preserve the last good panel in memory and make
   staleness visible.
 - Bind to loopback by default. LAN exposure is an explicit owner choice.
+- Generate release screenshots from a synthetic workspace and label them as demos. Regenerate the
+  README image when the worker roster or dashboard visualization changes.
 
 - The bundled `live_refresh.js` may fetch same-origin dashboard snapshots and update display DOM.
   Keep CSP restricted to same-origin scripts/connections; never execute workspace-derived markup.

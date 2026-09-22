@@ -14,7 +14,7 @@ The normalization epoch also consumes all prior worker-result routing events. Ad
 `restart_normalized` attempts are terminal history, not fresh completion, finding, or abandonment
 events for the new coordinator to ingest.
 
-Normalization preserves project truth and durable evidence: `.de67/DFS.md`, the work ledger, the
+Normalization preserves project truth and durable evidence: `.de67/FS.md`, the work ledger, the
 mutation-suggestion ledger, completed attempts, findings, incidents, mutation state, and semantic
 restart generations. The fresh coordinator reads those artifacts and may dispatch new attempts for
 unfinished ledger work.
@@ -34,4 +34,4 @@ coordinator may resume the same worker with `message`; an active or uncertain tu
 exclusive review. Explicit external starts retain the normalization behavior described above.
 
 Use `supervisor_service.py status` and `stop` for observation and shutdown. A stopped service never
-implies that DFS or ledger work is complete.
+implies that FS or ledger work is complete.

@@ -18,11 +18,12 @@ from typing import NamedTuple
 SCRIPT_ROOT = str(Path(__file__).resolve().parent)
 if SCRIPT_ROOT not in sys.path:
     sys.path.insert(0, SCRIPT_ROOT)
-from specification import SpecificationError, resolve_path
+from specification import FS_FILE, SpecificationError, resolve_path
 
 
 TASK_GUIDELINES = "test-and-task-guidelines.md"
 GUIDELINE_FILES = (TASK_GUIDELINES,)
+# Historical SQLite lane and receipt label, never a filesystem path.
 DFS_FILE = "DFS.md"
 MUTATION_LEDGER = "mutation-suggestions.md"
 RANDOM_MUTATION_LANES = (*GUIDELINE_FILES, DFS_FILE)
@@ -89,7 +90,7 @@ class GuardError(RuntimeError):
 
 
 class DfsSlice(NamedTuple):
-    """One validated durable DFS context slice."""
+    """One validated durable FS context slice."""
 
     slice_id: str
     claim_id: str
@@ -390,11 +391,11 @@ def require_universal_random_review(
         or row["selected_lane"] != DFS_FILE
     ):
         raise GuardError(
-            "Universal review is due only for the persisted 30-attempt DFS draw"
+            "Universal review is due only for the persisted 30-attempt FS draw"
         )
     if not bool(row["universal_required"]):
         reason = row["universal_capability_reason"] or (
-            "the due-time workspace roster did not prove gpt-5.6-sol/ultra"
+            "the due-time workspace roster did not prove gpt-6-sol/ultra"
         )
         raise GuardError(f"Universal review was deferred at due time: {reason}")
     if (
@@ -431,7 +432,7 @@ def require_universal_reviewer_capability(cycle: sqlite3.Row) -> str:
 def universal_candidate_digest(
     candidate_root: Path, dfs_candidate: Path | None = None
 ) -> str:
-    """Digest the complete isolated candidate, including an optional DFS."""
+    """Digest the complete isolated candidate, including an optional FS."""
 
     digest = hashlib.sha256()
     for relative, content in sorted(_method_files(candidate_root).items()):
@@ -659,7 +660,7 @@ def _ensure_universal_receipt_schema(connection: sqlite3.Connection) -> None:
             changed_paths TEXT NOT NULL,
             interval_windows INTEGER NOT NULL CHECK (interval_windows = 30),
             selected_lane TEXT NOT NULL CHECK (selected_lane = 'DFS.md'),
-            reviewer_model TEXT NOT NULL CHECK (reviewer_model = 'gpt-5.6-sol'),
+            reviewer_model TEXT NOT NULL CHECK (reviewer_model IN ('gpt-5.6-sol', 'gpt-6-sol')),
             reviewer_effort TEXT NOT NULL CHECK (reviewer_effort = 'ultra'),
             capability_roster_digest TEXT,
             UNIQUE (lineage_id, cycle_number, receipt_id),
@@ -677,6 +678,38 @@ def _ensure_universal_receipt_schema(connection: sqlite3.Connection) -> None:
     if "capability_roster_digest" not in receipt_columns:
         connection.execute(
             "ALTER TABLE universal_review_receipts ADD COLUMN capability_roster_digest TEXT"
+        )
+    schema_row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'universal_review_receipts'"
+    ).fetchone()
+    schema = str(schema_row[0]) if schema_row else ""
+    if "gpt-6-sol" not in schema:
+        old_check = r"CHECK\s*\(\s*reviewer_model\s*=\s*'gpt-5\.6-sol'\s*\)"
+        widened, replacements = re.subn(
+            old_check,
+            "CHECK (reviewer_model IN ('gpt-5.6-sol', 'gpt-6-sol'))",
+            schema,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        widened, table_replacements = re.subn(
+            r"\bCREATE TABLE(?: IF NOT EXISTS)? universal_review_receipts\b",
+            "CREATE TABLE universal_review_receipts_v2",
+            widened,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if replacements != 1 or table_replacements != 1:
+            raise GuardError("Unsupported universal review receipt schema")
+        connection.execute("DROP TRIGGER IF EXISTS universal_review_receipts_cannot_change")
+        connection.execute("DROP TRIGGER IF EXISTS universal_review_receipts_cannot_be_deleted")
+        connection.execute(widened)
+        connection.execute(
+            "INSERT INTO universal_review_receipts_v2 SELECT * FROM universal_review_receipts"
+        )
+        connection.execute("DROP TABLE universal_review_receipts")
+        connection.execute(
+            "ALTER TABLE universal_review_receipts_v2 RENAME TO universal_review_receipts"
         )
     connection.execute(
         """
@@ -721,7 +754,7 @@ def persist_universal_review_receipt(
         "changed_paths": list(changed_paths),
         "interval_windows": 30,
         "selected_lane": DFS_FILE,
-        "reviewer_model": "gpt-5.6-sol",
+        "reviewer_model": "gpt-6-sol",
         "reviewer_effort": "ultra",
         "capability_roster_digest": capability_roster_digest,
     }
@@ -767,7 +800,7 @@ def persist_universal_review_receipt(
                 != capability_roster_digest
         ):
             raise GuardError(
-                "Universal receipt requires the still-due persisted 30-attempt DFS draw"
+                "Universal receipt requires the still-due persisted 30-attempt FS draw"
             )
         connection.execute(
             """
@@ -776,7 +809,7 @@ def persist_universal_review_receipt(
                 candidate_digest, changed_paths, interval_windows,
                 selected_lane, reviewer_model, reviewer_effort,
                 capability_roster_digest
-            ) VALUES (?, ?, ?, ?, ?, ?, 30, 'DFS.md', 'gpt-5.6-sol', 'ultra', ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, 30, 'DFS.md', 'gpt-6-sol', 'ultra', ?)
             """,
             (
                 receipt_id,
@@ -835,14 +868,10 @@ def validate_random_review_mutation(
         name: read_markdown(candidate_root / name)
         for name in GUIDELINE_FILES
     }
-    # ``DFS.md`` remains the durable lane/receipt label, but after migration it
-    # is a hash-bound compatibility handle rather than the contract itself.
-    # Resolve both roots before comparing them so a stale redirect cannot make
-    # a changed FS invisible, and so a valid redirect is checked against the
-    # canonical content instead of being parsed as a specification.
+    # Existing receipts keep their lane label; the contract has one filename.
     try:
-        baseline_specification = resolve_path(baseline_root / DFS_FILE)
-        candidate_specification = resolve_path(candidate_root / DFS_FILE)
+        baseline_specification = resolve_path(baseline_root / FS_FILE)
+        candidate_specification = resolve_path(candidate_root / FS_FILE)
     except SpecificationError as error:
         raise GuardError(str(error)) from error
     baseline_files[DFS_FILE] = baseline_specification.text
@@ -938,7 +967,7 @@ def _normalize_reference(value: str) -> str:
     normalized = " ".join(value.strip().split())
     if normalized.startswith("🔴 "):
         normalized = normalized[2:].strip()
-    for prefix in ("DFS claim:", "Claim:"):
+    for prefix in ("FS claim:", "DFS claim:", "Claim:"):
         if normalized.casefold().startswith(prefix.casefold()):
             normalized = normalized[len(prefix) :].strip()
             break
@@ -1015,7 +1044,7 @@ def validate_accepted_task_state(
             f"Deadline task claim {row['claim_id']} does not match selected claim {expected_claim}"
         )
     if row["integrity_breached_at"] is not None or row["has_integrity_incident"]:
-        raise GuardError("An integrity breach invalidates DFS completion")
+        raise GuardError("An integrity breach invalidates FS completion")
     if (
         row["phase_at_dispatch"] != "closure"
         or row["attempt_terminal_kind"] != "completed"
@@ -1132,7 +1161,7 @@ def validate_invalidated_claim_state(
     if acceptance is None:
         raise GuardError(f"Claim has no recorded acceptance: {lineage_id}/{expected_claim}")
     if valid is not None:
-        raise GuardError("A currently valid acceptance prevents DFS reopening")
+        raise GuardError("A currently valid acceptance prevents FS reopening")
     if acceptance["invalidated_at"] is None:
         raise GuardError("Latest claim acceptance has not been invalidated")
     if not str(acceptance["evidence"] or "").strip():
@@ -1191,7 +1220,7 @@ def worker_finding_from_state(
     if row["evidence"] is None or not str(row["evidence"]).strip():
         raise GuardError("Stored worker finding has no evidence")
     if row["completed_at"] is not None:
-        raise GuardError("A completed task cannot authorize DFS expansion")
+        raise GuardError("A completed task cannot authorize FS expansion")
     if row["integrity_breached_at"] is not None or row["has_integrity_incident"]:
         raise GuardError("An integrity breach invalidates the worker finding")
     return str(row["claim_id"]), str(row["kind"])
@@ -1226,7 +1255,7 @@ def _exact_markdown_section(text: str, heading: str) -> str:
     sections = _markdown_sections(text)
     matches = [section for section in sections if section[2] == heading]
     if len(matches) != 1:
-        raise GuardError(f"DFS must contain exactly one {heading!r} section")
+        raise GuardError(f"FS must contain exactly one {heading!r} section")
     start, level, _ = matches[0]
     end = len(lines)
     for index, other_level, _ in sections:
@@ -1261,7 +1290,7 @@ def _claims_by_id(
     for record in records:
         claim_id = record[0]
         if claim_id in claims:
-            raise GuardError(f"{version} DFS has duplicate stable claim id: {claim_id}")
+            raise GuardError(f"{version} FS has duplicate stable claim id: {claim_id}")
         claims[claim_id] = record
     return claims
 
@@ -1271,7 +1300,7 @@ def _require_baseline_line_subsequence(baseline: str, candidate: str) -> None:
     for baseline_line in baseline.splitlines(keepends=True):
         if not any(line == baseline_line for line in remaining):
             raise GuardError(
-                "DFS expansion cannot delete or rewrite any baseline line"
+                "FS expansion cannot delete or rewrite any baseline line"
             )
 
 
@@ -1287,7 +1316,7 @@ def _validate_append_only_dfs(
         if _exact_markdown_section(baseline, heading) != _exact_markdown_section(
             proposed, heading
         ):
-            raise GuardError(f"DFS expansion cannot change {heading}")
+            raise GuardError(f"FS expansion cannot change {heading}")
     _require_baseline_line_subsequence(baseline, proposed)
 
     baseline_records = _stable_claim_records(baseline)
@@ -1300,7 +1329,7 @@ def _validate_append_only_dfs(
         task_claim = baseline_by_id.get(task_claim_id)
         if task_claim is None or task_claim[1] != " " or not task_claim[2]:
             raise GuardError(
-                "Worker finding task claim is not exactly one still-red DFS claim: "
+                "Worker finding task claim is not exactly one still-red FS claim: "
                 f"{task_claim_id}"
             )
 
@@ -1312,24 +1341,24 @@ def _validate_append_only_dfs(
         claim_id = record[0]
         candidate_record = candidate_by_id.get(claim_id)
         if candidate_record is None:
-            raise GuardError(f"DFS expansion cannot delete stable claim {claim_id}")
+            raise GuardError(f"FS expansion cannot delete stable claim {claim_id}")
         if candidate_record[3] != record[3]:
             raise GuardError(
-                f"DFS expansion cannot rename, rewrite, or change status of stable claim {claim_id}"
+                f"FS expansion cannot rename, rewrite, or change status of stable claim {claim_id}"
             )
         position = candidate_positions[claim_id]
         if position <= prior_position:
-            raise GuardError("DFS expansion cannot reorder existing stable claims")
+            raise GuardError("FS expansion cannot reorder existing stable claims")
         prior_position = position
 
     new_records = [
         record for record in candidate_records if record[0] not in baseline_by_id
     ]
     if not new_records:
-        raise GuardError("DFS expansion must add at least one new red claim")
+        raise GuardError("FS expansion must add at least one new red claim")
     for record in new_records:
         if record[1] != " " or not record[2] or RED_CLAIM.match(record[3]) is None:
-            raise GuardError(f"New DFS claim must be unchecked and red: {record[0]}")
+            raise GuardError(f"New FS claim must be unchecked and red: {record[0]}")
     return tuple(record[0] for record in new_records)
 
 
@@ -1407,9 +1436,9 @@ def validate_owner_suggestion_consumption(before: Path, candidate: Path) -> tupl
             raise GuardError("Ledger candidate added or rewrote a pending suggestion")
         remaining.remove(entry)
     if not remaining:
-        raise GuardError("Owner DFS expansion must consume at least one pending suggestion")
+        raise GuardError("Owner FS expansion must consume at least one pending suggestion")
     if any(not entry.startswith("- Owner-authorized") for entry in remaining):
-        raise GuardError("Owner DFS expansion may consume only owner-authorized suggestions")
+        raise GuardError("Owner FS expansion may consume only owner-authorized suggestions")
     return tuple(entry.splitlines()[0][2:].strip() for entry in remaining)
 
 
@@ -1419,7 +1448,7 @@ def validate_owner_dfs_expansion(
     ledger_before: Path,
     ledger_candidate: Path,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Guard a same-outcome DFS expansion authorized by pending owner guidance."""
+    """Guard a same-outcome FS expansion authorized by pending owner guidance."""
 
     consumed = validate_owner_suggestion_consumption(ledger_before, ledger_candidate)
     baseline = read_markdown(before)
@@ -1433,7 +1462,7 @@ def validate_owner_dfs_expansion(
     for frozen, refrozen in refreeze_pairs:
         if frozen in baseline:
             if refrozen not in normalized:
-                raise GuardError(f"Owner DFS expansion must refreeze through {refrozen!r}")
+                raise GuardError(f"Owner FS expansion must refreeze through {refrozen!r}")
             normalized = normalized.replace(refrozen, frozen, 1)
     descriptor, temporary_name = tempfile.mkstemp(suffix=".owner-dfs.md")
     temporary = Path(temporary_name)
@@ -1478,7 +1507,7 @@ def _atomic_write_utf8(path: Path, text: str) -> None:
 
 
 def _write_stdout_utf8(text: str) -> None:
-    """Emit extracted DFS text without inheriting a legacy console code page."""
+    """Emit extracted FS text without inheriting a legacy console code page."""
 
     binary = getattr(sys.stdout, "buffer", None)
     if binary is None:
@@ -1489,7 +1518,7 @@ def _write_stdout_utf8(text: str) -> None:
 
 
 def parse_dfs_slices(dfs_text: str) -> tuple[DfsSlice, ...]:
-    """Validate and return every durable properly nested DFS slice marker pair."""
+    """Validate and return every durable properly nested FS slice marker pair."""
 
     lines = dfs_text.splitlines(keepends=True)
     markers: dict[int, re.Match[str]] = {}
@@ -1507,14 +1536,14 @@ def parse_dfs_slices(dfs_text: str) -> tuple[DfsSlice, ...]:
             continue
         if fence_character is not None or fence is not None:
             raise GuardError(
-                f"DFS slice marker token is not allowed in a fenced block on line {index + 1}"
+                f"FS slice marker token is not allowed in a fenced block on line {index + 1}"
             )
         marker = DFS_SLICE_MARKER.fullmatch(body)
         if marker is None:
-            raise GuardError(f"Malformed DFS slice marker on line {index + 1}")
+            raise GuardError(f"Malformed FS slice marker on line {index + 1}")
         if not marker.group("id").startswith(f"{marker.group('claim')}-S"):
             raise GuardError(
-                f"DFS slice id is not bound to its marker claim on line {index + 1}"
+                f"FS slice id is not bound to its marker claim on line {index + 1}"
             )
         markers[index] = marker
 
@@ -1532,21 +1561,21 @@ def parse_dfs_slices(dfs_text: str) -> tuple[DfsSlice, ...]:
         claim_id = marker.group("claim")
         if kind == "BEGIN":
             if slice_id in seen_ids:
-                raise GuardError(f"Duplicate DFS slice marker id: {slice_id}")
+                raise GuardError(f"Duplicate FS slice marker id: {slice_id}")
             seen_ids.add(slice_id)
             active.append((slice_id, claim_id, index, logical_line))
             continue
         if not active:
-            raise GuardError(f"DFS slice END has no matching BEGIN: {slice_id}")
+            raise GuardError(f"FS slice END has no matching BEGIN: {slice_id}")
         begin_id, begin_claim, begin_index, logical_before = active[-1]
         if slice_id != begin_id or claim_id != begin_claim:
             raise GuardError(
-                "DFS slice markers are crossed or bind different ids/claims"
+                "FS slice markers are crossed or bind different ids/claims"
             )
         logical_start = logical_before + 1
         logical_end = logical_line
         if logical_end < logical_start:
-            raise GuardError(f"DFS slice is empty: {slice_id}")
+            raise GuardError(f"FS slice is empty: {slice_id}")
         slices.append(
             DfsSlice(
                 slice_id=slice_id,
@@ -1565,13 +1594,13 @@ def parse_dfs_slices(dfs_text: str) -> tuple[DfsSlice, ...]:
         )
         active.pop()
     if active:
-        raise GuardError(f"DFS slice BEGIN has no matching END: {active[-1][0]}")
+        raise GuardError(f"FS slice BEGIN has no matching END: {active[-1][0]}")
     bindings: set[tuple[str, int, int]] = set()
     for item in slices:
         binding = (item.claim_id, item.logical_start, item.logical_end)
         if binding in bindings:
             raise GuardError(
-                "A claim cannot bind two DFS slice ids to the same logical range: "
+                "A claim cannot bind two FS slice ids to the same logical range: "
                 f"{item.claim_id} {item.logical_start}:{item.logical_end}"
             )
         bindings.add(binding)
@@ -1579,7 +1608,7 @@ def parse_dfs_slices(dfs_text: str) -> tuple[DfsSlice, ...]:
 
 
 def strip_dfs_slice_markers(dfs_text: str) -> str:
-    """Return exact DFS text with only validated marker lines removed."""
+    """Return exact FS text with only validated marker lines removed."""
 
     parse_dfs_slices(dfs_text)
     return "".join(
@@ -1590,7 +1619,7 @@ def strip_dfs_slice_markers(dfs_text: str) -> str:
 
 
 def validate_dfs_slice_candidate(before: Path, candidate: Path) -> tuple[str, ...]:
-    """Prove an anchor-only candidate preserves every semantic DFS byte."""
+    """Prove an anchor-only candidate preserves every semantic FS byte."""
 
     baseline = _read_utf8_exact(before)
     proposed = _read_utf8_exact(candidate)
@@ -1598,7 +1627,7 @@ def validate_dfs_slice_candidate(before: Path, candidate: Path) -> tuple[str, ..
     candidate_slices = parse_dfs_slices(proposed)
     if strip_dfs_slice_markers(baseline) != strip_dfs_slice_markers(proposed):
         raise GuardError(
-            "DFS slice candidate changes content other than validated marker lines"
+            "FS slice candidate changes content other than validated marker lines"
         )
     candidate_by_id = {item.slice_id: item for item in candidate_slices}
     for item in baseline_slices:
@@ -1615,7 +1644,7 @@ def validate_dfs_slice_candidate(before: Path, candidate: Path) -> tuple[str, ..
             item.content,
         ):
             raise GuardError(
-                f"DFS slice candidate removes or rebinds durable slice {item.slice_id}"
+                f"FS slice candidate removes or rebinds durable slice {item.slice_id}"
             )
     baseline_ids = {item.slice_id for item in baseline_slices}
     return tuple(
@@ -1636,7 +1665,7 @@ def _slice_id(
     ordinal = max(used_ordinals, default=0) + 1
     candidate = f"{prefix}{ordinal:03d}"
     if candidate in occupied:
-        raise GuardError(f"Cannot allocate a collision-free DFS slice id: {candidate}")
+        raise GuardError(f"Cannot allocate a collision-free FS slice id: {candidate}")
     return candidate
 
 
@@ -1669,7 +1698,7 @@ def _acquire_dfs_path_locks(paths: tuple[Path, ...]) -> tuple[tuple[int, Path], 
                 )
             except FileExistsError as error:
                 raise GuardError(
-                    f"DFS slice path is locked by another marker operation: {lock_path}"
+                    f"FS slice path is locked by another marker operation: {lock_path}"
                 ) from error
             acquired.append((descriptor, lock_path))
             os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii"))
@@ -1696,7 +1725,7 @@ def insert_dfs_slices(
     selected_claim: str,
     ranges: tuple[tuple[int, int], ...],
 ) -> tuple[str, ...]:
-    """Lock, validate, and atomically insert durable DFS slice markers."""
+    """Lock, validate, and atomically insert durable FS slice markers."""
 
     locks = _acquire_dfs_path_locks((source, output))
     try:
@@ -1714,7 +1743,7 @@ def _insert_dfs_slices_locked(
     """Allocate stable ids and atomically insert markers around logical lines."""
 
     if not ranges:
-        raise GuardError("DFS slice insertion needs at least one inclusive line range")
+        raise GuardError("FS slice insertion needs at least one inclusive line range")
     claim_id = _selected_claim_id(selected_claim)
     baseline = _read_utf8_exact(source)
     existing = parse_dfs_slices(baseline)
@@ -1724,7 +1753,7 @@ def _insert_dfs_slices_locked(
     ]
     if len(claim_records) != 1:
         raise GuardError(
-            f"DFS slice claim must identify exactly one stable DFS claim: {claim_id}"
+            f"FS slice claim must identify exactly one stable FS claim: {claim_id}"
         )
 
     semantic_lines = semantic.splitlines(keepends=True)
@@ -1733,11 +1762,11 @@ def _insert_dfs_slices_locked(
     for start, end in normalized_ranges:
         if start < 1 or end < start or end > len(semantic_lines):
             raise GuardError(
-                f"Invalid inclusive DFS slice range {start}:{end}; "
-                f"logical DFS has {len(semantic_lines)} lines"
+                f"Invalid inclusive FS slice range {start}:{end}; "
+                f"logical FS has {len(semantic_lines)} lines"
             )
         if start <= prior_end:
-            raise GuardError("DFS slice ranges must be disjoint and non-overlapping")
+            raise GuardError("FS slice ranges must be disjoint and non-overlapping")
         prior_end = end
 
     occupied = {item.slice_id for item in existing}
@@ -1764,7 +1793,7 @@ def _insert_dfs_slices_locked(
                 continue
         if any(item.claim_id == claim_id for item in overlaps):
             raise GuardError(
-                f"DFS slices for {claim_id} must be non-overlapping; "
+                f"FS slices for {claim_id} must be non-overlapping; "
                 f"range {start}:{end} overlaps an existing slice"
             )
         crossing = [
@@ -1778,7 +1807,7 @@ def _insert_dfs_slices_locked(
         if crossing:
             item = crossing[0]
             raise GuardError(
-                f"DFS slice range {start}:{end} crosses existing slice "
+                f"FS slice range {start}:{end} crosses existing slice "
                 f"{item.slice_id} at {item.logical_start}:{item.logical_end}"
             )
 
@@ -1827,7 +1856,7 @@ def _insert_dfs_slices_locked(
         if temporary_candidate.exists():
             temporary_candidate.unlink()
     if _read_utf8_exact(source) != baseline:
-        raise GuardError("DFS source changed while slice markers were being prepared")
+        raise GuardError("FS source changed while slice markers were being prepared")
     _atomic_write_utf8(output, candidate)
     return tuple(selected_ids)
 
@@ -1840,9 +1869,9 @@ def extract_dfs_slices(
     """Return only the requested validated marked blocks in request order."""
 
     if not slice_ids:
-        raise GuardError("DFS slice extraction needs at least one slice id")
+        raise GuardError("FS slice extraction needs at least one slice id")
     if len(slice_ids) != len(set(slice_ids)):
-        raise GuardError("DFS slice extraction cannot request a duplicate id")
+        raise GuardError("FS slice extraction cannot request a duplicate id")
     claim_id = _selected_claim_id(selected_claim)
     try:
         text = resolve_path(dfs).text
@@ -1853,13 +1882,13 @@ def extract_dfs_slices(
     blocks: list[str] = []
     for slice_id in slice_ids:
         if not DFS_SLICE_ID.fullmatch(slice_id):
-            raise GuardError(f"Malformed DFS slice id: {slice_id}")
+            raise GuardError(f"Malformed FS slice id: {slice_id}")
         item = by_id.get(slice_id)
         if item is None:
-            raise GuardError(f"DFS slice does not exist: {slice_id}")
+            raise GuardError(f"FS slice does not exist: {slice_id}")
         if item.claim_id != claim_id:
             raise GuardError(
-                f"DFS slice {slice_id} belongs to another claim: {item.claim_id}"
+                f"FS slice {slice_id} belongs to another claim: {item.claim_id}"
             )
         blocks.append(item.content)
     return "".join(blocks)
@@ -1878,7 +1907,7 @@ def specification_claims(specification_text: str) -> tuple[str, ...]:
     """Return active legacy lamps or canonical claim identities from slices.
 
     A functional-only FS intentionally has no implementation-status block.  Its
-    durable slice claims replace status prose for ledger binding; a legacy DFS
+    durable slice claims replace status prose for ledger binding; a legacy FS
     retains its stricter red-lamp interpretation unchanged.
     """
     legacy = red_dfs_claims(specification_text)
@@ -1923,18 +1952,18 @@ def _ledger_slice_ids(block: str, reference: str) -> tuple[str, ...]:
         line for line in block.splitlines() if DFS_SLICE_LEDGER_TOKEN in line
     ]
     if not pointer_lines:
-        raise GuardError(f"Active work item has no DFS slices: {reference}")
+        raise GuardError(f"Active work item has no FS slices: {reference}")
     if len(pointer_lines) != 1:
         raise GuardError(
-            f"Active work item must have exactly one DFS slices line: {reference}"
+            f"Active work item must have exactly one FS slices line: {reference}"
         )
     match = DFS_SLICE_LEDGER.fullmatch(pointer_lines[0])
     if match is None:
-        raise GuardError(f"Malformed DFS slices line for active item: {reference}")
+        raise GuardError(f"Malformed FS slices line for active item: {reference}")
     slice_ids = tuple(re.findall(r"`([^`]+)`", match.group("ids")))
     if not slice_ids or len(slice_ids) != len(set(slice_ids)):
         raise GuardError(
-            f"Active work item needs unique DFS slice ids: {reference}"
+            f"Active work item needs unique FS slice ids: {reference}"
         )
     return slice_ids
 
@@ -1959,7 +1988,7 @@ def dfs_slice_status(
         matches = [claim for claim in red_claims if _same_claim(reference, claim)]
         if len(matches) != 1:
             statuses.append(
-                (reference, "invalid", "not exactly one still-red DFS claim")
+                (reference, "invalid", "not exactly one still-red FS claim")
             )
             continue
         claim_id = _selected_claim_id(matches[0])
@@ -1967,7 +1996,7 @@ def dfs_slice_status(
             line for line in block.splitlines() if DFS_SLICE_LEDGER_TOKEN in line
         ]
         if not pointer_lines:
-            statuses.append((reference, "missing", "no DFS slices line"))
+            statuses.append((reference, "missing", "no FS slices line"))
             continue
         try:
             slice_ids = _ledger_slice_ids(block, reference)
@@ -1978,11 +2007,11 @@ def dfs_slice_status(
         for slice_id in slice_ids:
             item = slices_by_id.get(slice_id)
             if item is None:
-                problem = f"missing DFS slice {slice_id}"
+                problem = f"missing FS slice {slice_id}"
                 break
             if item.claim_id != claim_id:
                 problem = (
-                    f"DFS slice {slice_id} belongs to another claim {item.claim_id}"
+                    f"FS slice {slice_id} belongs to another claim {item.claim_id}"
                 )
                 break
         if problem:
@@ -2046,9 +2075,9 @@ def validate_work_ledger(
     for reference, block in blocks:
         matches = [claim for claim in red_claims if _same_claim(reference, claim)]
         if not matches:
-            raise GuardError(f"Work item does not reference a still-red DFS claim: {reference}")
+            raise GuardError(f"Work item does not reference a still-red FS claim: {reference}")
         if len(matches) > 1:
-            raise GuardError(f"Work item reference is ambiguous in the DFS: {reference}")
+            raise GuardError(f"Work item reference is ambiguous in the FS: {reference}")
         claim = matches[0]
         claim_id = _selected_claim_id(claim)
         slice_ids = _ledger_slice_ids(block, reference)
@@ -2056,11 +2085,11 @@ def validate_work_ledger(
             item = slices_by_id.get(slice_id)
             if item is None:
                 raise GuardError(
-                    f"Active work item references missing DFS slice {slice_id}: {reference}"
+                    f"Active work item references missing FS slice {slice_id}: {reference}"
                 )
             if item.claim_id != claim_id:
                 raise GuardError(
-                    f"Active work item references DFS slice {slice_id} owned by another claim: "
+                    f"Active work item references FS slice {slice_id} owned by another claim: "
                     f"{item.claim_id}"
                 )
         selected_claims.append(claim)
@@ -2080,7 +2109,7 @@ def validate_work_ledger(
             for _, task_claim in mentioned:
                 if _stable_key(task_claim) != _stable_key(claim):
                     raise GuardError(
-                        f"Work item mentions a task owned by another DFS claim: {reference}"
+                        f"Work item mentions a task owned by another FS claim: {reference}"
                     )
     return items
 
@@ -2103,7 +2132,7 @@ def validate_dfs_completion(before: Path, after: Path, selected_claim: str) -> s
 
     if len(matches) != 1:
         raise GuardError(
-            f"Selected claim must identify exactly one still-red DFS claim: {selected}"
+            f"Selected claim must identify exactly one still-red FS claim: {selected}"
         )
 
     index, match, label = matches[0]
@@ -2117,7 +2146,7 @@ def validate_dfs_completion(before: Path, after: Path, selected_claim: str) -> s
     expected = "".join(lines)
     if candidate != expected:
         raise GuardError(
-            "DFS completion must only change the selected '[ ] 🔴' marker to '[x]'"
+            "FS completion must only change the selected '[ ] 🔴' marker to '[x]'"
         )
     return label
 
@@ -2140,7 +2169,7 @@ def validate_dfs_reopen(before: Path, after: Path, selected_claim: str) -> str:
 
     if len(matches) != 1:
         raise GuardError(
-            f"Selected claim must identify exactly one accepted DFS claim: {selected}"
+            f"Selected claim must identify exactly one accepted FS claim: {selected}"
         )
 
     index, match, label = matches[0]
@@ -2154,7 +2183,7 @@ def validate_dfs_reopen(before: Path, after: Path, selected_claim: str) -> str:
     expected = "".join(lines)
     if candidate != expected:
         raise GuardError(
-            "DFS reopening must only change the selected '[x]' marker to '[ ] 🔴'"
+            "FS reopening must only change the selected '[x]' marker to '[ ] 🔴'"
         )
     return label
 
@@ -2170,7 +2199,7 @@ def validate_universal_dfs_mutation(before: Path, candidate: Path) -> bool:
         if _exact_markdown_section(baseline, heading) != _exact_markdown_section(
             proposed, heading
         ):
-            raise GuardError(f"Universal DFS candidate cannot change {heading}")
+            raise GuardError(f"Universal FS candidate cannot change {heading}")
 
     baseline_records = _stable_claim_records(baseline)
     candidate_records = _stable_claim_records(proposed)
@@ -2182,11 +2211,11 @@ def validate_universal_dfs_mutation(before: Path, candidate: Path) -> bool:
         replacement = candidate_by_id.get(record[0])
         if replacement is None or replacement[3] != record[3]:
             raise GuardError(
-                f"Universal DFS candidate cannot delete or rewrite accepted claim {record[0]}"
+                f"Universal FS candidate cannot delete or rewrite accepted claim {record[0]}"
             )
         position = positions[record[0]]
         if position <= prior_position:
-            raise GuardError("Universal DFS candidate cannot reorder accepted claims")
+            raise GuardError("Universal FS candidate cannot reorder accepted claims")
         prior_position = position
     baseline_slices = {
         item.slice_id: item
@@ -2199,7 +2228,7 @@ def validate_universal_dfs_mutation(before: Path, candidate: Path) -> bool:
         replacement = candidate_slices.get(slice_id)
         if replacement is None or replacement.claim_id != item.claim_id:
             raise GuardError(
-                "Universal DFS candidate cannot remove or rebind durable "
+                "Universal FS candidate cannot remove or rebind durable "
                 f"slice {slice_id}"
             )
     return True
@@ -2227,7 +2256,7 @@ def build_parser() -> argparse.ArgumentParser:
     guidelines.add_argument("--method-baseline", type=Path)
     guidelines.add_argument("--method-candidate", type=Path)
 
-    ledger = commands.add_parser("work-ledger", help="Validate active work against red DFS claims")
+    ledger = commands.add_parser("work-ledger", help="Validate active work against red FS claims")
     ledger.add_argument("--ledger", type=Path, required=True)
     ledger.add_argument("--dfs", type=Path, required=True)
     ledger.add_argument("--state", type=Path, required=True)
@@ -2235,14 +2264,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     slice_status = commands.add_parser(
         "dfs-slice-status",
-        help="Report ready, missing, or invalid active-item DFS slice pointers",
+        help="Report ready, missing, or invalid active-item FS slice pointers",
     )
     slice_status.add_argument("--ledger", type=Path, required=True)
     slice_status.add_argument("--dfs", type=Path, required=True)
 
     mark_slices = commands.add_parser(
         "mark-dfs-slices",
-        help="Atomically add durable claim-bound DFS slice markers",
+        help="Atomically add durable claim-bound FS slice markers",
     )
     mark_slices.add_argument("--source", type=Path, required=True)
     mark_slices.add_argument("--output", type=Path, required=True)
@@ -2253,7 +2282,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     extract_slices = commands.add_parser(
         "extract-dfs-slices",
-        help="Extract only selected validated DFS slice content",
+        help="Extract only selected validated FS slice content",
     )
     extract_slices.add_argument("--dfs", type=Path, required=True)
     extract_slices.add_argument("--claim", required=True)
@@ -2262,7 +2291,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     extract_slices.add_argument("--output", type=Path)
 
-    completion = commands.add_parser("complete-dfs", help="Validate one accepted DFS claim")
+    completion = commands.add_parser("complete-dfs", help="Validate one accepted FS claim")
     completion.add_argument("--before", type=Path, required=True)
     completion.add_argument("--after", type=Path, required=True)
     completion.add_argument("--claim", required=True)
@@ -2292,7 +2321,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     owner_expansion = commands.add_parser(
         "owner-expand-dfs",
-        help="Validate same-outcome DFS expansion from pending owner guidance",
+        help="Validate same-outcome FS expansion from pending owner guidance",
     )
     owner_expansion.add_argument("--before", type=Path, required=True)
     owner_expansion.add_argument("--candidate", type=Path, required=True)
@@ -2406,7 +2435,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.claim,
                 tuple(arguments.ranges),
             )
-            print("ok: DFS slices " + ", ".join(slice_ids))
+            print("ok: FS slices " + ", ".join(slice_ids))
         elif arguments.command == "extract-dfs-slices":
             extracted = extract_dfs_slices(
                 arguments.dfs,
@@ -2418,7 +2447,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 _atomic_write_utf8(arguments.output, extracted)
                 print(
-                    f"ok: wrote {len(arguments.slice_ids)} DFS slices to "
+                    f"ok: wrote {len(arguments.slice_ids)} FS slices to "
                     f"{arguments.output}"
                 )
         elif arguments.command == "complete-dfs":
@@ -2465,7 +2494,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.ledger_candidate,
             )
             print(
-                "ok: owner-guided DFS expansion added "
+                "ok: owner-guided FS expansion added "
                 + ", ".join(added)
                 + f"; consumed {len(consumed)} owner suggestion(s)"
             )
@@ -2519,7 +2548,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             if (arguments.dfs_before is None) != (arguments.dfs_candidate is None):
                 raise GuardError(
-                    "Universal DFS validation needs both baseline and candidate files"
+                    "Universal FS validation needs both baseline and candidate files"
                 )
             dfs_changed = False
             if arguments.dfs_before is not None:

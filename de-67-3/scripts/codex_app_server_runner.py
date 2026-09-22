@@ -29,12 +29,19 @@ class Rpc:
         from websockets.exceptions import ConnectionClosed
         from websockets.sync.client import unix_connect
         self.closed_error = ConnectionClosed
-        self.connection = unix_connect(str(socket), compression=None, max_size=None)
+        # Local notification bursts can pause frame reads and delay Pong processing.
+        # Keep transport pings, but use RPC deadlines and owned-process lifetime
+        # for failure detection rather than a traffic-sensitive Pong deadline.
+        self.connection = unix_connect(str(socket), compression=None, max_size=None,
+                                       ping_timeout=None)
         self.notifications: list[dict[str, Any]] = []
         self.sequence = 0
 
     def send(self, message: dict[str, Any]) -> None:
-        self.connection.send(json.dumps(message))
+        try:
+            self.connection.send(json.dumps(message))
+        except self.closed_error as error:
+            raise RpcError(f"Codex App Server connection closed: {error}") from error
 
     def receive(self, timeout: float = 1) -> dict[str, Any]:
         try:
@@ -42,7 +49,7 @@ class Rpc:
         except TimeoutError:
             raise queue.Empty from None
         except self.closed_error as error:
-            raise RpcError("Codex App Server connection closed") from error
+            raise RpcError(f"Codex App Server connection closed: {error}") from error
         if "id" in message and "method" in message:
             # This runner is noninteractive, just like codex exec. Do not invent approvals.
             if message["method"] == "item/tool/requestUserInput":
@@ -229,7 +236,7 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
             rpc.call("initialize", {"clientInfo": {"name": "de67_runner", "version": "1.0"},
                                     "capabilities": {"experimentalApi": True}})
             rpc.send({"method": "initialized", "params": {}})
-            model = os.environ.get("DE67_COORDINATOR_MODEL", "gpt-5.6-sol")
+            model = os.environ.get("DE67_COORDINATOR_MODEL", "gpt-6-sol")
             effort = os.environ.get("DE67_COORDINATOR_REASONING_EFFORT", "low")
             params: dict[str, Any] = {
                 "cwd": str(workspace), "model": model, "approvalPolicy": "never",
@@ -250,6 +257,10 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
             turn_params = {"threadId": thread_id, "effort": effort,
                            "input": [{"type": "text", "text": prompt}]}
             if initial:
+                # A resumed owner conversation already carries its standing guidance.
+                # Supervisor review prompts (without initial input) remain per-invocation.
+                if session and resume:
+                    turn_params["input"] = []
                 turn_params["input"].extend(initial["input"])
                 turn_params["clientUserMessageId"] = initial["client_id"]
                 atomic_json(Path(initial["receipt_path"]), {"state": "submitting", "thread_id": thread_id})
@@ -355,5 +366,6 @@ if __name__ == "__main__":
     try:
         raise SystemExit(run(args.codex, Path(args.cwd).resolve(), sys.stdin.read()))
     except (RpcError, OSError, KeyError) as error:
+        emit({"type": "de67.transport_error", "message": str(error)})
         print(f"DE67 App Server: {error}", file=sys.stderr)
         raise SystemExit(2)

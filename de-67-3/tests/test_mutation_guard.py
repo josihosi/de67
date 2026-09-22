@@ -19,7 +19,6 @@ SPEC = importlib.util.spec_from_file_location("de67_phase3_mutation_guard", MODU
 assert SPEC is not None and SPEC.loader is not None
 guard = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(guard)
-from specification import compatibility_pointer  # noqa: E402
 
 DEADLINE_MODULE_PATH = ROOT / "scripts" / "deadline_harness.py"
 DEADLINE_SPEC = importlib.util.spec_from_file_location(
@@ -50,8 +49,8 @@ class MutationGuardTests(unittest.TestCase):
         self.write_guidelines(self.baseline, TASK_GUIDANCE)
         self.write_guidelines(self.candidate, TASK_GUIDANCE)
         dfs_text = self.expansion_dfs(new_claim="")
-        (self.baseline / guard.DFS_FILE).write_text(dfs_text, encoding="utf-8")
-        (self.candidate / guard.DFS_FILE).write_text(dfs_text, encoding="utf-8")
+        (self.baseline / guard.FS_FILE).write_text(dfs_text, encoding="utf-8")
+        (self.candidate / guard.FS_FILE).write_text(dfs_text, encoding="utf-8")
         self.empty_ledger = self.root / guard.MUTATION_LEDGER
         self.empty_ledger.write_text(
             guard.read_markdown(
@@ -62,6 +61,38 @@ class MutationGuardTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_legacy_universal_receipts_migrate_without_losing_history_or_immutability(self) -> None:
+        with sqlite3.connect(":memory:") as connection:
+            connection.execute("""CREATE TABLE universal_review_receipts (
+                receipt_id TEXT PRIMARY KEY, lineage_id TEXT NOT NULL,
+                cycle_number INTEGER NOT NULL CHECK (cycle_number > 0),
+                validated_at REAL NOT NULL, candidate_digest TEXT NOT NULL,
+                changed_paths TEXT NOT NULL,
+                interval_windows INTEGER NOT NULL CHECK (interval_windows = 30),
+                selected_lane TEXT NOT NULL CHECK (selected_lane = 'DFS.md'),
+                reviewer_model TEXT NOT NULL CHECK (reviewer_model = 'gpt-5.6-sol'),
+                reviewer_effort TEXT NOT NULL CHECK (reviewer_effort = 'ultra'),
+                UNIQUE (lineage_id, cycle_number, receipt_id)
+            )""")
+            connection.execute("""INSERT INTO universal_review_receipts VALUES
+                ('old', 'project', 1, 1.0, 'candidate', '[]', 30, 'DFS.md', 'gpt-5.6-sol', 'ultra')""")
+            connection.execute("""CREATE TRIGGER universal_review_receipts_cannot_change
+                BEFORE UPDATE ON universal_review_receipts BEGIN
+                SELECT RAISE(ABORT, 'universal review receipts are append-only'); END""")
+            guard._ensure_universal_receipt_schema(connection)
+            self.assertEqual(
+                connection.execute("SELECT reviewer_model FROM universal_review_receipts WHERE receipt_id='old'").fetchone()[0],
+                "gpt-5.6-sol",
+            )
+            connection.execute("""INSERT INTO universal_review_receipts
+                (receipt_id, lineage_id, cycle_number, validated_at, candidate_digest,
+                 changed_paths, interval_windows, selected_lane, reviewer_model, reviewer_effort)
+                VALUES ('new', 'project', 2, 2.0, 'candidate', '[]', 30, 'DFS.md', 'gpt-6-sol', 'ultra')""")
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+                connection.execute("UPDATE universal_review_receipts SET candidate_digest='changed' WHERE receipt_id='old'")
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+                connection.execute("DELETE FROM universal_review_receipts WHERE receipt_id='new'")
 
     def test_canonical_work_ledger_template_has_no_fake_active_item(self) -> None:
         self.assertEqual(guard.active_work_items(WORK_LEDGER_TEXT), ())
@@ -81,20 +112,9 @@ class MutationGuardTests(unittest.TestCase):
         for root in (self.baseline, self.candidate):
             fs = root / "FS.md"
             fs.write_text(source, encoding="utf-8")
-            (root / guard.DFS_FILE).write_text(
-                compatibility_pointer(fs), encoding="utf-8"
-            )
         candidate_fs = self.candidate / "FS.md"
         candidate_fs.write_text(source + "\nChanged canonical contract.\n", encoding="utf-8")
 
-        with self.assertRaisesRegex(guard.GuardError, "compatibility pointer"):
-            guard.validate_random_review_mutation(
-                self.baseline, self.candidate, selected_lane=guard.DFS_FILE
-            )
-
-        (self.candidate / guard.DFS_FILE).write_text(
-            compatibility_pointer(candidate_fs), encoding="utf-8"
-        )
         with self.assertRaises(guard.GuardError) as rejected:
             guard.validate_random_review_mutation(
                 self.baseline, self.candidate, selected_lane=guard.DFS_FILE
@@ -396,7 +416,7 @@ class MutationGuardTests(unittest.TestCase):
         self.assertIn("independent short and long diagnosis", output)
 
     def write_dfs(self, text: str, *, with_slices: bool = True) -> Path:
-        path = self.root / "DFS.md"
+        path = self.root / "FS.md"
         if with_slices:
             rendered: list[str] = []
             for line in text.splitlines(keepends=True):
@@ -438,7 +458,7 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_work_ledger_has_no_arbitrary_active_item_limit(self) -> None:
         dfs = self.write_dfs(
-            "# DFS\n\n"
+            "# FS\n\n"
             + "".join(f"- [ ] 🔴 R-{number:03d} — Work {number}\n" for number in range(1, 12))
         )
         ten = self.write_ledger(
@@ -456,7 +476,7 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_work_ledger_rejects_missing_and_non_red_claims(self) -> None:
         dfs = self.write_dfs(
-            "# DFS\n\n"
+            "# FS\n\n"
             "- [ ] 🔴 R-001 — Still open\n"
             "- [x] R-002 — Already accepted\n"
         )
@@ -474,7 +494,7 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_exact_red_syntax_matches_an_active_item(self) -> None:
         dfs = self.write_dfs(
-            "# DFS\n\n- [ ] 🔴 R-001 — Missing production behavior\n"
+            "# FS\n\n- [ ] 🔴 R-001 — Missing production behavior\n"
         )
         ledger = self.write_ledger(
             "# Work ledger\n\n## Active work\n\n"
@@ -484,7 +504,7 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(items, ("R-001 — Implement the red claim",))
 
     def test_work_ledger_accepts_independent_items_for_one_claim(self) -> None:
-        dfs = self.write_dfs("# DFS\n\n- [ ] 🔴 R-001 — Still open\n")
+        dfs = self.write_dfs("# FS\n\n- [ ] 🔴 R-001 — Still open\n")
         ledger = self.write_ledger(
             "# Work ledger\n\n## Active work\n\n"
             "- [ ] R-001 — First route\n\n"
@@ -497,7 +517,7 @@ class MutationGuardTests(unittest.TestCase):
         )
 
     def test_work_ledger_preserves_multiple_same_claim_task_identities(self) -> None:
-        dfs = self.write_dfs("# DFS\n\n- [ ] 🔴 R-001 — Still open\n")
+        dfs = self.write_dfs("# FS\n\n- [ ] 🔴 R-001 — Still open\n")
         state = self.root / "ledger-history.sqlite"
         with deadline.DeadlineHarness(state) as harness:
             harness.start_task("project", "R001-M1", "R-001", 10, now=0)
@@ -532,7 +552,7 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_work_ledger_rejects_task_owned_by_another_claim(self) -> None:
         dfs = self.write_dfs(
-            "# DFS\n\n"
+            "# FS\n\n"
             "- [ ] 🔴 R-001 — First\n"
             "- [ ] 🔴 R-002 — Second\n"
         )
@@ -544,14 +564,14 @@ class MutationGuardTests(unittest.TestCase):
             "- [ ] R-001 — First\n\n  Active route: second-task.\n"
         )
 
-        with self.assertRaisesRegex(guard.GuardError, "another DFS claim"):
+        with self.assertRaisesRegex(guard.GuardError, "another FS claim"):
             guard.validate_work_ledger(
                 ledger, dfs, state=state, lineage_id="project"
             )
 
     def slice_dfs(self) -> Path:
         return self.write_dfs(
-            "# DFS\n\n"
+            "# FS\n\n"
             "Shared contract.\n"
             "Shared proof rule.\n\n"
             "- [ ] 🔴 R-001 — First outcome\n"
@@ -681,7 +701,7 @@ class MutationGuardTests(unittest.TestCase):
         self.assertEqual(
             guard.dfs_slice_status(pointerless, dfs)[0][1], "missing"
         )
-        with self.assertRaisesRegex(guard.GuardError, "has no DFS slices"):
+        with self.assertRaisesRegex(guard.GuardError, "has no FS slices"):
             guard.validate_work_ledger(pointerless, dfs)
 
         completed_pointer_is_not_in_active_block = self.write_ledger(
@@ -717,7 +737,7 @@ class MutationGuardTests(unittest.TestCase):
             with_slices=False,
         )
         self.assertEqual(guard.dfs_slice_status(missing, dfs)[0][1], "invalid")
-        with self.assertRaisesRegex(guard.GuardError, "missing DFS slice"):
+        with self.assertRaisesRegex(guard.GuardError, "missing FS slice"):
             guard.validate_work_ledger(missing, dfs)
 
         guard.insert_dfs_slices(dfs, dfs, "R-002", ((7, 7),))
@@ -830,11 +850,11 @@ class MutationGuardTests(unittest.TestCase):
         before = self.root / "before.md"
         after = self.root / "after.md"
         before.write_text(
-            "# DFS\n\n- [ ] 🔴 R-001 — First\n- [ ] 🔴 R-002 — Second\n",
+            "# FS\n\n- [ ] 🔴 R-001 — First\n- [ ] 🔴 R-002 — Second\n",
             encoding="utf-8",
         )
         after.write_text(
-            "# DFS\n\n- [x] R-001 — First\n- [ ] 🔴 R-002 — Second\n",
+            "# FS\n\n- [x] R-001 — First\n- [ ] 🔴 R-002 — Second\n",
             encoding="utf-8",
         )
         completed = guard.validate_dfs_completion(before, after, "R-001 — First")
@@ -844,11 +864,11 @@ class MutationGuardTests(unittest.TestCase):
         before = self.root / "before.md"
         after = self.root / "after.md"
         before.write_text(
-            "# DFS\n\n- [ ] 🔴 R-001 — First\n- [ ] 🔴 R-002 — Second\n",
+            "# FS\n\n- [ ] 🔴 R-001 — First\n- [ ] 🔴 R-002 — Second\n",
             encoding="utf-8",
         )
         after.write_text(
-            "# DFS revised\n\n- [x] R-001 — First\n- [ ] 🔴 R-002 — Second\n",
+            "# FS revised\n\n- [x] R-001 — First\n- [ ] 🔴 R-002 — Second\n",
             encoding="utf-8",
         )
         with self.assertRaisesRegex(guard.GuardError, "must only change"):
@@ -857,8 +877,8 @@ class MutationGuardTests(unittest.TestCase):
     def completion_files(self) -> tuple[Path, Path]:
         before = self.root / "state-before.md"
         after = self.root / "state-after.md"
-        before.write_text("# DFS\n\n- [ ] 🔴 R-001 — First\n", encoding="utf-8")
-        after.write_text("# DFS\n\n- [x] R-001 — First\n", encoding="utf-8")
+        before.write_text("# FS\n\n- [ ] 🔴 R-001 — First\n", encoding="utf-8")
+        after.write_text("# FS\n\n- [x] R-001 — First\n", encoding="utf-8")
         return before, after
 
     def deadline_state(
@@ -973,14 +993,14 @@ class MutationGuardTests(unittest.TestCase):
         before = self.root / "reopen-before.md"
         after = self.root / "reopen-after.md"
         before.write_text(
-            "# DFS\n\n"
+            "# FS\n\n"
             "The product outcome and proof route stay unchanged.\n\n"
             "- [x] R-001 — First\n"
             "- [x] R-002 — Other accepted claim\n",
             encoding="utf-8",
         )
         candidate = (
-            "# DFS\n\n"
+            "# FS\n\n"
             "The product outcome and proof route stay unchanged.\n\n"
             "- [ ] 🔴 R-001 — First\n"
             "- [x] R-002 — Other accepted claim\n"
@@ -1162,7 +1182,7 @@ class MutationGuardTests(unittest.TestCase):
     @staticmethod
     def expansion_dfs(*, new_claim: str = "- [ ] 🔴 R-003 — New prerequisite\n") -> str:
         return (
-            "# DFS\n\n"
+            "# FS\n\n"
             "## Functional contract\n\n"
             "The existing behavior remains the contract.\n\n"
             "## Project language and terminology\n\n"
@@ -1291,7 +1311,7 @@ class MutationGuardTests(unittest.TestCase):
         wrong_claim = self.finding_state("wrong-claim", claim="R-999")
         result, output = self.run_expand_cli(wrong_claim)
         self.assertEqual(result, 1)
-        self.assertIn("not exactly one still-red DFS claim", output)
+        self.assertIn("not exactly one still-red FS claim", output)
 
     def test_expand_dfs_preserves_protected_sections_exactly(self) -> None:
         before, candidate = self.expansion_files(
@@ -1392,7 +1412,7 @@ class MutationGuardTests(unittest.TestCase):
             connection.close()
         result, output = self.run_expand_cli(state)
         self.assertEqual(result, 1)
-        self.assertIn("completed task cannot authorize DFS expansion", output)
+        self.assertIn("completed task cannot authorize FS expansion", output)
 
         closed = self.expansion_dfs().replace(
             "- [ ] 🔴 R-001 — Worker found a blocker",
@@ -1461,10 +1481,10 @@ class MutationGuardTests(unittest.TestCase):
         state, cycle = self.random_review_state(0)
         self.mutate_task()
         self.mutate_task()
-        (self.candidate / guard.DFS_FILE).write_text(self.expansion_dfs(), encoding="utf-8")
+        (self.candidate / guard.FS_FILE).write_text(self.expansion_dfs(), encoding="utf-8")
         result, output = self.run_random_review_cli(state, cycle)
         self.assertEqual(result, 0, output)
-        for name in (*guard.GUIDELINE_FILES, guard.DFS_FILE):
+        for name in (*guard.GUIDELINE_FILES, guard.FS_FILE):
             self.assertIn(name, output)
 
     def test_random_guideline_review_accepts_exact_guarded_noop(self) -> None:
@@ -1477,7 +1497,7 @@ class MutationGuardTests(unittest.TestCase):
 
     def setUp_candidate_again(self) -> None:
         self.write_guidelines(self.candidate, TASK_GUIDANCE)
-        (self.candidate / guard.DFS_FILE).write_text(
+        (self.candidate / guard.FS_FILE).write_text(
             self.expansion_dfs(new_claim=""), encoding="utf-8"
         )
 
@@ -1501,7 +1521,7 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_random_dfs_review_accepts_safe_expansion_or_exact_guarded_noop(self) -> None:
         state, cycle = self.random_review_state(1)
-        (self.candidate / guard.DFS_FILE).write_text(
+        (self.candidate / guard.FS_FILE).write_text(
             self.expansion_dfs(), encoding="utf-8"
         )
         result, output = self.run_random_review_cli(state, cycle)
@@ -1516,21 +1536,21 @@ class MutationGuardTests(unittest.TestCase):
 
     def test_random_review_repairs_missing_status_delimiter_without_new_work(self) -> None:
         state, cycle = self.random_review_state(1)
-        original = (self.baseline / guard.DFS_FILE).read_text(encoding="utf-8")
+        original = (self.baseline / guard.FS_FILE).read_text(encoding="utf-8")
         original += (
             "\n<!-- DE67:DFS-SLICE:BEGIN id=R-099-S001 claim=R-099 -->\n"
             "Required behavior and proof remain unchanged.\n\n"
             "- [ ] 🔴 R-099 — Existing unaccepted outcome.\n"
             "<!-- DE67:DFS-SLICE:END id=R-099-S001 claim=R-099 -->\n"
         )
-        (self.baseline / guard.DFS_FILE).write_text(original, encoding="utf-8")
+        (self.baseline / guard.FS_FILE).write_text(original, encoding="utf-8")
         repaired = original.replace("- [ ] 🔴 R-099", "Implementation status:\n\n- [ ] 🔴 R-099")
-        (self.candidate / guard.DFS_FILE).write_text(repaired, encoding="utf-8")
+        (self.candidate / guard.FS_FILE).write_text(repaired, encoding="utf-8")
         result, output = self.run_random_review_cli(state, cycle)
         self.assertEqual(result, 0, output)
         for invalid in (repaired.replace("[ ] 🔴 R-099", "[x] R-099"),
                         repaired.replace("proof remain unchanged", "proof is waived")):
-            (self.candidate / guard.DFS_FILE).write_text(invalid, encoding="utf-8")
+            (self.candidate / guard.FS_FILE).write_text(invalid, encoding="utf-8")
             result, output = self.run_random_review_cli(state, cycle)
             self.assertEqual(result, 1, output)
 
@@ -1540,7 +1560,7 @@ class MutationGuardTests(unittest.TestCase):
             "The existing behavior remains the contract.",
             "The behavior is now broader.",
         )
-        (self.candidate / guard.DFS_FILE).write_text(candidate, encoding="utf-8")
+        (self.candidate / guard.FS_FILE).write_text(candidate, encoding="utf-8")
         result, output = self.run_random_review_cli(state, cycle)
         self.assertEqual(result, 1)
         self.assertIn("Functional contract", output)
@@ -1669,7 +1689,7 @@ class MutationGuardTests(unittest.TestCase):
                     "version": 1,
                     "worker_capabilities": [
                         {
-                            "model": "gpt-5.6-sol",
+                            "model": "gpt-6-sol",
                             "reasoning_effort": capability_effort,
                         }
                     ],
@@ -1705,7 +1725,7 @@ class MutationGuardTests(unittest.TestCase):
                         "version": 1,
                         "worker_capabilities": [
                             {
-                                "model": "gpt-5.6-sol",
+                                "model": "gpt-6-sol",
                                 "reasoning_effort": "ultra",
                             }
                         ],
@@ -1756,7 +1776,7 @@ class MutationGuardTests(unittest.TestCase):
             state, cycle, baseline, candidate
         )
         self.assertEqual(result, 1)
-        self.assertIn("persisted 30-attempt DFS draw", output)
+        self.assertIn("persisted 30-attempt FS draw", output)
 
         state, cycle = self.universal_review_state(capability_effort="xhigh")
         result, output = self.run_universal_review_cli(
@@ -1764,7 +1784,7 @@ class MutationGuardTests(unittest.TestCase):
         )
         self.assertEqual(result, 1)
         self.assertIn("deferred at due time", output)
-        self.assertIn("no persisted gpt-5.6-sol/ultra probe", output)
+        self.assertIn("no persisted gpt-6-sol/ultra probe", output)
 
     def test_universal_receipt_is_atomic_immutable_and_required_for_resolution(self) -> None:
         baseline, candidate = self.method_candidate_roots()
@@ -1792,7 +1812,7 @@ class MutationGuardTests(unittest.TestCase):
             self.assertEqual(receipt["cycle_number"], cycle)
             self.assertEqual(receipt["interval_windows"], 30)
             self.assertEqual(receipt["selected_lane"], "DFS.md")
-            self.assertEqual(receipt["reviewer_model"], "gpt-5.6-sol")
+            self.assertEqual(receipt["reviewer_model"], "gpt-6-sol")
             self.assertEqual(receipt["reviewer_effort"], "ultra")
             self.assertEqual(
                 receipt["capability_roster_digest"],
@@ -1884,7 +1904,7 @@ class MutationGuardTests(unittest.TestCase):
                     "version": 1,
                     "worker_capabilities": [
                         {
-                            "model": "gpt-5.6-sol",
+                            "model": "gpt-6-sol",
                             "reasoning_effort": "xhigh",
                         }
                     ],

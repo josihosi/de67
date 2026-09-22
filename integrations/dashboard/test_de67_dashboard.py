@@ -72,7 +72,7 @@ class DashboardTests(unittest.TestCase):
             change(f"UPDATE session_windows SET status='{status}' WHERE session_id='live'")
             self.assertIn('class="galaxy off"', dashboard.render("overview").decode())
         database.unlink()
-        self.assertIn('class="galaxy off"', dashboard.render("overview").decode())
+        self.assertIn('class="galaxy unknown"', dashboard.render("overview").decode())
         self.assertEqual(dashboard.snapshot()["mutator_activity"]["status"], "unavailable")
 
     def test_coordinator_activity_tracks_wait_and_resume(self) -> None:
@@ -152,8 +152,8 @@ class DashboardTests(unittest.TestCase):
             "version": 1,
             "clock": {"state": str(state / "deadlines.sqlite3"), "lineage": "lineage"},
         }), encoding="utf-8")
-        (self.workspace / ".de67/DFS.md").write_text(
-            "# DFS\n\nStatus: Frozen\n\n<script>alert(1)</script>\n\n"
+        (self.workspace / ".de67/FS.md").write_text(
+            "# FS\n\nStatus: Frozen\n\n<script>alert(1)</script>\n\n"
             "- [ ] R-009 — active work\n"
             "- [ ] R-010 — waiting on an event\n"
             "- [ ] 🔴 R-011 — upcoming work\n"
@@ -262,7 +262,7 @@ class DashboardTests(unittest.TestCase):
                                    ("nested",300), ("review",400), ("named",500),
                                    ("named-helper",600), ("unrelated",999), ("orphan",999)):
                 path = self.sessions / (session + ".jsonl")
-                path.write_text(json.dumps({"type":"turn_context", "payload":{"model":"gpt-5.6-luna" if session in ("nested", "named") else "gpt-5.6-terra"}}) + "\n" + json.dumps({"type":"event_msg", "timestamp":datetime.now(timezone.utc).isoformat(),
+                path.write_text(json.dumps({"type":"turn_context", "payload":{"model":"gpt-6-luna" if session in ("nested", "named") else "gpt-6-sol"}}) + "\n" + json.dumps({"type":"event_msg", "timestamp":datetime.now(timezone.utc).isoformat(),
                     "payload":{"type":"token_count", "info":{"total_token_usage":{
                     "input_tokens":total,"cached_input_tokens":10,"output_tokens":5},
                     "last_token_usage":{"input_tokens":total,"cached_input_tokens":10,"output_tokens":5}}}}) + "\n")
@@ -273,7 +273,7 @@ class DashboardTests(unittest.TestCase):
         paths = [p for p in self.workspace.rglob("*") if p.is_file()]
         before = [p.read_bytes() for p in paths]
         fuel = dashboard_module.fuel_state(self.workspace, self.sessions)
-        self.assertEqual(fuel["totals"], {"coordinator":200,"terra":790,"luna":790,"astra":395,"other":0})
+        self.assertEqual(fuel["totals"], {"coordinator":200,"sol":790,"luna":790,"astra":395,"other":0})
         self.assertEqual(sum(fuel["bins"]), sum(fuel["totals"].values()))
         for role in fuel["totals"]:
             self.assertEqual(sum(fuel["series"][role]), fuel["totals"][role])
@@ -281,16 +281,16 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(fuel["sessions"], 7)
         self.assertEqual(before, [p.read_bytes() for p in paths])
         with (self.sessions / "named.jsonl").open("a", encoding="utf-8") as trace:
-            for total, added, model in ((700, 200, "terra"), (1000, 300, "luna")):
+            for total, added, model in ((700, 200, "sol"), (1000, 300, "luna")):
                 trace.write(json.dumps({"type": "turn_context", "payload": {
-                    "model": "gpt-5.6-" + model, "effort": "high"}}) + "\n")
+                    "model": "gpt-6-" + model, "effort": "high"}}) + "\n")
                 trace.write(json.dumps({"type": "event_msg", "timestamp": datetime.now(timezone.utc).isoformat(),
                     "payload": {"type": "token_count", "info": {
                         "total_token_usage": {"input_tokens": total, "cached_input_tokens": 10, "output_tokens": 5},
                         "last_token_usage": {"input_tokens": added, "cached_input_tokens": 0, "output_tokens": 0}}}}) + "\n")
         reused = dashboard_module.fuel_state(self.workspace, self.sessions)
         self.assertEqual(reused["totals"]["luna"], 1090)
-        self.assertEqual(reused["totals"]["terra"], 990)
+        self.assertEqual(reused["totals"]["sol"], 990)
         for role in reused["totals"]:
             self.assertEqual(sum(reused["series"][role]), reused["totals"][role])
         self.assertEqual(reused["sessions"], 7)
@@ -361,8 +361,8 @@ class DashboardTests(unittest.TestCase):
             """)
             for name, events in (
                 ("owner-a", [(1, "sol", 1)]), ("owner-b", [(1, "sol", 1)]),
-                ("named", [(0, "luna", 10), (15, "luna", 20), (20, "terra", 7),
-                           (25, "terra", 30), (35, "terra", 40), (45, "luna", 50),
+                ("named", [(0, "luna", 10), (15, "luna", 20), (20, "sol", 7),
+                           (25, "sol", 30), (35, "sol", 40), (45, "luna", 50),
                            (55, "luna", 60)]),
                 ("helper", [(15, "luna", 5), (25, "luna", 5), (35, "luna", 5)]),
             ):
@@ -370,7 +370,7 @@ class DashboardTests(unittest.TestCase):
                 for offset, model, delta in events:
                     cumulative += delta
                     records.append({"type": "turn_context", "payload": {
-                        "model": "gpt-5.6-" + model, "effort": "medium"}})
+                        "model": "gpt-6-" + model, "effort": "medium"}})
                     records.append({"type": "event_msg", "timestamp": datetime.fromtimestamp(
                         base + offset, timezone.utc).isoformat(), "payload": {"type": "token_count", "info": {
                             "total_token_usage": {"input_tokens": cumulative, "cached_input_tokens": 0, "output_tokens": 0},
@@ -381,12 +381,12 @@ class DashboardTests(unittest.TestCase):
         connection.close()
         config_path = self.workspace / ".de67/state/workspace.json"
         config = json.loads(config_path.read_text())
-        for lineage, luna, terra in (("lineage", 90, 40), ("other", 5, 37), ("lineage", 90, 40)):
+        for lineage, luna, sol in (("lineage", 90, 40), ("other", 5, 37), ("lineage", 90, 40)):
             config["clock"]["lineage"] = lineage
             config_path.write_text(json.dumps(config))
             fuel = dashboard_module.fuel_state(self.workspace, self.sessions)
             self.assertEqual(fuel["totals"], {
-                "coordinator": 1, "luna": luna, "terra": terra, "astra": 0, "other": 0})
+                "coordinator": 1, "luna": luna, "sol": sol, "astra": 0, "other": 0})
             self.assertEqual(fuel["sessions"], 3)
             self.assertFalse(fuel["partial"])
             for role in fuel["totals"]:
@@ -394,14 +394,14 @@ class DashboardTests(unittest.TestCase):
 
     def test_fuel_labels_and_dynamic_axis(self) -> None:
         for peak, label in ((0,"1"),(1800,"2k"),(9000000,"10m")):
-            page = dashboard_module.render_fuel({"available":True,"totals":{"coordinator":1,"terra":2,"luna":4,"astra":3,"other":0},
-                "bins":[peak] + [0]*23,"series":{role:[peak if role == "terra" else 0]+[0]*23 for role in ("astra","coordinator","terra","luna","other")},"partial":True})
+            page = dashboard_module.render_fuel({"available":True,"totals":{"coordinator":1,"sol":2,"luna":4,"astra":3,"other":0},
+                "bins":[peak] + [0]*23,"series":{role:[peak if role == "sol" else 0]+[0]*23 for role in ("astra","coordinator","sol","luna","other")},"partial":True})
             self.assertIn('aria-label="coordinator: 1 fresh tokens"', page)
-            self.assertIn('aria-label="worker terra: 2 fresh tokens"', page)
+            self.assertIn('aria-label="worker sol: 2 fresh tokens"', page)
             self.assertIn('aria-label="worker luna: 4 fresh tokens"', page)
             self.assertEqual(page.count('class="fuel-series"'), 4)
             self.assertLess(page.index("<svg"), page.index('class="fuel-total"'))
-            self.assertIn('aria-label="mutator: 3 fresh tokens"', page)
+            self.assertIn('aria-label="astra: 3 fresh tokens"', page)
             self.assertLess(page.index('</svg>'), page.index('class="fuel-legend"'))
             self.assertLess(page.index('class="fuel-legend"'), page.index('class="fuel-bars"'))
             self.assertIn('left:100.00%">5</span>', page)
@@ -412,14 +412,14 @@ class DashboardTests(unittest.TestCase):
 
     def test_role_dot_axis_crops_unused_range_and_keeps_role_order(self) -> None:
         import re
-        roles = ("astra", "coordinator", "terra", "luna")
+        roles = ("astra", "coordinator", "sol", "luna")
         for values in ((13000000, 12000000, 102000000, 5000000), (10, 10, 10, 10), (0, 0, 0, 0)):
             page = dashboard_module.render_fuel({"available": True,
                 "totals": dict(zip(roles, values)), "bins": [0] * 24,
                 "series": {role: [0] * 24 for role in roles}, "partial": False})
             plot = page.split('class="fuel-bars"', 1)[1]
             labels = re.findall(r'aria-label="([^":]+):', plot)
-            self.assertEqual(labels, ["mutator", "coordinator", "worker terra", "worker luna"])
+            self.assertEqual(labels, ["astra", "coordinator", "worker sol", "worker luna"])
             positions = [float(value) for value in re.findall(r'<em style="left:([0-9.]+)%', plot)]
             self.assertEqual(len(positions), sum(value > 0 for value in values))
             self.assertTrue(all(0 <= value <= 100 for value in positions))
@@ -441,7 +441,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("Manual refresh" if not interval else f"Live · every {interval}s", page)
 
     def test_projection_is_read_only_and_escapes_workspace_html(self) -> None:
-        paths = [self.workspace / ".de67/DFS.md", self.workspace / ".de67/work-ledger.md",
+        paths = [self.workspace / ".de67/FS.md", self.workspace / ".de67/work-ledger.md",
                  self.workspace / ".de67/state/deadlines.sqlite3"]
         before = [path.read_bytes() for path in paths]
         page = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).render("dfs").decode()
@@ -590,7 +590,7 @@ class DashboardTests(unittest.TestCase):
             "## Blocked work\n- Blocked: R-004 — blocked\n"
         )
         dfs = (
-            "# DFS\n\nStatus: Refrozen\n\n"
+            "# FS\n\nStatus: Refrozen\n\n"
             "- [ ] 🔴 R-002 — active\n"
             "- [ ] 🔴 R-003 — waiting\n"
             "- [ ] 🔴 R-004 — blocked\n"
@@ -623,7 +623,7 @@ class DashboardTests(unittest.TestCase):
         ):
             with self.subTest(status=status):
                 upcoming = dashboard_module.upcoming_dfs_work(
-                    f"# DFS\n\n{status}\n\n- [ ] 🔴 R-next_1 — upcoming\n",
+                    f"# FS\n\n{status}\n\n- [ ] 🔴 R-next_1 — upcoming\n",
                     ledger,
                     "R-002",
                 )
@@ -633,7 +633,7 @@ class DashboardTests(unittest.TestCase):
         ledger = dashboard_module.parse_ledger("## Active work\n- [ ] R-002 — active\n")
 
         upcoming = dashboard_module.upcoming_dfs_work(
-            "# DFS\n\nStatus: Draft\n\n"
+            "# FS\n\nStatus: Draft\n\n"
             "~~~markdown\nStatus: Frozen\n~~~\n"
             "## Freeze record\n\nStatus: Refrozen\n\n"
             "- [ ] 🔴 R-003 — not authoritative\n",
@@ -649,7 +649,7 @@ class DashboardTests(unittest.TestCase):
             "~~~markdown\n- [ ] R-fenced — example only\n~~~\n"
         )
         dfs = (
-            "# DFS\n\nStatus: Frozen\n\n"
+            "# FS\n\nStatus: Frozen\n\n"
             "- [ ] 🔴 R-FOO — distinct uppercase claim\n"
             "- [ ] 🔴 R-fenced — not owned by the ledger example\n"
         )
@@ -787,7 +787,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('<strong>work: R-009</strong>', page)
 
     def test_invalid_utf8_is_visible_without_raw_failure(self) -> None:
-        (self.workspace / ".de67/DFS.md").write_bytes(b"# DFS\n\xff")
+        (self.workspace / ".de67/FS.md").write_bytes(b"# FS\n\xff")
         state = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions).snapshot()
         self.assertTrue(state["dfs"]["identity"]["invalid_utf8"])
         self.assertIn("�", state["dfs"]["html"])
@@ -802,11 +802,11 @@ class DashboardTests(unittest.TestCase):
     def test_last_good_panel_survives_source_disappearance(self) -> None:
         dashboard = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions)
         first = dashboard.snapshot()
-        (self.workspace / ".de67/DFS.md").unlink()
+        (self.workspace / ".de67/FS.md").unlink()
         second = dashboard.snapshot()
         self.assertFalse(first["dfs"]["stale"])
         self.assertTrue(second["dfs"]["stale"])
-        self.assertIn("<h1>DFS</h1>", second["dfs"]["html"])
+        self.assertIn("<h1>FS</h1>", second["dfs"]["html"])
 
     def test_last_good_clock_survives_malformed_workspace_configuration(self) -> None:
         dashboard = dashboard_module.Dashboard(self.workspace, sessions_root=self.sessions)
@@ -1103,20 +1103,20 @@ class DashboardTests(unittest.TestCase):
             path.write_text("".join(json.dumps(item) + "\n" for item in items), encoding="utf-8")
 
         write_session("rollout-2026-08-18T08-00-00-root.jsonl", "root", None,
-                      "gpt-5.6-sol", "low")
+                      "gpt-6-sol", "low")
         write_session("rollout-2026-08-18T08-01-00-luna.jsonl", "luna", "root",
-                      "gpt-5.6-luna", "medium")
-        write_session("rollout-2026-08-18T08-02-00-terra.jsonl", "terra", "root",
-                      "gpt-5.6-terra", "high", complete=True)
+                      "gpt-6-luna", "medium")
+        write_session("rollout-2026-08-18T08-02-00-sol.jsonl", "sol", "root",
+                      "gpt-6-sol", "high", complete=True)
         write_session("rollout-2026-08-18T08-03-00-sol.jsonl", "sol", "root",
-                      "gpt-5.6-sol", "low")
+                      "gpt-6-sol", "low")
 
         page = dashboard_module.Dashboard(
             self.workspace, sessions_root=self.sessions
         ).render("overview").decode()
         self.assertIn('class="cosmos-workers"', page)
-        self.assertIn('aria-label="luna: low: 0, medium: 1, high: 0, max: 0"', page)
-        self.assertIn("<span>terra</span>", page)
+        self.assertIn('aria-label="luna: low: 0, medium: 1, high: 0, xhigh: 0, max: 0"', page)
+        self.assertIn("<span>sol</span>", page)
         self.assertNotIn("<strong>Sol</strong>", page)
         self.assertNotIn("Unavailable", page)
 
@@ -1139,18 +1139,18 @@ class DashboardTests(unittest.TestCase):
                 "".join(json.dumps(item) + "\n" for item in items), encoding="utf-8"
             )
 
-        write_session("rollout-root.jsonl", "root", None, "gpt-5.6-sol", "low")
-        write_session("rollout-terra.jsonl", "terra", "root", "gpt-5.6-terra", "high")
-        write_session("rollout-helper-a.jsonl", "helper-a", "terra", "gpt-5.6-luna", "low")
-        write_session("rollout-helper-b.jsonl", "helper-b", "terra", "gpt-5.6-luna", "max")
+        write_session("rollout-root.jsonl", "root", None, "gpt-6-sol", "low")
+        write_session("rollout-sol.jsonl", "sol", "root", "gpt-6-sol", "high")
+        write_session("rollout-helper-a.jsonl", "helper-a", "sol", "gpt-6-luna", "low")
+        write_session("rollout-helper-b.jsonl", "helper-b", "sol", "gpt-6-luna", "max")
         write_session(
-            "rollout-finished-helper.jsonl", "helper-old", "terra",
-            "gpt-5.6-luna", "medium", complete=True,
+            "rollout-finished-helper.jsonl", "helper-old", "sol",
+            "gpt-6-luna", "medium", complete=True,
         )
 
         workers = dashboard_module.worker_state(self.workspace, self.sessions)
 
-        self.assertEqual(workers["counts"]["terra"]["high"], 1)
+        self.assertEqual(workers["counts"]["sol"]["high"], 1)
         self.assertEqual(workers["counts"]["luna"]["low"], 1)
         self.assertEqual(workers["counts"]["luna"]["max"], 1)
         self.assertEqual(workers["counts"]["luna"]["medium"], 0)
@@ -1173,17 +1173,17 @@ class DashboardTests(unittest.TestCase):
             )
 
         write_session("rollout-root.jsonl", "root", None,
-                      "gpt-5.6-sol", "low", ["task_started"])
-        write_session("rollout-terra.jsonl", "terra", "root",
-                      "gpt-5.6-terra", "high", ["task_started"])
-        write_session("rollout-interrupted-a.jsonl", "helper-a", "terra",
-                      "gpt-5.6-luna", "low", ["task_started", "turn_aborted"])
-        write_session("rollout-interrupted-b.jsonl", "helper-b", "terra",
-                      "gpt-5.6-luna", "max", ["task_started", "turn_aborted"])
+                      "gpt-6-sol", "low", ["task_started"])
+        write_session("rollout-sol.jsonl", "sol", "root",
+                      "gpt-6-sol", "high", ["task_started"])
+        write_session("rollout-interrupted-a.jsonl", "helper-a", "sol",
+                      "gpt-6-luna", "low", ["task_started", "turn_aborted"])
+        write_session("rollout-interrupted-b.jsonl", "helper-b", "sol",
+                      "gpt-6-luna", "max", ["task_started", "turn_aborted"])
 
         workers = dashboard_module.worker_state(self.workspace, self.sessions)
 
-        self.assertEqual(workers["counts"]["terra"]["high"], 1)
+        self.assertEqual(workers["counts"]["sol"]["high"], 1)
         self.assertEqual(workers["counts"]["luna"]["low"], 0)
         self.assertEqual(workers["counts"]["luna"]["max"], 0)
 
@@ -1214,15 +1214,15 @@ class DashboardTests(unittest.TestCase):
                 "".join(json.dumps(item) + "\n" for item in items), encoding="utf-8"
             )
 
-        write_session("rollout-root.jsonl", "root", None, "gpt-5.6-sol", "low")
-        write_session("rollout-live.jsonl", "live", "root", "gpt-5.6-terra", "medium")
+        write_session("rollout-root.jsonl", "root", None, "gpt-6-sol", "low")
+        write_session("rollout-live.jsonl", "live", "root", "gpt-6-sol", "medium")
         write_session("rollout-owner-lost.jsonl", "owner-lost", "root",
-                      "gpt-5.6-terra", "medium")
+                      "gpt-6-sol", "medium")
         write_session("rollout-returned.jsonl", "returned", "root",
-                      "gpt-5.6-terra", "medium")
-        write_session("rollout-helper.jsonl", "helper", "live", "gpt-5.6-luna", "low")
+                      "gpt-6-sol", "medium")
+        write_session("rollout-helper.jsonl", "helper", "live", "gpt-6-luna", "low")
         write_session("rollout-stale-helper.jsonl", "stale-helper", "owner-lost",
-                      "gpt-5.6-luna", "low")
+                      "gpt-6-luna", "low")
 
         database = self.workspace / ".de67/state/deadlines.sqlite3"
         connection = sqlite3.connect(database)
@@ -1250,7 +1250,7 @@ class DashboardTests(unittest.TestCase):
 
         workers = dashboard_module.worker_state(self.workspace, self.sessions)
 
-        self.assertEqual(workers["counts"]["terra"]["medium"], 1)
+        self.assertEqual(workers["counts"]["sol"]["medium"], 1)
         self.assertEqual(workers["counts"]["luna"]["low"], 1)
 
     def test_worker_header_survives_large_metadata_before_turn_context(self) -> None:
@@ -1275,9 +1275,9 @@ class DashboardTests(unittest.TestCase):
                 "".join(json.dumps(item) + "\n" for item in items), encoding="utf-8"
             )
 
-        write_session("rollout-root.jsonl", "root", None, "gpt-5.6-sol", "low")
+        write_session("rollout-root.jsonl", "root", None, "gpt-6-sol", "low")
         write_session(
-            "rollout-worker.jsonl", "worker", "root", "gpt-5.6-luna", "high", noise=20
+            "rollout-worker.jsonl", "worker", "root", "gpt-6-luna", "high", noise=20
         )
 
         workers = dashboard_module.worker_state(self.workspace, self.sessions)
@@ -1299,12 +1299,12 @@ class DashboardTests(unittest.TestCase):
             path.write_text("".join(json.dumps(item) + "\n" for item in items), encoding="utf-8")
 
         write_session("rollout-root.jsonl", "coordinator", None,
-                      "gpt-5.6-terra", "low", ["task_started"])
+                      "gpt-6-sol", "low", ["task_started"])
         write_session("rollout-worker.jsonl", "worker", "coordinator",
-                      "gpt-5.6-luna", "high",
+                      "gpt-6-luna", "high",
                       ["task_started", "task_complete", "task_started"])
         write_session("rollout-unrelated.jsonl", "unrelated", None,
-                      "gpt-5.6-sol", "low", ["task_started"])
+                      "gpt-6-sol", "low", ["task_started"])
 
         runner = self.workspace / ".de67/state/runner-runs/live"
         runner.mkdir(parents=True)
@@ -1344,11 +1344,11 @@ class DashboardTests(unittest.TestCase):
             path.write_text("".join(json.dumps(item) + "\n" for item in items), encoding="utf-8")
 
         write_session("rollout-old-root.jsonl", "old-coordinator", None,
-                      "gpt-5.6-terra", "low")
+                      "gpt-6-sol", "low")
         write_session("rollout-worker.jsonl", "worker", "old-coordinator",
-                      "gpt-5.6-luna", "medium")
+                      "gpt-6-luna", "medium")
         write_session("rollout-current-root.jsonl", "current-coordinator", None,
-                      "gpt-5.6-terra", "low")
+                      "gpt-6-sol", "low")
 
         old_runner = self.workspace / ".de67/state/coordinator-runs/old"
         current_runner = self.workspace / ".de67/state/coordinator-runs/current"
@@ -1386,7 +1386,7 @@ class DashboardTests(unittest.TestCase):
                     "cwd": str(self.workspace), "timestamp": "2026-08-24T08:00:00Z",
                 }},
                 {"type": "turn_context", "payload": {
-                    "model": "gpt-5.6-sol", "effort": "low",
+                    "model": "gpt-6-sol", "effort": "low",
                 }},
                 {"type": "event_msg", "payload": {"type": "task_started"}},
             )), encoding="utf-8")
@@ -1483,7 +1483,7 @@ class IndexedWorkerTests(unittest.TestCase):
                         ("owner", None, "sol", "low", root),
                         ("named", recorded_parent, "luna", "high", root),
                         ("helper", "named", "luna", "low", root),
-                        ("native", "owner", "terra", "medium", root),
+                        ("native", "owner", "sol", "medium", root),
                         ("idle", None, "luna", "medium", root),
                         ("foreign", None, "luna", "max", root / "other"),
                     ):
@@ -1492,7 +1492,7 @@ class IndexedWorkerTests(unittest.TestCase):
                             {"type": "session_meta", "payload": {
                                 "id": session, "parent_thread_id": parent, "cwd": str(cwd)}},
                             {"type": "turn_context", "payload": {
-                                "model": "gpt-5.6-" + model, "effort": effort}},
+                                "model": "gpt-6-" + model, "effort": effort}},
                             {"type": "event_msg", "payload": {"type": "task_started"}},
                         ]
                         path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
@@ -1512,19 +1512,19 @@ class IndexedWorkerTests(unittest.TestCase):
                     workers = dashboard_module.worker_state(root, sessions)
                     self.assertTrue(workers["available"])
                     self.assertEqual(workers["counts"]["luna"], {
-                        "low": 1, "medium": 0, "high": 1, "max": 0})
-                    self.assertEqual(workers["counts"]["terra"]["medium"], 1)
+                        "low": 1, "medium": 0, "high": 1, "xhigh": 0, "max": 0})
+                    self.assertEqual(workers["counts"]["sol"]["medium"], 1)
                     with (sessions / "named.jsonl").open("a", encoding="utf-8") as trace:
                         trace.write(json.dumps({"type": "turn_context", "payload": {
-                            "model": "gpt-5.6-terra", "effort": "max"}}) + "\n")
+                            "model": "gpt-6-sol", "effort": "max"}}) + "\n")
                     changed = dashboard_module.worker_state(root, sessions)
                     self.assertEqual(changed["counts"]["luna"]["high"], 0)
                     self.assertEqual(changed["counts"]["luna"]["low"], 1)
-                    self.assertEqual(changed["counts"]["terra"]["max"], 1)
+                    self.assertEqual(changed["counts"]["sol"]["max"], 1)
                     claims.return_value = {"native": "owner"}
                     released = dashboard_module.worker_state(root, sessions)
                     self.assertTrue(all(count == 0 for count in released["counts"]["luna"].values()))
-                    self.assertEqual(released["counts"]["terra"]["medium"], 1)
+                    self.assertEqual(released["counts"]["sol"]["medium"], 1)
 
     def test_no_workers_does_not_scan_history(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1616,7 +1616,7 @@ class WorkerScaleTests(unittest.TestCase):
                     self.assertGreater(math.dist(left, right), 10.34)
 
     def test_overflow_is_explicit_and_total_remains_exact(self):
-        result = dashboard_module.render_worker_scale({"terra": {"max": 15}})
+        result = dashboard_module.render_worker_scale({"sol": {"max": 15}})
         self.assertEqual(result.count('class="worker-dot"'), 12)
         self.assertIn("+3", result)
         self.assertIn("max: 15", result)

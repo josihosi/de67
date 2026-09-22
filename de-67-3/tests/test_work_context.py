@@ -122,7 +122,7 @@ class WorkContextTests(unittest.TestCase):
                 '  - DFS slices: `R-CONT-S001`\n'
                 '  - Known footing: independently accepted branch-a work.\n'
                 '  - Current handoff: Continue `sessions/branch-a`.\n')
-            (de67/'DFS.md').write_text('<!-- DE67:DFS-SLICE:BEGIN id=R-CONT-S001 claim=R-CONT -->\n'
+            (de67/'FS.md').write_text('<!-- DE67:DFS-SLICE:BEGIN id=R-CONT-S001 claim=R-CONT -->\n'
                 'Observe independent natural response.\n<!-- DE67:DFS-SLICE:END id=R-CONT-S001 claim=R-CONT -->\n')
             call=policy_kernel.unbound_worker_spawns(root,state,'project')[0]
             packet=Path(call['dispatch_packet']['path']).read_text()
@@ -140,7 +140,7 @@ class WorkContextTests(unittest.TestCase):
             trace.write_text('full trace deliberately not parsed')
             with closing(sqlite3.connect(runtime/'state_5.sqlite')) as db, db:
                 db.execute('CREATE TABLE threads(id,rollout_path,source,model)')
-                db.execute('INSERT INTO threads VALUES (?,?,?,?)',('known',str(trace),'subagent','gpt-5.6-luna'))
+                db.execute('INSERT INTO threads VALUES (?,?,?,?)',('known',str(trace),'subagent','gpt-6-luna'))
             metadata=thread_records([{'task_id':'task','worker_id':'known','coordinator_session_id':'absent'}],codex_home=runtime)
             self.assertEqual(metadata['unavailable_thread_ids'],['absent'])
             self.assertEqual(metadata['records'][0]['trace']['bytes'],trace.stat().st_size)

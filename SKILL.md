@@ -10,7 +10,7 @@ This file routes; it does not run a phase.
 Match the user's command and read exactly one entrypoint:
 
 - `de67 1`: read `de-67-1/SKILL.md` for the current-chat discussion and WEC.
-- `de67 2`: read `de-67-2/SKILL.md` for code inspection and DFS authoring.
+- `de67 2`: read `de-67-2/SKILL.md` for code inspection and FS authoring.
 - `de67 3`: read `de-67-3/SKILL.md` for implementation, deadlines, and mutation.
 - `de67 release` or an explicit request to package/release the de67 skill: read
   `release-packaging/SKILL.md` for release preparation and release-facing documentation.
@@ -22,7 +22,7 @@ background or completeness. These reading boundaries apply when running a phase.
 to inspect or improve the workflow may follow the relevant surfaces without starting those phases.
 
 The handoff artifacts are the interface: phase 2 receives `WEC.md`;
-phase 3 receives the frozen `DFS.md` and Phase-2-initialized `.de67/` clock state.
+phase 3 receives the frozen `FS.md` and Phase-2-initialized `.de67/` clock state.
 
 ## Execution placement
 
@@ -69,7 +69,7 @@ When the user supplies the de67 repository and asks Codex to install or integrat
 4. Verify that `codex` and `python` resolve in the execution environment. Phase 3's bundled runner
    invokes the local Codex CLI; do not replace it with a machine-specific wrapper.
 5. Use Astra high for the Phase-2 owner and Astra medium for the Phase-3 mutation reviewer.
-   Ordinary delivery keeps a Sol low coordinator and Luna/Terra workers. Verify the required models
+   Ordinary delivery keeps a GPT-6 Sol low coordinator and GPT-6 Luna/Sol workers. Verify the required models
    in the target runtime; report unavailable capability rather than silently substituting a model.
 6. Run the skill validator when available, then run the bundled Python tests before reporting the
    installation complete.

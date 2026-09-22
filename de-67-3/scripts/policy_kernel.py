@@ -316,7 +316,7 @@ def _referenced_entrypoints(*values: str) -> list[str]:
 
 
 def current_owner_contract(workspace: Path) -> str:
-    """Carry the current owner-authored handoff verbatim, with source identity."""
+    """Carry explicit delivery corrections, never the Phase-2 WEC handoff."""
     path = workspace / ".de67/WEC.md"
     if not path.is_file():
         return ""
@@ -324,8 +324,8 @@ def current_owner_contract(workspace: Path) -> str:
     source = source_bytes.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     begin, end = "<!-- DE67:OWNER-CONTRACT:BEGIN -->", "<!-- DE67:OWNER-CONTRACT:END -->"
     if begin not in source and end not in source:
-        # Legacy workspaces still use the complete WEC as the authority source.
-        body = source.strip()
+        # The FS is Phase 3's contract. An unmarked WEC belongs to Phase 2.
+        return ""
     else:
         if source.count(begin) != 1 or source.count(end) != 1:
             raise PolicyError("Owner contract requires one complete marked section")
@@ -335,8 +335,8 @@ def current_owner_contract(workspace: Path) -> str:
             raise PolicyError("Owner contract markers are empty or out of order")
         body = body.strip()
     return (
-        "Current owner contract (.de67/WEC.md sha256 "
-        + hashlib.sha256(source_bytes).hexdigest() + "):\n" + body + "\n"
+        "Current owner contract (.de67/WEC.md marked section sha256 "
+        + hashlib.sha256(body.encode("utf-8")).hexdigest() + "):\n" + body + "\n"
         "Apply these current constraints to this assignment and every helper handoff. "
         "They govern generic repair/finding permissions and supersede historical strategy, "
         "including no-replay advice where the owner requires fresh proof. Acknowledge relevant pending "
@@ -375,7 +375,7 @@ def _worker_read_plan(
         })
     plan.extend([
         {
-            "source": f".de67/FS.md slice for {claim_id} (legacy DFS.md resolver compatible)",
+            "source": f".de67/FS.md slice for {claim_id}",
             "reason": "read on demand if the compact packet leaves the product or proof boundary ambiguous",
         },
         {
@@ -396,7 +396,7 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
     ledger = ledger_path.read_text(encoding="utf-8")
     # Assignments are nested under the owning active claim item; cross-reference
     # mentions elsewhere must not become an assignment route.  The guard owns
-    # parsing of active blocks and validation of their DFS selector line.
+    # parsing of active blocks and validation of their FS selector line.
     claim_blocks = [
         (reference, block)
         for reference, block in _active_work_blocks(ledger)
@@ -420,7 +420,7 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
         )
     reference, owning_route = owning_blocks[0]
     # Keep independent same-claim ledger frontiers visible in the packet while
-    # taking DFS content only from the selected owner block.
+    # taking FS content only from the selected owner block.
     route = "\n\n".join(block for _, block in claim_blocks)
     try:
         slice_ids = _ledger_slice_ids(owning_route, reference)
@@ -432,13 +432,13 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
         raise PolicyError(str(error)) from error
     if not selected.strip():
         raise PolicyError(
-            f"Unbound exploration task {task_id} has empty selected DFS slices for {claim_id}"
+            f"Unbound exploration task {task_id} has empty selected FS slices for {claim_id}"
         )
     return route.strip(), selected.strip()
 
 
 def worker_helper_contract() -> str:
-    return ('When native helpers and Luna are available, use model="gpt-5.6-luna", '
+    return ('When native helpers and Luna are available, use model="gpt-6-luna", '
             'fork_turns="none" and suitable effort for bounded discovery or suitable execution. '
             'Otherwise use focused local retrieval within this task. Helpers never own coordination '
             'records; the primary worker collects or stops them before returning. '
@@ -453,6 +453,10 @@ def worker_helper_contract() -> str:
 def worker_outcome_contract() -> str:
     """Keep recoverable work inside the outcome and reserve terminal findings."""
     return (
+        "Deliver the simplest coherent implementation of the requested behavior using the repository's "
+        'existing mechanisms. Proposed decomposition is revisable. Consolidate temporary workarounds '
+        'introduced during this assignment when they are no longer needed; keep unrelated refactoring '
+        'outside the assignment. '
         "Repository-owned implementation, tooling, fixture, scenario, binding and observation repairs remain recoverable work within the assigned scope. "
         "When a prerequisite becomes a substantial independent investigation, ask Sol to decide its ownership; "
         "continue independent work and preserve live runs and useful understanding. Do not silently absorb unrelated prerequisites. "
@@ -509,20 +513,14 @@ def _write_worker_dispatch_packet(
     return packet.resolve(), digest
 
 
-def worker_selection_contract() -> str:
-    return 'Default to Luna for playtesting, clear execution and ordinary repairs. An unknown result or a broad assignment that might need debugging does not itself justify Terra. Use Terra for a concrete hard problem: coupled implementation, difficult diagnosis or demonstrated repair difficulty. After that problem is resolved, give substantial remaining execution to Luna when the handoff saves total work, preserving useful understanding and live ownership. Sol retains coordination; Terra can use Luna helpers without becoming another coordinator. Select model and effort separately: low for clear execution, medium for bounded reasoning, high for competing explanations; Luna also supports xhigh/max. Reassess from results, including helper and handoff costs, without quotas or a selection report. Choose only available pairs from model_choices. Once verified and enabled through the worker system, gpt-6-astra/low is an optional ordinary worker for challenging coding or high uncertainty when Sol expects better implementation judgment or less rework. This is not a default, required escalation or quota; Luna and Terra remain available. Give Astra a focused self-contained assignment with relevant FS, source, evidence and exclusive ownership, not the persistent mutator conversation. Sol remains coordinator and the Astra mutator remains a separate role. At the first naturally suitable Astra assignment, assess verified result, rework, elapsed time and full-tree usage including helpers/retries/review; disclose accounting gaps and treat quality or savings as hypotheses until observed. Do not manufacture a benchmark or duplicate race. Sol is not an ordinary worker.'
-
-
 def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
     """Expose available worker capabilities without choosing for the coordinator."""
     path = workspace / ".de67/state/workspace.json"
     configured = json.loads(path.read_text(encoding="utf-8")).get("worker_capabilities") if path.is_file() else None
     efforts_by_model = {
-        "gpt-5.6-luna": ("low", "medium", "high", "xhigh", "max"),
-        "gpt-5.6-terra": ("low", "medium", "high"),
-        # Astra is deliberately restricted to its separately verified ordinary
-        # worker route.  The persistent mutator is not a worker capability.
-        "gpt-6-astra": ("low",),
+        "gpt-6-luna": ("low", "medium", "high", "xhigh", "max"),
+        "gpt-6-sol": ("low", "medium", "high", "xhigh", "max"),
+        "gpt-6-astra": ("low", "medium", "high", "xhigh", "max"),
     }
     capabilities = configured if configured is not None else [
         {"model": model, "reasoning_effort": effort}
@@ -546,7 +544,7 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
         if choice not in result:
             result.append(choice)
     if not result:
-        raise PolicyError("No configured ordinary-worker capability is available")
+        raise PolicyError("No configured GPT-6 worker capability is available; rerun workspace setup with the new roster")
     return result
 
 
@@ -633,7 +631,7 @@ def unbound_worker_spawns(
                         specification.text, re.DOTALL,
                     )
                     if match is None:
-                        raise PolicyError(f"Closure task {task_id} has no current DFS slice")
+                        raise PolicyError(f"Closure task {task_id} has no current FS slice")
                     proof_route = _dfs_worker_boundary(match.group(1)) + "\nAssigned closure route:\n" + proof_route
             elif phase == "exploration":
                 ledger_route, dfs_slice = _exploration_route(
@@ -1329,8 +1327,7 @@ def workspace_facts(
             facts.add("pending_suggestions")
     try:
         specification = resolve(workspace / ".de67")
-        open_work = ("🔴" in specification.text if specification.legacy
-                     else bool(_active_work_blocks(ledger_text)))
+        open_work = "🔴" in specification.text or bool(_active_work_blocks(ledger_text))
     except SpecificationError:
         open_work = False
     facts.add("red_dfs_work" if open_work else "dfs_complete")

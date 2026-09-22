@@ -211,6 +211,14 @@ class Relay:
         self.save(job)
 
     def input_for(self, job: dict[str, Any]) -> list[dict[str, Any]]:
+        try:
+            return self.prepare_input(job)
+        except OSError as error:
+            # No native input has been submitted yet; isolate attachment failures
+            # from transport errors whose delivery may already be uncertain.
+            raise ValueError(f"Could not prepare message input: {error}") from error
+
+    def prepare_input(self, job: dict[str, Any]) -> list[dict[str, Any]]:
         if "input" in job:
             return job["input"]
         text = job["text"]
@@ -224,7 +232,9 @@ class Relay:
             name = Path(attachment.get("filename", "attachment")).name
             destination = folder / (str(attachment["id"]) + "-" + name)
             if not destination.exists():
-                with urllib.request.urlopen(attachment["url"], timeout=60) as response:
+                request = urllib.request.Request(attachment["url"],
+                    headers={"User-Agent": "DE67AgentInput/1.0"})
+                with urllib.request.urlopen(request, timeout=60) as response:
                     data = response.read()
                 if attachment.get("size") is not None and len(data) != attachment["size"]:
                     raise ValueError("Attachment download was incomplete")

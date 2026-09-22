@@ -31,6 +31,10 @@ class ReleasePackageTests(unittest.TestCase):
                 "integrations/dashboard/de67_dashboard.py": "dashboard code\n",
                 "integrations/direct_input/de67_agent_relay.py": "relay code\n",
                 "integrations/openclaw_discord/SETUP.md": "discord setup\n",
+                "integrations/jev_telescope/README.md": "telescope setup\n",
+                "integrations/jev_telescope/telescope.py": "telescope code\n",
+                "integrations/jev_pit_crew/README.md": "pit crew setup\n",
+                "integrations/jev_pit_crew/pit_crew.py": "pit crew code\n",
                 "docs/verification/history.md": "local development evidence\n",
             }
             for path, text in tracked.items():
@@ -70,6 +74,12 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertIn("de67/integrations/dashboard/de67_dashboard.py", archive.namelist())
             with zipfile.ZipFile(first / "de67-3.0.0-discord.zip") as archive:
                 self.assertIn("de67/integrations/direct_input/de67_agent_relay.py", archive.namelist())
+            with zipfile.ZipFile(first / "de67-3.0.0-jev-telescope.zip") as archive:
+                self.assertIn("de67/integrations/jev_telescope/telescope.py", archive.namelist())
+                self.assertNotIn("de67/integrations/jev_pit_crew/pit_crew.py", archive.namelist())
+            with zipfile.ZipFile(first / "de67-3.0.0-jev-pit-crew.zip") as archive:
+                self.assertIn("de67/integrations/jev_pit_crew/pit_crew.py", archive.namelist())
+                self.assertNotIn("de67/integrations/jev_telescope/telescope.py", archive.namelist())
 
     def test_unclassified_and_runtime_paths_fail_instead_of_shipping(self):
         for path in (".de67/state/clock.sqlite3", "de-67-3/private.log", "secrets.json",

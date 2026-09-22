@@ -1,0 +1,704 @@
+{
+  "day_utc": "2026-09-16",
+  "hours": {
+    "2026-09-16T00": 1271810,
+    "2026-09-16T01": 1309026,
+    "2026-09-16T02": 1515228,
+    "2026-09-16T03": 1312959,
+    "2026-09-16T04": 1136459,
+    "2026-09-16T05": 864148,
+    "2026-09-16T06": 1638570,
+    "2026-09-16T07": 1213043,
+    "2026-09-16T08": 830255,
+    "2026-09-16T09": 957930,
+    "2026-09-16T10": 246363,
+    "2026-09-16T11": 777816,
+    "2026-09-16T12": 1129983,
+    "2026-09-16T13": 702414,
+    "2026-09-16T14": 1357545,
+    "2026-09-16T15": 1006457,
+    "2026-09-16T16": 1224207,
+    "2026-09-16T17": 1639474,
+    "2026-09-16T18": 933917,
+    "2026-09-16T19": 898743,
+    "2026-09-16T20": 1045250,
+    "2026-09-16T21": 507905
+  },
+  "sessions": [
+    {
+      "id": "01a0a87a-17d2-74e0-ae34-d072dc3043aa",
+      "model": "gpt-5.6-terra",
+      "totals": {
+        "fresh": 12430619,
+        "requests": 4487,
+        "input": 560212749,
+        "cached": 548731648,
+        "output": 1022384,
+        "tool_output_chars": 33516451
+      },
+      "tools": [
+        [
+          "exec",
+          4219
+        ],
+        [
+          "append_to_file",
+          104
+        ],
+        [
+          "read_file",
+          47
+        ],
+        [
+          "new_context",
+          40
+        ],
+        [
+          "wait",
+          25
+        ],
+        [
+          "write_file",
+          11
+        ],
+        [
+          "read_item",
+          4
+        ],
+        [
+          "wait_agent",
+          2
+        ],
+        [
+          "list_items",
+          2
+        ],
+        [
+          "search_contents",
+          2
+        ]
+      ],
+      "repeat_output_events": 557,
+      "user_message_count": 47
+    },
+    {
+      "id": "01a0a729-5ae1-7752-9dd7-2c2e0f3a0fad",
+      "model": "gpt-5.6-terra",
+      "totals": {
+        "fresh": 4811992,
+        "requests": 1684,
+        "input": 223198025,
+        "cached": 218819200,
+        "output": 433167,
+        "tool_output_chars": 14848350
+      },
+      "tools": [
+        [
+          "exec",
+          1606
+        ],
+        [
+          "append_to_file",
+          32
+        ],
+        [
+          "new_context",
+          15
+        ],
+        [
+          "read_file",
+          15
+        ],
+        [
+          "wait",
+          1
+        ]
+      ],
+      "repeat_output_events": 210,
+      "user_message_count": 15
+    },
+    {
+      "id": "01a0a64b-9b65-7890-81c7-6442d9747d8a",
+      "model": "gpt-5.6-sol",
+      "totals": {
+        "fresh": 1420289,
+        "requests": 952,
+        "input": 119613829,
+        "cached": 118327040,
+        "output": 133500,
+        "tool_output_chars": 1873344
+      },
+      "tools": [
+        [
+          "exec",
+          917
+        ],
+        [
+          "append_to_file",
+          9
+        ],
+        [
+          "read_item",
+          6
+        ],
+        [
+          "search_contents",
+          5
+        ],
+        [
+          "write_file",
+          3
+        ],
+        [
+          "new_context",
+          3
+        ],
+        [
+          "read_file",
+          3
+        ],
+        [
+          "list_items",
+          3
+        ],
+        [
+          "list_agents",
+          1
+        ]
+      ],
+      "repeat_output_events": 60,
+      "user_message_count": 22
+    },
+    {
+      "id": "01a0aaf1-1b96-7d31-acae-d9037e61983f",
+      "model": "gpt-5.6-sol",
+      "totals": {
+        "fresh": 1341734,
+        "requests": 723,
+        "input": 96953915,
+        "cached": 95717376,
+        "output": 105195,
+        "tool_output_chars": 1512850
+      },
+      "tools": [
+        [
+          "exec",
+          706
+        ],
+        [
+          "write_file",
+          4
+        ],
+        [
+          "search_contents",
+          3
+        ],
+        [
+          "list_items",
+          2
+        ],
+        [
+          "new_context",
+          2
+        ],
+        [
+          "read_file",
+          2
+        ],
+        [
+          "list_agents",
+          2
+        ],
+        [
+          "read_item",
+          2
+        ]
+      ],
+      "repeat_output_events": 6,
+      "user_message_count": 17
+    },
+    {
+      "id": "01a0a8e9-1fc2-7030-ab24-577037ae9bdc",
+      "model": "gpt-5.6-sol",
+      "totals": {
+        "fresh": 1311952,
+        "requests": 564,
+        "input": 75538571,
+        "cached": 74333184,
+        "output": 106565,
+        "tool_output_chars": 1541995
+      },
+      "tools": [
+        [
+          "exec",
+          538
+        ],
+        [
+          "list_items",
+          4
+        ],
+        [
+          "read_item",
+          4
+        ],
+        [
+          "search_contents",
+          4
+        ],
+        [
+          "write_file",
+          3
+        ],
+        [
+          "new_context",
+          2
+        ],
+        [
+          "read_file",
+          2
+        ],
+        [
+          "append_to_file",
+          1
+        ]
+      ],
+      "repeat_output_events": 27,
+      "user_message_count": 20
+    },
+    {
+      "id": "01a08109-6d0f-7391-8d01-0209be85fbeb",
+      "model": "gpt-6-astra",
+      "totals": {
+        "fresh": 1057536,
+        "requests": 162,
+        "input": 23465868,
+        "cached": 22389248,
+        "output": 67444,
+        "tool_output_chars": 531656
+      },
+      "tools": [
+        [
+          "exec",
+          109
+        ],
+        [
+          "send_message",
+          12
+        ],
+        [
+          "append_to_file",
+          8
+        ],
+        [
+          "wait_agent",
+          8
+        ],
+        [
+          "followup_task",
+          4
+        ],
+        [
+          "spawn_agent",
+          3
+        ],
+        [
+          "list_agents",
+          2
+        ],
+        [
+          "sleep",
+          2
+        ],
+        [
+          "search_contents",
+          1
+        ],
+        [
+          "write_file",
+          1
+        ],
+        [
+          "new_context",
+          1
+        ],
+        [
+          "read_file",
+          1
+        ]
+      ],
+      "repeat_output_events": 20,
+      "user_message_count": 9
+    },
+    {
+      "id": "01a0aa04-42a6-75e1-bbee-55802389d3ec",
+      "model": "gpt-6-astra",
+      "totals": {
+        "fresh": 670369,
+        "requests": 543,
+        "input": 70243456,
+        "cached": 69646464,
+        "output": 73377,
+        "tool_output_chars": 975753
+      },
+      "tools": [
+        [
+          "exec",
+          538
+        ],
+        [
+          "write_file",
+          2
+        ],
+        [
+          "new_context",
+          1
+        ],
+        [
+          "read_file",
+          1
+        ]
+      ],
+      "repeat_output_events": 2,
+      "user_message_count": 11
+    },
+    {
+      "id": "01a0a9f2-8cc7-73f0-b75d-d51f1b462316",
+      "model": "gpt-5.6-luna",
+      "totals": {
+        "fresh": 166194,
+        "requests": 25,
+        "input": 2607636,
+        "cached": 2450432,
+        "output": 8990,
+        "tool_output_chars": 473099
+      },
+      "tools": [
+        [
+          "exec",
+          22
+        ]
+      ],
+      "repeat_output_events": 0,
+      "user_message_count": 1
+    },
+    {
+      "id": "01a0aae5-63aa-7e21-b583-6923b4e16142",
+      "model": "gpt-5.6-luna",
+      "totals": {
+        "fresh": 162356,
+        "requests": 36,
+        "input": 2890430,
+        "cached": 2736384,
+        "output": 8310,
+        "tool_output_chars": 363238
+      },
+      "tools": [
+        [
+          "exec",
+          34
+        ]
+      ],
+      "repeat_output_events": 0,
+      "user_message_count": 1
+    },
+    {
+      "id": "01a0a8e1-669f-7360-8774-2d56f107e7a5",
+      "model": "gpt-5.6-luna",
+      "totals": {
+        "fresh": 146461,
+        "requests": 26,
+        "input": 2315827,
+        "cached": 2176512,
+        "output": 7146,
+        "tool_output_chars": 401980
+      },
+      "tools": [
+        [
+          "exec",
+          24
+        ]
+      ],
+      "repeat_output_events": 2,
+      "user_message_count": 1
+    },
+    {
+      "id": "01a0a26a-8039-7cf0-822a-f7f6e49f1464",
+      "model": "gpt-5.6-terra",
+      "totals": {
+        "tool_output_chars": 0
+      },
+      "tools": [],
+      "repeat_output_events": 0,
+      "user_message_count": 0
+    },
+    {
+      "id": "01a0a5fa-7fef-72d0-8f7c-3cbc1791d0b8",
+      "model": "gpt-5.6-sol",
+      "totals": {
+        "tool_output_chars": 0
+      },
+      "tools": [],
+      "repeat_output_events": 0,
+      "user_message_count": 0
+    },
+    {
+      "id": "01a0a265-ab58-7bd1-bb58-cc1b40a4802f",
+      "model": "gpt-5.6-terra",
+      "totals": {
+        "tool_output_chars": 0
+      },
+      "tools": [],
+      "repeat_output_events": 0,
+      "user_message_count": 0
+    },
+    {
+      "id": "01a0a1dd-fc15-7d13-8258-ca67d442ea9b",
+      "model": "gpt-5.6-terra",
+      "totals": {
+        "tool_output_chars": 0
+      },
+      "tools": [],
+      "repeat_output_events": 0,
+      "user_message_count": 0
+    }
+  ],
+  "heuristic_classification": [
+    {
+      "id": "01a0a87a-17d2-74e0-ae34-d072dc3043aa",
+      "counts": {
+        "gui": 155,
+        "source-log-read": 780,
+        "game-harness": 544,
+        "other": 855,
+        "process-status": 590,
+        "process-poll-wait": 113,
+        "game-action-look": 1411,
+        "raw-worker-events": 2,
+        "image": 6
+      },
+      "text_chars": {
+        "gui": 930180,
+        "source-log-read": 6107806,
+        "game-harness": 5476560,
+        "other": 1917568,
+        "process-status": 1348104,
+        "process-poll-wait": 229145,
+        "game-action-look": 6676126,
+        "raw-worker-events": 40199,
+        "image": 782
+      },
+      "next_request_fresh_association": {
+        "gui": 582892,
+        "source-log-read": 2782012,
+        "game-harness": 1933761,
+        "other": 2259112,
+        "process-status": 1052946,
+        "process-poll-wait": 199893,
+        "game-action-look": 3574866,
+        "raw-worker-events": 14788,
+        "image": 30349
+      }
+    },
+    {
+      "id": "01a0a729-5ae1-7752-9dd7-2c2e0f3a0fad",
+      "counts": {
+        "game-action-look": 546,
+        "source-log-read": 358,
+        "process-status": 131,
+        "other": 334,
+        "game-harness": 162,
+        "gui": 111,
+        "image": 13,
+        "process-poll-wait": 14
+      },
+      "text_chars": {
+        "unknown": 8892,
+        "game-action-look": 2937792,
+        "source-log-read": 2730731,
+        "process-status": 518653,
+        "other": 1097982,
+        "game-harness": 1650052,
+        "gui": 653392,
+        "image": 611,
+        "process-poll-wait": 63120
+      },
+      "next_request_fresh_association": {
+        "other": 931738,
+        "game-action-look": 1545776,
+        "source-log-read": 1087358,
+        "process-status": 308106,
+        "game-harness": 551846,
+        "gui": 328182,
+        "image": 34398,
+        "process-poll-wait": 22619,
+        "game-harness+source-log-read": 1969
+      }
+    },
+    {
+      "id": "01a0a64b-9b65-7890-81c7-6442d9747d8a",
+      "counts": {
+        "worker-wait": 370,
+        "process-poll-wait": 333,
+        "raw-worker-events": 56,
+        "process-status": 19,
+        "other": 68,
+        "source-log-read": 61,
+        "game-harness": 33,
+        "game-action-look": 1,
+        "policy-decision": 9
+      },
+      "text_chars": {
+        "unknown": 1627,
+        "worker-wait": 234238,
+        "process-poll-wait": 510990,
+        "raw-worker-events": 179422,
+        "process-status": 25208,
+        "other": 38605,
+        "source-log-read": 340194,
+        "game-harness": 99650,
+        "game-action-look": 24226,
+        "policy-decision": 64707
+      },
+      "next_request_fresh_association": {
+        "other": 132946,
+        "worker-wait": 610429,
+        "process-poll-wait": 168580,
+        "raw-worker-events": 223425,
+        "process-status": 18639,
+        "source-log-read": 93649,
+        "game-harness": 147418,
+        "game-action-look": 4153,
+        "policy-decision": 21050
+      }
+    },
+    {
+      "id": "01a0aaf1-1b96-7d31-acae-d9037e61983f",
+      "counts": {
+        "source-log-read": 23,
+        "game-harness": 26,
+        "worker-wait": 303,
+        "process-status": 11,
+        "other": 27,
+        "policy-decision": 7,
+        "process-poll-wait": 278,
+        "raw-worker-events": 48
+      },
+      "text_chars": {
+        "source-log-read": 166474,
+        "game-harness": 107277,
+        "worker-wait": 167193,
+        "process-status": 89377,
+        "other": 43661,
+        "policy-decision": 88159,
+        "process-poll-wait": 444809,
+        "raw-worker-events": 195427
+      },
+      "next_request_fresh_association": {
+        "source-log-read": 84759,
+        "game-harness": 65272,
+        "worker-wait": 713901,
+        "process-status": 14760,
+        "other": 65455,
+        "policy-decision": 24925,
+        "process-poll-wait": 324820,
+        "raw-worker-events": 47842
+      }
+    },
+    {
+      "id": "01a0a8e9-1fc2-7030-ab24-577037ae9bdc",
+      "counts": {
+        "game-harness": 45,
+        "worker-wait": 174,
+        "source-log-read": 41,
+        "policy-decision": 17,
+        "other": 51,
+        "process-poll-wait": 157,
+        "raw-worker-events": 57,
+        "process-status": 16
+      },
+      "text_chars": {
+        "game-harness": 238169,
+        "worker-wait": 110026,
+        "source-log-read": 200198,
+        "policy-decision": 16900,
+        "other": 115050,
+        "process-poll-wait": 240207,
+        "raw-worker-events": 356858,
+        "process-status": 12954
+      },
+      "next_request_fresh_association": {
+        "game-harness": 284733,
+        "worker-wait": 396708,
+        "source-log-read": 110180,
+        "policy-decision": 31164,
+        "other": 118512,
+        "process-poll-wait": 260354,
+        "raw-worker-events": 83269,
+        "process-status": 27032
+      }
+    },
+    {
+      "id": "01a08109-6d0f-7391-8d01-0209be85fbeb",
+      "counts": {
+        "game-harness": 6,
+        "other": 82,
+        "source-log-read": 44,
+        "process-status": 3,
+        "gui": 1,
+        "worker-wait": 9,
+        "process-poll-wait": 9
+      },
+      "text_chars": {
+        "game-harness": 19461,
+        "other": 107496,
+        "source-log-read": 283989,
+        "process-status": 8652,
+        "gui": 2497,
+        "worker-wait": 25513,
+        "process-poll-wait": 18081
+      },
+      "next_request_fresh_association": {
+        "game-harness": 399126,
+        "other": 245843,
+        "source-log-read": 372208,
+        "process-status": 3898,
+        "gui": 531,
+        "worker-wait": 14979,
+        "process-poll-wait": 20951
+      }
+    },
+    {
+      "id": "01a0aa04-42a6-75e1-bbee-55802389d3ec",
+      "counts": {
+        "game-harness": 18,
+        "worker-wait": 246,
+        "source-log-read": 18,
+        "policy-decision": 8,
+        "other": 11,
+        "process-status": 8,
+        "process-poll-wait": 224,
+        "raw-worker-events": 9
+      },
+      "text_chars": {
+        "game-harness": 111452,
+        "worker-wait": 103557,
+        "source-log-read": 126551,
+        "policy-decision": 58762,
+        "other": 49842,
+        "process-status": 11873,
+        "process-poll-wait": 353065,
+        "raw-worker-events": 48549
+      },
+      "next_request_fresh_association": {
+        "game-harness": 67664,
+        "worker-wait": 269822,
+        "source-log-read": 52173,
+        "policy-decision": 12240,
+        "other": 29273,
+        "process-status": 11438,
+        "process-poll-wait": 218731,
+        "raw-worker-events": 9028
+      }
+    }
+  ]
+}

@@ -63,7 +63,15 @@ de67 3   build, test, and repair against it
 | **[2 · Specify](de-67-2/SKILL.md)** | A fresh owner inspects the repository and resolves the functional contract. | Frozen `.de67/FS.md` and initialized clock state. |
 | **[3 · Deliver](de-67-3/SKILL.md)** | A coordinator assigns workers, interprets results, and continues through investigation, implementation, and repair. | Durable findings and evidence for the requested outcome. |
 
-**[See the complete lifecycle and diagrams →](docs/how-de67-works.md)**
+- **[de67 2 — Specify](de-67-2/SKILL.md)**
+  A fresh specification owner inspects the actual repository and turns the WEC into a frozen,
+  code-grounded `.de67/FS.md`.
+
+- **[de67 3 — Deliver](de-67-3/SKILL.md)**
+  Coordinators and workers autonomously implement the frozen FS, test production routes, preserve
+  evidence, and continue until the requested outcome is proved.
+
+**[See the complete de67 lifecycle and diagrams →](docs/how-de67-works.md)**
 
 ## Structure, not a prison
 
@@ -101,8 +109,8 @@ guarded review route, and returns control to a fresh coordinator.
 
 ## Watch it work
 
-The optional dashboard provides a read-only view of the live FS, work ledger, deadline clock,
-coordinator, workers, mutation state, and recent evidence. It cannot control or stop delivery.
+Phase 3 includes an optional passive website showing the live FS, ledger, clock, workers,
+coordinator, mutation state, and recent evidence. The dashboard cannot control or stop delivery.
 
 Run the dashboard from this checkout:
 
@@ -154,6 +162,9 @@ Built natively for [OpenAI Codex](https://openai.com/codex/). Other agent runtim
 equivalent tools, subagents, durable state, and reasoning control; those ports are not shipped.
 
 ## Credits
+
+- [@morganlinton](https://x.com/morganlinton) shared the VulcanBench comparison that informed
+  the advisory thinking-effort preferences.
 
 - Josef Horvath directed the product and method, contributed the imagination round, and supplied
   the live Cataclysm-AOL proving ground.

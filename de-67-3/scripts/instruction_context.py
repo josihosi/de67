@@ -18,6 +18,14 @@ FALLBACK_GUIDANCE = (
     "status with accepted results, remaining constraints, and evidence references. "
     "Preserve exclusive ownership for edits and mutable runtime operations, and close "
     "temporary processes you own when the work ends."
+
+)
+
+
+EVIDENCE_GUIDANCE = (
+    "For known evidence IDs, status or failures, use exact source retrieval without a provider call "
+    "(play_cli evidence where available). Reserve optional Telescope typed selection for competing "
+    "explanations; inspect original source handles and counterevidence before concluding. "
 )
 
 
@@ -39,10 +47,10 @@ def common_guidance(workspace: str | Path) -> str:
             and source.is_file()
             and hashlib.sha256(source.read_bytes()).hexdigest() == digest
         ):
-            return telescope_guidance(Path(workspace))
+            return EVIDENCE_GUIDANCE + telescope_guidance(Path(workspace))
     except (OSError, ValueError, KeyError, TypeError):
         pass
-    return FALLBACK_GUIDANCE + telescope_guidance(Path(workspace))
+    return FALLBACK_GUIDANCE + " " + EVIDENCE_GUIDANCE + telescope_guidance(Path(workspace))
 
 
 def telescope_guidance(workspace: Path) -> str:

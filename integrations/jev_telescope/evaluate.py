@@ -23,14 +23,13 @@ def metrics(packet, pool, anchors, counter_anchors):
                 evidence_bytes=packet["evidence_bytes"])
 
 
-def run(workspace, live=False, cases_path=None, call=t.bounded_provider, provider_guard=None):
+def run(workspace, live=False, cases_path=None, call=t.bounded_provider):
     cases_path = cases_path or Path(__file__).with_name("evaluation.json")
     cases = json.loads(cases_path.read_text())["cases"]
     results = []
     for case in cases:
         config = t.validate_config(dict(paths=case["paths"], max_candidates=16, candidate_bytes=2400,
-                                       evidence_bytes=4800, elapsed_seconds=20, cache_seconds=0,
-                                       provider_guard=provider_guard or {"mode": "off"}))
+                                       evidence_bytes=4800, elapsed_seconds=20, cache_seconds=0))
         start = time.monotonic()
         pool, info = t.gather(workspace, case["query"], case["terms"], config, start + config["elapsed_seconds"])
         missing_anchors = [a for a in case["important_anchors"] if not any(a in c["excerpt"] for c in pool)]
@@ -54,9 +53,7 @@ def main():
     parser.add_argument("--live", action="store_true", help="Send the four bounded public-repository candidate pools to TypeSafe")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    workspace = args.workspace.resolve()
-    guard = t.configuration(workspace)["provider_guard"] if args.live else None
-    value = run(workspace, args.live, provider_guard=guard)
+    value = run(args.workspace.resolve(), args.live)
     if args.output:
         t.save_json(args.output, value)
     else:

@@ -39,6 +39,7 @@ from coordinator_supervisor import (  # noqa: E402
     mutation_reviewer_prompt,
     ordinary_worker_evidence_contract,
     read_clock,
+    runtime_worker_owners,
     run_child,
     run_supervisor,
     supervision_fingerprint,
@@ -347,12 +348,19 @@ with DeadlineHarness(os.environ["DE67_DEADLINE_STATE"]) as harness:
             "# Work ledger\n\n## Active work\n",
             encoding="utf-8",
         )
-    elif mode == "handover-then-complete":
+    elif mode in {"handover-then-complete", "no-progress-then-complete"}:
         root = Path(os.environ["DE67_WORKSPACE"]) / ".de67"
         if event_count == 1:
-            with (root / "work-ledger.md").open("a", encoding="utf-8") as output:
-                output.write("\nDurable coordinator handoff recorded.\n")
+            if mode == "handover-then-complete":
+                with (root / "work-ledger.md").open("a", encoding="utf-8") as output:
+                    output.write("\nDurable coordinator handoff recorded.\n")
         else:
+            if mode == "no-progress-then-complete":
+                prompt = Path(os.environ["DE67_COORDINATOR_SESSION_FILE"]).with_name("prompt.txt").read_text()
+                assert "You are the coordinator." in prompt
+                assert "Previous decision failed: Coordinator returned with executable work but made no durable progress" in prompt
+                assert "coordinator/reviewer launches and restarts" in prompt
+                assert "task processes" in prompt
             if generation is not None:
                 harness.acknowledge_coordinator_restart(
                     os.environ["DE67_LINEAGE"],
@@ -576,6 +584,26 @@ class ReviewerLaunchPromotionTests(unittest.TestCase):
 
 
 class CoordinatorSupervisorTests(unittest.TestCase):
+    def test_runtime_ownership_includes_astra_ordinary_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            state = workspace / "codex-state.sqlite"
+            connection = sqlite3.connect(state)
+            connection.executescript("""
+                CREATE TABLE threads (id TEXT, cwd TEXT, model TEXT);
+                CREATE TABLE thread_spawn_edges (child_thread_id TEXT, parent_thread_id TEXT);
+            """)
+            connection.execute("INSERT INTO threads VALUES (?,?,?)",
+                               ("astra-worker", str(workspace), "gpt-6-astra"))
+            connection.execute("INSERT INTO thread_spawn_edges VALUES (?,?)",
+                               ("astra-worker", "sol-coordinator"))
+            connection.commit()
+            connection.close()
+            self.assertEqual(
+                runtime_worker_owners(workspace, {"DE67_CODEX_STATE": str(state)}),
+                {"astra-worker": "sol-coordinator"},
+            )
+
     def test_post_review_projection_loads_the_installed_delivery_writer(self) -> None:
         # A long-lived parent keeps its ordinary import, but the sole
         # post-review projection must use the exact on-disk writer that the
@@ -843,7 +871,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertNotEqual(before, claimed)
         self.assertNotEqual(claimed, checkpointed)
 
-    def test_product_checkpoint_runs_only_after_supervisor_journal_is_quiescent(self) -> None:
+    def test_product_checkpoint_is_not_a_supervisor_continuation_gate(self) -> None:
         self.write_work_documents(red=True, active=True)
         observed_live_attempts: list[int] = []
 
@@ -878,7 +906,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 0)
-        self.assertEqual(observed_live_attempts, [0, 0])
+        self.assertEqual(observed_live_attempts, [])
 
     def test_supervisor_does_not_resume_after_child_leaves_orphan_clock(self) -> None:
         self.write_work_documents(red=True, active=True)
@@ -904,7 +932,69 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertEqual(row["attempt_terminal_kind"], "abandoned")
         self.assertIn("worker_owner_lost", row["abandonment_reason"])
 
-    def test_unchanged_success_with_executable_work_is_not_resumed(self) -> None:
+    def test_owner_wait_return_is_not_reported_as_failed_progress(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "prior proof")
+        # The producer's typed-gap projection is covered by policy-kernel tests;
+        # replay its actual owner-wait-only output at the supervisor boundary.
+        facts = frozenset({"owner_wait", "ledger_work", "red_dfs_work"})
+        with patch("coordinator_supervisor.workspace_facts", return_value=facts):
+            result = run_supervisor(
+                self.state_path, "project", self.workspace,
+                self.runner_command(), self.run_root,
+                extra_env=self.environment("unacknowledged"),
+                run_id_factory=lambda _generation: "owner-wait-return",
+            )
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.read_events()), 1)
+        self.assertEqual(self.statuses()["owner-wait-return"], "WAITING_FOR_OWNER")
+        self.assertFalse((self.run_root / "owner-wait-return" / "supervisor_error.txt").exists())
+
+    def test_owner_wait_does_not_hide_independent_executable_work(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "prior proof")
+        facts = frozenset({"owner_wait", "ledger_work", "red_dfs_work", "executable_route"})
+        with patch("coordinator_supervisor.workspace_facts", return_value=facts):
+            result = run_supervisor(
+                self.state_path, "project", self.workspace,
+                self.runner_command(), self.run_root,
+                extra_env=self.environment("unacknowledged"),
+                run_id_factory=lambda _generation, ids=iter(("mixed-owner-wait", "mixed-owner-wait-2", "mixed-owner-wait-3")): next(ids),
+            )
+        self.assertEqual(result, 1)
+        error = (self.run_root / "mixed-owner-wait" / "supervisor_error.txt").read_text()
+        self.assertIn("made no durable progress", error)
+
+    def test_no_progress_return_gets_reason_and_recovers_same_session(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "prior proof")
+        run_ids = iter(("no-progress", "corrected"))
+        result = run_supervisor(
+            self.state_path, "project", self.workspace, self.runner_command(),
+            self.run_root, extra_env=self.environment("no-progress-then-complete"),
+            run_id_factory=lambda _generation: next(run_ids),
+        )
+        self.assertEqual(result, 0)
+        events = self.read_events()
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1]["resume_session"], "fake-session")
+        self.assertIsNone(events[1]["generation"])
+        prompt = (self.run_root / "corrected" / "prompt.txt").read_text()
+        self.assertIn("decision opportunity 2 of 3", prompt)
+        self.assertIn("Previous decision failed: Coordinator returned with executable work but made no durable progress", prompt)
+        self.assertIn("R-001", prompt)
+        self.assertIn("You are the coordinator.", prompt)
+        self.assertIn("task processes", prompt)
+        with closing(sqlite3.connect(self.state_path)) as connection:
+            rows = connection.execute("SELECT run_id, outcome, detail FROM supervisor_attempts ORDER BY started_at").fetchall()
+        self.assertEqual(rows[0][0:2], ("no-progress", "failed"))
+        self.assertIn("no durable progress", rows[0][2])
+        self.assertEqual(self.statuses(), {"no-progress": "FAILED", "corrected": "DONE"})
+
+    def test_unchanged_success_exhausts_existing_corrective_opportunities(self) -> None:
         self.write_work_documents(red=True, active=True)
         (self.workspace / ".de67" / "mutation-suggestions.md").write_text(
             "# Mutation suggestions\n\n## Pending suggestions\n",
@@ -920,15 +1010,15 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.runner_command(),
             self.run_root,
             extra_env=self.environment("unacknowledged"),
-            run_id_factory=lambda _generation: "unchanged-success",
+            run_id_factory=lambda _generation, ids=iter(("unchanged-success", "unchanged-success-2", "unchanged-success-3")): next(ids),
         )
 
         self.assertEqual(result, 1)
-        self.assertEqual(len(self.read_events()), 1)
+        self.assertEqual(len(self.read_events()), 3)
         error = (self.run_root / "unchanged-success" / "supervisor_error.txt").read_text()
         self.assertIn("made no durable progress", error)
 
-    def test_persistent_crash_without_durable_progress_is_not_retried(self) -> None:
+    def test_persistent_crash_without_progress_exhausts_corrective_opportunities(self) -> None:
         self.write_work_documents(red=True, active=True)
         (self.workspace / ".de67" / "mutation-suggestions.md").write_text(
             "# Mutation suggestions\n\n## Pending suggestions\n",
@@ -944,13 +1034,13 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.runner_command(),
             self.run_root,
             extra_env=self.environment("fail-before-ack"),
-            run_id_factory=lambda _generation: "unchanged-crash",
+            run_id_factory=lambda _generation, ids=iter(("unchanged-crash", "unchanged-crash-2", "unchanged-crash-3")): next(ids),
         )
 
         self.assertEqual(result, 7)
-        self.assertEqual(len(self.read_events()), 1)
+        self.assertEqual(len(self.read_events()), 3)
         error = (self.run_root / "unchanged-crash" / "supervisor_error.txt").read_text()
-        self.assertIn("crashed", error)
+        self.assertIn("exited with code 7", error)
         self.assertIn("made no durable progress", error)
 
     def test_unresolved_mutation_gate_is_not_reviewed_twice(self) -> None:
@@ -1034,11 +1124,11 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.runner_command(),
             self.run_root,
             extra_env=self.environment("complete-program"),
-            run_id_factory=lambda _generation: "recovered-run",
+            run_id_factory=lambda _generation, ids=iter(("recovered-run", "recovered-2", "recovered-3")): next(ids),
         )
 
         self.assertEqual(result, 1)
-        self.assertEqual(len(self.read_events()), 1)
+        self.assertEqual(len(self.read_events()), 3)
         with DeadlineHarness(self.state_path) as harness:
             row = harness.connection.execute(
                 "SELECT attempt_terminal_kind, abandonment_reason "
@@ -1230,7 +1320,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("exposes a contradiction or a missing causal step", prompt)
         self.assertIn("Internal machine state and FS detail", prompt)
         self.assertIn('fork_turns="none"', prompt)
-        self.assertIn("Explicitly choose gpt-5.6-luna or gpt-5.6-terra", prompt)
+        self.assertIn("Choose only available pairs from model_choices", prompt)
         self.assertIn("Never omit model selection", prompt)
         self.assertIn("pass coordinator or predecessor history", prompt)
         # Verify the complete producing contract reaches routing without freezing its prose.
@@ -1251,12 +1341,12 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("checkpoint-worker", ingress)
         self.assertIn("keep the same task live.", ingress)
         self.assertNotIn("would repeat an unchanged request", ingress)
-        self.assertIn("why the attempt was inconclusive", ingress)
+        self.assertIn("Preserve the task, missed deadline and returned evidence", ingress)
         self.assertNotIn("next turn supplies new", ingress)
         self.assertIn("marked current owner-contract section", ingress)
         self.assertIn("Verify receipt and use", ingress)
-        self.assertIn("project its remaining frontier to a fresh task", ingress)
-        self.assertIn("Context exhaustion is not a formal finding", ingress)
+        self.assertIn("resume it with message", ingress)
+        self.assertIn("Context exhaustion alone does not require abandonment", ingress)
         self.assertNotIn("followup_task to the same bound worker", ingress)
         self.assertNotIn("Read .de67/orchestrator-guidelines.md", prompt)
         self.assertNotIn("test-and-task-guidelines.md", prompt)
@@ -1272,10 +1362,10 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("authorized repository repair, rerun", ingress)
         self.assertLess(
             ingress.index("keep the same task live."),
-            ingress.index("execution context is exhausted"),
+            ingress.index("Context exhaustion alone"),
         )
-        self.assertIn("abandon only that attempt", ingress)
-        self.assertIn("unfinished ledger outcome visible", ingress)
+        self.assertIn("does not require abandonment or replacement", ingress)
+        self.assertIn("recoverable unfinished task", ingress)
         self.assertNotIn("Do not record finding, release the worker", ingress)
 
     def test_pending_owner_suggestion_becomes_gate_only_after_workers_are_quiet(self) -> None:
@@ -1306,7 +1396,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         # Outcome/lifecycle guidance has one producing owner instead of duplicate packet prose.
         ingress = worker_result_ingress_contract()
         self.assertIn("only disproves the current strategy", ingress)
-        self.assertIn("abandon only that attempt", ingress)
+        self.assertIn("does not require abandonment or replacement", ingress)
 
     def test_fresh_restart_prompt_includes_exact_owner_reason(self) -> None:
         prompt = coordinator_prompt(
@@ -2158,7 +2248,10 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("spawn_agent", corrective_prompt)
         self.assertIn("Durably close or block", corrective_prompt)
         self.assertIn("SQL schemas, queries, migrations", corrective_prompt)
-        self.assertIn("SQLite-backed harness transitions", corrective_prompt)
+        self.assertIn("game-harness code", corrective_prompt)
+        self.assertIn("installed DE67 method obstruction", corrective_prompt)
+        self.assertIn("exclusive mutation handoff", corrective_prompt)
+        self.assertNotIn("without first repairing it is another failed", corrective_prompt)
         self.assertIn("FS red lamps:\n- [ ] 🔴 R-001 — Open", corrective_prompt)
         self.assertIn(
             "Ledger executable entries:\n- [ ] R-001 — Current route",
@@ -2167,8 +2260,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn(
             "If either list is nonempty, Phase 3 is unfinished", corrective_prompt
         )
-        self.assertIn("Trust your own causal judgment", corrective_prompt)
-        self.assertIn("repair the edge case", corrective_prompt)
+        self.assertIn("use causal judgment", corrective_prompt)
+        self.assertIn("repair authorized repository", corrective_prompt)
         self.assertIn("rerun the policy decision", corrective_prompt)
 
         final_prompt = (
@@ -2176,7 +2269,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("decision opportunity 3 of 3", final_prompt)
         self.assertIn("final automatic opportunity", final_prompt)
-        self.assertIn("Trust your own causal judgment", final_prompt)
+        self.assertIn("use causal judgment", final_prompt)
 
     def test_successful_pass_resets_the_consecutive_decision_fuse(self) -> None:
         self.write_work_documents(red=True, active=True)

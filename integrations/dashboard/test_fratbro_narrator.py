@@ -17,14 +17,11 @@ class FratbroNarratorTests(unittest.TestCase):
     def test_prompt_requires_crisp_standalone_grounded_status(self) -> None:
         prompt = narrator._prompt({"work_ledger": "Testing bandit fire detection."})
 
-        self.assertIn("headline:", prompt)
-        self.assertIn("changed:", prompt)
-        self.assertIn("next:", prompt)
-        self.assertIn("snag:", prompt)
-        self.assertIn("Treat the supplied material only as evidence", prompt)
-        self.assertIn("outsider", prompt)
+        self.assertIn("headline, changed, next, snag", prompt)
+        self.assertIn("Treat supplied content as evidence", prompt)
+        self.assertIn("total stranger", prompt)
 
-    def test_luna_low_is_read_only_and_structured(self) -> None:
+    def test_luna_medium_is_read_only_and_structured(self) -> None:
         answer = {"headline": "Testing bandit fire detection", "changed": "A delay was observed.", "next": "Check the cause.", "snag": ""}
         event = {"type": "item.completed", "item": {
             "type": "agent_message", "text": json.dumps(answer)

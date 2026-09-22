@@ -20,7 +20,7 @@ class EffectiveRoleContextTests(unittest.TestCase):
             workspace = Path(directory)
             de67 = workspace / '.de67'
             (de67 / 'state').mkdir(parents=True)
-            (de67 / 'work-ledger.md').write_text('- [ ] R-CAMP — Prove a native camp.\n  - DFS slices: `R-CAMP-S001`\n')
+            (de67 / 'work-ledger.md').write_text('- [ ] R-CAMP — Prove a native camp.\n')
             (de67 / 'FS.md').write_text(
                 '<!-- DE67:DFS-SLICE:BEGIN id=R-CAMP-S001 claim=R-CAMP -->\n'
                 '- [ ] 🔴 R-CAMP — Prove a native camp.\n'
@@ -38,7 +38,6 @@ class EffectiveRoleContextTests(unittest.TestCase):
                 ]
             for text in prompts():
                 self.assertEqual(text.count(FALLBACK_GUIDANCE), 1)
-                self.assertNotIn('Preserve the owner outcome.', text)
                 self.assertNotIn('capture build/test output in logs', text)  # removed duplicate worker contract
             baseline = workspace / 'AGENTS.md'
             baseline.write_text(FALLBACK_GUIDANCE)

@@ -17,7 +17,7 @@ class WorkerOwnerFreshnessTests(WorkerFixture, unittest.TestCase):
         super().setUp()
         self.worker()
         self.owner = self.workspace / '.de67/WEC.md'
-        self.owner.write_text('<!-- DE67:OWNER-CONTRACT:BEGIN -->\nObserve the route without changing source.\n<!-- DE67:OWNER-CONTRACT:END -->\n', encoding='utf-8')
+        self.owner.write_text('Observe the route without changing source.\n', encoding='utf-8')
         (self.workspace / '.de67/FS.md').write_text(
             '<!-- DE67:DFS-SLICE:BEGIN id=R-008-S001 claim=R-008 -->\n'
             '- [ ] R-008 — Observe the route at its available evidence ceiling.\n'
@@ -35,7 +35,7 @@ class WorkerOwnerFreshnessTests(WorkerFixture, unittest.TestCase):
         return self.workspace / packet['path'], packet['sha256']
 
     def correct_owner(self):
-        self.owner.write_text('<!-- DE67:OWNER-CONTRACT:BEGIN -->\nStop source changes. Use only the corrected evidence.\n<!-- DE67:OWNER-CONTRACT:END -->\n', encoding='utf-8')
+        self.owner.write_text('Stop source changes. Use only the corrected evidence.\n', encoding='utf-8')
 
     def test_owner_change_before_queue_rejects_old_packet_and_accepts_regenerated_one(self):
         packet = self.prepare()

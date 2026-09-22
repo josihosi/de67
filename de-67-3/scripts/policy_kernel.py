@@ -453,6 +453,10 @@ def worker_helper_contract() -> str:
 def worker_outcome_contract() -> str:
     """Keep recoverable work inside the outcome and reserve terminal findings."""
     return (
+        "Deliver the simplest coherent implementation of the requested behavior using the repository's "
+        'existing mechanisms. Proposed decomposition is revisable. Consolidate temporary workarounds '
+        'introduced during this assignment when they are no longer needed; keep unrelated refactoring '
+        'outside the assignment. '
         "Repository-owned implementation, tooling, fixture, scenario, binding and observation repairs remain recoverable work within the assigned scope. "
         "When a prerequisite becomes a substantial independent investigation, ask Sol to decide its ownership; "
         "continue independent work and preserve live runs and useful understanding. Do not silently absorb unrelated prerequisites. "
@@ -477,8 +481,9 @@ def worker_communication_contract() -> str:
     return (
         "Named workers use the coordinator mailbox command supplied here; native children use "
         "send_message(target=\"/root\", message=...). Share progress or questions that can "
-        "change coordination or another worker's work. During tests, ask the coordinator for help "
-        "when results surprise you, progress stalls, or you are unsure what to try next. Share the "
+        "change coordination or another worker's work. Ask the coordinator for help when results "
+        "surprise you, progress stalls, or uncertainty about where to look, how to approach the task, "
+        "or how to interpret evidence could change your next steps. Share the "
         "relevant actual state, expected behavior, evidence and uncertainty so you can reason "
         "together before repeating an ineffective approach. If retrieval itself is awkward, name "
         "the question the available view could not answer and the relevant evidence handle; let "
@@ -508,17 +513,14 @@ def _write_worker_dispatch_packet(
     return packet.resolve(), digest
 
 
-def worker_selection_contract() -> str:
-    return 'Default to Luna for playtesting, clear execution and ordinary repairs. An unknown result or a broad assignment that might need debugging does not itself justify Terra. Use Terra for a concrete hard problem: coupled implementation, difficult diagnosis or demonstrated repair difficulty. After that problem is resolved, give substantial remaining execution to Luna when the handoff saves total work, preserving useful understanding and live ownership. Sol retains coordination; Terra can use Luna helpers without becoming another coordinator. Select model and effort separately: low for clear execution, medium for bounded reasoning, high for competing explanations; Luna also supports xhigh/max. Reassess from results, including helper and handoff costs, without quotas or a selection report. Explicitly choose gpt-5.6-luna or gpt-5.6-terra and effort from model_choices; Sol is not an ordinary worker.'
-
-
 def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
     """Expose available worker capabilities without choosing for the coordinator."""
     path = workspace / ".de67/state/workspace.json"
     configured = json.loads(path.read_text(encoding="utf-8")).get("worker_capabilities") if path.is_file() else None
     efforts_by_model = {
         "gpt-5.6-luna": ("low", "medium", "high", "xhigh", "max"),
-        "gpt-5.6-terra": ("low", "medium", "high"),
+        "gpt-5.6-terra": ("low", "medium", "high", "xhigh", "max"),
+        "gpt-6-astra": ("low", "medium", "high", "xhigh", "max"),
     }
     capabilities = configured if configured is not None else [
         {"model": model, "reasoning_effort": effort}
@@ -528,7 +530,7 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
         raise PolicyError("worker_capabilities must be a list")
     result = []
     for value in capabilities:
-        if not isinstance(value, dict) or value.get("model") not in {"gpt-5.6-luna", "gpt-5.6-terra"}:
+        if not isinstance(value, dict) or value.get("model") not in efforts_by_model:
             continue
         choice = {"model": value["model"], "reasoning_effort": value.get("reasoning_effort", "medium")}
         # Setup records successfully probed pairs; defaults do not restrict that roster.
@@ -539,7 +541,7 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
         if choice not in result:
             result.append(choice)
     if not result:
-        raise PolicyError("No configured Luna/Terra worker capability is available")
+        raise PolicyError("No configured ordinary-worker capability is available")
     return result
 
 
@@ -1002,6 +1004,7 @@ def workspace_facts(
 ) -> frozenset[str]:
     facts: set[str] = set()
     current_claim: str | None = None
+    terminal_task_ids: set[str] = set()
     owner_wait_claims: set[str] = set()
     owner_wait_gaps: set[tuple[str, int, str]] = set()
     connection = sqlite3.connect(f"file:{state.resolve()}?mode=ro", uri=True)
@@ -1038,6 +1041,8 @@ def workspace_facts(
                     (lineage_id,),
                 ).fetchone()
                 epoch_generation = int(epoch[0]) if epoch is not None else None
+            terminal_task_ids = {str(row["task_id"]) for row in rows
+                                 if row["attempt_terminal_at"] is not None}
             nonterminal = [row for row in rows if row["attempt_terminal_at"] is None]
             worker_claims_exist = _table_exists(connection, "worker_claims")
             claimed_ids: set[str] = set()
@@ -1064,7 +1069,9 @@ def workspace_facts(
                 row for row in nonterminal
                 if not worker_claims_exist or str(row["task_id"]) in claimed_ids
             ]
-            if live:
+            from worker_library import returned_assignments
+            returned = returned_assignments(workspace, state, lineage_id)
+            if any(str(row["task_id"]) not in returned for row in live):
                 facts.add("live_task")
             if any(str(row["task_id"]) not in ever_claimed_ids for row in nonterminal):
                 facts.add("unbound_task")
@@ -1142,7 +1149,14 @@ def workspace_facts(
                     "ORDER BY started_at DESC",
                     (lineage_id,),
                 ).fetchall()
-            clock = next((row for row in clock if str(row["claim_id"]) not in owner_wait_claims), None)
+            accepted_claims = {
+                str(row[0]) for row in connection.execute(
+                    "SELECT claim_id FROM claim_acceptances WHERE lineage_id = ? AND invalidated_at IS NULL",
+                    (lineage_id,),
+                )
+            } if _table_exists(connection, "claim_acceptances") else set()
+            clock = next((row for row in clock
+                          if str(row["claim_id"]) not in owner_wait_claims | accepted_claims), None)
             if clock is not None:
                 current_claim = str(clock["claim_id"])
                 facts.add("open_claim")
@@ -1281,6 +1295,9 @@ def workspace_facts(
                 if any(re.search(r"(?<![A-Za-z0-9_-])" + re.escape(identity) + r"(?![A-Za-z0-9_-])", line)
                        for identity in owner_wait_claims | {gap for _, _, gap in owner_wait_gaps}):
                     continue
+            assignment = re.match(r"(?i)^\s*- Assignment ([^:]+):\s*\S", line)
+            if assignment and assignment.group(1).strip() in terminal_task_ids:
+                continue
             if re.search(r"(?i)^\s*- (?:Next executable route|Active work|Assignment [^:]+):\s*\S", line):
                 facts.add("executable_route")
     suggestions = workspace / ".de67" / "mutation-suggestions.md"

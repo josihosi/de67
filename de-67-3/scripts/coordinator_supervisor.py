@@ -29,7 +29,7 @@ from blocker_adapter import (
 from instruction_context import common_guidance
 from agent_mailbox import communication_contract
 from deadline_harness import DeadlineError, DeadlineHarness
-from policy_kernel import current_owner_contract, worker_selection_contract
+from policy_kernel import current_owner_contract, workspace_facts
 from specification import SpecificationError, resolve
 from repository_checkpoint import (
     RepositoryCheckpointError,
@@ -153,6 +153,19 @@ class SupervisorJournal:
                 raise SupervisorError(
                     f"Supervisor run is missing or already terminal: {run_id}"
                 )
+
+    def reject(self, run_id: str, reason: str) -> None:
+        """Record a protocol rejection after the child's process exit was recorded."""
+        with closing(sqlite3.connect(self.state_path)) as connection, connection:
+            cursor = connection.execute(
+                """
+                UPDATE supervisor_attempts SET outcome = 'failed', detail = ?
+                WHERE lineage_id = ? AND run_id = ? AND finished_at IS NOT NULL
+                """,
+                (reason, self.lineage_id, run_id),
+            )
+            if cursor.rowcount != 1:
+                raise SupervisorError(f"Supervisor child exit is not recorded: {run_id}")
 
 
 def _write(path: Path, value: str) -> None:
@@ -420,24 +433,21 @@ def active_worker_coordinator_session(
     lineage_id: str,
 ) -> str | None:
     """Return the one coordinator session that owns all active worker claims."""
+    from worker_library import execution_sessions, returned_assignments
+    workspace = state_path.parent.parent.parent
+    returned = returned_assignments(workspace, state_path, lineage_id)
+    controllers = execution_sessions(workspace, state_path, lineage_id)
     with DeadlineHarness(state_path) as harness:
-        sessions = tuple(
-            str(row["coordinator_session_id"])
+        sessions = sorted({
+            controllers.get(row["task_id"], str(row["coordinator_session_id"]))
             for row in harness.connection.execute(
-                """
-                SELECT DISTINCT claim.coordinator_session_id
-                FROM worker_claims AS claim
-                JOIN tasks AS task
-                  ON task.lineage_id = claim.lineage_id
-                 AND task.task_id = claim.task_id
-                WHERE claim.lineage_id = ?
-                  AND claim.released_at IS NULL
-                  AND task.attempt_terminal_at IS NULL
-                ORDER BY claim.coordinator_session_id
-                """,
-                (lineage_id,),
-            ).fetchall()
-        )
+                """SELECT claim.task_id, claim.coordinator_session_id
+                FROM worker_claims AS claim JOIN tasks AS task
+                  ON task.lineage_id = claim.lineage_id AND task.task_id = claim.task_id
+                WHERE claim.lineage_id = ? AND claim.released_at IS NULL
+                  AND task.attempt_terminal_at IS NULL""", (lineage_id,))
+            if row["task_id"] not in returned
+        })
     if len(sessions) > 1:
         raise SupervisorError(
             "Active worker claims belong to multiple coordinator sessions"
@@ -473,7 +483,7 @@ def runtime_worker_owners(
     return {
         str(worker): str(parent)
         for worker, parent, model in rows
-        if any(name in str(model or "").lower() for name in ("luna", "terra"))
+        if any(name in str(model or "").lower() for name in ("luna", "terra", "astra"))
     } | owners
 
 
@@ -574,7 +584,10 @@ def mutation_gate(
     """Return the first durable mutation gate only after workers are quiet."""
     with DeadlineHarness(state_path) as harness:
         summary = harness.list_tasks()
-    if any(task.get("state") == "running" for task in summary["tasks"]):
+    from worker_library import returned_assignments
+    returned = returned_assignments(workspace, state_path, lineage_id) if workspace else set()
+    if any(task.get("state") == "running" and task.get("task_id") not in returned
+           for task in summary["tasks"]):
         return None
     if workspace is not None:
         immediate = [
@@ -744,7 +757,7 @@ def work_is_complete(
 
 
 def ledger_has_active_work(workspace: Path) -> bool:
-    """Treat every strict active-ledger item as immediately admissible work."""
+    """Detect unchecked ledger items; executability also depends on route facts."""
     ledger = workspace / ".de67" / "work-ledger.md"
     return ledger.is_file() and ACTIVE_LEDGER_ITEM.search(
         ledger.read_text(encoding="utf-8")
@@ -869,37 +882,26 @@ def coordinator_ledger_contract() -> str:
 
 def worker_handoff_contract() -> str:
     return (
-        "Before opening focused exploration, record its outcome and exit condition as "
-        "`  - Assignment TASK-ID: ...` in the existing ledger; keep independent assignments separate. "
-        "Whole-claim assignments remain valid; broader product scope is context for narrower tasks. "
-        "For coding or testing, Sol turns the FS outcome and relevant source knowledge into "
-        "working guidance when it can reduce uncertainty, rework or error. Select what helps: "
-        "existing design, approach, interfaces and invariants for coding; behavior, material "
-        "premises and distinguishing observations for testing. Explain unresolved choices and "
-        "how correctness could be established where useful. Scale detail to uncertainty and "
-        "consequences; skip additional briefing when it adds no value. The FS is outcome authority; "
-        "the brief is revisable engineering guidance, distinguishing facts from hypotheses. "
-        "Use bounded Luna searches when helpful and synthesize their findings rather than forwarding "
-        "search history. Carry useful guidance and references through the existing context_library.py "
-        "prepare and selected_context route; preserve accepted facts and evidence limits, refresh "
-        "changed dependencies and verify packet input/use. Workers choose and adapt execution; "
-        "use returned evidence to revise the approach and inform Sol's review. "
-        "Opening a clock does not delegate. Consider the named worker catalogue before dispatch: "
-        "reuse a worker whose job, skills and useful context fit the work, including a changed tactic "
-        "or related assignment. A job describes continuing responsibility; each task brief describes "
-        "the current outcome. Create a named worker with an explicit model/effort when no existing "
-        "worker fits or independent concurrent work needs one. Assign through worker_library.py with "
-        "the kernel's exact task and hash-bound packet; it creates or resumes the worker's conversation "
-        "and records verified ownership. Native spawn_agent remains available with the exact task_name, "
-        "fork_turns=none and packet arguments. The full packet is worker input, not coordinator context. "
+        "Record the outcome and exit condition as `  - Assignment TASK-ID: ...` in the ledger "
+        "before opening exploration. Keep independent assignments separate; whole-claim tasks remain valid. "
+        "Give workers the outcome, relevant evidence and writable scope; offer a starting approach only "
+        "when useful, and let them adapt. Give coupled shared-file edits one owner. Distinguish installed "
+        "implementation targets from writable candidate paths: ordinary workers stage method patches; "
+        "the exclusive mutator promotes them. Carry selected facts and evidence limits through "
+        "context_library.py prepare/selected_context, refreshing changed dependencies. "
+        "Choose the model and named worker for the remaining work; reuse useful context when it saves "
+        "total effort. Create a worker with explicit model/effort when none fits or independent work needs one. "
+        "After opening a task, ask the kernel for its prepared handoff. Assign through worker_library.py "
+        "using the returned exact task and hash-bound packet; it records verified ownership and creates "
+        "or resumes the conversation. Native spawn_agent remains available with the prepared exact "
+        "task_name, fork_turns=none and packet arguments. Use those arguments directly. The full packet is "
+        "worker input, not coordinator context. Do not invoke claim-worker yourself. "
         "Independently actionable opened tasks need one distinct worker each before waiting, with "
-        "exclusive edit/runtime ownership. A worker's previous task must be terminal before a new "
-        "assignment; questions and partial results continue the same task. The library checks exact "
-        "workspace, current coordinator, task and worker identity; native workers retain verified "
-        "parent/workspace checks. Do not invoke claim-worker yourself. "
-        "A /root/<task-name> is not a worker UUID. Continue live coordination; wait when no useful "
-        "decision remains. A timeout is not completion. Record returns before routing or exiting; "
-        "do not finish while a worker result is outstanding. Attempts without verified handoff are abandoned."
+        "exclusive edit/runtime ownership. A worker's prior task must be terminal before a new assignment; "
+        "questions and partial results continue the same task. A /root/<task-name> is not a worker UUID. "
+        "Coordinate useful work, wait when no decision remains, and record returns before routing. "
+        "Timeout is not completion; do not finish while a worker result is outstanding. "
+        "Attempts without verified handoff are abandoned."
     )
 
 
@@ -923,11 +925,15 @@ def worker_result_ingress_contract() -> str:
         "ledger item for each observation. Use checkpoint-worker only when evidence needs durable "
         "continuation; a message or checkpoint does not settle the task or restart its clock. "
         "A verified ordinary-worker return is durable-state ingress, not a route decision. "
-        "Judge whether the observations establish the assigned behavior and whether changed code "
-        "fits the relevant data flow, ownership, interfaces and failure paths. Reconcile the brief, "
-        "source and returned evidence at a material contradiction; a passing suite or reviewer concern "
-        "alone settles neither question. Use narrow inspection or an independent review only when "
-        "an unresolved question warrants it. Treat the worker's requested disposition as evidence "
+        'Judge both whether the change delivers the assigned behavior and whether it leaves the affected '
+        'code understandable and maintainable. Inspect the relevant diff and surrounding callers. Look '
+        'for duplicated state, unclear ownership or lifetime, unnecessary branches or abstractions, and '
+        'departures from established APIs and native types. Check whether the tests could expose a '
+        'mistaken implementation assumption. Resolve material differences against the FS; passing tests '
+        'do not erase them. Where a concrete problem warrants correction, prefer simplifying the affected '
+        'implementation. Use an independent reviewer when a specific unresolved risk warrants another '
+        'perspective, giving them the code and question to investigate. Stop when the material concerns '
+        "are settled. Treat the worker's requested disposition as evidence "
         "to judge, not as terminal authority; persist its result separately from that judgment. "
         "Before recording a formal finding, name the assigned-outcome exit that its evidence proves. "
         "A return that only disproves the current strategy is nonterminal even when the worker names "
@@ -941,10 +947,10 @@ def worker_result_ingress_contract() -> str:
         "Ending an assignment and interrupting execution are separate decisions: completion, cancellation, "
         "a concrete need to stop ongoing actions, or demonstrated inability can justify stopping; "
         "communication and partial results alone do not. "
-        "If its execution context is exhausted, preserve accepted proof plus why the attempt was "
-        "inconclusive, abandon only that attempt, keep the unfinished "
-        "ledger outcome visible, and project its remaining frontier to a fresh task after any required "
-        "incident review. Context exhaustion is not a formal finding or an assigned-outcome exit. "
+        "A returned turn may leave a recoverable unfinished task; resume it with message, including "
+        "after a due review under the fresh coordinator. Review may proceed once all worker turns "
+        "are returned and no longer editing. Preserve the task, missed deadline and returned evidence. "
+        "Context exhaustion alone does not require abandonment or replacement. "
         "When accepting returned work, reconcile all worker/helper game attempts, including failed "
         "startups and replacements, against their PID/birth identity and broker. Arrange graceful "
         "closure through the responsible owner or an explicit retained-session handoff; a finished "
@@ -995,7 +1001,9 @@ def recovery_frontier_snapshot(workspace: Path) -> str:
     )
 
 
-def coordinator_recovery_contract(opportunity: int, workspace: Path) -> str:
+def coordinator_recovery_contract(
+    opportunity: int, workspace: Path, reason: str | None = None,
+) -> str:
     """Return bounded corrective context after a failed coordinator decision."""
     if opportunity <= 1 or opportunity > COORDINATOR_DECISION_OPPORTUNITIES:
         raise SupervisorError(f"Invalid coordinator decision opportunity: {opportunity}")
@@ -1008,20 +1016,21 @@ def coordinator_recovery_contract(opportunity: int, workspace: Path) -> str:
     snapshot = recovery_frontier_snapshot(workspace)
     return (
         f"Recovery: this is coordinator decision opportunity {opportunity} of "
-        f"{COORDINATOR_DECISION_OPPORTUNITIES}.\n{snapshot}\n"
+        f"{COORDINATOR_DECISION_OPPORTUNITIES}.\n"
+        + (f"Previous decision failed: {reason}\n" if reason else "")
+        + f"{snapshot}\n"
         "If either list is nonempty, Phase 3 is unfinished. Execute the exact policy decision. "
         "If DE67_COORDINATOR_ACK_ARGV_JSON is present, execute that exact array before any "
         "dispatch or other state transition. "
-        "If the returned action cannot advance, untangle and repair the edge case instead of "
-        "repeating the failed surface action. Trust your own causal judgment: you may change the "
-        "implementation, harness, fixtures, SQL schemas, queries, migrations, SQLite-backed "
-        "harness transitions, or ledger projection when that is the shortest honest fix. Mutate "
-        "DE67 clock state through the deadline harness rather than ad hoc SQL. Then rerun the "
+        "If the returned action cannot advance, use causal judgment to repair authorized repository "
+        "implementation, game-harness code, fixtures, SQL schemas, queries, migrations or ledger projection. "
+        "For an installed DE67 method obstruction, preserve the reproducer and stage a candidate "
+        "through the existing exclusive mutation handoff; that is a valid recovery outcome. "
+        "Use deadline-harness APIs for DE67 clock transitions. Then rerun the "
         "policy decision and continue de67 3. Do not open a replacement task merely because an "
         "earlier attempt was abandoned. When policy returns spawn_worker, use its exact injected "
-        "task/packet identity through named-worker assign or the concrete native spawn_agent call. Waiting, exiting, or calling an internal "
-        "delegation/harness defect a blocker without first repairing it is another failed "
-        "decision. Durably close or block existing work only when evidence proves completion "
+        "task/packet identity through named-worker assign or the concrete native spawn_agent call. "
+        "Durably close or block existing work only when evidence proves completion "
         "or a genuinely external blocker. A durable external blocker, proved FS completion, or no red lamp and no "
         "executable ledger entry remains a valid stop."
         + final
@@ -1049,6 +1058,8 @@ def named_worker_contract(workspace: Path) -> str:
         "it when responsibility changes. An idle worker can change model/effort for the next job while "
         "retaining its conversation. Reuse remains a judgment about useful context and competence, "
         "not an exact task-name match, compulsory reuse, worker quota or periodic summary ritual. "
+        "Git checkpoints are optional snapshots chosen by the coordinator, not task completion or acceptance. "
+        "A failed checkpoint remains visible for repair and does not stop delivery or a due review. "
         "The library runs through the App Server transport and returns compact result references in "
         "the existing coordinator mailbox. Use its message/wait for named workers. For a CLI wait, "
         "keep exec_command and any required write_stdin polling inside one functions.exec invocation "
@@ -1070,19 +1081,36 @@ def named_worker_contract(workspace: Path) -> str:
 
 
 def live_coordination_contract() -> str:
-    return "Use worker_library.py message/wait for named workers; use native send_message/followup_task/wait_agent for native children. Native workers address /root. Sol owns direction and scope. While a worker owns execution, resolve an independent source, interface or acceptance question when its answer can change the current work or successor, and send the useful finding through that worker's message route. Preserve exclusive input/edit ownership and do not duplicate the worker's investigation. If no such question remains, waiting is correct. When execution reveals a substantial independent tooling problem, decide who owns it without interrupting useful live state or handing off merely for a changed tactic. After hard diagnosis, reassess whether Luna can perform substantial remaining execution at lower total cost. Apply the returned-work judgment in the result ingress contract before settling consequential changes. Carry forward current findings, retiring source-specific advice once regression proof absorbs it. Notice recurring context/tool obstructions in worker evidence and commission a bounded repair through the existing work ledger; validate that it removes the demonstrated repetition. DE67 method edits retain exclusive mutation/guard ownership. Do not convert worker discovery transcripts into coordinator context or request parallel summaries, periodic reports or new receipts. Use current-root token_usage in work_context as feedback with helper/handoff costs; distinguish expected savings from measured use, never quotas. At worker return or a natural adoption event, reassess remaining whole-claim proof against its immutable deadline; schedule the unmet boundary with an honest estimate. When no useful decision remains, use the worker's wait route, waking no later than the item deadline; apply policy at routing transitions."
+    return "Use worker_library.py message/wait for named workers; use native send_message/followup_task/wait_agent for native children. Native workers address /root. Sol owns direction and scope. While a worker owns execution, resolve an independent source, interface or acceptance question when its answer can change the current work or successor, and send the useful finding through that worker's message route. Preserve exclusive input/edit ownership and do not duplicate the worker's investigation. At useful coordination boundaries, inspect compact CPU, memory pressure/swap and task-owned process state when it can reveal missed cleanup or a stalled operation. Reconcile games, bridges, helpers and builds with active assignments and explicit retained-session purposes. Sol owns noticing and arranging cleanup when a worker forgets; verified finished or unused task-owned processes may be closed through their supported graceful lifecycle without asking again. Check exact PID/birth identity and OS exit, preserving journals, unsaved state and exclusive input ownership. Low CPU, age or RSS alone does not establish disuse; keep active work, Josef's applications, shared services in use and intentionally retained sessions. For a stalled active operation, diagnose the specific process and coordinate bounded recovery with its worker; report an exact unresolved ownership or recovery gap while continuing independent work. Use no monitoring daemon, fixed polling quota or arbitrary kill threshold. If no such question remains, waiting is correct. When execution reveals a substantial independent tooling problem, decide who owns it without interrupting useful live state or handing off merely for a changed tactic. After hard diagnosis, reassess whether Luna can perform substantial remaining execution at lower total cost. Apply the returned-work judgment in the result ingress contract before settling consequential changes. Carry forward current findings, retiring source-specific advice once regression proof absorbs it. Notice recurring context/tool obstructions in worker evidence and commission a bounded repair through the existing work ledger; validate that it removes the demonstrated repetition. DE67 method edits retain exclusive mutation/guard ownership. Do not convert worker discovery transcripts into coordinator context or request parallel summaries, periodic reports or new receipts. Use current-root token_usage in work_context as feedback with helper/handoff costs; distinguish expected savings from measured use, never quotas. At worker return or a natural adoption event, reassess remaining whole-claim proof against its immutable deadline; schedule the unmet boundary with an honest estimate. When no useful decision remains, use the worker's wait route, waking no later than the item deadline; apply policy at routing transitions."
 
 
 def coordinator_continuation_prompt() -> str:
     """Resume the same session without replaying its stable role contracts."""
     return (
-        "Continue the same DE-67 coordinator lifecycle under the role contracts already in this "
+        "You are the coordinator. Continue the same DE-67 coordinator lifecycle under the role contracts already in this "
         "session. Ordinary worker results and findings are state events, not a reason to stop. "
         "Ingest any pending worker return under the existing receipt contract before routing; "
         "otherwise execute DE67_POLICY_DECIDE_ARGV_JSON without a shell for the next action brief. "
         "Use current state and changed evidence, not a replay of prior instructions or history. "
         "Continue live coordination; wait_agent when no useful decision remains while workers "
-        "are outstanding. The supervisor still owns process and restart transitions.\n"
+        "are outstanding. The external supervisor owns coordinator/reviewer launches and restarts; "
+        "you own coordination of task processes, including supported graceful cleanup under the "
+        "existing identity, unsaved-state and input-ownership safeguards.\n"
+    )
+
+
+def worker_selection_contract() -> str:
+    return (
+        "Model choice: use Luna for playtesting, clear execution and ordinary repairs; Terra for "
+        "coupled implementation or difficult diagnosis; Astra when stronger implementation judgment "
+        "may reduce uncertainty or rework. Sol coordinates and is not an ordinary worker. After a "
+        "hard repair, prefer Luna for substantial remaining playtesting when the handoff saves total "
+        "work; preserve useful context and live ownership. "
+        "Thinking effort: for coding, generally prefer max on Luna/Terra and low on Astra. For other "
+        "work, choose effort for the reasoning needed. These are preferences, not escalation gates "
+        "or quotas; use judgment. Choose only available pairs from model_choices. Judge completed outcomes and total "
+        "work, including helpers, handoffs and retries. Give each worker a focused assignment; an "
+        "Astra worker is separate from the persistent mutator."
     )
 
 
@@ -1095,7 +1123,7 @@ def coordinator_prompt(
     restart_reason: str | None = None,
 ) -> str:
     lines = [
-        f"Act as a fresh Phase-3 delivery coordinator in {workspace}.",
+        f"You are the coordinator for Phase-3 delivery in {workspace}.",
         common_guidance(workspace),
         communication_contract(workspace, "coordinator", "mutator"),
         worker_result_ingress_contract(),
@@ -1127,7 +1155,7 @@ def coordinator_prompt(
         worker_handoff_contract(),
         nested_worker_contract(),
         "Use DE67_DEADLINE_STATE and DE67_LINEAGE as the exact clock and lineage for every state transition; do not infer replacements.",
-        "The external coordinator supervisor owns this process. Do not launch your successor.",
+        "The external supervisor owns coordinator/reviewer launches and restarts. Do not launch your successor.",
     ]
     if generation is not None:
         lines.append(
@@ -1432,6 +1460,7 @@ def run_child(
     extra_env: Mapping[str, str] | None = None,
     resume_session_id: str | None = None,
     decision_opportunity: int = 1,
+    recovery_reason: str | None = None,
     prompt_override: str | None = None,
     role: str = "coordinator",
 ) -> ChildResult:
@@ -1467,7 +1496,7 @@ def run_child(
         raise
     if decision_opportunity > 1:
         prompt = prompt.rstrip() + "\n" + coordinator_recovery_contract(
-            decision_opportunity, workspace
+            decision_opportunity, workspace, recovery_reason
         ) + "\n"
     _write(run_dir / "status.txt", "STARTING\n")
 
@@ -1712,9 +1741,10 @@ def _run_supervisor_locked(
     # A restarted supervisor resumes the durable owner of any still-live
     # workers. It never launches a fresh coordinator that would have to adopt
     # another session's children or dispatch duplicates.
-    resume_session_id = active_worker_coordinator_session(state, lineage_id)
+    resume_session_id = None if restart.required else active_worker_coordinator_session(state, lineage_id)
     attempted_generations: set[int] = set()
     failed_decision_opportunities = 0
+    recovery_reason = None
     while True:
         if generation is not None:
             if generation in attempted_generations:
@@ -1736,7 +1766,12 @@ def _run_supervisor_locked(
                 )
 
         launch_fingerprint = supervision_fingerprint(state, lineage_id, workdir)
-        journal.begin("coordinator", launch_fingerprint, run_id)
+        # A corrective opportunity carries new failure context even when the durable
+        # frontier is unchanged. Keep it distinct in the journal's replay guard.
+        journal_frontier = launch_fingerprint
+        if failed_decision_opportunities:
+            journal_frontier += f":recovery-{failed_decision_opportunities + 1}"
+        journal.begin("coordinator", journal_frontier, run_id)
         result = run_child(
             runner_command,
             workdir,
@@ -1748,6 +1783,7 @@ def _run_supervisor_locked(
             extra_env=extra_env,
             resume_session_id=resume_session_id,
             decision_opportunity=failed_decision_opportunities + 1,
+            recovery_reason=recovery_reason,
         )
 
         # A runner that could not be launched is a concrete environment blocker,
@@ -1865,7 +1901,17 @@ def _run_supervisor_locked(
             )
         if work_is_complete(workdir, state, lineage_id):
             return 0
-        has_executable_work = ledger_has_active_work(workdir) or dfs_has_open_work(workdir)
+        frontier_facts = workspace_facts(workdir, state, lineage_id, now=time.time())
+        actionable = bool(frontier_facts & {
+            "executable_route", "live_task", "unbound_task",
+            "worker_completed", "worker_finding", "worker_abandoned",
+        })
+        waiting_on_owner = "owner_wait" in frontier_facts and not actionable
+        has_executable_work = (
+            ledger_has_active_work(workdir) or dfs_has_open_work(workdir)
+        ) and not waiting_on_owner
+        if waiting_on_owner and not after.required and result.exit_code == 0:
+            _write(result.run_dir / "status.txt", "WAITING_FOR_OWNER\n")
         if not after.required and has_executable_work:
             session_path = result.run_dir / "session_id.txt"
             session_id = (
@@ -1874,31 +1920,32 @@ def _run_supervisor_locked(
                 else ""
             )
             if session_id:
-                if launch_fingerprint == progressed:
+                no_progress = launch_fingerprint == progressed
+                if no_progress or result.exit_code != 0:
                     failure = (
                         "Coordinator returned with executable work but made no durable progress"
                         if result.exit_code == 0
-                        else "Coordinator crashed with executable work but made no durable progress"
+                        else f"Coordinator exited with code {result.exit_code} while executable work remains"
                     )
-                    _mark_protocol_failure(
-                        result,
-                        failure,
-                    )
-                    return result.exit_code if result.exit_code > 0 else 1
-                if result.exit_code != 0:
+                    if no_progress and result.exit_code != 0:
+                        failure += "; made no durable progress"
+                    _mark_protocol_failure(result, failure)
+                    journal.reject(run_id, failure)
                     if (
                         failed_decision_opportunities + 1
                         >= COORDINATOR_DECISION_OPPORTUNITIES
                     ):
                         _mark_protocol_failure(
                             result,
-                            "Three coordinator decision opportunities were exhausted; "
+                            failure + "; Three coordinator decision opportunities were exhausted; "
                             "explicit supervisor startup is required",
                         )
-                        return result.exit_code
+                        return result.exit_code if result.exit_code != 0 else 1
                     failed_decision_opportunities += 1
+                    recovery_reason = f"{failure}. Prior run: {run_id}; evidence: {result.run_dir / 'supervisor_error.txt'}."
                 else:
                     failed_decision_opportunities = 0
+                    recovery_reason = None
                 active_owner = active_worker_coordinator_session(state, lineage_id)
                 resume_session_id = active_owner or (
                     None
@@ -1918,12 +1965,10 @@ def _run_supervisor_locked(
             # Process recovery is not a semantic coordinator restart. Start a
             # clean low coordinator against the same durable frontier without
             # manufacturing a mutation generation.
+            recovery_reason = f"Coordinator exited with code {result.exit_code} without a resumable session"
             if launch_fingerprint == progressed:
-                _mark_protocol_failure(
-                    result,
-                    "Coordinator crashed with executable work but made no durable progress",
-                )
-                return result.exit_code if result.exit_code > 0 else 1
+                recovery_reason += "; made no durable progress"
+            journal.reject(run_id, recovery_reason)
             if (
                 failed_decision_opportunities + 1
                 >= COORDINATOR_DECISION_OPPORTUNITIES
@@ -1986,7 +2031,7 @@ def _run_supervisor_locked(
         failed_decision_opportunities = 0
         restart = after
         generation = after.generation
-        resume_session_id = active_worker_coordinator_session(state, lineage_id)
+        resume_session_id = None if restart.required else active_worker_coordinator_session(state, lineage_id)
 
 
 def run_supervisor(

@@ -36,6 +36,32 @@ class FakeProcess:
 
 
 class CodexRunnerTests(unittest.TestCase):
+    def test_transport_failure_is_retained_in_runner_status(self):
+        reason = 'Codex App Server connection closed: keepalive ping timeout'
+        process = FakeProcess([json.dumps({'type': 'de67.transport_error', 'message': reason}) + '\n'], 2)
+        with patch('codex_runner.subprocess.Popen', return_value=process), \
+                patch('codex_runner.shutil.which', return_value='/fake/codex'):
+            with self.assertRaisesRegex(codex_runner.RunnerError, 'keepalive ping timeout'):
+                codex_runner.run(self.workspace, 'Run assigned work.', environment=self.environment())
+        status = json.loads(next((self.root / 'runs').glob('*/status.json')).read_text())
+        self.assertEqual(status['exit_code'], 2)
+        self.assertEqual(status['error'], reason)
+
+    def test_terminal_unbound_task_reconciles_without_weakening_live_handoff(self):
+        terminal = {'completed-before-roster-observation'}
+        guard = codex_runner.CoordinatorLoopGuard(
+            initial_unbound_tasks=('completed-before-roster-observation', 'still-live'),
+            task_terminal=lambda task: task in terminal,
+        )
+        guard.reconcile_handoffs()
+        self.assertEqual(guard.unbound_tasks, ('still-live',))
+        with self.assertRaises(codex_runner.RunnerError):
+            guard.observe({'type': 'item.started', 'item': {
+                'type': 'collab_tool_call', 'tool': 'wait', 'status': 'in_progress'}})
+        terminal.add('still-live')
+        guard.reconcile_handoffs()
+        self.assertEqual(guard.unbound_tasks, ())
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
@@ -831,6 +857,44 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertEqual(status["status"], "failed")
         self.assertIn("claim database is locked", status["error"])
         self.assertIn("abandon database is locked", status["cleanup_error"])
+
+    def test_reviewer_exit_does_not_enforce_or_abandon_coordinator_handoffs(self) -> None:
+        environment = {**self.environment(), "DE67_PROCESS_ROLE": "mutation-reviewer"}
+        process = FakeProcess([
+            '{"type":"thread.started","thread_id":"reviewer"}\n',
+            '{"type":"turn.completed"}\n',
+        ], 0)
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=process
+        ), patch("codex_runner._initial_unbound_tasks", return_value=("retained-sol-task",)) as initial, patch(
+            "codex_runner._claim_recorder"
+        ) as claim, patch("codex_runner._abandon_unbound_tasks") as abandon:
+            self.assertEqual(codex_runner.run(
+                self.workspace, "Review; preserve the returned Sol-owned task.",
+                environment=environment,
+            ), 0)
+        initial.assert_not_called()
+        claim.assert_not_called()
+        abandon.assert_not_called()
+        status = json.loads(next((self.root / "runs").glob("*/status.json")).read_text())
+        self.assertEqual(status["status"], "done")
+
+    def test_coordinator_exit_accepts_verified_owned_handoff(self) -> None:
+        environment = {**self.environment(), "DE67_PROCESS_ROLE": "coordinator"}
+        process = FakeProcess([
+            '{"type":"thread.started","thread_id":"sol"}\n',
+            '{"type":"turn.completed"}\n',
+        ], 0)
+        resolve = lambda task, started, parent, used: "worker" if parent == "sol" else None
+        with patch("codex_runner.shutil.which", return_value="codex"), patch(
+            "codex_runner.subprocess.Popen", return_value=process
+        ), patch("codex_runner._initial_unbound_tasks", return_value=("owned-task",)), patch(
+            "codex_runner._roster_resolver", return_value=resolve
+        ), patch("codex_runner._claim_recorder", return_value=lambda *args: None), patch(
+            "codex_runner._abandon_unbound_tasks"
+        ) as abandon:
+            self.assertEqual(codex_runner.run(self.workspace, "Continue", environment=environment), 0)
+        abandon.assert_not_called()
 
     def test_runner_cannot_publish_success_with_an_unbound_attempt(self) -> None:
         process = FakeProcess([], 0)

@@ -1,9 +1,7 @@
 import json
 import os
-from contextlib import closing
 from pathlib import Path
 import sqlite3
-import socket
 import sys
 import tempfile
 import time
@@ -29,19 +27,12 @@ def response(body, kinds=None, counter=()):
 
 class TelescopeTests(unittest.TestCase):
     def setUp(self):
-        self._ordinary_fixture_roots = patch.object(t.pg, "_disposable_context_roots", return_value=())
-        self._ordinary_fixture_roots.start()
-        self.addCleanup(self._ordinary_fixture_roots.stop)
-        self.temp = tempfile.TemporaryDirectory(prefix=".provider-guard-test-")
+        self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         (self.root / "source.py").write_text("def order():\n    pending_order = 'move'\n    return pending_order\n")
         (self.root / "unrelated.py").write_text("# order of paint colors\ncolors = ['blue']\n")
-        self.guard = dict(mode="on", scope_id="telescope-tests", state_path=str(self.root / "owner" / "provider.sqlite3"),
-                          max_calls=100, max_request_bytes=100000, max_in_flight=2, timeout_seconds=5,
-                          max_retries=0, retry_backoff_seconds=0)
-        self.config = t.validate_config(dict(mode="on", paths=["source.py", "unrelated.py"], cache_seconds=0,
-                                              provider_guard=self.guard))
+        self.config = t.validate_config(dict(mode="on", paths=["source.py", "unrelated.py"], cache_seconds=0))
         self.pool, self.info = t.gather(self.root, "order", [], self.config, time.monotonic() + 10)
         self.target = next(c["id"] for c in self.pool if c["path"] == "source.py")
 
@@ -107,22 +98,6 @@ class TelescopeTests(unittest.TestCase):
             with self.assertRaisesRegex(t.TelescopeError, "missing_credentials"):
                 t.provider({}, 1)
 
-    def test_missing_default_credentials_do_not_consume_guard_budget(self):
-        config = t.validate_config({**self.config, "cache_seconds": 0,
-                                    "provider_guard": {**self.guard,
-                                                       "scope_id": "missing-credentials-guard-01",
-                                                       "max_calls": 1}})
-        with patch.dict(os.environ, {}, clear=True):
-            missing = t.evaluate(self.root, "order", "", self.pool, self.info, config)
-        self.assertEqual(missing["fallback"], "missing_credentials")
-        self.assertEqual(missing["provider_calls"], 0)
-        self.assertEqual(missing["provider_guard"]["effective_state"], "ready")
-        self.assertEqual(missing["provider_guard"]["calls_reserved"], 0)
-
-        recovered = self.run_eval(lambda body, timeout: response(body, {self.target: "direct"}), config)
-        self.assertEqual(recovered["provider_calls"], 1)
-        self.assertEqual(recovered["provider_guard"]["effective_state"], "disabled_budget")
-
     def test_budget_exhaustion_does_not_call_provider(self):
         def forbidden(*args): self.fail("provider called")
         for override in ({"max_calls": 0}, {"input_bytes": 1}):
@@ -163,33 +138,6 @@ class TelescopeTests(unittest.TestCase):
         cached = self.run_eval(call, config)
         self.assertTrue(cached["cache_hit"])
         self.assertEqual(cached["provider_usage"], {})
-        mismatched = self.run_eval(lambda *args: self.fail("mismatched cached guard called provider"),
-                                   {**config, "provider_guard": {"mode": "off"}})
-        self.assertEqual(mismatched["fallback"], "provider_guard_mode_mismatch")
-        self.assertFalse(mismatched["cache_hit"])
-        self.assertEqual(mismatched["provider_calls"], 0)
-        self.assertEqual(mismatched["items"], t.assemble(
-            self.root, self.pool,
-            [{"id": candidate["id"], "category": "baseline_match"} for candidate in self.pool], config)["items"])
-        budget_config = t.validate_config({**config, "model": "budget-cache-model",
-                                            "provider_guard": {**self.guard, "scope_id": "budget-cache-guard",
-                                                               "max_calls": 1}})
-        budget_calls = []
-
-        def budget_call(body, timeout):
-            budget_calls.append(body)
-            return response(body, {self.target: "direct"})
-
-        first_budgeted = self.run_eval(budget_call, budget_config)
-        self.assertTrue(first_budgeted["provider_guard"]["shutdown_notice"])
-        budget_latched = self.run_eval(lambda *args: self.fail("latched cached guard called provider"), budget_config)
-        self.assertEqual(len(budget_calls), 1)
-        self.assertEqual(budget_latched["fallback"], "disabled_budget")
-        self.assertFalse(budget_latched["cache_hit"])
-        self.assertEqual(budget_latched["provider_calls"], 0)
-        self.assertEqual(budget_latched["items"], t.assemble(
-            self.root, self.pool,
-            [{"id": candidate["id"], "category": "baseline_match"} for candidate in self.pool], budget_config)["items"])
         self.run_eval(call, config, hypothesis="not stored")
         self.run_eval(call, {**config, "model": "different-model"})
         t.evaluate(self.root, "different query", "", self.pool, self.info, config, call=call)
@@ -199,10 +147,8 @@ class TelescopeTests(unittest.TestCase):
 
     def test_off_and_shadow_preserve_identical_baseline_items(self):
         def forbidden(*args): self.fail("off called provider")
-        off = self.run_eval(forbidden, {**self.config, "mode": "off",
-                                        "provider_guard": {**self.guard, "mode": "off"}})
-        shadow = self.run_eval(lambda body, timeout: response(body), {**self.config, "mode": "shadow",
-                                                                        "provider_guard": {**self.guard, "mode": "shadow"}})
+        off = self.run_eval(forbidden, {**self.config, "mode": "off"})
+        shadow = self.run_eval(lambda body, timeout: response(body), {**self.config, "mode": "shadow"})
         self.assertEqual(off["items"], shadow["items"])
         self.assertFalse(shadow["abstained"])
         telemetry = list((self.root / ".de67/state/jev-telescope/comparisons").glob("*.json"))
@@ -232,35 +178,34 @@ class TelescopeTests(unittest.TestCase):
         state.mkdir(parents=True)
         source = state / "deadlines.sqlite3"
         evidence = json.dumps({"receipt_id": "receipt1", "receipt": {"status": "inconclusive", "finding": "order stored"}})
-        with closing(sqlite3.connect(source)) as db:
+        with sqlite3.connect(source) as db:
             db.execute("CREATE TABLE worker_checkpoints(lineage_id, task_id, sequence, kind, evidence)")
             db.execute("INSERT INTO worker_checkpoints VALUES ('p','task',1,'result-receipt-v1',?)", (evidence,))
-            db.commit()
-        with closing(sqlite3.connect(state / "work-context.sqlite3")) as db:
+        with sqlite3.connect(state / "work-context.sqlite3") as db:
             db.execute("CREATE TABLE receipts(source,lineage,task,sequence,receipt_id,recorded_at,search_text)")
             db.execute("INSERT INTO receipts VALUES (?,'p','task',1,'receipt1',100,'order')", (str(source),))
-            db.commit()
         config = {**self.config, "receipt_index": True, "paths": [], "mode": "off"}
         pool, info = t.gather(self.root, "order", [], config, time.monotonic() + 10)
         packet = t.evaluate(self.root, "order", "", pool, info, config)
         self.assertEqual(packet["items"][0]["excerpt"], evidence)
         self.assertEqual(packet["items"][0]["recorded_at"], 100)
-        with closing(sqlite3.connect(source)) as db:
+        with sqlite3.connect(source) as db:
             db.execute("UPDATE worker_checkpoints SET evidence='changed'")
-            db.commit()
         packet = t.evaluate(self.root, "order", "", pool, info, config)
         self.assertEqual(packet["items"], [])
         self.assertEqual(len(packet["stale_ids"]), 1)
 
     def test_optional_discovery_off_is_unchanged(self):
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "de-67-3/scripts"))
-        from instruction_context import common_guidance, FALLBACK_GUIDANCE
-        self.assertEqual(common_guidance(self.root), FALLBACK_GUIDANCE)
+        from instruction_context import common_guidance, FALLBACK_GUIDANCE, EVIDENCE_GUIDANCE
+        self.assertEqual(common_guidance(self.root), FALLBACK_GUIDANCE + " " + EVIDENCE_GUIDANCE)
+        self.assertIn("without a provider call", common_guidance(self.root))
+        self.assertIn("typed selection for competing", common_guidance(self.root))
         state = self.root / ".de67/state"
         state.mkdir(parents=True)
         config = state / "workspace.json"
         config.write_text(json.dumps({"jev_telescope": {"mode": "off"}}))
-        self.assertEqual(common_guidance(self.root), FALLBACK_GUIDANCE)
+        self.assertEqual(common_guidance(self.root), FALLBACK_GUIDANCE + " " + EVIDENCE_GUIDANCE)
         config.write_text(json.dumps({"jev_telescope": {"mode": "shadow"}}))
         self.assertIn("--workspace", common_guidance(self.root))
         self.assertIn("not a per-turn step", common_guidance(self.root))
@@ -271,24 +216,6 @@ class TelescopeTests(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 t.bounded_provider({}, .05)
         self.assertLess(time.monotonic() - started, 3)
-
-    def test_child_projects_urllib_wrapped_timeout_as_timeout(self):
-        class Connection:
-            def __init__(self):
-                self.messages = []
-                self.closed = False
-
-            def send(self, message):
-                self.messages.append(message)
-
-            def close(self):
-                self.closed = True
-
-        connection = Connection()
-        with patch.object(t, "provider", side_effect=t.urllib.error.URLError(socket.timeout())):
-            t._provider_child(connection, {}, 1)
-        self.assertEqual(connection.messages, [(False, {"kind": "timeout"})])
-        self.assertTrue(connection.closed)
 
     def test_queries_with_secrets_never_transmit(self):
         def forbidden(*args): self.fail("secret transmitted")
@@ -306,8 +233,7 @@ class TelescopeTests(unittest.TestCase):
         def call(body, timeout):
             kinds = {c["id"]: "direct" for c in body["state"]["candidates"] if "pending_order" in c["excerpt"]}
             return response(body, kinds)
-        report = evaluate.run(self.root, live=True, cases_path=cases, call=call,
-                              provider_guard={**self.guard, "scope_id": "evaluation-tests"})
+        report = evaluate.run(self.root, live=True, cases_path=cases, call=call)
         row = report["cases"][0]
         self.assertEqual(row["missing_label_anchors"], [])
         self.assertEqual(row["baseline"]["coverage"], row["jev"]["coverage"])

@@ -556,7 +556,7 @@ class DeadlineHarness:
                 changed_paths TEXT NOT NULL,
                 interval_windows INTEGER NOT NULL CHECK (interval_windows = 30),
                 selected_lane TEXT NOT NULL CHECK (selected_lane = 'DFS.md'),
-                reviewer_model TEXT NOT NULL CHECK (reviewer_model = 'gpt-5.6-sol'),
+                reviewer_model TEXT NOT NULL CHECK (reviewer_model IN ('gpt-5.6-sol', 'gpt-6-sol')),
                 reviewer_effort TEXT NOT NULL CHECK (reviewer_effort = 'ultra'),
                 capability_roster_digest TEXT,
                 UNIQUE (lineage_id, cycle_number, receipt_id),
@@ -951,7 +951,6 @@ class DeadlineHarness:
                 "ADD COLUMN cadence_version INTEGER NOT NULL DEFAULT 1"
             )
         self._migrate_random_interval_constraint()
-        self._migrate_temporary_cadence()
         receipt_columns = {
             row["name"]
             for row in self.connection.execute(
@@ -2729,17 +2728,17 @@ class DeadlineHarness:
             )
         proved = any(
             isinstance(item, dict)
-            and item.get("model") == "gpt-5.6-sol"
+            and item.get("model") == "gpt-6-sol"
             and item.get("reasoning_effort") == "ultra"
             for item in capabilities
         )
         if not proved:
             return (
                 False,
-                "workspace roster has no persisted gpt-5.6-sol/ultra probe",
+                "workspace roster has no persisted gpt-6-sol/ultra probe",
                 roster_digest,
             )
-        return True, "workspace roster proves gpt-5.6-sol/ultra", roster_digest
+        return True, "workspace roster proves gpt-6-sol/ultra", roster_digest
 
     def _snapshot_universal_capability(
         self, lineage_id: str, cycle_number: int
@@ -6937,7 +6936,7 @@ class DeadlineHarness:
                 if (
                     receipt["interval_windows"] != UNIVERSAL_RANDOM_INTERVAL
                     or receipt["selected_lane"] != "DFS.md"
-                    or receipt["reviewer_model"] != "gpt-5.6-sol"
+                    or receipt["reviewer_model"] not in ("gpt-5.6-sol", "gpt-6-sol")
                     or receipt["reviewer_effort"] != "ultra"
                     or receipt["capability_roster_digest"]
                         != cycle["universal_capability_roster_digest"]

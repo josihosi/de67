@@ -106,7 +106,7 @@ def run_luna(workspace: Path, evidence: dict[str, Any], codex: str) -> dict[str,
     # Run outside the observed workspace so this narrator session cannot become
     # fresh project activity and recursively trigger another narration.
     command = [codex, "exec", "--sandbox", "read-only", "--json", "--skip-git-repo-check",
-               "-C", str(workspace.parent), "-m", "gpt-5.6-luna",
+               "-C", str(workspace.parent), "-m", "gpt-6-luna",
                "-c", "model_reasoning_effort=low", "-"]
     completed = subprocess.run(
         command, input=_prompt(evidence), text=True, capture_output=True, check=False

@@ -62,6 +62,38 @@ class MutationGuardTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_legacy_universal_receipts_migrate_without_losing_history_or_immutability(self) -> None:
+        with sqlite3.connect(":memory:") as connection:
+            connection.execute("""CREATE TABLE universal_review_receipts (
+                receipt_id TEXT PRIMARY KEY, lineage_id TEXT NOT NULL,
+                cycle_number INTEGER NOT NULL CHECK (cycle_number > 0),
+                validated_at REAL NOT NULL, candidate_digest TEXT NOT NULL,
+                changed_paths TEXT NOT NULL,
+                interval_windows INTEGER NOT NULL CHECK (interval_windows = 30),
+                selected_lane TEXT NOT NULL CHECK (selected_lane = 'DFS.md'),
+                reviewer_model TEXT NOT NULL CHECK (reviewer_model = 'gpt-5.6-sol'),
+                reviewer_effort TEXT NOT NULL CHECK (reviewer_effort = 'ultra'),
+                UNIQUE (lineage_id, cycle_number, receipt_id)
+            )""")
+            connection.execute("""INSERT INTO universal_review_receipts VALUES
+                ('old', 'project', 1, 1.0, 'candidate', '[]', 30, 'DFS.md', 'gpt-5.6-sol', 'ultra')""")
+            connection.execute("""CREATE TRIGGER universal_review_receipts_cannot_change
+                BEFORE UPDATE ON universal_review_receipts BEGIN
+                SELECT RAISE(ABORT, 'universal review receipts are append-only'); END""")
+            guard._ensure_universal_receipt_schema(connection)
+            self.assertEqual(
+                connection.execute("SELECT reviewer_model FROM universal_review_receipts WHERE receipt_id='old'").fetchone()[0],
+                "gpt-5.6-sol",
+            )
+            connection.execute("""INSERT INTO universal_review_receipts
+                (receipt_id, lineage_id, cycle_number, validated_at, candidate_digest,
+                 changed_paths, interval_windows, selected_lane, reviewer_model, reviewer_effort)
+                VALUES ('new', 'project', 2, 2.0, 'candidate', '[]', 30, 'DFS.md', 'gpt-6-sol', 'ultra')""")
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+                connection.execute("UPDATE universal_review_receipts SET candidate_digest='changed' WHERE receipt_id='old'")
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+                connection.execute("DELETE FROM universal_review_receipts WHERE receipt_id='new'")
+
     def test_canonical_work_ledger_template_has_no_fake_active_item(self) -> None:
         self.assertEqual(guard.active_work_items(WORK_LEDGER_TEXT), ())
 
@@ -1657,7 +1689,7 @@ class MutationGuardTests(unittest.TestCase):
                     "version": 1,
                     "worker_capabilities": [
                         {
-                            "model": "gpt-5.6-sol",
+                            "model": "gpt-6-sol",
                             "reasoning_effort": capability_effort,
                         }
                     ],
@@ -1693,7 +1725,7 @@ class MutationGuardTests(unittest.TestCase):
                         "version": 1,
                         "worker_capabilities": [
                             {
-                                "model": "gpt-5.6-sol",
+                                "model": "gpt-6-sol",
                                 "reasoning_effort": "ultra",
                             }
                         ],
@@ -1752,7 +1784,7 @@ class MutationGuardTests(unittest.TestCase):
         )
         self.assertEqual(result, 1)
         self.assertIn("deferred at due time", output)
-        self.assertIn("no persisted gpt-5.6-sol/ultra probe", output)
+        self.assertIn("no persisted gpt-6-sol/ultra probe", output)
 
     def test_universal_receipt_is_atomic_immutable_and_required_for_resolution(self) -> None:
         baseline, candidate = self.method_candidate_roots()
@@ -1780,7 +1812,7 @@ class MutationGuardTests(unittest.TestCase):
             self.assertEqual(receipt["cycle_number"], cycle)
             self.assertEqual(receipt["interval_windows"], 30)
             self.assertEqual(receipt["selected_lane"], "DFS.md")
-            self.assertEqual(receipt["reviewer_model"], "gpt-5.6-sol")
+            self.assertEqual(receipt["reviewer_model"], "gpt-6-sol")
             self.assertEqual(receipt["reviewer_effort"], "ultra")
             self.assertEqual(
                 receipt["capability_roster_digest"],
@@ -1872,7 +1904,7 @@ class MutationGuardTests(unittest.TestCase):
                     "version": 1,
                     "worker_capabilities": [
                         {
-                            "model": "gpt-5.6-sol",
+                            "model": "gpt-6-sol",
                             "reasoning_effort": "xhigh",
                         }
                     ],

@@ -42,7 +42,7 @@ The dashboard uses only Python's standard library. It keeps the last good Markdo
 in memory when a source becomes unavailable. A missing workspace, locked database, malformed text,
 unknown schema, failed process probe, or dashboard crash cannot stop or mutate de67.
 
-The overview shows active Luna, Terra, and Sol workers by reasoning effort from Codex's existing local
+The overview shows active GPT-6 Luna and Sol workers by reasoning effort from Codex's existing local
 session records. It does not add worker fields or coordinator reporting. Use `--codex-sessions PATH`
 when the session root is not `~/.codex/sessions`; an unavailable source leaves only that table
 unavailable. The mutation tile combines completed deadline, integrity, and random mutations and
@@ -108,12 +108,12 @@ python3 -m unittest integrations/dashboard/test_de67_dashboard.py
 ## Token use
 
 The token panel counts observed campaign usage: input minus cached input plus output.
-It includes coordinator, mutator, Terra-worker, and Luna-worker sessions, including completed
+It includes coordinator, mutator, Sol-worker, and Luna-worker sessions, including completed
 workers. Other or unknown worker models remain separately accounted for when present.
 Missing session records make the total explicitly partial. The graph stacks the four roles into their combined total in one-hour
 bins across the last 24 hours, with a linear scale that follows observed use.
 Between the plots, a shared color legend identifies each role. A logarithmic dot plot
-compares campaign totals in fixed mutator, coordinator, Terra, Luna order. Its axis rounds
+compares campaign totals in fixed mutator, coordinator, Sol, Luna order. Its axis rounds
 around the lowest and highest positive totals, omitting the unused low end; zero totals
 retain their numeric label without a dot. Hover for exact counts. The mutator uses the
 lit galaxy's star color throughout both plots. The combined total sits at the bottom. Narrator and

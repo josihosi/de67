@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from contextlib import closing
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,42 @@ BINDING_FIELDS = ("workspace", "run_id", "thread_id", "runner_pid", "server_pid"
 
 def _root(workspace: Path) -> Path:
     return Path(workspace).resolve() / ".de67/state/worker-library"
+
+
+def _pit_crew_boundary(workspace: Path, assignment: Mapping[str, Any]) -> None:
+    """Offer one completed audit append to the optional Pit Crew package.
+
+    The core worker library must remain ordinary and usable when the optional
+    package is absent, malformed, disabled, or otherwise unavailable.  This
+    deliberately gives Pit Crew no RPC, harness, or coordinator object.
+    """
+    try:
+        config_path = Path(workspace).resolve() / ".de67/state/workspace.json"
+        value = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+        config = value.get("jev_pit_crew") if isinstance(value, dict) else None
+        if not isinstance(config, dict) or config.get("mode") not in {"shadow", "on"}:
+            return
+        source = Path(__file__).resolve().parents[2] / "integrations/jev_pit_crew/pit_crew.py"
+        if not source.is_file():
+            return
+        module_name = "_de67_optional_pit_crew_" + hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
+        module = sys.modules.get(module_name)
+        if module is None:
+            spec = importlib.util.spec_from_file_location(module_name, source)
+            if spec is None or spec.loader is None:
+                return
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            try:
+                spec.loader.exec_module(module)
+            except Exception:
+                sys.modules.pop(module_name, None)
+                return
+        module.observe_boundary(Path(workspace), dict(assignment))
+    except Exception:
+        # An optional advisory must never block an audit event or alter worker
+        # dispatch semantics.  Its own durable state is inspectable when enabled.
+        return
 
 
 def _connect(workspace: Path, *, write: bool = False) -> sqlite3.Connection | None:
@@ -513,6 +550,7 @@ class WorkerDispatcher:
         with path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"worker_name": assignment["name"], "task_id": assignment["task_id"],
                                      "observed_at": time.time(), **message}, ensure_ascii=False) + "\n")
+        _pit_crew_boundary(self.workspace, assignment)
 
     def _prepared_delivery(self, assignment: Mapping[str, Any], worker_id: str | None) -> tuple[str, dict[str, Any]]:
         from worker_packet import delivery_text

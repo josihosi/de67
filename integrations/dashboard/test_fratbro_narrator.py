@@ -33,7 +33,7 @@ class FratbroNarratorTests(unittest.TestCase):
             result = narrator.run_luna(Path("/tmp/work"), {"evidence": True}, "codex")
 
         command = run.call_args.args[0]
-        self.assertIn("gpt-5.6-luna", command)
+        self.assertIn("gpt-6-luna", command)
         self.assertIn("model_reasoning_effort=low", command)
         self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
         self.assertEqual(command[command.index("-C") + 1], str(Path("/tmp")))

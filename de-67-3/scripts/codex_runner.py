@@ -295,7 +295,7 @@ def _command(codex: str, workspace: Path, environment: dict[str, str]) -> list[s
             ]
         )
     if environment.get("DE67_COORDINATOR_RUN_ID"):
-        model = environment.get("DE67_COORDINATOR_MODEL", "gpt-5.6-sol").strip()
+        model = environment.get("DE67_COORDINATOR_MODEL", "gpt-6-sol").strip()
         effort = environment.get(
             "DE67_COORDINATOR_REASONING_EFFORT", "low"
         ).strip()

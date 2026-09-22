@@ -438,7 +438,7 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
 
 
 def worker_helper_contract() -> str:
-    return ('When native helpers and Luna are available, use model="gpt-5.6-luna", '
+    return ('When native helpers and Luna are available, use model="gpt-6-luna", '
             'fork_turns="none" and suitable effort for bounded discovery or suitable execution. '
             'Otherwise use focused local retrieval within this task. Helpers never own coordination '
             'records; the primary worker collects or stops them before returning. '
@@ -518,8 +518,8 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
     path = workspace / ".de67/state/workspace.json"
     configured = json.loads(path.read_text(encoding="utf-8")).get("worker_capabilities") if path.is_file() else None
     efforts_by_model = {
-        "gpt-5.6-luna": ("low", "medium", "high", "xhigh", "max"),
-        "gpt-5.6-terra": ("low", "medium", "high", "xhigh", "max"),
+        "gpt-6-luna": ("low", "medium", "high", "xhigh", "max"),
+        "gpt-6-sol": ("low", "medium", "high", "xhigh", "max"),
         "gpt-6-astra": ("low", "medium", "high", "xhigh", "max"),
     }
     capabilities = configured if configured is not None else [
@@ -541,7 +541,7 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
         if choice not in result:
             result.append(choice)
     if not result:
-        raise PolicyError("No configured ordinary-worker capability is available")
+        raise PolicyError("No configured GPT-6 worker capability is available; rerun workspace setup with the new roster")
     return result
 
 

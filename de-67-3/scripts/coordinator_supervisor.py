@@ -483,7 +483,7 @@ def runtime_worker_owners(
     return {
         str(worker): str(parent)
         for worker, parent, model in rows
-        if any(name in str(model or "").lower() for name in ("luna", "terra", "astra"))
+        if any(name in str(model or "").lower() for name in ("luna", "sol", "terra", "astra"))
     } | owners
 
 
@@ -1101,16 +1101,16 @@ def coordinator_continuation_prompt() -> str:
 
 def worker_selection_contract() -> str:
     return (
-        "Model choice: use Luna for playtesting, clear execution and ordinary repairs; Terra for "
-        "coupled implementation or difficult diagnosis; Astra when stronger implementation judgment "
-        "may reduce uncertainty or rework. Sol coordinates and is not an ordinary worker. After a "
-        "hard repair, prefer Luna for substantial remaining playtesting when the handoff saves total "
-        "work; preserve useful context and live ownership. "
-        "Thinking effort: for coding, generally prefer max on Luna/Terra and low on Astra. For other "
-        "work, choose effort for the reasoning needed. These are preferences, not escalation gates "
-        "or quotas; use judgment. Choose only available pairs from model_choices. Judge completed outcomes and total "
-        "work, including helpers, handoffs and retries. Give each worker a focused assignment; an "
-        "Astra worker is separate from the persistent mutator."
+        "Model choice: use GPT-6 Luna for focused execution, playtesting, and ordinary repairs; "
+        "use GPT-6 Sol for coupled implementation or difficult diagnosis. Use Astra for exceptional "
+        "work where its stronger judgment reduces uncertainty or rework. Sol also coordinates, "
+        "but a Sol worker owns only its assigned task. After a hard repair, give substantial "
+        "remaining execution to Luna when the handoff saves total work, preserving useful context "
+        "and live ownership. Choose model and reasoning effort for the actual uncertainty "
+        "and expected total work. Choose only available pairs from model_choices. These are preferences, "
+        "not quotas or escalation gates. Judge completed outcomes including helpers, handoffs, "
+        "and retries. Give each worker a focused assignment. An Astra worker is separate from "
+        "the independent Astra reviewer."
     )
 
 
@@ -1360,17 +1360,6 @@ def _complete_mutation_review(
             raise SupervisorError(
                 f"Mutation reviewer failed for {gate.kind} {gate.identity}; ordinary work remains stopped"
             )
-        try:
-            checkpoint_repository(
-                workspace,
-                state_path,
-                lineage_id,
-                supervisor_owner_id=(journal.owner_id if journal is not None else None),
-            )
-        except RepositoryCheckpointError as error:
-            raise SupervisorError(
-                f"Product recovery checkpoint failed after mutation review: {error}"
-            ) from error
         remaining = mutation_gate(state_path, lineage_id, workspace)
         if remaining is not None:
             gate = remaining
@@ -1710,17 +1699,6 @@ def _run_supervisor_locked(
         f"supervisor-{os.getpid()}-{uuid.uuid4().hex}",
         os.environ.get("DE67_SUPERVISOR_START_TOKEN"),
     )
-    try:
-        checkpoint_repository(
-            workdir,
-            state,
-            lineage_id,
-            supervisor_owner_id=journal.owner_id,
-        )
-    except RepositoryCheckpointError as error:
-        raise SupervisorError(
-            f"Product recovery checkpoint failed at supervisor startup: {error}"
-        ) from error
     reviewed_gates: set[tuple[str, str]] = set()
     consumed_events: set[str] = set()
     gate = mutation_gate(state, lineage_id, workdir)
@@ -1806,17 +1784,6 @@ def _run_supervisor_locked(
             ),
             None if result.exit_code == 0 else f"exit code {result.exit_code}",
         )
-        try:
-            checkpoint_repository(
-                workdir,
-                state,
-                lineage_id,
-                supervisor_owner_id=journal.owner_id,
-            )
-        except RepositoryCheckpointError as error:
-            raise SupervisorError(
-                f"Product recovery checkpoint failed after coordinator boundary: {error}"
-            ) from error
 
         # This is the only clock read after this child exits. There is no polling loop.
         after = read_clock(state, lineage_id)
@@ -2067,7 +2034,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lineage", required=True)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--run-root", required=True)
-    parser.add_argument("--coordinator-model", default="gpt-5.6-sol")
+    parser.add_argument("--coordinator-model", default="gpt-6-sol")
     parser.add_argument(
         "--coordinator-reasoning-effort",
         choices=("low", "medium", "high", "xhigh", "max", "ultra"),

@@ -36,9 +36,9 @@ class WorkerCapabilityTests(unittest.TestCase):
             config = workspace / '.de67/state/workspace.json'
             config.parent.mkdir(parents=True)
             choices = [
-                {'model': 'gpt-5.6-luna', 'reasoning_effort': 'low'},
-                {'model': 'gpt-5.6-terra', 'reasoning_effort': 'xhigh'},
-                {'model': 'gpt-5.6-terra', 'reasoning_effort': 'max'},
+                {'model': 'gpt-6-luna', 'reasoning_effort': 'low'},
+                {'model': 'gpt-6-sol', 'reasoning_effort': 'xhigh'},
+                {'model': 'gpt-6-sol', 'reasoning_effort': 'max'},
                 {'model': 'gpt-6-astra', 'reasoning_effort': 'low'},
             ]
             config.write_text(json.dumps({'worker_capabilities': choices}), encoding='utf-8')
@@ -971,7 +971,7 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertEqual(arguments["fork_turns"], "none")
             self.assertNotIn("model", arguments)
             self.assertEqual({c['model'] for c in calls[0]['model_choices']},
-                             {'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-6-astra'})
+                             {'gpt-6-luna', 'gpt-6-sol', 'gpt-6-astra'})
             for choice in calls[0]['model_choices']:
                 completed_call = {**arguments, **choice}
                 self.assertEqual(completed_call['task_name'], calls[0]['task_name'])
@@ -1346,7 +1346,7 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertIn("Directly related evidence", reference.read_text())
             self.assertNotIn("Directly related evidence", packet_text)
             self.assertLess(packet_text.index(kernel.worker_helper_contract()), packet_text.index("Current proof frontier"))
-            self.assertIn('model="gpt-5.6-luna", fork_turns="none"', packet_text)
+            self.assertIn('model="gpt-6-luna", fork_turns="none"', packet_text)
             self.assertIn("Recover the parser-to-durable-state boundary.", packet_text)
             self.assertIn("Establish actual actor and game-time opportunity.", packet_text)
             self.assertIn("Observe response.", packet_text)

@@ -73,7 +73,7 @@ class WorkerFixture:
         self.env = {"CODEX_THREAD_ID": thread_id, "DE67_COORDINATOR_RUN_ID": run_id}
         return value
 
-    def worker(self, name="pilot", model="gpt-5.6-luna", effort="low"):
+    def worker(self, name="pilot", model="gpt-6-luna", effort="low"):
         return library.create(self.workspace, name, "Observe the current route", model, effort, environment=self.env)
 
     def task(self, task_id="task-a", text="Prove this exact assignment"):
@@ -128,7 +128,7 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         self.assertEqual(starts[-1]["config"]["model_reasoning_effort"], "low")
 
     def test_coding_max_effort_reaches_worker_runtime(self):
-        for model, name in (("gpt-5.6-luna", "luna-coder"), ("gpt-5.6-terra", "terra-coder")):
+        for model, name in (("gpt-6-luna", "luna-coder"), ("gpt-6-sol", "terra-coder")):
             self.worker(name=name, model=model, effort="max")
             self.assign(name=name, task_id=name)
             self.dispatcher.process_pending()
@@ -268,7 +268,7 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         Path(self.binding["socket"]).unlink()
         self.binding = self.bind("sol-b", "run-b", "supervisor-b")
         self.dispatcher = library.WorkerDispatcher(self.workspace, self.rpc, self.binding)
-        library.describe(self.workspace, "pilot", "Observe the corrected route", model="gpt-5.6-terra",
+        library.describe(self.workspace, "pilot", "Observe the corrected route", model="gpt-6-sol",
                          effort="medium", environment=self.env)
         self.assign(task_id="task-b")
         self.dispatcher.process_pending()
@@ -276,7 +276,7 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         self.assertEqual(current["thread_id"], original["worker_id"])
         self.assertEqual(current["assignment"]["task_id"], "task-b")
         resumed = [params for method, params in self.rpc.calls if method == "thread/resume"]
-        self.assertEqual(resumed[-1]["model"], "gpt-5.6-terra")
+        self.assertEqual(resumed[-1]["model"], "gpt-6-sol")
         self.assertEqual(library.worker_owners(self.workspace, self.state, "project"), {original["worker_id"]: "sol-b"})
 
     def test_parallel_dispatch_binds_exact_tasks_not_queue_order(self):

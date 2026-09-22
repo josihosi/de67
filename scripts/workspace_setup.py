@@ -198,7 +198,7 @@ def _worker_capabilities(
 ) -> list[dict[str, str]]:
     if not requested:
         if required:
-            raise SetupError("Record successfully probed Luna and Terra capabilities")
+            raise SetupError("Record successfully probed GPT-6 Luna and Sol capabilities")
         return []
     result: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -217,9 +217,9 @@ def _worker_capabilities(
         result.append({"model": model, "reasoning_effort": effort})
     if required:
         models = {item["model"] for item in result}
-        required_models = {"gpt-5.6-luna", "gpt-5.6-terra"}
+        required_models = {"gpt-6-luna", "gpt-6-sol"}
         if not required_models.issubset(models):
-            raise SetupError("Record successfully probed Luna and Terra capabilities")
+            raise SetupError("Record successfully probed GPT-6 Luna and Sol capabilities")
         if len({item["reasoning_effort"] for item in result}) < 2:
             raise SetupError("Prove more than one reasoning effort across the worker roster")
     return result

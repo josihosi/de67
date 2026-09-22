@@ -316,7 +316,7 @@ def run(workspace: Path, codex: str, through: str | None):
             extra_env={"DE67_CODEX": codex, "DE67_AGENT_TRANSPORT": "app-server",
                        "DE67_AGENT_TRANSPORT_PYTHON": sys.executable,
                        "DE67_RUNNER_ROOT": str(workspace / ".de67/state/runner-runs"),
-                       "DE67_COORDINATOR_MODEL": "gpt-5.6-sol",
+                       "DE67_COORDINATOR_MODEL": "gpt-6-sol",
                        "DE67_COORDINATOR_REASONING_EFFORT": "low",
                        "DE67_COORDINATOR_SANDBOX": "workspace-write"},
         )

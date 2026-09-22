@@ -27,7 +27,7 @@ flowchart TD
     S[External supervisor] --> C[Coordinator]
     C --> K{Read policy, FS,<br/>ledger, and clock}
     K -->|executable work| T[Open or select task]
-    T --> W[Spawn Luna or Terra worker]
+    T --> W[Spawn Luna or Sol worker]
     W --> R[Durable worker result]
     R --> C
     C -->|gap remains or switch route| K

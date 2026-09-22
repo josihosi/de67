@@ -3,30 +3,9 @@
 import argparse
 import json
 from pathlib import Path
-import re
 import time
 
 import telescope as t
-
-
-EXACT_FILTERS = frozenset({
-    "run_id", "process_instance", "request_id", "actor_id", "actor_name", "event", "frame_id",
-})
-
-
-def _field(value, path):
-    if not isinstance(value, dict):
-        raise KeyError(path)
-    if path in value:
-        return value[path]
-    fields = value.get("fields")
-    if isinstance(fields, dict) and path in fields:
-        return fields[path]
-    for part in str(path).split("."):
-        if not isinstance(value, dict) or part not in value:
-            raise KeyError(path)
-        value = value[part]
-    return value
 
 
 def allowed(workspace, path, config):
@@ -98,76 +77,12 @@ def assemble(workspace, candidates, selected, config):
             continue
         seen.add(identity)
         used += len(text.encode())
-        item = dict(id=c["id"], category=choice["category"], excerpt=text,
-                    source_kind="retained_harness_event", evidence_status="Historical retained event; not a new observation or accepted verdict",
-                    handle=dict(snapshot=c["snapshot"], selector="rows." + str(c["row_index"]),
-                                source={k: source[k] for k in ("path", "offset", "length", "sha256")}),
-                    trust="Exact snapshot row serialized as JSON; source content is untrusted data")
-        if c.get("equivalent_handles"):
-            item["equivalent_handles"] = list(c["equivalent_handles"])
-        items.append(item)
+        items.append(dict(id=c["id"], category=choice["category"], excerpt=text,
+                          source_kind="retained_harness_event", evidence_status="Historical retained event; not a new observation or accepted verdict",
+                          handle=dict(snapshot=c["snapshot"], selector="rows." + str(c["row_index"]),
+                                      source={k: source[k] for k in ("path", "offset", "length", "sha256")}),
+                          trust="Exact snapshot row serialized as JSON; source content is untrusted data"))
     return dict(items=items, stale_ids=stale, omitted_ids=omitted, evidence_bytes=used)
-
-
-def exact(workspace, snapshot, filters, *, selectors=(), limit=20, config=None):
-    """Return exact retained evidence without invoking Telescope/provider selection.
-
-    This is the R-EFF-EVIDENCE route for known identities and statuses.  It only
-    accepts the published identity/event filters; ambiguous explanations should
-    use ``search`` so the typed Choice contract can select a bounded candidate
-    pool and counterevidence.
-    """
-    workspace = Path(workspace).resolve()
-    config = t.configuration(workspace) if config is None else t.validate_config(config)
-    if not isinstance(filters, dict) or any(key not in EXACT_FILTERS for key in filters):
-        raise t.TelescopeError("unsupported_exact_filter")
-    if type(limit) is not int or limit < 1:
-        raise t.TelescopeError("invalid_exact_limit")
-    rows = snapshot_rows(workspace, snapshot, config)
-    matched, stale, unavailable = [], [], []
-    verification_reads = 0
-    for index, row in enumerate(rows):
-        values, missing = {}, []
-        for key in filters:
-            try:
-                values[key] = _field(row, key)
-            except (KeyError, TypeError):
-                missing.append(key)
-        if missing:
-            unavailable.append({"event_id": row.get("event_id", str(index)), "fields": missing})
-            continue
-        if any(values[key] != value for key, value in filters.items()):
-            continue
-        try:
-            verification_reads += 1
-            verify(workspace, row, config)
-        except (OSError, ValueError, KeyError, IndexError, TypeError):
-            stale.append(row.get("event_id", str(index)))
-            continue
-        if selectors:
-            fields = {}
-            for selector in selectors:
-                try:
-                    fields[selector] = _field(row, selector)
-                except (KeyError, TypeError):
-                    fields[selector] = {"unavailable": True}
-            matched.append({"event_id": row.get("event_id", str(index)), "source": row.get("source"), "fields": fields})
-        else:
-            matched.append(row)
-    return {
-        "route": "R-EFF-EVIDENCE",
-        "provider_calls": 0,
-        "mode": "exact",
-        "filters": dict(filters),
-        "matched": len(matched),
-        "rows": matched[:limit],
-        "stale_ids": stale,
-        "unavailable_filter_fields": unavailable,
-        "retrieval": {"rows_available": len(rows), "rows_scanned": len(rows),
-                       "source_verification_reads": verification_reads,
-                       "follow_up": "Inspect original source handles before treating a row as a finding."},
-        "note": "Exact identity/event filters are retrieval, not semantic selection; no provider call was made."
-    }
 
 
 def search(workspace, snapshot, query, hypothesis="", *, config=None, call=t.bounded_provider):
@@ -175,88 +90,29 @@ def search(workspace, snapshot, query, hypothesis="", *, config=None, call=t.bou
     config = t.configuration(workspace) if config is None else t.validate_config(config)
     started = time.monotonic()
     rows = snapshot_rows(workspace, snapshot, config)
-    candidates, excluded, scanned = [], 0, 0
-    scan_truncated = False
-    pool_truncated = False
-    exclusion_reasons, duplicate_reasons = [], []
-    verification_reads = 0
-    stop_reason = None
-    stop_words = {"the", "and", "for", "with", "that", "this", "does", "from", "find", "what", "when", "how", "why", "was"}
-    terms = {word for word in re.findall(r"[a-z0-9_]{3,}", (query + " " + hypothesis).casefold())
-             if word not in stop_words}
-
-    def score(text):
-        lowered = text.casefold()
-        # Substring matching is deterministic and keeps inflected event names
-        # such as ``rejected`` relevant to a ``reject`` query.
-        return sum(1 for word in terms if word in lowered)
-
-    by_equivalence = {}
+    candidates, excluded, truncated, scanned = [], 0, False, 0
     for index, row in enumerate(rows):
-        if scanned >= config["max_files"]:
-            scan_truncated, stop_reason = True, "row_scan_budget"
-            break
-        if time.monotonic() - started >= config["elapsed_seconds"]:
-            scan_truncated, stop_reason = True, "time_scan_budget"
+        if len(candidates) >= config["max_candidates"] or scanned >= config["max_files"] or time.monotonic() - started >= config["elapsed_seconds"]:
+            truncated = True
             break
         scanned += 1
         try:
-            verification_reads += 1
             source = verify(workspace, row, config)
             text = t.encoded(row).decode()
             if len(text.encode()) > config["candidate_bytes"]:
                 excluded += 1
-                exclusion_reasons.append({"event_id": row.get("event_id", str(index)), "reason": "candidate_bytes"})
+                truncated = True
                 continue
-            relevance = score(text)
-            if not relevance:
-                excluded += 1
-                exclusion_reasons.append({"event_id": row.get("event_id", str(index)), "reason": "irrelevant_lexical_score"})
-                continue
-            identity = (source["path"], source["offset"], source["length"], source["sha256"], t.digest(t.encoded(row)))
-            if identity in by_equivalence:
-                canonical = by_equivalence[identity]
-                canonical.setdefault("equivalent_handles", []).append({
-                    "snapshot": snapshot, "row_index": index, "event_id": row.get("event_id", str(index)),
-                    "source": {k: source[k] for k in ("path", "offset", "length", "sha256")}})
-                duplicate_reasons.append({"event_id": row.get("event_id", str(index)),
-                                          "duplicate_of": canonical["id"], "reason": "exact_equivalent_record"})
-                continue
-            candidate = dict(id=t.digest(t.encoded([snapshot, index]))[:24], snapshot=snapshot, row_index=index,
+            candidates.append(dict(id=t.digest(t.encoded([snapshot, index]))[:24], snapshot=snapshot, row_index=index,
                                    path=str(Path(source["path"]).relative_to(workspace)) if Path(source["path"]).is_absolute() else source["path"],
                                    sha256=source["sha256"], start=index + 1, end=index + 1,
                                    source_kind="harness_snapshot_row", evidence_status="start/end identify snapshot row, not source lines; original status/bindings are in excerpt",
-                                   excerpt=text, relevance_score=relevance)
-            by_equivalence[identity] = candidate
-            candidates.append(candidate)
+                                   excerpt=text))
         except (OSError, ValueError, KeyError, TypeError):
             excluded += 1
-            exclusion_reasons.append({"event_id": row.get("event_id", str(index)), "reason": "stale_or_invalid_source"})
-    candidates.sort(key=lambda c: (-c["relevance_score"], c["path"], c["start"], c["id"]))
-    if len(candidates) > config["max_candidates"]:
-        pool_truncated = True
-        omitted_pool = candidates[config["max_candidates"]:]
-        final_pool_omitted_ids = [c["id"] for c in omitted_pool]
-        for candidate in omitted_pool:
-            exclusion_reasons.append({"event_id": candidate["id"], "reason": "final_pool_limit"})
-        candidates = candidates[:config["max_candidates"]]
-    else:
-        final_pool_omitted_ids = []
     info = dict(snapshot=snapshot, rows_available=len(rows), rows_scanned=scanned, exclusions=excluded,
-                truncated=scan_truncated or pool_truncated or any(item["reason"] == "candidate_bytes" for item in exclusion_reasons),
-                scan_truncated=scan_truncated, scan_truncation_reason=stop_reason,
-                final_pool_truncated=pool_truncated,
-                final_pool_truncation_reason="max_candidates" if pool_truncated else None,
-                final_pool_omitted_ids=final_pool_omitted_ids,
-                candidate_pool_before_limit=len(candidates) + len(final_pool_omitted_ids),
-                exclusion_reasons=exclusion_reasons, duplicate_reasons=duplicate_reasons,
-                expansion="Use exact(snapshot, filters, selectors) or a narrower query/raised explicit scan budget; omitted rows may contain relevant evidence.")
-    info["candidate_source_verification_reads"] = verification_reads
-    packet = t.evaluate(workspace, query, hypothesis, candidates, info, config, call=call, started=started, assembler=assemble)
-    packet["retrieval"]["selection_source_verification_reads"] = (
-        len(packet.get("items", [])) + len(packet.get("stale_ids", [])) + len(packet.get("omitted_ids", []))
-    )
-    return packet
+                truncated=truncated, expansion="Narrow play_cli evidence filters/--select, or raise explicit candidate/scan budgets. Omitted rows may contain relevant evidence.")
+    return t.evaluate(workspace, query, hypothesis, candidates, info, config, call=call, started=started, assembler=assemble)
 
 
 def main():

@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import socket
 import subprocess
 import sys
 import tempfile
@@ -20,13 +21,15 @@ import time
 import urllib.error
 import urllib.request
 
+import provider_guard as pg
+
 ENDPOINT = "https://api.typesafe.ai/v1/systemone"
-VERSION = 1
+VERSION = 2
 DEFAULTS = dict(mode="off", paths=[], excludes=[], model="jev-latest", max_candidates=12,
                 max_files=300, max_file_bytes=524288, max_scan_bytes=4194304,
                 candidate_bytes=1600, input_bytes=48000, evidence_bytes=8000,
                 max_calls=1, elapsed_seconds=15, context_lines=4, cache_seconds=3600,
-                receipt_index=False)
+                receipt_index=False, provider_guard={"mode": "off"})
 KINDS = {"irrelevant": "Does not help answer the question; lexical overlap alone is insufficient.",
          "direct": "Direct implementation or evidence answering the question.",
          "history": "A previous investigation or finding relevant to this question.",
@@ -38,6 +41,30 @@ SECRET = re.compile(r"-----BEGIN .*PRIVATE KEY|(?:api[_-]?key|password|token|sec
 
 class TelescopeError(ValueError):
     pass
+
+
+class ProviderFailure(TelescopeError):
+    """A sanitized provider failure that can cross the short-lived child boundary."""
+
+    def __init__(self, status=None, code=None, request_id=None, retry_after_seconds=None):
+        self.status = status if type(status) is int and 100 <= status <= 599 else None
+        self.code = _safe_provider_field(code)
+        self.request_id = _safe_provider_field(request_id)
+        self.retry_after_seconds = None
+        if type(retry_after_seconds) in (int, float) and not isinstance(retry_after_seconds, bool):
+            try:
+                retry_after_seconds = float(retry_after_seconds)
+            except OverflowError:
+                retry_after_seconds = None
+            if retry_after_seconds is not None and math.isfinite(retry_after_seconds) and retry_after_seconds >= 0:
+                self.retry_after_seconds = retry_after_seconds
+        super().__init__("provider_http_" + str(self.status) if self.status is not None else "provider_failure")
+
+    def public(self):
+        return {key: value for key, value in dict(status=self.status, code=self.code,
+                                                   request_id=self.request_id,
+                                                   retry_after_seconds=self.retry_after_seconds).items()
+                if value is not None}
 
 
 def encoded(value):
@@ -81,6 +108,10 @@ def validate_config(value):
         raise TelescopeError("model must be named explicitly")
     if type(config["receipt_index"]) is not bool:
         raise TelescopeError("receipt_index must be boolean")
+    try:
+        config["provider_guard"] = pg.validate_config(config["provider_guard"])
+    except pg.GuardError as error:
+        raise TelescopeError(error.reason) from error
     return config
 
 
@@ -324,6 +355,72 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+_SAFE_PROVIDER_FIELD = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+_SAFE_CHILD_REASONS = {"missing_credentials", "provider_response_too_large", "duplicate_json_key",
+                       "malformed_response", "provider_failure", "provider_budget_exhausted",
+                       "input_budget_exhausted", "secret_pattern_in_query", "oversized_cache",
+                       "provider_guard_mode_mismatch"}
+
+
+def _safe_provider_field(value):
+    return value if isinstance(value, str) and _SAFE_PROVIDER_FIELD.fullmatch(value) else None
+
+
+def _header(headers, name):
+    try:
+        return headers.get(name)
+    except (AttributeError, TypeError):
+        return None
+
+
+def provider_failure(error):
+    """Read at most a safe structured code; never retain or transmit an HTTP error body."""
+    status = error.code if type(getattr(error, "code", None)) is int else None
+    headers = getattr(error, "headers", None)
+    request_id = _safe_provider_field(_header(headers, "x-typesafe-request-id"))
+    retry_after = _header(headers, "retry-after")
+    try:
+        retry_after = float(retry_after) if isinstance(retry_after, str) and re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", retry_after) else None
+    except ValueError:
+        retry_after = None
+    code = None
+    try:
+        raw = error.read(32769)
+        if len(raw) <= 32768:
+            body = strict_json(raw)
+            nested = body.get("error") if isinstance(body, dict) else None
+            code = body.get("code") if isinstance(body, dict) else None
+            code = code if code is not None else (nested.get("code") if isinstance(nested, dict) else None)
+    except (OSError, UnicodeError, ValueError, TypeError):
+        pass
+    finally:
+        try:
+            error.close()
+        except (AttributeError, OSError):
+            pass
+    return ProviderFailure(status, code, request_id, retry_after)
+
+
+def provider_error_details(error):
+    if isinstance(error, ProviderFailure):
+        return error.public()
+    if isinstance(error, urllib.error.HTTPError):
+        return provider_failure(error).public()
+    return pg.public_failure(error)
+
+
+def provider_fallback(error):
+    if isinstance(error, TimeoutError):
+        return "provider_timeout"
+    if isinstance(error, ProviderFailure):
+        return str(error)
+    if isinstance(error, urllib.error.HTTPError):
+        return str(provider_failure(error))
+    if isinstance(error, TelescopeError):
+        return str(error) if str(error) in _SAFE_CHILD_REASONS else "provider_failure_or_invalid_output"
+    return "provider_failure_or_invalid_output"
+
+
 def provider(body, timeout):
     key = os.environ.get("TYPESAFE_API_KEY")
     if not key:
@@ -341,10 +438,24 @@ def provider(body, timeout):
 def _provider_child(connection, body, timeout):
     try:
         connection.send((True, provider(body, timeout)))
-    except Exception as error:
-        reason = "provider_http_" + str(error.code) if isinstance(error, urllib.error.HTTPError) else (
-            str(error) if isinstance(error, TelescopeError) else "provider_failure")
-        connection.send((False, reason))
+    except urllib.error.HTTPError as error:
+        connection.send((False, {"kind": "http", **provider_failure(error).public()}))
+    except TimeoutError:
+        connection.send((False, {"kind": "timeout"}))
+    except urllib.error.URLError as error:
+        # urllib wraps socket/request timeouts in URLError rather than
+        # preserving TimeoutError at the call boundary.  Project that safe
+        # distinction through the short-lived child so the guard applies its
+        # ordinary transient/backoff policy without retaining error content.
+        if isinstance(getattr(error, "reason", None), (TimeoutError, socket.timeout)):
+            connection.send((False, {"kind": "timeout"}))
+        else:
+            connection.send((False, {"kind": "failure"}))
+    except TelescopeError as error:
+        reason = str(error) if str(error) in _SAFE_CHILD_REASONS else "provider_failure"
+        connection.send((False, {"kind": "telescope", "reason": reason}))
+    except Exception:
+        connection.send((False, {"kind": "failure"}))
     finally:
         connection.close()
 
@@ -361,7 +472,14 @@ def bounded_provider(body, timeout):
             raise TimeoutError()
         ok, result = parent.recv()
         if not ok:
-            raise TelescopeError(result)
+            if isinstance(result, dict) and result.get("kind") == "http":
+                raise ProviderFailure(result.get("status"), result.get("code"), result.get("request_id"),
+                                      result.get("retry_after_seconds"))
+            if isinstance(result, dict) and result.get("kind") == "timeout":
+                raise TimeoutError()
+            if isinstance(result, dict) and result.get("kind") == "telescope":
+                raise TelescopeError(result.get("reason") if result.get("reason") in _SAFE_CHILD_REASONS else "provider_failure")
+            raise TelescopeError("provider_failure")
         return result
     finally:
         parent.close()
@@ -427,19 +545,31 @@ def evaluate(workspace, query, hypothesis, candidates, info, config, *, call=bou
     deadline = started + config["elapsed_seconds"]
     baseline = [{"id": c["id"], "category": "baseline_match"} for c in candidates]
     selected, comparison, usage = baseline, None, {}
-    fallback, cached, calls = None, False, 0
+    fallback, cached, calls, provider_error = None, False, 0, {}
     mode = config["mode"]
+    guard_config = config["provider_guard"]
+    guard_status = (dict(mode=guard_config["mode"], effective_state="ready",
+                         funds_classification=pg.FUNDS_CLASSIFICATION)
+                    if mode == "off" else {})
     if mode != "off" and candidates:
-        body = request_body(query, hypothesis, candidates, config)
-        cache_key = digest(encoded({"version": VERSION, "endpoint": ENDPOINT, "body": body,
-                                    "sources": [(c["id"], c["sha256"]) for c in candidates]}))
-        cache = workspace / ".de67/state/jev-telescope/cache" / (cache_key + ".json")
         try:
+            guard_status = pg.ProviderGuard(guard_config).status()
+            if guard_config["mode"] != mode:
+                raise TelescopeError("provider_guard_mode_mismatch")
+            if guard_status.get("effective_state") != "ready":
+                raise pg.GuardError(guard_status.get("effective_state") or "provider_guard_state_unavailable",
+                                    guard_status)
+            body = request_body(query, hypothesis, candidates, config)
+            cache_key = digest(encoded({"version": VERSION, "endpoint": ENDPOINT, "body": body,
+                                        "sources": [(c["id"], c["sha256"]) for c in candidates]}))
+            cache = workspace / ".de67/state/jev-telescope/cache" / (cache_key + ".json")
             if SECRET.search(query) or SECRET.search(hypothesis):
                 raise TelescopeError("secret_pattern_in_query")
             if len(encoded(body)) > config["input_bytes"]:
                 raise TelescopeError("input_budget_exhausted")
             result = None
+            # Cached output is provider-derived, so it is only usable under the
+            # same ready guard state and explicit mode as a fresh dispatch.
             if config["cache_seconds"] and cache.is_file():
                 try:
                     with cache.open("rb") as stream:
@@ -456,8 +586,20 @@ def evaluate(workspace, query, hypothesis, candidates, info, config, *, call=bou
             if result is None:
                 if config["max_calls"] == 0 or time.monotonic() >= deadline:
                     raise TelescopeError("provider_budget_exhausted")
-                calls += 1
-                result = call(body, max(.01, deadline - time.monotonic()))
+                # The built-in child transport cannot send without this key.
+                # Fail before a durable admission so a local setup error never
+                # consumes the owner's call or token budget.  Injected calls
+                # remain usable for deterministic tests and other explicit
+                # adapters that own their own credential boundary.
+                if call is bounded_provider and not os.environ.get("TYPESAFE_API_KEY"):
+                    raise TelescopeError("missing_credentials")
+                dispatched = pg.guarded_dispatch(guard_config, body, request_bytes=len(encoded(body)),
+                                                  timeout=max(.01, deadline - time.monotonic()), transport=call)
+                calls += dispatched.attempts
+                prior_notice = bool(guard_status.get("shutdown_notice"))
+                guard_status = {**dispatched.status,
+                                "shutdown_notice": bool(prior_notice or dispatched.shutdown_notice)}
+                result = dispatched.value
             if time.monotonic() > deadline:
                 raise TelescopeError("provider_timeout")
             choices, usage = validate_response(result, body)
@@ -468,12 +610,27 @@ def evaluate(workspace, query, hypothesis, candidates, info, config, *, call=bou
                                                           for key, answer in result["answers"].items()}, "usage": usage}))
             if mode == "on":
                 selected = choices
-        except (TimeoutError, subprocess.TimeoutExpired):
+        except pg.DispatchError as error:
+            calls += error.attempts
+            fallback = provider_fallback(error.cause)
+            provider_error = provider_error_details(error.cause)
+            prior_notice = bool(guard_status.get("shutdown_notice"))
+            guard_status = {**error.status,
+                            "shutdown_notice": bool(prior_notice or error.status.get("shutdown_notice"))}
+        except pg.GuardError as error:
+            fallback = error.reason
+            prior_notice = bool(guard_status.get("shutdown_notice"))
+            guard_status = {**error.status,
+                            "shutdown_notice": bool(prior_notice or error.status.get("shutdown_notice"))}
+        except (TimeoutError, subprocess.TimeoutExpired) as error:
             fallback = "provider_timeout"
+            provider_error = provider_error_details(error)
         except urllib.error.HTTPError as error:
-            fallback = "provider_http_" + str(error.code)
+            fallback = provider_fallback(error)
+            provider_error = provider_error_details(error)
         except (OSError, ValueError, KeyError, TypeError, EOFError) as error:
-            fallback = str(error) if isinstance(error, TelescopeError) else "provider_failure_or_invalid_output"
+            fallback = provider_fallback(error)
+            provider_error = provider_error_details(error)
     packet = assembler(workspace, candidates, selected, config)
     packet.update(mode=mode, fallback=fallback, cache_hit=cached, provider_calls=calls,
                   provider_usage={} if cached else usage, cached_evaluation_usage=usage if cached else {},
@@ -481,12 +638,17 @@ def evaluate(workspace, query, hypothesis, candidates, info, config, *, call=bou
                   abstained=mode == "on" and comparison == [] and fallback is None,
                   no_candidates=not candidates,
                   elapsed_seconds=time.monotonic() - started,
+                  provider_guard=guard_status,
                   limitations="Bounded candidate pool only; omitted evidence may exist. Categories are model judgments, not accepted findings.")
+    if provider_error:
+        packet["provider_error"] = provider_error
     if packet["stale_ids"]:
         packet["retrieval_required"] = "Sources changed or disappeared; rerun search. Stale evidence was omitted."
     if mode != "off":
         # Metadata only: never query, paths, excerpts, key, or response bodies.
-        telemetry = {k: packet[k] for k in ("mode", "fallback", "cache_hit", "provider_calls", "provider_usage", "elapsed_seconds", "candidates_considered")}
+        telemetry = {k: packet[k] for k in ("mode", "fallback", "cache_hit", "provider_calls", "provider_usage", "elapsed_seconds", "candidates_considered", "provider_guard")}
+        if provider_error:
+            telemetry["provider_error"] = provider_error
         telemetry.update(time=time.time(), baseline_ids=[x["id"] for x in baseline], selected=comparison,
                          returned_ids=[x["id"] for x in packet["items"]])
         try:

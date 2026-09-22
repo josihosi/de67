@@ -140,7 +140,7 @@ class WorkContextTests(unittest.TestCase):
             trace.write_text('full trace deliberately not parsed')
             with closing(sqlite3.connect(runtime/'state_5.sqlite')) as db, db:
                 db.execute('CREATE TABLE threads(id,rollout_path,source,model)')
-                db.execute('INSERT INTO threads VALUES (?,?,?,?)',('known',str(trace),'subagent','gpt-5.6-luna'))
+                db.execute('INSERT INTO threads VALUES (?,?,?,?)',('known',str(trace),'subagent','gpt-6-luna'))
             metadata=thread_records([{'task_id':'task','worker_id':'known','coordinator_session_id':'absent'}],codex_home=runtime)
             self.assertEqual(metadata['unavailable_thread_ids'],['absent'])
             self.assertEqual(metadata['records'][0]['trace']['bytes'],trace.stat().st_size)

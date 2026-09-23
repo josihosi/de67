@@ -217,7 +217,7 @@ def _worker_capabilities(
         result.append({"model": model, "reasoning_effort": effort})
     if required:
         models = {item["model"] for item in result}
-        required_models = {"gpt-5.6-luna", "gpt-5.6-terra"}
+        required_models = {"gpt-6-luna", "gpt-5.6-terra"}
         if not required_models.issubset(models):
             raise SetupError("Record successfully probed Luna and Terra capabilities")
         if len({item["reasoning_effort"] for item in result}) < 2:

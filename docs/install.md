@@ -1,7 +1,7 @@
 # Install de67
 
 These instructions are for Codex setting up de67 for its user. The core skill is independent of
-the optional dashboard and Discord packages. Use the matching version of each installed package.
+the optional dashboard, Discord, and experimental Jev packages. Use the matching version of each installed package.
 
 ## Requirements and platform scope
 
@@ -85,6 +85,21 @@ old execution ownership; it is not a harmless reload. Do not delete state to mak
 Legacy `DFS.md` is supported. A migrated `FS.md` requires its hash-bound `DFS.md` compatibility
 pointer; do not edit the pointer as a second specification.
 
-Optional packages: [dashboard](../integrations/dashboard/README.md) and
-[Discord](../integrations/openclaw_discord/SETUP.md). Diagnose failures with
+Optional packages: [dashboard](../integrations/dashboard/README.md),
+[Discord](../integrations/openclaw_discord/SETUP.md),
+[experimental Jev Telescope](../integrations/jev_telescope/README.md), and
+[experimental Jev Pit Crew](../integrations/jev_pit_crew/README.md).
+Install each add-on archive only when the user wants that capability. Telescope requires `rg`;
+both Jev routes default to off and require explicit workspace configuration. To remove either,
+set its mode to `off`, verify ordinary de67 operation, then remove that add-on's files while
+preserving any durable audit state in the project. Diagnose failures with
 [troubleshooting](troubleshooting.md).
+
+For an authorized Jev installation, verify the archive against `SHA256SUMS`, then extract its
+`de67/` directory into the same skills parent as the matching core. For example, run
+`unzip de67-VERSION-jev-telescope.zip -d /path/to/skills-parent` on Unix or
+`Expand-Archive de67-VERSION-jev-telescope.zip -DestinationPath C:\path\to\skills-parent -Force`
+in PowerShell. Use `jev-pit-crew` in the archive name for that separate add-on. Read its guide,
+set its workspace mode and limits explicitly, and run its documented tests before enabling it.
+To remove Pit Crew, keep the shared `jev_telescope/provider_guard.py` file if Telescope is also
+installed; remove only files owned by the add-on being retired.

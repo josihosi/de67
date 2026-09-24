@@ -1,6 +1,6 @@
 # Jev Pit Crew
 
-Pit Crew is an optional, normally packaged evidence-advisory path. It reads the existing
+Pit Crew is an experimental optional evidence-advisory add-on with a separate archive. It reads the existing
 `worker_library.py` audit JSONL only after that audit record is durable, builds compact
 active-task candidates, and can send one fixed-format advisory to the existing coordinator
 mailbox. It cannot assign or interrupt workers, change a task/claim/receipt, approve work,

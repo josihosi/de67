@@ -264,7 +264,7 @@ def worker_emblem(model: str) -> str:
 
 
 def render_worker_scale(counts: dict[str, dict[str, int]]) -> str:
-    models = ("astra", "terra", "luna")
+    models = ("astra", "sol", "luna")
     levels = ("low", "medium", "high", "max")
     marks = ['<line class="strength-axis" x1="48" y1="114" x2="348" y2="114"/>']
     for index, level in enumerate(levels):
@@ -1486,7 +1486,7 @@ def _trace_fuel(path: Path, *, windows: list[tuple[float, float | None]] | None 
     if cached is None or stat.st_size < cached["offset"] or cached["windows"] != selection:
         cached = {"offset": 0, "fresh": None, "observed": 0, "partial": False, "points": [],
                   "model": None, "effort": None, "worker_points": [], "windows": selection,
-                  "worker_totals": {"astra": 0, "terra": 0, "luna": 0, "other": 0}}
+                  "worker_totals": {"astra": 0, "sol": 0, "luna": 0, "other": 0}}
         _TOKEN_TRACES[key] = cached
 
     def record(delta: int, timestamp: float | None = None) -> None:
@@ -1498,7 +1498,7 @@ def _trace_fuel(path: Path, *, windows: list[tuple[float, float | None]] | None 
                        for start, end in selection):
                 return
         model = str(cached["model"]).lower().rsplit("-", 1)[-1]
-        role = model if model in ("astra", "terra", "luna") else "other"
+        role = model if model in ("astra", "sol", "luna") else "other"
         cached["observed"] += delta
         cached["worker_totals"][role] += delta
         if timestamp is not None:
@@ -1673,7 +1673,7 @@ def render_fuel(fuel: dict[str, Any]) -> str:
     def axis_label(value: float) -> str:
         return f"{value / 1000000:g}m" if value >= 1000000 else f"{value / 1000:g}k" if value >= 1000 else f"{value:g}"
     roles = [("astra", "astra", "#fff0d6"), ("coordinator", "coordinator", "#eabd69"),
-             ("terra", "worker terra", "#77accb"), ("luna", "worker luna", "#82dfbd")]
+             ("sol", "worker sol", "#77accb"), ("luna", "worker luna", "#82dfbd")]
     if totals.get("other", 0):
         roles.append(("other", "other workers", "#9997a0"))
     cumulative = [0] * len(bins)
@@ -2191,9 +2191,14 @@ class Dashboard:
                          "unknown" if coordinator == "unknown" else "off")
             astra_counts = worker_counts.get("astra", {})
             astra_total = sum(astra_counts.values())
-            astra_state = "on" if astra_total else "off" if workers.get("available") else "unknown"
-            astra_label = (f"Astra: {astra_total} active · workers and mutator" if workers.get("available")
-                           else "Astra: activity unavailable")
+            mutator_glowing = mutation_running or bool(state["mutator_activity"].get("glowing"))
+            astra_state = ("on" if astra_total or mutator_glowing else
+                           "unknown" if not workers.get("available") and state["mutator_activity"].get("status") == "unavailable" else
+                           "off")
+            astra_label = ("Astra mutator: reviewing" if mutation_running else
+                           "Astra mutator: active" if mutator_glowing else
+                           f"Astra: {astra_total} active · workers and mutator" if astra_total else
+                           "Astra mutator: idle")
             sun_activity = process.get("activity", "unknown") if sun_state == "on" else sun_state
             import random
             rng = random.Random(67)

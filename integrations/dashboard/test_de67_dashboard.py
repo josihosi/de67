@@ -397,7 +397,7 @@ class DashboardTests(unittest.TestCase):
             page = dashboard_module.render_fuel({"available":True,"totals":{"coordinator":1,"sol":2,"luna":4,"astra":3,"other":0},
                 "bins":[peak] + [0]*23,"series":{role:[peak if role == "sol" else 0]+[0]*23 for role in ("astra","coordinator","sol","luna","other")},"partial":True})
             self.assertIn('aria-label="coordinator: 1 fresh tokens"', page)
-            self.assertIn('aria-label="worker terra: 2 fresh tokens"', page)
+            self.assertIn('aria-label="worker sol: 2 fresh tokens"', page)
             self.assertIn('aria-label="worker luna: 4 fresh tokens"', page)
             self.assertEqual(page.count('class="fuel-series"'), 4)
             self.assertLess(page.index("<svg"), page.index('class="fuel-total"'))
@@ -419,7 +419,7 @@ class DashboardTests(unittest.TestCase):
                 "series": {role: [0] * 24 for role in roles}, "partial": False})
             plot = page.split('class="fuel-bars"', 1)[1]
             labels = re.findall(r'aria-label="([^":]+):', plot)
-            self.assertEqual(labels, ["mutator", "coordinator", "worker terra", "worker luna"])
+            self.assertEqual(labels, ["astra", "coordinator", "worker sol", "worker luna"])
             positions = [float(value) for value in re.findall(r'<em style="left:([0-9.]+)%', plot)]
             self.assertEqual(len(positions), sum(value > 0 for value in values))
             self.assertTrue(all(0 <= value <= 100 for value in positions))
@@ -1116,7 +1116,7 @@ class DashboardTests(unittest.TestCase):
         ).render("overview").decode()
         self.assertIn('class="cosmos-workers"', page)
         self.assertIn('aria-label="luna: low: 0, medium: 1, high: 0, max: 0"', page)
-        self.assertIn("<span>terra</span>", page)
+        self.assertIn("<span>sol</span>", page)
         self.assertNotIn("<strong>Sol</strong>", page)
         self.assertNotIn("Unavailable", page)
 
@@ -1616,7 +1616,7 @@ class WorkerScaleTests(unittest.TestCase):
                     self.assertGreater(math.dist(left, right), 10.34)
 
     def test_overflow_is_explicit_and_total_remains_exact(self):
-        result = dashboard_module.render_worker_scale({"terra": {"max": 15}})
+        result = dashboard_module.render_worker_scale({"sol": {"max": 15}})
         self.assertEqual(result.count('class="worker-dot"'), 12)
         self.assertIn("+3", result)
         self.assertIn("max: 15", result)

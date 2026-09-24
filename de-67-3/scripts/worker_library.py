@@ -698,6 +698,11 @@ class WorkerDispatcher:
                 with closing(_connect(self.workspace)) as db:
                     assignment = dict(db.execute("SELECT * FROM assignments WHERE id=?", (request["assignment_id"],)).fetchone())
                     worker = _worker(db, request["name"])
+                if worker["model"] not in {"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}:
+                    raise WorkerLibraryError("Worker model is retired; use GPT-6 Luna, Sol or Astra")
+                from policy_kernel import worker_model_choices
+                if {"model": worker["model"], "reasoning_effort": worker["effort"]} not in worker_model_choices(self.workspace):
+                    raise WorkerLibraryError("Worker model/effort is no longer available in the current roster")
                 task = _task(Path(assignment["state_path"]), assignment["lineage"], assignment["task_id"])
                 if worker["retired_at"] is not None or task["attempt_terminal_at"] is not None:
                     raise WorkerLibraryError("Worker is retired or task is terminal")

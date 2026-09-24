@@ -255,23 +255,20 @@ def solar_filaments() -> str:
 
 
 def worker_emblem(model: str) -> str:
-    emblem = ('<path fill="#7ee6c2" d="M25 4a14 14 0 1 0 0 28A16 16 0 0 1 25 4Z"/>'
+    emblem = ('<path fill="#8ff0cf" stroke="#d5fff0" stroke-width="1.2" stroke-linejoin="round" d="M25 4A15 15 0 1 0 25 32C13 29 13 7 25 4Z"/>'
               if model == "luna" else
-              '<circle cx="18" cy="18" r="10" fill="#f2bd63"/>'
-              '<path d="M18 1v5m0 24v5M1 18h5m24 0h5M6 6l4 4m16 16 4 4M30 6l-4 4M10 26l-4 4" '
-              'stroke="#ffe0a1" stroke-width="2" stroke-linecap="round"/>'
-              if model == "sol" else '')
+              '<circle cx="18" cy="18" r="14" fill="#77accb"/><path fill="#cee2e7" d="M9 8Q13 4 18 4L20 7 17 10 18 12 15 14 14 18 11 17 10 13 7 12ZM18 19Q22 17 25 20L25 24 22 27 21 30 19 28 19 24 16 22Z"/><path d="M6 16A12 12 0 0 1 13 7" fill="none" stroke="#e2f1f3" stroke-opacity=".45" stroke-width=".8" stroke-linecap="round"/>')
     if model == "astra":
         emblem = '<path fill="#fff0d6" d="m18 2 3.7 11.2L34 13l-9.8 7.4L28 32l-10-6.6L8 32l3.8-11.6L2 13l12.3.2Z"/><circle cx="18" cy="18" r="3" fill="#fffbe5"/>'
     return emblem
 
 
 def render_worker_scale(counts: dict[str, dict[str, int]]) -> str:
-    models = ("astra", "sol", "luna")
-    levels = ("low", "medium", "high", "xhigh", "max")
+    models = ("astra", "terra", "luna")
+    levels = ("low", "medium", "high", "max")
     marks = ['<line class="strength-axis" x1="48" y1="114" x2="348" y2="114"/>']
     for index, level in enumerate(levels):
-        x = 48 + index * 300 // (len(levels) - 1)
+        x = 48 + index * 100
         active = [model for model in models for _ in range(max(0, counts.get(model, {}).get(level, 0)))]
         marks.append(f'<circle class="strength-stop" cx="{x}" cy="114" r="2"/>')
         for model, (dx, dy) in zip(active, worker_dot_positions(len(active))):
@@ -1321,6 +1318,42 @@ def _active_mutator(workspace: Path, sessions_root: Path) -> dict[str, str] | No
     return {"id": str(row[0]), "effort": str(row[3])}
 
 
+def _worker_execution(workspace: Path, claims: dict[str, str]) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+    """Join retained claims to current library execution without changing claim history."""
+    registry = workspace / ".de67/state/worker-library/registry.sqlite3"
+    if not registry.exists():
+        return claims, {}
+    clock = json.loads((workspace / ".de67/state/workspace.json").read_text())["clock"]
+    state = Path(clock["state"]).expanduser()
+    if not state.is_absolute():
+        state = workspace / state
+    connection = sqlite3.connect(registry.resolve().as_uri() + "?mode=ro", uri=True, timeout=0)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            "SELECT a.worker_id,a.status,a.binding,w.model,w.effort FROM assignments a "
+            "JOIN workers w ON a.name=w.name AND a.worker_id=w.thread_id "
+            "WHERE a.state_path=? AND a.lineage=? ORDER BY a.updated_at",
+            (str(state.resolve()), clock["lineage"])).fetchall()
+    finally:
+        connection.close()
+    owners, metadata = dict(claims), {}
+    for row in rows:
+        worker = row["worker_id"]
+        if worker not in claims:
+            continue
+        owners.pop(worker, None)
+        binding = json.loads(row["binding"])
+        if (row["status"] != "running"
+                or binding.get("workspace") != str(workspace.resolve())
+                or binding.get("deadline_state") != str(state.resolve())
+                or binding.get("lineage") != clock["lineage"]):
+            continue
+        owners[worker] = binding["thread_id"]
+        metadata[worker] = {"model": row["model"], "effort": row["effort"]}
+    return owners, metadata
+
+
 def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     """Project active roster subagents from Codex's existing read-only session records."""
     counts = {model: {effort: 0 for effort in ("low", "medium", "high", "xhigh", "max")}
@@ -1330,19 +1363,23 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     if mutator:
         counts["astra"][mutator["effort"]] += 1
     active_claims = _active_worker_claims(workspace)
+    metadata = {}
+    if active_claims:
+        active_claims, metadata = _worker_execution(workspace, active_claims)
     if active_claims == {}:
         return {"counts": counts, "available": True}
+    active_coordinator_id = _active_coordinator_id(workspace) or (
+        next(iter(active_claims.values())) if active_claims else None
+    )
     index = sessions_root.parent / "state_5.sqlite"
     if active_claims and index.is_file():
         owners = set(active_claims.values())
-        if len(owners) != 1:
-            raise ValueError("active worker ownership is ambiguous")
         uri = f"file:{quote(str(index), safe='/:')}?mode=ro"
         connection = sqlite3.connect(uri, uri=True, timeout=0)
         try:
             # Library workers have durable owners but need not have native
             # spawn edges. Seed their helper trees from those same claims.
-            seeds = sorted(owners | set(active_claims))
+            seeds = sorted(owners | set(active_claims) | ({active_coordinator_id} if active_coordinator_id else set()))
             values = ",".join("(?)" for _ in seeds)
             rows = connection.execute(
                 f"WITH RECURSIVE tree(id) AS (VALUES {values} UNION "
@@ -1359,9 +1396,6 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     root_path: Path | None = None
     root: dict[str, Any] = {}
     target = workspace.resolve()
-    active_coordinator_id = _active_coordinator_id(workspace) or (
-        next(iter(active_claims.values())) if active_claims else None
-    )
     for path in paths:
         candidate = _session_header(path)
         try:
@@ -1379,7 +1413,6 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
             break
     if root_path is None or not root.get("id"):
         return {"counts": counts, "available": False, "error": "active Codex session unavailable"}
-    active_claims = _active_worker_claims(workspace)
     candidates: list[tuple[Path, dict[str, Any]]] = []
     for path in paths:
         if path == root_path:
@@ -1396,7 +1429,8 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     # Durable claims identify current primaries, including reused library
     # workers. Codex's native spawn tree supplies their helper descendants.
     root_id = str(root["id"])
-    descendants = {root_id}
+    primary_owners = {root_id} | set((active_claims or {}).values())
+    descendants = set(primary_owners)
     pending = candidates
     while pending:
         next_pending: list[tuple[Path, dict[str, Any]]] = []
@@ -1411,8 +1445,8 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
                 continue
             if (
                 active_claims is not None
-                and parent == root_id
-                and active_claims.get(candidate_id) != root_id
+                and parent in primary_owners
+                and active_claims.get(candidate_id) != parent
             ):
                 # A direct coordinator child is a primary worker only while its
                 # durable claim belongs to this coordinator. Do not inherit the
@@ -1423,9 +1457,9 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
             changed = True
             if active_claims is None and _session_complete(path):
                 continue
-            if active_claims is not None and parent != root_id and _session_complete(path):
+            if active_claims is not None and candidate_id not in active_claims and _session_complete(path):
                 continue
-            context = _trace_fuel(path)
+            context = metadata.get(candidate_id) or _trace_fuel(path)
             model = str(context.get("model", "")).lower().rsplit("-", 1)[-1]
             effort = str(context.get("effort", "")).lower()
             if model in counts and effort in counts[model] and candidate_id not in counted:
@@ -1452,7 +1486,7 @@ def _trace_fuel(path: Path, *, windows: list[tuple[float, float | None]] | None 
     if cached is None or stat.st_size < cached["offset"] or cached["windows"] != selection:
         cached = {"offset": 0, "fresh": None, "observed": 0, "partial": False, "points": [],
                   "model": None, "effort": None, "worker_points": [], "windows": selection,
-                  "worker_totals": {"astra": 0, "sol": 0, "luna": 0, "other": 0}}
+                  "worker_totals": {"astra": 0, "terra": 0, "luna": 0, "other": 0}}
         _TOKEN_TRACES[key] = cached
 
     def record(delta: int, timestamp: float | None = None) -> None:
@@ -1464,7 +1498,7 @@ def _trace_fuel(path: Path, *, windows: list[tuple[float, float | None]] | None 
                        for start, end in selection):
                 return
         model = str(cached["model"]).lower().rsplit("-", 1)[-1]
-        role = model if model in ("astra", "sol", "luna") else "other"
+        role = model if model in ("astra", "terra", "luna") else "other"
         cached["observed"] += delta
         cached["worker_totals"][role] += delta
         if timestamp is not None:
@@ -1639,7 +1673,7 @@ def render_fuel(fuel: dict[str, Any]) -> str:
     def axis_label(value: float) -> str:
         return f"{value / 1000000:g}m" if value >= 1000000 else f"{value / 1000:g}k" if value >= 1000 else f"{value:g}"
     roles = [("astra", "astra", "#fff0d6"), ("coordinator", "coordinator", "#eabd69"),
-             ("sol", "worker sol", "#f2bd63"), ("luna", "worker luna", "#82dfbd")]
+             ("terra", "worker terra", "#77accb"), ("luna", "worker luna", "#82dfbd")]
     if totals.get("other", 0):
         roles.append(("other", "other workers", "#9997a0"))
     cumulative = [0] * len(bins)
@@ -2157,18 +2191,9 @@ class Dashboard:
                          "unknown" if coordinator == "unknown" else "off")
             astra_counts = worker_counts.get("astra", {})
             astra_total = sum(astra_counts.values())
-            mutator_activity = state.get("mutator_activity") or {}
-            if mutation_running:
-                astra_state, astra_label = "on", "Astra mutator: reviewing"
-            elif mutator_activity.get("glowing"):
-                astra_state = "on"
-                astra_label = "Astra mutator: " + str(mutator_activity.get("status", "working"))
-            elif astra_total:
-                astra_state, astra_label = "on", f"Astra: {astra_total} active"
-            elif workers.get("available") or mutator_activity.get("status") in {"idle", "disabled"}:
-                astra_state, astra_label = "off", "Astra mutator: idle"
-            else:
-                astra_state, astra_label = "unknown", "Astra: activity unavailable"
+            astra_state = "on" if astra_total else "off" if workers.get("available") else "unknown"
+            astra_label = (f"Astra: {astra_total} active · workers and mutator" if workers.get("available")
+                           else "Astra: activity unavailable")
             sun_activity = process.get("activity", "unknown") if sun_state == "on" else sun_state
             import random
             rng = random.Random(67)

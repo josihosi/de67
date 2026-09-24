@@ -39,7 +39,6 @@ class WorkerCapabilityTests(unittest.TestCase):
                 {'model': 'gpt-6-luna', 'reasoning_effort': 'low'},
                 {'model': 'gpt-6-sol', 'reasoning_effort': 'xhigh'},
                 {'model': 'gpt-6-sol', 'reasoning_effort': 'max'},
-                {'model': 'gpt-6-astra', 'reasoning_effort': 'low'},
             ]
             config.write_text(json.dumps({'worker_capabilities': choices}), encoding='utf-8')
             self.assertEqual(kernel.worker_model_choices(workspace), choices)
@@ -970,8 +969,7 @@ class PolicyKernelTests(unittest.TestCase):
             arguments = calls[0]["example_call"]["arguments"]
             self.assertEqual(arguments["fork_turns"], "none")
             self.assertNotIn("model", arguments)
-            self.assertEqual({c['model'] for c in calls[0]['model_choices']},
-                             {'gpt-6-luna', 'gpt-6-sol', 'gpt-6-astra'})
+            self.assertEqual({c['model'] for c in calls[0]['model_choices']}, {'gpt-6-luna','gpt-6-sol','gpt-6-astra'})
             for choice in calls[0]['model_choices']:
                 completed_call = {**arguments, **choice}
                 self.assertEqual(completed_call['task_name'], calls[0]['task_name'])

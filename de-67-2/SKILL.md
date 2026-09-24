@@ -93,7 +93,7 @@ gate and create no coordination artifact unless it is named here.
    ```
 
    Start a fresh probe coordinator after that configuration exists. A Luna probe omits `model` and
-   supplies `reasoning_effort`; a Sol worker probe supplies both `model="gpt-6-sol"` and
+   supplies `reasoning_effort`; a Sol probe supplies both `model="gpt-6-sol"` and
    `reasoning_effort`. Every probe uses `fork_turns="none"` and a unique task-local nonce prompt;
    success means it returns that nonce without inherited conversation. Probe only useful pairs, but
    prove both models and more than one effort level. Record only successful model/effort pairs. If

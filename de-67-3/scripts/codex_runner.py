@@ -296,6 +296,8 @@ def _command(codex: str, workspace: Path, environment: dict[str, str]) -> list[s
         )
     if environment.get("DE67_COORDINATOR_RUN_ID"):
         model = environment.get("DE67_COORDINATOR_MODEL", "gpt-6-sol").strip()
+        if model not in {"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}:
+            raise RunnerError("Retired model: use GPT-6 Luna, Sol or Astra")
         effort = environment.get(
             "DE67_COORDINATOR_REASONING_EFFORT", "low"
         ).strip()

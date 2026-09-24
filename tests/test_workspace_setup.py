@@ -639,6 +639,10 @@ class WorkspaceSetupTests(unittest.TestCase):
             (),
             (("gpt-6-luna", "high"),),
             (("gpt-6-luna", "high"), ("gpt-6-sol", "high")),
+            (("gpt-5.6-luna", "high"), ("gpt-6-sol", "low")),
+            (("gpt-6-luna", "low"), ("gpt-6-luna", "medium")),
+            (("gpt-6-luna", "high"), ("gpt-6-sol", "low"), ("gpt-6-luna", "high")),
+            (("gpt-6-luna", "high"), ("gpt-6-sol", "invalid effort")),
         )
         for roster in invalid_rosters:
             with self.subTest(roster=roster), self.assertRaises(SetupError):

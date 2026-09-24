@@ -237,6 +237,8 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
                                     "capabilities": {"experimentalApi": True}})
             rpc.send({"method": "initialized", "params": {}})
             model = os.environ.get("DE67_COORDINATOR_MODEL", "gpt-6-sol")
+            if model not in {"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}:
+                raise RpcError("Retired model: use GPT-6 Luna, Sol or Astra")
             effort = os.environ.get("DE67_COORDINATOR_REASONING_EFFORT", "low")
             params: dict[str, Any] = {
                 "cwd": str(workspace), "model": model, "approvalPolicy": "never",

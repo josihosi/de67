@@ -198,7 +198,7 @@ def _worker_capabilities(
 ) -> list[dict[str, str]]:
     if not requested:
         if required:
-            raise SetupError("Record successfully probed GPT-6 Luna and Sol capabilities")
+            raise SetupError("Record successfully probed Luna and Sol capabilities")
         return []
     result: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -210,6 +210,13 @@ def _worker_capabilities(
             r"[A-Za-z0-9][A-Za-z0-9._-]*", effort
         ):
             raise SetupError("Worker capabilities use MODEL REASONING_EFFORT")
+        efforts = {
+            "gpt-6-luna": {"low", "medium", "high", "xhigh", "max"},
+            "gpt-6-sol": {"low", "medium", "high", "xhigh", "max", "ultra"},
+            "gpt-6-astra": {"low", "medium", "high", "xhigh", "max", "ultra"},
+        }
+        if model not in efforts or effort not in efforts[model]:
+            raise SetupError("Use an available GPT-6 Luna, Sol or Astra model/effort pair")
         key = (model, effort)
         if key in seen:
             raise SetupError(f"Duplicate worker capability: {model}/{effort}")
@@ -219,7 +226,7 @@ def _worker_capabilities(
         models = {item["model"] for item in result}
         required_models = {"gpt-6-luna", "gpt-6-sol"}
         if not required_models.issubset(models):
-            raise SetupError("Record successfully probed GPT-6 Luna and Sol capabilities")
+            raise SetupError("Record successfully probed Luna and Sol capabilities")
         if len({item["reasoning_effort"] for item in result}) < 2:
             raise SetupError("Prove more than one reasoning effort across the worker roster")
     return result

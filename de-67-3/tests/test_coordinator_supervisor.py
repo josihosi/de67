@@ -1320,7 +1320,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("exposes a contradiction or a missing causal step", prompt)
         self.assertIn("Internal machine state and FS detail", prompt)
         self.assertIn('fork_turns="none"', prompt)
-        self.assertIn("Choose only available pairs from model_choices", prompt)
+        self.assertIn("Explicitly choose gpt-6-luna or gpt-6-sol", prompt)
         self.assertIn("Never omit model selection", prompt)
         self.assertIn("pass coordinator or predecessor history", prompt)
         # Verify the complete producing contract reaches routing without freezing its prose.

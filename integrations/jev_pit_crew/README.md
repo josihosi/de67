@@ -12,8 +12,6 @@ installing or enabling it cannot make a provider request. An explicit caller may
 `pit_crew.run(..., selector=...)` for a controlled local stub or a separately
 owner-authorized future adapter; that callable is admitted through the existing
 credential-free `integrations/jev_telescope/provider_guard.py` boundary.
-The Pit Crew archive includes that guard from the same core revision; the full Telescope
-adapter remains optional.
 
 ## Configuration
 

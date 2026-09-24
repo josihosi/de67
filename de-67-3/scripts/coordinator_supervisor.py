@@ -29,7 +29,7 @@ from blocker_adapter import (
 from instruction_context import common_guidance
 from agent_mailbox import communication_contract
 from deadline_harness import DeadlineError, DeadlineHarness
-from policy_kernel import current_owner_contract
+from policy_kernel import current_owner_contract, workspace_facts
 from specification import SpecificationError, resolve
 from repository_checkpoint import (
     RepositoryCheckpointError,
@@ -1096,21 +1096,6 @@ def coordinator_continuation_prompt() -> str:
         "are outstanding. The external supervisor owns coordinator/reviewer launches and restarts; "
         "you own coordination of task processes, including supported graceful cleanup under the "
         "existing identity, unsaved-state and input-ownership safeguards.\n"
-    )
-
-
-def worker_selection_contract() -> str:
-    return (
-        "Model choice: use GPT-6 Luna for focused execution, playtesting, and ordinary repairs; "
-        "use GPT-6 Sol for coupled implementation or difficult diagnosis. Use Astra for exceptional "
-        "work where its stronger judgment reduces uncertainty or rework. Sol also coordinates, "
-        "but a Sol worker owns only its assigned task. After a hard repair, give substantial "
-        "remaining execution to Luna when the handoff saves total work, preserving useful context "
-        "and live ownership. Choose model and reasoning effort for the actual uncertainty "
-        "and expected total work. Choose only available pairs from model_choices. These are preferences, "
-        "not quotas or escalation gates. Judge completed outcomes including helpers, handoffs, "
-        "and retries. Give each worker a focused assignment. An Astra worker is separate from "
-        "the independent Astra reviewer."
     )
 
 

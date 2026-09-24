@@ -192,7 +192,8 @@ class WorkspaceSetupTests(unittest.TestCase):
         environment = self.workspace / ".de67"
         (environment / "work-ledger.md").write_text(
             "- [x] R-001 — Historical proof accepted.\n"
-            "- [ ] R-002 — Fresh campaign proof remains open.\n"
+            "- [ ] R-002 — Fresh campaign proof remains open.\n",
+            encoding="utf-8",
         )
         paths = [environment / "FS.md", environment / "work-ledger.md",
                  self.workspace / DEADLINE_STATE_RELATIVE_PATH]

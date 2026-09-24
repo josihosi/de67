@@ -16,16 +16,17 @@ LLM endpoint is not a substitute. See the [Codex App Server documentation](https
 | Bundled detached Phase 3 service | macOS and `tmux`; the current service launcher is macOS-only |
 | Native Windows | CLI transport and shared logic; the Unix App Server route is not implemented |
 
-The configured roles are Astra high for specification, Sol low for coordination, Luna/Terra for
-workers, and Astra medium for mutation review. Phase 2 probes the needed model/effort combinations
-and records actual availability. Named workers run with full filesystem access; install and run
+The configured roles are GPT-6 Astra high for specification, GPT-6 Sol low for coordination,
+GPT-6 Luna and Sol for workers, and GPT-6 Astra medium for mutation review. Phase 2 probes the
+needed model/effort combinations and records actual availability. Named workers run with full filesystem access; install and run
 this workflow only in the user's intended execution environment.
 
 ## Install the core
 
-1. Download `de67-3.1.0-core.zip` and `SHA256SUMS` from the
-   [v3.1.0 release](https://github.com/josihosi/de67/releases/tag/v3.1.0). Verify its SHA-256 before
-   extraction (`Get-FileHash` on PowerShell or `shasum -a 256` on macOS).
+1. Download the core archive and `SHA256SUMS` for the reviewed release, or build the archives
+   from the reviewed commit with `python scripts/package_release.py --ref COMMIT --version VERSION --output DIR`.
+   Verify the core archive's SHA-256 before extraction
+   (`Get-FileHash` on PowerShell or `shasum -a 256` on macOS).
 2. Inspect the user's existing skill installation and changes. Extract the archive's `de67/`
    directory into the configured user skills directory. Keep its complete structure; do not
    install only `SKILL.md`. An upgrade should preserve the previous installation until the new

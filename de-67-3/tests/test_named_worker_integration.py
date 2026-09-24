@@ -142,9 +142,9 @@ class NamedWorkerIntegrationTests(unittest.TestCase):
             db.executescript('CREATE TABLE threads(id TEXT,cwd TEXT,model TEXT); '
                              'CREATE TABLE thread_spawn_edges(parent_thread_id TEXT,child_thread_id TEXT);')
             db.executemany('INSERT INTO threads VALUES (?,?,?)', [
-                ('native-worker', str(self.workspace), 'gpt-5.6-luna'),
-                ('persistent-worker', str(self.workspace), 'gpt-5.6-terra'),
-                ('unrelated-worker', str(self.root / 'elsewhere'), 'gpt-5.6-luna'),
+                ('native-worker', str(self.workspace), 'gpt-6-luna'),
+                ('persistent-worker', str(self.workspace), 'gpt-6-sol'),
+                ('unrelated-worker', str(self.root / 'elsewhere'), 'gpt-6-luna'),
             ])
             db.executemany('INSERT INTO thread_spawn_edges VALUES (?,?)', [
                 ('native-parent', 'native-worker'), ('old-parent', 'persistent-worker'),
@@ -166,11 +166,11 @@ class NamedWorkerIntegrationTests(unittest.TestCase):
             harness.start_task('project', 'second-task', 'second-claim', 1000, now=299)
             harness.claim_worker('project', 'second-task', 'persistent-worker', 'current-coordinator', 'supervisor', now=300)
         sessions = [
-            ('old-coordinator', 'gpt-5.6-sol', [50]),
-            ('current-coordinator', 'gpt-5.6-sol', [250]),
+            ('old-coordinator', 'gpt-6-sol', [50]),
+            ('current-coordinator', 'gpt-6-sol', [250]),
             ('native-helper', 'native-helper-model', [250]),
-            ('persistent-worker', 'gpt-5.6-terra', [50, 150, 250, 350]),
-            ('worker-helper', 'gpt-5.6-luna', [50, 150, 250, 350]),
+            ('persistent-worker', 'gpt-6-sol', [50, 150, 250, 350]),
+            ('worker-helper', 'gpt-6-luna', [50, 150, 250, 350]),
             ('nested-helper', 'nested-helper-model', [50, 150, 250, 350]),
             ('unrelated-worker', 'unrelated-model', [150]),
         ]
@@ -192,13 +192,13 @@ class NamedWorkerIntegrationTests(unittest.TestCase):
         self.assertTrue(result['complete'], result)
         self.assertEqual(result['root_session_id'], 'current-coordinator')
         self.assertEqual(result['session_count'], 5)
-        self.assertEqual(result['by_model']['gpt-5.6-sol']['total_tokens'], 12)
+        self.assertEqual(result['by_model']['gpt-6-sol']['total_tokens'], 36)
         self.assertEqual(result['by_model']['native-helper-model']['total_tokens'], 12)
         self.assertNotIn('unrelated-model', result['by_model'])
         sources = {source['session_id']: source for source in result['sources']}
-        for worker, model in [('persistent-worker', 'gpt-5.6-terra'),
-                              ('worker-helper', 'gpt-5.6-luna'), ('nested-helper', 'nested-helper-model')]:
-            self.assertEqual(result['by_model'][model]['total_tokens'], 24)
+        for worker, model in [('persistent-worker', 'gpt-6-sol'),
+                              ('worker-helper', 'gpt-6-luna'), ('nested-helper', 'nested-helper-model')]:
+            self.assertEqual(result['by_model'][model]['total_tokens'], 36 if model == 'gpt-6-sol' else 24)
             self.assertEqual(sources[worker]['usage_windows'], [{'start': 100, 'end': 200},
                                                                {'start': 300, 'end': None}])
             self.assertEqual(sources[worker]['response_count'], 2)
@@ -210,12 +210,12 @@ class NamedWorkerIntegrationTests(unittest.TestCase):
                                  details=True, codex_home=self.runtime)
         self.assertTrue(prior['complete'], prior)
         self.assertEqual(prior['root_session_id'], 'old-coordinator')
-        self.assertEqual(prior['by_model']['gpt-5.6-terra']['total_tokens'], 12)
-        self.assertEqual(prior['by_model']['gpt-5.6-luna']['total_tokens'], 12)
+        self.assertEqual(prior['by_model']['gpt-6-sol']['total_tokens'], 24)
+        self.assertEqual(prior['by_model']['gpt-6-luna']['total_tokens'], 12)
         self.assertNotIn('native-helper-model', prior['by_model'])
         selected = token_usage_view(self.workspace, self.state, 'project', task='second-task',
                                     codex_home=self.runtime)
-        self.assertEqual(selected['by_model']['gpt-5.6-terra']['total_tokens'], 24)
+        self.assertEqual(selected['by_model']['gpt-6-sol']['total_tokens'], 36)
         self.assertEqual(selected['new_source_bytes_read'], 0)
 
     def test_usage_marks_unavailable_durable_worker_helper_as_gap(self):
@@ -225,8 +225,8 @@ class NamedWorkerIntegrationTests(unittest.TestCase):
         result = token_usage_view(self.workspace, self.state, 'project', details=True, codex_home=self.runtime)
         self.assertFalse(result['complete'])
         self.assertIn('nested-helper', result['unavailable_thread_ids'])
-        self.assertEqual(result['by_model']['gpt-5.6-terra']['total_tokens'], 24)
-        self.assertEqual(result['by_model']['gpt-5.6-luna']['total_tokens'], 24)
+        self.assertEqual(result['by_model']['gpt-6-sol']['total_tokens'], 36)
+        self.assertEqual(result['by_model']['gpt-6-luna']['total_tokens'], 24)
 
 
 if __name__ == '__main__':

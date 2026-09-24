@@ -39,7 +39,7 @@ interface languages. Do not let current code silently rename the user's concept.
 
 Use only for unresolved red items or ambiguous ownership.
 
-| Source | What was searched | Claim to validate | Effect on DFS |
+| Source | What was searched | Claim to validate | Effect on FS |
 |---|---|---|---|
 | `<URL/repo ref>` | `<feature / symbol / behavior>` | `<matching behavior or pattern>` | `<new red item, clarifying wording, or no change>` |
 

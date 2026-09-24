@@ -21,7 +21,7 @@ def event(kind, payload, timestamp=None):
     return json.dumps(result) + '\n'
 
 
-def context(turn='turn', model='gpt-5.6-terra'):
+def context(turn='turn', model='gpt-6-sol'):
     return event('turn_context', {'turn_id': turn, 'model': model})
 
 
@@ -55,15 +55,15 @@ class UsageWindowTests(unittest.TestCase):
         self.path.write_text(text, encoding='utf-8', newline='')
 
     def test_old_worker_lifetime_excluded_and_own_current_models_preserved(self):
-        self.write(context('old', 'gpt-5.6-luna') + response('old', 50, 100, turn='old')
+        self.write(context('old', 'gpt-6-luna') + response('old', 50, 100, turn='old')
                    + context() + response('new', 150, 20)
                    + response('rollup', 160, 1000, identity='helper')
-                   + context('sol', 'gpt-5.6-sol') + response('new-sol', 170, 30, turn='sol'))
+                   + context('sol', 'gpt-6-sol') + response('new-sol', 170, 30, turn='sol'))
         result = self.view()
         self.assertTrue(result['complete'])
-        self.assertNotIn('gpt-5.6-luna', result['by_model'])
-        self.assertEqual(result['by_model']['gpt-5.6-terra']['total_tokens'], 22)
-        self.assertEqual(result['by_model']['gpt-5.6-sol']['uncached_input_plus_output_tokens'], 28)
+        self.assertNotIn('gpt-6-luna', result['by_model'])
+        self.assertEqual(result['by_model']['gpt-6-sol']['total_tokens'], 54)
+        self.assertEqual(result['by_model']['gpt-6-sol']['uncached_input_plus_output_tokens'], 46)
         source = result['sources'][0]
         self.assertEqual(source['usage_windows'], self.record['usage_windows'])
         self.assertEqual(source['response_count'], 2)
@@ -83,18 +83,18 @@ class UsageWindowTests(unittest.TestCase):
                    + response('second', 350) + response('end', 400, 1000))
         result = self.view()
         self.assertTrue(result['complete'])
-        self.assertEqual(result['by_model']['gpt-5.6-terra']['total_tokens'], 36)
-        self.assertEqual(result['by_model']['gpt-5.6-terra']['session_count'], 1)
+        self.assertEqual(result['by_model']['gpt-6-sol']['total_tokens'], 36)
+        self.assertEqual(result['by_model']['gpt-6-sol']['session_count'], 1)
         self.assertEqual(result['sources'][0]['response_count'], 3)
         self.assertEqual(result['sources'][0]['excluded_response_count'], 2)
 
     def test_reprojection_uses_cached_records_and_open_window_ingests_only_suffix(self):
         self.write(context() + response('old', 50) + response('current', 150))
-        self.assertEqual(self.view()['by_model']['gpt-5.6-terra']['total_tokens'], 12)
+        self.assertEqual(self.view()['by_model']['gpt-6-sol']['total_tokens'], 12)
         self.record['usage_windows'] = [{'start': 0, 'end': 100}]
         result = self.view()
         self.assertEqual(result['new_source_bytes_read'], 0)
-        self.assertEqual(result['by_model']['gpt-5.6-terra']['total_tokens'], 12)
+        self.assertEqual(result['by_model']['gpt-6-sol']['total_tokens'], 12)
         self.assertEqual(result['sources'][0]['counters_observed_at'], stamp(50))
         self.record['usage_windows'] = [{'start': 100, 'end': None}]
         suffix = response('next', 300, 20)
@@ -103,7 +103,7 @@ class UsageWindowTests(unittest.TestCase):
         result = self.view()
         self.assertTrue(result['complete'])
         self.assertEqual(result['new_source_bytes_read'], len(suffix.encode('utf-8')))
-        self.assertEqual(result['by_model']['gpt-5.6-terra']['total_tokens'], 34)
+        self.assertEqual(result['by_model']['gpt-6-sol']['total_tokens'], 34)
 
     def test_unknown_missing_invalid_or_naive_timestamps_are_excluded_gaps(self):
         self.write(context() + response('known', 150) + response('missing', None, 100)
@@ -111,7 +111,7 @@ class UsageWindowTests(unittest.TestCase):
                    + response('naive', '1970-01-01T00:02:30', 100))
         result = self.view()
         self.assertFalse(result['complete'])
-        self.assertEqual(result['by_model']['gpt-5.6-terra']['total_tokens'], 12)
+        self.assertEqual(result['by_model']['gpt-6-sol']['total_tokens'], 12)
         self.assertEqual(result['sources'][0]['response_count'], 1)
         self.assertEqual(result['sources'][0]['unknown_timestamp_response_count'], 3)
         self.assertFalse(result['sources'][0]['complete'])
@@ -122,7 +122,7 @@ class UsageWindowTests(unittest.TestCase):
                    + response('end', 200))
         result = self.view()
         self.assertTrue(result['complete'])
-        self.assertEqual(result['by_model']['gpt-5.6-terra']['total_tokens'], 24)
+        self.assertEqual(result['by_model']['gpt-6-sol']['total_tokens'], 24)
         self.assertEqual(result['sources'][0]['response_count'], 2)
 
     def test_invalid_window_is_a_gap_without_unbounded_fallback(self):
@@ -139,7 +139,7 @@ class UsageWindowTests(unittest.TestCase):
         self.write(context() + response('old', 50, 20) + response('new', 150))
         result = self.view()
         self.assertTrue(result['complete'])
-        self.assertEqual(result['by_model']['gpt-5.6-terra']['total_tokens'], 34)
+        self.assertEqual(result['by_model']['gpt-6-sol']['total_tokens'], 34)
         self.assertEqual(result['sources'][0]['response_count'], 2)
         self.assertNotIn('usage_windows', result['sources'][0])
 

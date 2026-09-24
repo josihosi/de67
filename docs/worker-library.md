@@ -13,7 +13,7 @@ Run the CLI from the current coordinator environment so its session and run iden
 
 ```text
 python de-67-3/scripts/worker_library.py --workspace WORKSPACE list
-python de-67-3/scripts/worker_library.py --workspace WORKSPACE create night-evidence --job "Interpret night-route evidence and distinguish observations from hypotheses" --model gpt-5.6-luna --effort medium
+python de-67-3/scripts/worker_library.py --workspace WORKSPACE create night-evidence --job "Interpret night-route evidence and distinguish observations from hypotheses" --model gpt-6-luna --effort medium
 python de-67-3/scripts/worker_library.py --workspace WORKSPACE assign night-evidence --task TASK --packet PREPARED_PACKET --sha256 PACKET_SHA256 --state DEADLINE_STATE --lineage LINEAGE
 python de-67-3/scripts/worker_library.py --workspace WORKSPACE message night-evidence --message "The current source establishes that the caller exists. Revise the missing-caller hypothesis against this evidence."
 python de-67-3/scripts/worker_library.py --workspace WORKSPACE wait night-evidence

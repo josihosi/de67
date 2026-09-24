@@ -8,11 +8,6 @@ description: Prepare a release of the de67 skill, including comparison with the 
 Prepare a reproducible release candidate of the de67 skill. This is a maintenance route,
 not a delivery phase. Do not start phase 3 or load its operating instructions merely to package it.
 
-The machinery selected for release has already been tested. Preserve it unchanged: packaging is
-not an opportunity to repair, refactor, or otherwise modify runtime machinery. Review findings
-do not authorize those changes. Release the selected source; any machinery changes require a
-separate, explicit maintenance request.
-
 Read [release promotion](../RELEASE_PROMOTION.md) for repository identity, history preservation,
 candidate construction, validation, and publication. Keep that procedure authoritative rather
 than duplicating it here. Respect the requested checkpoint: preparation does not itself authorize

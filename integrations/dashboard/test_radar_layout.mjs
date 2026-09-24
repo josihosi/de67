@@ -17,11 +17,44 @@ function sql(text) {
   execFileSync(process.env.PYTHON || "python3", ["-c",
     "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.executescript(sys.argv[2]); c.close()", database, text]);
 }
-sql("CREATE TABLE tasks(task_id TEXT, claim_id TEXT, started_at REAL, deadline_at REAL, closure_gap_id TEXT, closure_gap_revision INTEGER); " +
-    "INSERT INTO tasks VALUES('R-1-run', 'R-1', 1, 9999999999, 'G-2', 1);");
+sql("CREATE TABLE tasks(lineage_id TEXT, task_id TEXT, claim_id TEXT, started_at REAL, deadline_at REAL, closure_gap_id TEXT, closure_gap_revision INTEGER); " +
+    `INSERT INTO tasks VALUES('test', 'R-1-run', 'R-1', 1, ${Math.floor(Date.now() / 1000) + 3600}, 'G-2', 1);` +
+    "CREATE TABLE worker_claims(lineage_id TEXT, task_id TEXT, worker_id TEXT, coordinator_session_id TEXT, claimed_at REAL, released_at REAL); " +
+    "INSERT INTO worker_claims VALUES('test', 'R-1-run', 'sol-worker', 'coordinator', 1, NULL); " +
+    "INSERT INTO worker_claims VALUES('test', 'R-1-run', 'luna-worker', 'coordinator', 1, NULL); " +
+    "INSERT INTO worker_claims VALUES('test', 'R-1-run', 'astra-worker', 'coordinator', 1, NULL); " +
+    "CREATE TABLE supervisor_attempts(lineage_id TEXT, role TEXT, run_id TEXT, finished_at REAL); " +
+    "INSERT INTO supervisor_attempts VALUES('test', 'coordinator', 'run-1', NULL);");
 await writeFile(join(state, "workspace.json"), JSON.stringify({clock: {state: database, lineage: "test"}}));
-await writeFile(join(root, ".de67/DFS.md"), "# DFS\nStatus: Frozen\n");
-await writeFile(join(root, ".de67/work-ledger.md"), "## Active work\n- [ ] R-1 — Exercise the current work.\n");
+await writeFile(join(root, ".de67/FS.md"), "# FS\nStatus: Frozen\n- [ ] 🔴 R-4 — Verify the supported platform route.\n");
+await writeFile(join(root, ".de67/work-ledger.md"),
+  "## Active work\n- [ ] R-1 — Trace the encounter through save and recovery.\n" +
+  "- [ ] R-2 — Check that the same actor survives a restart.\n" +
+  "- [ ] R-3 — Validate cleanup and replay through the public API.\n");
+await mkdir(join(state, "coordinator-runs/run-1"), {recursive: true});
+await writeFile(join(state, "coordinator-runs/run-1/session_id.txt"), "coordinator\n");
+const sessionPaths = [];
+for (const [id, parent, model, effort, fresh] of [
+  ["coordinator", null, "gpt-6-sol", "low", 240000],
+  ["sol-worker", "coordinator", "gpt-6-sol", "high", 180000],
+  ["luna-worker", "coordinator", "gpt-6-luna", "medium", 95000],
+  ["astra-worker", "coordinator", "gpt-6-astra", "max", 120000],
+]) {
+  const path = join(root, "sessions", `rollout-${id}.jsonl`);
+  const timestamp = new Date().toISOString();
+  const usage = {input_tokens: fresh, cached_input_tokens: 0, output_tokens: 0};
+  const records = [
+    {type: "session_meta", payload: {id, parent_thread_id: parent, cwd: root, timestamp}},
+    {type: "turn_context", payload: {model, effort}},
+    {type: "event_msg", payload: {type: "task_started"}},
+    {type: "event_msg", timestamp, payload: {type: "token_count", info: {total_token_usage: usage, last_token_usage: usage}}},
+  ];
+  await writeFile(path, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+  sessionPaths.push([id, path]);
+}
+execFileSync(process.env.PYTHON || "python3", ["-c",
+  "import sqlite3,sys,json; c=sqlite3.connect(sys.argv[1]); c.executescript('CREATE TABLE threads(id TEXT,rollout_path TEXT); CREATE TABLE thread_spawn_edges(parent_thread_id TEXT,child_thread_id TEXT)'); c.executemany('INSERT INTO threads VALUES (?,?)',json.loads(sys.argv[2])); c.executemany('INSERT INTO thread_spawn_edges VALUES (?,?)',[('coordinator','sol-worker'),('coordinator','luna-worker'),('coordinator','astra-worker')]); c.commit(); c.close()",
+  join(root, "state_5.sqlite"), JSON.stringify(sessionPaths)]);
 const cache = join(root, "briefing.json"), reportPath = join(root, "report.json"), sidecar = join(root, "sidecar.py");
 await writeFile(sidecar, "from pathlib import Path\nprint(Path(__file__).with_name('report.json').read_text())\n");
 const narrator = join(root, "narrator.py");
@@ -67,6 +100,30 @@ try {
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(url);
   await page.waitForSelector(".radar-links path");
+  assert.match(await page.locator(".worker-legend").textContent(), /astra.*sol.*luna/);
+  if (process.env.DE67_OVERVIEW_SCREENSHOT) {
+    await page.emulateMedia({reducedMotion: "reduce"});
+    await page.clock.pauseAt(new Date());
+    await page.evaluate(() => {
+      const sun = document.querySelector(".sun");
+      sun.classList.remove("off", "unknown", "waiting", "activity-off", "activity-unknown", "activity-waiting");
+      sun.classList.add("on", "activity-working");
+      sun.setAttribute("aria-label", "Coordinator: working");
+      sun.setAttribute("title", "Coordinator: working");
+      document.querySelector("#dashboard-header h1")?.classList.remove("supervisor-absent");
+      document.querySelector("#dashboard-header > span").textContent = "demo campaign";
+      document.querySelector("#refresh-status").textContent = "Demo · synthetic activity";
+    });
+    const radar = await page.locator(".trajectory").evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      return {y: rect.top + scrollY, height: rect.height};
+    });
+    await page.screenshot({path: process.env.DE67_OVERVIEW_SCREENSHOT, fullPage: true,
+      clip: {x: 0, y: 0, width: 1200, height: Math.round(radar.y + radar.height * 0.65)}});
+    await page.clock.resume();
+    await page.reload();
+    await page.waitForSelector(".radar-links path");
+  }
   assert.equal(await page.locator('.assigned-bearing[data-assigned-index="1"]').count(), 1);
   assert.equal(await page.locator('.assigned-bearing').count(), 1);
   assert.match(await page.locator('.assigned-destination').textContent(), /Assigned to.*G-2/);

@@ -60,9 +60,10 @@ class CoordinatorLoopGuard:
     def _reconcile_terminal_tasks(self) -> None:
         if self._task_terminal is None:
             return
-        for task_id in tuple(self._task_workers):
+        for task_id in set(self._task_workers) | set(self._unbound):
             if self._task_terminal(task_id):
                 self._task_workers.pop(task_id, None)
+                self._unbound.pop(task_id, None)
                 self._pending_delegations.discard(task_id)
 
     def reconcile_handoffs(self) -> None:
@@ -294,7 +295,9 @@ def _command(codex: str, workspace: Path, environment: dict[str, str]) -> list[s
             ]
         )
     if environment.get("DE67_COORDINATOR_RUN_ID"):
-        model = environment.get("DE67_COORDINATOR_MODEL", "gpt-5.6-sol").strip()
+        model = environment.get("DE67_COORDINATOR_MODEL", "gpt-6-sol").strip()
+        if model not in {"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}:
+            raise RunnerError("Retired model: use GPT-6 Luna, Sol or Astra")
         effort = environment.get(
             "DE67_COORDINATOR_REASONING_EFFORT", "low"
         ).strip()
@@ -586,6 +589,14 @@ def _claim_recorder(environment: dict[str, str]) -> Callable[[str, str, str | No
             return
         if not state or not lineage or not supervisor or not coordinator_session:
             raise RunnerError("Durable worker claim lacks supervisor or coordinator identity")
+        # Named assignments may adopt a new execution controller after review
+        # while retaining the original durable claim. Verify both surfaces.
+        workspace = environment.get("DE67_WORKSPACE", "").strip()
+        if workspace:
+            from worker_library import owns_assignment
+            if owns_assignment(Path(workspace), task_id, worker_id, coordinator_session,
+                               Path(state), lineage, execution_supervisor_id=supervisor):
+                return
         try:
             with DeadlineHarness(state) as harness:
                 claim = harness.claim_worker(
@@ -723,6 +734,7 @@ def run(
     session_id: str | None = None
     process: subprocess.Popen[str] | None = None
     tasks_to_abandon: tuple[str, ...] = ()
+    transport_error: str | None = None
     try:
         with prompt_path.open("r", encoding="utf-8") as prompt_stream, output_path.open(
             "w", encoding="utf-8", newline="\n"
@@ -754,6 +766,8 @@ def run(
                     continue
                 if not isinstance(event, dict):
                     continue
+                if event.get("type") == "de67.transport_error":
+                    transport_error = str(event.get("message") or "App Server transport failed")
                 try:
                     if loop_guard is not None:
                         loop_guard.observe(event)
@@ -765,6 +779,8 @@ def run(
                 from codex_app_server_runner import stop_owned_runtime
                 stop_owned_runtime(process, workspace, run_directory, selected_environment)
             process = None
+            if exit_code != 0 and transport_error is not None:
+                raise RunnerError(transport_error)
             if loop_guard is not None:
                 loop_guard.reconcile_handoffs()
             if loop_guard is not None and loop_guard.unbound_tasks:

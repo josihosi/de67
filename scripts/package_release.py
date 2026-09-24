@@ -19,7 +19,9 @@ ROOT_FILES = {"SKILL.md", "README.md", "LICENSE", "RELEASE_PROMOTION.md"}
 CORE_ROOTS = {"agents", "references", "de-67-1", "de-67-2", "de-67-3",
               "alignment-audit", "release-packaging", "scripts", "tests", "docs"}
 ADDONS = {"dashboard": {"dashboard"},
-          "discord": {"openclaw_discord", "direct_input", "openclaw_advisory"}}
+          "discord": {"openclaw_discord", "direct_input", "openclaw_advisory"},
+          "jev-telescope": {"jev_telescope"},
+          "jev-pit-crew": {"jev_pit_crew"}}
 
 
 def package_for(path: str) -> str | None:
@@ -67,6 +69,9 @@ def build(root: Path, ref: str, version: str, output: Path) -> dict:
         if package is None:
             continue
         packages[package][path] = value
+        if path == "integrations/jev_telescope/provider_guard.py":
+            # Pit Crew calls the credential-free guard without the Telescope adapter.
+            packages["jev-pit-crew"][path] = value
         if package != "core" and path.endswith(".md"):
             # Core users can read optional setup instructions without installing executable add-ons.
             packages["core"][path] = value

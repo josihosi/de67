@@ -1,6 +1,6 @@
 ---
 name: de-67-2
-description: "Create and freeze a code-grounded functional specification (DFS) from WEC.md. Use only when the user explicitly says `de67 2`; never trigger this phase implicitly."
+description: "Create and freeze a code-grounded functional specification (FS) from WEC.md. Use only when the user explicitly says `de67 2`; never trigger this phase implicitly."
 ---
 
 # de67 2 — functional specification
@@ -8,7 +8,7 @@ description: "Create and freeze a code-grounded functional specification (DFS) f
 Run only after an explicit `de67 2` invocation.
 
 Use the shared [MSW decision rule](../references/msw-kernel.md) when it is not already in context.
-Consult the [writing guidance](../references/controlled-english.md) when preparing the DFS.
+Consult the [writing guidance](../references/controlled-english.md) when preparing the FS.
 
 ## Phase owner
 
@@ -21,9 +21,9 @@ the workspace, and checkpoints the result; the invocation agent does not duplica
 ## Phase boundary
 
 - Accept `WEC.md` as the only cross-phase input.
-- Preserve it as `.de67/WEC.md` and produce `.de67/DFS.md`; the frozen DFS is phase 3's required
+- Preserve it as `.de67/WEC.md` and produce `.de67/FS.md`; the frozen FS is phase 3's required
   handoff.
-- Do not load another phase's procedure. On refreeze, existing DFS receipt blocks and the shared
+- Do not load another phase's procedure. On refreeze, existing FS receipt blocks and the shared
   workspace-setup helper's durable-state compatibility result are handoff evidence, not new owner
   intent. Preserve them while authoring the current WEC outcome.
 - Never inventory or read an existing `.de67/no-go-zone/`.
@@ -51,37 +51,37 @@ gate and create no coordination artifact unless it is named here.
    conflict.
 
    Preserve contributing and licence files, `README.md`, technical/design documentation, product
-   code, tests, and unrecognized documents. Carry still-binding product requirements into WEC/DFS
+   code, tests, and unrecognized documents. Carry still-binding product requirements into WEC/FS
    when they preserve the user's intent; ask when they would change it. When an active context
    surface duplicates or contradicts the de67 workflow, show the user the exact conflict and propose
    the smallest remedy: retain it, narrow and route its useful facts, or move the competing surface
    to tracked `.de67/no-go-zone/<original-relative-path>`. Edit or move it only after the user
    approves. Until then, continue obeying it and stop for resolution only when the conflict prevents
-   a valid DFS. After approval, reconcile direct references to anything moved. Never silently
+   a valid FS. After approval, reconcile direct references to anything moved. Never silently
    neutralize authoritative guidance or broadly archive documents.
 5. Inspect the real implementation before specifying changes:
    entrypoints, declarations, call sites, readers, writers, persistence, schedulers, tests, and
    relevant configuration.
-6. Read [references/dfs-pattern.md](references/dfs-pattern.md) completely and use
-   [assets/DFS.md](assets/DFS.md) as the output template.
+6. Read [references/fs-pattern.md](references/fs-pattern.md) completely and use
+   [assets/FS.md](assets/FS.md) as the output template.
 7. Run a bounded external-research pass only for unresolved red items, ambiguous ownership edges, or
    external-reference risk. Use GitHub or upstream docs only for short, directly relevant evidence.
 8. For every affected state or action, identify every current reader, writer, and competing owner.
    Decide and document the authoritative owner, precedence, yield/override rules, and atomic or
    idempotent boundaries. Ask the user when a decision would alter product intent or vocabulary;
    otherwise make the smallest code-grounded design decision that satisfies the WEC.
-9. Preserve the reasoning needed by later agents in the DFS: the causal model, why the chosen
+9. Preserve the reasoning needed by later agents in the FS: the causal model, why the chosen
    mechanism satisfies the WEC, the meaningful alternative or counterexample it excludes, and the
    observations that would require revisiting the design. Separate contract constraints from
    replaceable implementation tactics. Put claim-specific rationale beside its claim and reference
-   shared reasoning once so a worker can retrieve a coherent slice without reading the whole DFS.
-   Write `.de67/DFS.md` mechanistically. Name concrete files, symbols, functions, parameters,
+   shared reasoning once so a worker can retrieve a coherent slice without reading the whole FS.
+   Write `.de67/FS.md` mechanistically. Name concrete files, symbols, functions, parameters,
    inputs, outputs, preconditions, transitions, postconditions, failure behavior, and persistence
    effects. Mark every absent, wrong, or unproved requirement with a stable line beginning
    `- [ ] 🔴 R-...`. Define the outcome test and production proof that closes each red item.
-   If research confirms a reusable mechanism, add stable IDs and source-identity notes in the DFS and
+   If research confirms a reusable mechanism, add stable IDs and source-identity notes in the FS and
    convert one affected gap to a revised red-item plan.
-10. Check the DFS against the current code again, resolve internal contradictions, record its source
+10. Check the FS against the current code again, resolve internal contradictions, record its source
    baseline, and freeze it.
 11. Prepare and prove the native worker choices needed by phase 3. Preserve any existing project
    configuration while setting the trusted project's `.codex/config.toml` agent default to Luna;
@@ -89,11 +89,11 @@ gate and create no coordination artifact unless it is named here.
 
    ```toml
    [agents]
-   default_subagent_model = "gpt-5.6-luna"
+   default_subagent_model = "gpt-6-luna"
    ```
 
    Start a fresh probe coordinator after that configuration exists. A Luna probe omits `model` and
-   supplies `reasoning_effort`; a Terra probe supplies both `model="gpt-5.6-terra"` and
+   supplies `reasoning_effort`; a Sol probe supplies both `model="gpt-6-sol"` and
    `reasoning_effort`. Every probe uses `fork_turns="none"` and a unique task-local nonce prompt;
    success means it returns that nonce without inherited conversation. Probe only useful pairs, but
    prove both models and more than one effort level. Record only successful model/effort pairs. If
@@ -111,7 +111,7 @@ gate and create no coordination artifact unless it is named here.
    The helper copies each missing Phase-3 runtime file from `de-67-3/assets/environment/` into
    `.de67/`: `orchestrator-guidelines.md`, `test-and-task-guidelines.md`, `work-ledger.md`, and
    `mutation-suggestions.md`. Existing local files are active mutable policy and must never be
-   overwritten. It proves the DFS status projection on a disposable copy of existing acceptance state
+   overwritten. It proves the FS status projection on a disposable copy of existing acceptance state
    before binding the clock; resolve a compatibility failure without discarding history or crediting
    fresh obligations. The helper then binds one stable lineage clock, records its machine-only configuration under
    `.de67/state/`, installs a guarded post-commit upstream hook, and immediately pushes the
@@ -120,7 +120,7 @@ gate and create no coordination artifact unless it is named here.
    remote URL, branch, or an existing unmanaged hook conflicts, stop and report it rather than
    weakening the guard. If setup succeeds but only its immediate backlog push fails, continue with
    the scoped local commit below; the hook preserves the failure status and retries on the next
-   commit. Git setup is outside the DFS and does not add dispatch policy to it.
+   commit. Git setup is outside the FS and does not add dispatch policy to it.
    The machine-only configuration records the successful worker pairs; it is an availability roster,
    not a worker profile or dispatch policy.
    Phase 2 records an audited effective shared-guidance source only when `--guidance-source PATH`
@@ -130,14 +130,14 @@ gate and create no coordination artifact unless it is named here.
    It does not infer equivalence from wording. A valid prior audited source is retained by repeated
    setup unless a new source is supplied. The Phase-2 audit records which coordinator, worker, and
    reviewer contexts actually received the effective source.
-13. Checkpoint only `.de67/WEC.md`, `.de67/DFS.md`, the four prepared Phase-3 runtime files, the
+13. Checkpoint only `.de67/WEC.md`, `.de67/FS.md`, the four prepared Phase-3 runtime files, the
    proved `.codex/config.toml` agent default, required no-go-zone moves and direct reference
    reconciliation, and a required ignore-rule change; preserve every unrelated dirty path. The
    installed hook pushes that commit, so do not run a second routine push.
 
-## Frozen DFS
+## Frozen FS
 
-The fully read `references/dfs-pattern.md` owns freeze/refreeze rules. Phase 3 may use only its named
+The fully read `references/fs-pattern.md` owns freeze/refreeze rules. Phase 3 may use only its named
 evidence-bound closure, clarification, and same-contract expansion routes. Workers report findings
-but never edit or refreeze the DFS. Ambiguous or material change returns to de67 2 and the user.
-Coordination state, models, deadlines, dispatch, and review procedure never enter the DFS.
+but never edit or refreeze the FS. Ambiguous or material change returns to de67 2 and the user.
+Coordination state, models, deadlines, dispatch, and review procedure never enter the FS.

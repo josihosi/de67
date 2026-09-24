@@ -10,7 +10,7 @@ import unittest
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-from instruction_context import FALLBACK_GUIDANCE, common_guidance  # noqa: E402
+from instruction_context import FALLBACK_GUIDANCE, EVIDENCE_GUIDANCE, common_guidance  # noqa: E402
 
 
 class InstructionContextTests(unittest.TestCase):
@@ -30,7 +30,9 @@ class InstructionContextTests(unittest.TestCase):
             source = root / "effective-AGENTS.md"
             source.write_text("already delivered\n", encoding="utf-8")
             self.write_config(root, source)
-            self.assertEqual(common_guidance(root), "")
+            self.assertEqual(common_guidance(root), EVIDENCE_GUIDANCE)
+            self.assertNotIn(FALLBACK_GUIDANCE, common_guidance(root))
+            self.assertIn("without a provider call", common_guidance(root))
 
     def test_missing_or_changed_audited_source_returns_minimal_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -39,9 +41,9 @@ class InstructionContextTests(unittest.TestCase):
             source.write_text("original\n", encoding="utf-8")
             self.write_config(root, source)
             source.write_text("changed\n", encoding="utf-8")
-            self.assertEqual(common_guidance(root), FALLBACK_GUIDANCE)
+            self.assertEqual(common_guidance(root), FALLBACK_GUIDANCE + " " + EVIDENCE_GUIDANCE)
             source.unlink()
-            self.assertEqual(common_guidance(root), FALLBACK_GUIDANCE)
+            self.assertEqual(common_guidance(root), FALLBACK_GUIDANCE + " " + EVIDENCE_GUIDANCE)
 
     def test_unavailable_helper_wording_is_honest(self) -> None:
         self.assertIn("if none is available, retrieve the needed source yourself", FALLBACK_GUIDANCE)

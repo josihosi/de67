@@ -25,7 +25,7 @@ For an active ledger, use the compact [ledger profile](controlled-english-ledger
 or decision request, use the [owner-message profile](controlled-english-message.md). Ordinary idea
 exploration may be conversational; it is not a sequence of blocker notices.
 
-A WEC preserves user intent and open choices. A DFS explains the product mechanism, its rationale,
+A WEC preserves user intent and open choices. A FS explains the product mechanism, its rationale,
 and how to tell whether it works. A work ledger records the current frontier, latest material
 result, uncertainty, and continuation; referenced artifacts preserve history. None needs a fixed
 word count, a field for every conceivable detail, or mandatory technical prose in owner messages.

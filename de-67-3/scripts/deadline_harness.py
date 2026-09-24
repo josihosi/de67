@@ -55,9 +55,6 @@ WORKSPACE_METHOD_GUIDELINE_FILES = (
 )
 ACTIVE_SKILL_ROOT = Path(__file__).resolve().parents[1]
 
-DFS_STATUS_BEGIN = "<!-- DE67:DELIVERY-STATUS:BEGIN"
-DFS_STATUS_END = "<!-- DE67:DELIVERY-STATUS:END -->"
-
 
 def _workspace_for_state(state_path: Path | None) -> Path | None:
     if (
@@ -89,68 +86,6 @@ def _open_ledger_baseline(block: str) -> str:
     """Recover a reopenable open projection without treating FS prose as evidence."""
     block = re.sub(r"(?m)^  - Durable acceptance:.*\n?", "", block)
     return re.sub(r"\A- \[x\] ", "- [ ] ", block, count=1)
-
-
-def _dfs_claim_status_span(dfs: str, claim_id: str) -> tuple[int, int, str] | None:
-    slice_pattern = re.compile(
-        r"<!-- DE67:DFS-SLICE:BEGIN[^>]*claim=" + re.escape(claim_id)
-        + r"(?=\s|-->)[^>]*-->\n(?P<body>.*?)\n"
-        r"<!-- DE67:DFS-SLICE:END[^>]*-->",
-        re.DOTALL,
-    )
-    slice_match = slice_pattern.search(dfs)
-    if slice_match is None:
-        return None
-    body = slice_match.group("body")
-    heading = re.search(r"(?m)^Implementation status:\s*$", body)
-    if heading is None:
-        return None
-    start = slice_match.start("body") + heading.end()
-    while start < len(dfs) and dfs[start] == "\n":
-        start += 1
-    end = slice_match.end("body")
-    return start, end, dfs[start:end].rstrip()
-
-
-def _open_dfs_status_baseline(status: str, claim_id: str) -> str | None:
-    """Return the red claim content, unwrapping a phase-authored status marker."""
-    content = status
-    if DFS_STATUS_BEGIN in status or DFS_STATUS_END in status:
-        marker = re.fullmatch(
-            re.escape(f"{DFS_STATUS_BEGIN} claim={claim_id} -->")
-            + r"\n(?P<body>.*?)\n"
-            + re.escape(DFS_STATUS_END),
-            status,
-            re.DOTALL,
-        )
-        if marker is None:
-            return None
-        content = marker.group("body").rstrip()
-    open_claim = re.search(
-        r"(?m)^- \[ \] 🔴 " + re.escape(claim_id) + r"(?=[ \t]+—|[ \t]*$)",
-        content,
-    )
-    return content if open_claim is not None and content.strip() else None
-
-
-def _committed_dfs_claim_baseline(workspace: Path, claim_id: str) -> str | None:
-    """Recover an unprojected claim block from the current committed DFS."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(workspace), "show", "HEAD:.de67/DFS.md"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-        )
-    except (OSError, UnicodeError):
-        return None
-    if result.returncode != 0:
-        return None
-    span = _dfs_claim_status_span(result.stdout, claim_id)
-    if span is None:
-        return None
-    return _open_dfs_status_baseline(span[2], claim_id)
 
 
 def _method_files(root: Path) -> dict[str, bytes]:
@@ -621,7 +556,7 @@ class DeadlineHarness:
                 changed_paths TEXT NOT NULL,
                 interval_windows INTEGER NOT NULL CHECK (interval_windows = 30),
                 selected_lane TEXT NOT NULL CHECK (selected_lane = 'DFS.md'),
-                reviewer_model TEXT NOT NULL CHECK (reviewer_model = 'gpt-5.6-sol'),
+                reviewer_model TEXT NOT NULL CHECK (reviewer_model IN ('gpt-5.6-sol', 'gpt-6-sol')),
                 reviewer_effort TEXT NOT NULL CHECK (reviewer_effort = 'ultra'),
                 capability_roster_digest TEXT,
                 UNIQUE (lineage_id, cycle_number, receipt_id),
@@ -1608,127 +1543,15 @@ class DeadlineHarness:
                     ),
                 )
 
-    def _synchronize_legacy_dfs_statuses(self, *, persist: bool = True) -> tuple[str, ...]:
-        """Project durable claim acceptance into agent-facing DFS status blocks."""
-        workspace = _workspace_for_state(self.state_path)
-        if workspace is None:
-            return ()
-        dfs_path = workspace / ".de67" / "DFS.md"
-        ledger_path = workspace / ".de67" / "work-ledger.md"
-        if not dfs_path.is_file() or not ledger_path.is_file():
-            raise DeadlineError("DFS status projection requires DFS.md and work-ledger.md")
-        dfs = dfs_path.read_text(encoding="utf-8")
-        ledger = ledger_path.read_text(encoding="utf-8")
-        rows = self.connection.execute(
-            """
-            SELECT accepted.* FROM claim_acceptances AS accepted
-            JOIN (
-              SELECT lineage_id, claim_id, MAX(acceptance_number) AS acceptance_number
-              FROM claim_acceptances
-              WHERE lineage_id = ?
-              GROUP BY lineage_id, claim_id
-            ) AS latest ON latest.lineage_id = accepted.lineage_id
-             AND latest.claim_id = accepted.claim_id
-             AND latest.acceptance_number = accepted.acceptance_number
-            WHERE accepted.lineage_id = ?
-            ORDER BY accepted.claim_id
-            """,
-            (self._bound_lineage_id(), self._bound_lineage_id()),
-        ).fetchall()
-        if not rows:
-            return ()
-        baseline_path = self.state_path.parent / "dfs-status-baselines.json"
-        try:
-            baselines = json.loads(baseline_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            baselines = {}
-        except (OSError, UnicodeError, json.JSONDecodeError) as error:
-            raise DeadlineError(f"DFS status baseline is unreadable: {error}") from error
-        if not isinstance(baselines, dict):
-            raise DeadlineError("DFS status baseline must be an object")
-        changed: list[str] = []
-        for acceptance in rows:
-            claim_id = str(acceptance["claim_id"])
-            span = _dfs_claim_status_span(dfs, claim_id)
-            if span is None:
-                raise DeadlineError(f"DFS has no implementation status block for {claim_id}")
-            start, end, current = span
-            if DFS_STATUS_BEGIN not in current:
-                open_baseline = _open_dfs_status_baseline(current, claim_id)
-                if open_baseline is not None:
-                    baselines[claim_id] = open_baseline
-            baseline = baselines.get(claim_id)
-            if not isinstance(baseline, str) or not baseline.strip():
-                recovered = _committed_dfs_claim_baseline(workspace, claim_id)
-                if recovered is not None:
-                    baselines[claim_id] = recovered
-                    baseline = recovered
-            if not isinstance(baseline, str) or not baseline.strip():
-                raise DeadlineError(f"DFS baseline is missing for {claim_id}")
-            if acceptance["invalidated_at"] is None:
-                ledger_block = _ledger_claim_block(ledger, claim_id)
-                receipt = (
-                    f"  - Durable acceptance: #{acceptance['acceptance_number']} via "
-                    f"`{acceptance['task_id']}`; SQLite evidence is authoritative."
-                )
-                if ledger_block is not None and ledger_block.startswith(
-                    f"- [x] {claim_id}"
-                ):
-                    projected_body = ledger_block
-                    if receipt not in projected_body:
-                        projected_body += f"\n{receipt}"
-                    projected = (
-                        f"{DFS_STATUS_BEGIN} claim={claim_id} -->\n"
-                        f"{projected_body}\n{DFS_STATUS_END}"
-                    )
-                elif (
-                    current.startswith(f"{DFS_STATUS_BEGIN} claim={claim_id} -->")
-                    and f"- [x] {claim_id}" in current
-                    and receipt in current
-                ):
-                    # The active ledger may compact accepted historical work after
-                    # the machine has already projected its durable receipt into DFS.
-                    projected = current
-                else:
-                    raise DeadlineError(
-                        f"Accepted claim {claim_id} lacks a checked work-ledger projection"
-                    )
-            else:
-                projected = baseline.rstrip()
-            if current != projected:
-                dfs = dfs[:start] + projected + dfs[end:]
-                changed.append(claim_id)
-        if not persist:
-            return tuple(changed)
-        if changed:
-            temporary = dfs_path.with_name(f".{dfs_path.name}.{os.getpid()}.tmp")
-            temporary.write_text(dfs, encoding="utf-8")
-            os.replace(temporary, dfs_path)
-        baseline_temporary = baseline_path.with_name(
-            f".{baseline_path.name}.{os.getpid()}.tmp"
-        )
-        baseline_temporary.write_text(
-            json.dumps(baselines, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        os.replace(baseline_temporary, baseline_path)
-        return tuple(changed)
-
     def synchronize_delivery_statuses(self, *, persist: bool = True) -> tuple[str, ...]:
-        """Project durable acceptance into the ledger for a functional-only FS.
-
-        The legacy DFS writer is retained byte-for-byte for pre-migration
-        workspaces.  Once the hash-bound compatibility pointer is present, no
-        implementation-status span in the functional document is consulted.
-        """
+        """Project durable acceptance into the ledger without changing FS.md."""
         workspace = _workspace_for_state(self.state_path)
         if workspace is None:
             return ()
         try:
-            specification = resolve(workspace / ".de67")
+            resolve(workspace / ".de67")
         except SpecificationError as error:
             raise DeadlineError(str(error)) from error
-        if specification.legacy:
-            return self._synchronize_legacy_dfs_statuses(persist=persist)
         ledger_path = workspace / ".de67" / "work-ledger.md"
         if not ledger_path.is_file():
             raise DeadlineError("FS status projection requires work-ledger.md")
@@ -1776,13 +1599,13 @@ class DeadlineHarness:
         return tuple(changed)
 
     def synchronize_dfs_statuses(self, *, persist: bool = True) -> tuple[str, ...]:
-        """Compatibility API; status projection now selects the resolved surface."""
+        """Historical API name; delivery status always projects into the ledger."""
         return self.synchronize_delivery_statuses(persist=persist)
 
     def _bound_lineage_id(self) -> str:
         rows = self.connection.execute("SELECT lineage_id FROM lineage_binding").fetchall()
         if len(rows) != 1:
-            raise DeadlineError("DFS status projection requires one bound lineage")
+            raise DeadlineError("Delivery status projection requires one bound lineage")
         return str(rows[0][0])
 
     def close(self) -> None:
@@ -2905,17 +2728,17 @@ class DeadlineHarness:
             )
         proved = any(
             isinstance(item, dict)
-            and item.get("model") == "gpt-5.6-sol"
+            and item.get("model") == "gpt-6-sol"
             and item.get("reasoning_effort") == "ultra"
             for item in capabilities
         )
         if not proved:
             return (
                 False,
-                "workspace roster has no persisted gpt-5.6-sol/ultra probe",
+                "workspace roster has no persisted gpt-6-sol/ultra probe",
                 roster_digest,
             )
-        return True, "workspace roster proves gpt-5.6-sol/ultra", roster_digest
+        return True, "workspace roster proves gpt-6-sol/ultra", roster_digest
 
     def _snapshot_universal_capability(
         self, lineage_id: str, cycle_number: int
@@ -3924,7 +3747,16 @@ class DeadlineHarness:
                 for item in existing
                 if item["receipt"].get("disposition") != "checkpoint"
             ]
-            if terminal_receipts and disposition != "checkpoint":
+            # A returned worker turn can be resumed without terminalizing the
+            # task.  In that case an earlier non-checkpoint receipt is durable
+            # ingress, but it must not prevent the still-live attempt from
+            # recording its eventual terminal result.  Once the task itself
+            # is terminal, keep the one-terminal-receipt invariant.
+            if (
+                terminal_receipts
+                and disposition != "checkpoint"
+                and task["attempt_terminal_kind"] is not None
+            ):
                 raise DeadlineError("Worker attempt already has a terminal result receipt")
             terminal_kind = task["attempt_terminal_kind"]
             if terminal_kind is not None and disposition not in {
@@ -7104,7 +6936,7 @@ class DeadlineHarness:
                 if (
                     receipt["interval_windows"] != UNIVERSAL_RANDOM_INTERVAL
                     or receipt["selected_lane"] != "DFS.md"
-                    or receipt["reviewer_model"] != "gpt-5.6-sol"
+                    or receipt["reviewer_model"] not in ("gpt-5.6-sol", "gpt-6-sol")
                     or receipt["reviewer_effort"] != "ultra"
                     or receipt["capability_roster_digest"]
                         != cycle["universal_capability_roster_digest"]

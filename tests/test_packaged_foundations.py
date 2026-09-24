@@ -24,10 +24,17 @@ class PackagedFoundationTests(unittest.TestCase):
                     self.assertTrue((document.parent / relative).is_file())
 
     def test_phase_handoff_templates_remain_available(self) -> None:
-        for phase, artifact in (("de-67-1", "WEC.md"), ("de-67-2", "DFS.md")):
+        for phase, artifact in (("de-67-1", "WEC.md"), ("de-67-2", "FS.md")):
             with self.subTest(phase=phase):
                 self.assertTrue((ROOT / phase / "SKILL.md").is_file())
                 self.assertTrue((ROOT / phase / "assets" / artifact).is_file())
+
+
+    def test_canonical_fs_template_and_runtime_are_packaged(self) -> None:
+        self.assertTrue((ROOT / "de-67-2/assets/FS.md").is_file())
+        self.assertFalse((ROOT / "de-67-2/assets/DFS.md").exists())
+        self.assertTrue((ROOT / "de-67-2/references/fs-pattern.md").is_file())
+        self.assertTrue((ROOT / "de-67-3/scripts/specification.py").is_file())
 
 
 if __name__ == "__main__":

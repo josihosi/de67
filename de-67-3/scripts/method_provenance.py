@@ -112,15 +112,13 @@ def report(method_root: Path, workspace: Path | None) -> dict[str, Any]:
             specification = resolve(local)
             guidance = {
                 "FS.md": _sha256(specification.path),
-                "DFS.md": _sha256(specification.path),
             }
-            compatibility = {
+            identity = {
                 "canonical": specification.path.name,
-                "legacy": specification.legacy,
             }
         except SpecificationError as error:
-            guidance = {"FS.md": None, "DFS.md": None}
-            compatibility = {"error": str(error)}
+            guidance = {"FS.md": None}
+            identity = {"error": str(error)}
         result["workspace"] = {
             "path": str(workspace),
             "git": _git_state(workspace),
@@ -131,7 +129,7 @@ def report(method_root: Path, workspace: Path | None) -> dict[str, Any]:
                     for name in ("test-and-task-guidelines.md",)
                 },
             },
-            "specification_compatibility": compatibility,
+            "specification": identity,
             "clock": _clock_state(_workspace_clock(workspace)),
         }
     return result

@@ -21,7 +21,7 @@ def response(identity,turn='t',rid='r',n=10):
     return event('token_usage_record',dict(thread_id=identity,turn_id=turn,response_id=rid,
         usage=usage(n),thread_token_usage=usage(1000)))
 
-def context(model='gpt-5.6-luna',turn='t'):
+def context(model='gpt-6-luna',turn='t'):
     return event('turn_context',dict(turn_id=turn,model=model))
 
 class UsageTests(unittest.TestCase):
@@ -33,10 +33,10 @@ class UsageTests(unittest.TestCase):
     def view(self):return usage_projection(self.db,self.metadata,root_id='root',details=True)
     def test_own_responses_deduplicated_rollups_excluded_model_switch(self):
         self.path.write_text(context()+response('root')+response('root')+response('child')+
-            context('gpt-5.6-terra','t2')+response('root','t2','r2',20))
+            context('gpt-6-sol','t2')+response('root','t2','r2',20))
         v=self.view();self.assertTrue(v['complete'])
-        self.assertEqual(v['by_model']['gpt-5.6-luna']['total_tokens'],12)
-        self.assertEqual(v['by_model']['gpt-5.6-terra']['uncached_input_plus_output_tokens'],18)
+        self.assertEqual(v['by_model']['gpt-6-luna']['total_tokens'],12)
+        self.assertEqual(v['by_model']['gpt-6-sol']['uncached_input_plus_output_tokens'],18)
         self.assertEqual(self.view()['new_source_bytes_read'],0)
     def test_partial_append_reads_only_suffix_and_retries_incomplete(self):
         initial=context()+response('root');self.path.write_text(initial)
@@ -45,26 +45,26 @@ class UsageTests(unittest.TestCase):
         self.assertFalse(self.view()['complete'])
         with self.path.open('a', encoding='utf-8', newline='') as f:f.write(tail[15:])
         v=self.view();self.assertTrue(v['complete']);self.assertEqual(v['new_source_bytes_read'],len(tail))
-        self.assertEqual(v['by_model']['gpt-5.6-luna']['total_tokens'],34)
+        self.assertEqual(v['by_model']['gpt-6-luna']['total_tokens'],34)
     def test_replacement_resets_cached_records(self):
         self.path.write_text(context()+response('root'));self.view()
-        replacement=self.root/'new';replacement.write_text(context('gpt-5.6-terra')+response('root',n=20))
+        replacement=self.root/'new';replacement.write_text(context('gpt-6-sol')+response('root',n=20))
         replacement.replace(self.path);v=self.view()
-        self.assertTrue(v['sources'][0]['reset']);self.assertNotIn('gpt-5.6-luna',v['by_model'])
+        self.assertTrue(v['sources'][0]['reset']);self.assertNotIn('gpt-6-luna',v['by_model'])
     def test_missing_malformed_conflicting_and_unknown_model_are_visible(self):
         self.path.write_text(response('root')+'[]\ninvalid\n'+response('root',n=20))
         v=self.view();self.assertFalse(v['complete']);self.assertIn('unattributed',v['by_model'])
         self.assertEqual(v['sources'][0]['invalid_or_conflicting_records'],3)
         self.path.unlink();self.assertFalse(self.view()['sources'][0]['available'])
     def test_conflicting_turn_models_never_silently_reassign(self):
-        self.path.write_text(context()+response('root')+context('gpt-5.6-terra'))
+        self.path.write_text(context()+response('root')+context('gpt-6-sol'))
         v=self.view();self.assertFalse(v['complete']);self.assertIn('unattributed',v['by_model'])
     def test_cumulative_fallback_is_not_added_to_responses(self):
         counter=event('event_msg',dict(type='token_count',info=dict(total_token_usage=usage(500))))
         self.path.write_text(context()+counter);self.assertFalse(self.view()['complete'])
         self.assertEqual(self.view()['by_model'],{})
         with self.path.open('a', encoding='utf-8', newline='') as f:f.write(response('root'))
-        self.assertEqual(self.view()['by_model']['gpt-5.6-luna']['total_tokens'],12)
+        self.assertEqual(self.view()['by_model']['gpt-6-luna']['total_tokens'],12)
     def test_missing_required_counters_are_a_gap(self):
         self.path.write_text(context()+event('token_usage_record',dict(thread_id='root',turn_id='t',response_id='r',usage={})))
         v=self.view();self.assertFalse(v['complete']);self.assertEqual(v['sources'][0]['invalid_or_conflicting_records'],1)
@@ -76,7 +76,7 @@ class UsageTests(unittest.TestCase):
     def test_existing_context_index_includes_only_selected_tree_and_helpers(self):
         with closing(sqlite3.connect(self.root/'state_5.sqlite')) as db, db:
             db.executescript('CREATE TABLE threads(id TEXT,rollout_path TEXT); CREATE TABLE thread_spawn_edges(parent_thread_id TEXT,child_thread_id TEXT);')
-            for identity,model in [('root','gpt-5.6-sol'),('child','gpt-5.6-terra'),('helper','gpt-5.6-luna'),('unrelated','gpt-5.6-luna')]:
+            for identity,model in [('root','gpt-6-sol'),('child','gpt-6-sol'),('helper','gpt-6-luna'),('unrelated','gpt-6-luna')]:
                 path=self.root/(identity+'.jsonl');path.write_text(context(model)+response(identity))
                 db.execute('INSERT INTO threads VALUES (?,?)',(identity,str(path)))
             db.executemany('INSERT INTO thread_spawn_edges VALUES (?,?)',[('root','child'),('child','helper')])
@@ -87,7 +87,7 @@ class UsageTests(unittest.TestCase):
             h.claim_worker('project','task','child','root','supervisor',now=2)
         v=token_usage_view(self.root,state,'project',codex_home=self.root)
         self.assertTrue(v['complete']);self.assertEqual(v['session_count'],3)
-        self.assertEqual(v['by_model']['gpt-5.6-luna']['session_count'],1)
+        self.assertEqual(v['by_model']['gpt-6-luna']['session_count'],1)
         self.assertEqual(token_usage_view(self.root,state,'project',codex_home=self.root)['new_source_bytes_read'],0)
         with closing(sqlite3.connect(self.root/'state_5.sqlite')) as db, db:db.execute('DROP TABLE thread_spawn_edges')
         self.assertFalse(token_usage_view(self.root,state,'project',codex_home=self.root)['complete'])

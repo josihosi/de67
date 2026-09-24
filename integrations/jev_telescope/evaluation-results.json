@@ -1,0 +1,300 @@
+{
+  "cases": [
+    {
+      "baseline": {
+        "abstention_correct": true,
+        "coverage": 1.0,
+        "evidence_bytes": 4579,
+        "fallback": null,
+        "labeled_relevant_count": 2,
+        "latency_seconds": 0.018015625,
+        "missed_counterevidence_ids": [],
+        "missed_important_ids": [],
+        "provider_calls": 0,
+        "provider_usage": {},
+        "returned_count": 6,
+        "unlabeled_return_count": 4
+      },
+      "candidate_pool": [
+        {
+          "end": 53,
+          "id": "8f514db0fa9c9408cfc26a8a",
+          "path": "de-67-3/tests/test_worker_library.py",
+          "sha256": "dc316019c57f21b3fa9f253b3224df881d13681ae109673d9ac93a9012d00214",
+          "start": 34
+        },
+        {
+          "end": 664,
+          "id": "5b9b2af19fa3b04ca4a7c12c",
+          "path": "de-67-3/scripts/worker_library.py",
+          "sha256": "e6a151c0babb4d0ea2d209981e8e6e435f3fbdbd5b60125836899a1343227a9f",
+          "start": 656
+        },
+        {
+          "end": 335,
+          "id": "58511fe0e82d0362b930dd04",
+          "path": "de-67-3/tests/test_worker_library.py",
+          "sha256": "dc316019c57f21b3fa9f253b3224df881d13681ae109673d9ac93a9012d00214",
+          "start": 320
+        },
+        {
+          "end": 565,
+          "id": "5fe751d7133485870135d0d7",
+          "path": "de-67-3/scripts/worker_library.py",
+          "sha256": "e6a151c0babb4d0ea2d209981e8e6e435f3fbdbd5b60125836899a1343227a9f",
+          "start": 557
+        },
+        {
+          "end": 784,
+          "id": "e52573d56380fa7559141266",
+          "path": "de-67-3/scripts/worker_library.py",
+          "sha256": "e6a151c0babb4d0ea2d209981e8e6e435f3fbdbd5b60125836899a1343227a9f",
+          "start": 776
+        },
+        {
+          "end": 262,
+          "id": "9105c3813f0dbb316d578fe4",
+          "path": "de-67-3/tests/test_worker_library.py",
+          "sha256": "dc316019c57f21b3fa9f253b3224df881d13681ae109673d9ac93a9012d00214",
+          "start": 254
+        },
+        {
+          "end": 404,
+          "id": "1a2f9a9c09cc8c78196e4a38",
+          "path": "de-67-3/tests/test_worker_library.py",
+          "sha256": "dc316019c57f21b3fa9f253b3224df881d13681ae109673d9ac93a9012d00214",
+          "start": 396
+        }
+      ],
+      "id": "worker-unload-and-reuse",
+      "jev": {
+        "abstention_correct": true,
+        "coverage": 1.0,
+        "evidence_bytes": 4579,
+        "fallback": null,
+        "labeled_relevant_count": 2,
+        "latency_seconds": 1.065620459,
+        "missed_counterevidence_ids": [],
+        "missed_important_ids": [],
+        "provider_calls": 1,
+        "provider_usage": {
+          "input_tokens": 4224,
+          "output_tokens": 830
+        },
+        "returned_count": 6,
+        "unlabeled_return_count": 4
+      },
+      "missing_label_anchors": [],
+      "retrieval_seconds": 0.018019833
+    },
+    {
+      "baseline": {
+        "abstention_correct": true,
+        "coverage": 1.0,
+        "evidence_bytes": 2479,
+        "fallback": null,
+        "labeled_relevant_count": 2,
+        "latency_seconds": 0.019432375000000057,
+        "missed_counterevidence_ids": [],
+        "missed_important_ids": [],
+        "provider_calls": 0,
+        "provider_usage": {},
+        "returned_count": 4,
+        "unlabeled_return_count": 2
+      },
+      "candidate_pool": [
+        {
+          "end": 259,
+          "id": "2f56b21840f330fd5e784a2a",
+          "path": "de-67-3/scripts/codex_app_server_runner.py",
+          "sha256": "5c8fbe6e9e8dfd1fd551c1b4705396c59677c09da63b48134cc0b3142a141e8f",
+          "start": 251
+        },
+        {
+          "end": 224,
+          "id": "1568fa76f6e835ef57f01e59",
+          "path": "de-67-3/tests/test_codex_app_server_runner.py",
+          "sha256": "9fc48392fd70bd05a1b4fbb55e9412b2bbbd528c77915c00201a97421cf89d77",
+          "start": 216
+        },
+        {
+          "end": 236,
+          "id": "101ff1a453fcbe570f7ae71f",
+          "path": "de-67-3/tests/test_codex_app_server_runner.py",
+          "sha256": "9fc48392fd70bd05a1b4fbb55e9412b2bbbd528c77915c00201a97421cf89d77",
+          "start": 228
+        },
+        {
+          "end": 248,
+          "id": "df6dc9aec265b63656067a5b",
+          "path": "de-67-3/tests/test_codex_app_server_runner.py",
+          "sha256": "9fc48392fd70bd05a1b4fbb55e9412b2bbbd528c77915c00201a97421cf89d77",
+          "start": 240
+        }
+      ],
+      "id": "owner-message-bootstrap",
+      "jev": {
+        "abstention_correct": true,
+        "coverage": 1.0,
+        "evidence_bytes": 2479,
+        "fallback": null,
+        "labeled_relevant_count": 2,
+        "latency_seconds": 0.9828178750000001,
+        "missed_counterevidence_ids": [],
+        "missed_important_ids": [],
+        "provider_calls": 1,
+        "provider_usage": {
+          "input_tokens": 2422,
+          "output_tokens": 467
+        },
+        "returned_count": 4,
+        "unlabeled_return_count": 2
+      },
+      "missing_label_anchors": [],
+      "retrieval_seconds": 0.019449292000000007
+    },
+    {
+      "baseline": {
+        "abstention_correct": true,
+        "coverage": 1.0,
+        "evidence_bytes": 1351,
+        "fallback": null,
+        "labeled_relevant_count": 2,
+        "latency_seconds": 0.03162095799999998,
+        "missed_counterevidence_ids": [],
+        "missed_important_ids": [],
+        "provider_calls": 0,
+        "provider_usage": {},
+        "returned_count": 2,
+        "unlabeled_return_count": 0
+      },
+      "candidate_pool": [
+        {
+          "end": 1188,
+          "id": "f863f105d2bd4d00ee9f2165",
+          "path": "de-67-3/tests/test_policy_kernel.py",
+          "sha256": "e4f2f52795ce8c7740ed1551b1a1f5b6af7343cfb905f3a7dd798841dd1727f6",
+          "start": 1175
+        },
+        {
+          "end": 331,
+          "id": "eaccaf7ced123c64b664a0fd",
+          "path": "de-67-3/scripts/policy_kernel.py",
+          "sha256": "f97643d649cdd28708b3ca57de07bf3e724eba8ae38af930ddaa5e67632ddf61",
+          "start": 323
+        }
+      ],
+      "id": "wec-misleading-hypothesis",
+      "jev": {
+        "abstention_correct": true,
+        "coverage": 1.0,
+        "evidence_bytes": 1351,
+        "fallback": null,
+        "labeled_relevant_count": 2,
+        "latency_seconds": 1.0105182499999996,
+        "missed_counterevidence_ids": [],
+        "missed_important_ids": [],
+        "provider_calls": 1,
+        "provider_usage": {
+          "input_tokens": 1428,
+          "output_tokens": 231
+        },
+        "returned_count": 2,
+        "unlabeled_return_count": 0
+      },
+      "missing_label_anchors": [],
+      "retrieval_seconds": 0.031628624999999744
+    },
+    {
+      "baseline": {
+        "abstention_correct": false,
+        "coverage": null,
+        "evidence_bytes": 1741,
+        "fallback": null,
+        "labeled_relevant_count": 0,
+        "latency_seconds": 0.017617584000000353,
+        "missed_counterevidence_ids": [],
+        "missed_important_ids": [],
+        "provider_calls": 0,
+        "provider_usage": {},
+        "returned_count": 7,
+        "unlabeled_return_count": 7
+      },
+      "candidate_pool": [
+        {
+          "end": 27,
+          "id": "353b7ec75d3d03c0578ec5ee",
+          "path": "de-67-3/scripts/symbol_codec.py",
+          "sha256": "5c8935c3b0a17d6d3490711336687d6d4ae7a605c3d4d1c9b62140a3877ded4f",
+          "start": 19
+        },
+        {
+          "end": 38,
+          "id": "b92cfb8c507d21136ed86ee9",
+          "path": "de-67-3/scripts/symbol_codec.py",
+          "sha256": "5c8935c3b0a17d6d3490711336687d6d4ae7a605c3d4d1c9b62140a3877ded4f",
+          "start": 30
+        },
+        {
+          "end": 52,
+          "id": "6a74c654bbcfc572750c0a16",
+          "path": "de-67-3/scripts/symbol_codec.py",
+          "sha256": "5c8935c3b0a17d6d3490711336687d6d4ae7a605c3d4d1c9b62140a3877ded4f",
+          "start": 44
+        },
+        {
+          "end": 68,
+          "id": "6deb9ae8f431fbc370cd9df0",
+          "path": "de-67-3/scripts/symbol_codec.py",
+          "sha256": "5c8935c3b0a17d6d3490711336687d6d4ae7a605c3d4d1c9b62140a3877ded4f",
+          "start": 60
+        },
+        {
+          "end": 79,
+          "id": "07f9cbfbc908f70550b0b126",
+          "path": "de-67-3/scripts/symbol_codec.py",
+          "sha256": "5c8935c3b0a17d6d3490711336687d6d4ae7a605c3d4d1c9b62140a3877ded4f",
+          "start": 71
+        },
+        {
+          "end": 105,
+          "id": "29eabbb7e63b43694c2ad460",
+          "path": "de-67-3/scripts/symbol_codec.py",
+          "sha256": "5c8935c3b0a17d6d3490711336687d6d4ae7a605c3d4d1c9b62140a3877ded4f",
+          "start": 97
+        },
+        {
+          "end": 121,
+          "id": "01b16b9773a2d0d2bcb88078",
+          "path": "de-67-3/scripts/symbol_codec.py",
+          "sha256": "5c8935c3b0a17d6d3490711336687d6d4ae7a605c3d4d1c9b62140a3877ded4f",
+          "start": 113
+        }
+      ],
+      "id": "irrelevant-candidates",
+      "jev": {
+        "abstention_correct": true,
+        "coverage": null,
+        "evidence_bytes": 0,
+        "fallback": null,
+        "labeled_relevant_count": 0,
+        "latency_seconds": 0.9719614169999997,
+        "missed_counterevidence_ids": [],
+        "missed_important_ids": [],
+        "provider_calls": 1,
+        "provider_usage": {
+          "input_tokens": 3472,
+          "output_tokens": 822
+        },
+        "returned_count": 0,
+        "unlabeled_return_count": 0
+      },
+      "missing_label_anchors": [],
+      "retrieval_seconds": 0.01762804200000012
+    }
+  ],
+  "efficiency_claim": "Unverified. This measures retrieval only; representative agent task quality, recovery searches, total agent usage and end-to-end elapsed time are not measured.",
+  "fallback_frequency": 0.0,
+  "provider_evaluated": true,
+  "measurement_note": "Live measurement on 2026-09-18. Baseline latency includes discovery; Jev latency is selection plus verification after shared discovery. Unlabeled is not synonymous with irrelevant."
+}

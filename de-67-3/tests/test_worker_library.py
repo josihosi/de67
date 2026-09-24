@@ -73,7 +73,7 @@ class WorkerFixture:
         self.env = {"CODEX_THREAD_ID": thread_id, "DE67_COORDINATOR_RUN_ID": run_id}
         return value
 
-    def worker(self, name="pilot", model="gpt-5.6-luna", effort="low"):
+    def worker(self, name="pilot", model="gpt-6-luna", effort="low"):
         return library.create(self.workspace, name, "Observe the current route", model, effort, environment=self.env)
 
     def task(self, task_id="task-a", text="Prove this exact assignment"):
@@ -126,6 +126,19 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         starts = [params for method, params in self.rpc.calls if method == "thread/start"]
         self.assertEqual(starts[-1]["model"], "gpt-6-astra")
         self.assertEqual(starts[-1]["config"]["model_reasoning_effort"], "low")
+
+    def test_coding_max_effort_reaches_worker_runtime(self):
+        for model, name in (("gpt-6-luna", "luna-coder"), ("gpt-6-sol", "sol-coder")):
+            self.worker(name=name, model=model, effort="max")
+            self.assign(name=name, task_id=name)
+            self.dispatcher.process_pending()
+            start = next(params for method, params in reversed(self.rpc.calls)
+                         if method == "thread/start")
+            turn = next(params for method, params in reversed(self.rpc.calls)
+                        if method == "turn/start")
+            self.assertEqual(start["model"], model)
+            self.assertEqual(start["config"]["model_reasoning_effort"], "max")
+            self.assertEqual(turn["effort"], "max")
 
     def prepared_text(self, task_id, owner, constraint="Current constraint version one"):
         from worker_packet import standing_section
@@ -255,7 +268,7 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         Path(self.binding["socket"]).unlink()
         self.binding = self.bind("sol-b", "run-b", "supervisor-b")
         self.dispatcher = library.WorkerDispatcher(self.workspace, self.rpc, self.binding)
-        library.describe(self.workspace, "pilot", "Observe the corrected route", model="gpt-5.6-terra",
+        library.describe(self.workspace, "pilot", "Observe the corrected route", model="gpt-6-sol",
                          effort="medium", environment=self.env)
         self.assign(task_id="task-b")
         self.dispatcher.process_pending()
@@ -263,7 +276,7 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         self.assertEqual(current["thread_id"], original["worker_id"])
         self.assertEqual(current["assignment"]["task_id"], "task-b")
         resumed = [params for method, params in self.rpc.calls if method == "thread/resume"]
-        self.assertEqual(resumed[-1]["model"], "gpt-5.6-terra")
+        self.assertEqual(resumed[-1]["model"], "gpt-6-sol")
         self.assertEqual(library.worker_owners(self.workspace, self.state, "project"), {original["worker_id"]: "sol-b"})
 
     def test_parallel_dispatch_binds_exact_tasks_not_queue_order(self):
@@ -353,6 +366,7 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         self.assertEqual(library.owned_assignments(self.workspace, self.state, "project", "sol-a"), {"task-a": original_worker})
 
     def test_new_sol_resumes_returned_open_assignment_after_review(self):
+        import codex_runner
         from coordinator_supervisor import mutation_gate, active_worker_coordinator_session
         self.worker()
         self.assign()
@@ -365,6 +379,7 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         self.returned(text="Partial evidence; native proof remains")
         self.assertIsNone(active_worker_coordinator_session(self.state, "project"))
         before = dict(library._task(self.state, "project", "task-a"))
+        before_claim = tuple(self.harness.connection.execute('SELECT * FROM worker_claims').fetchone())
         self.assertIsNone(before["attempt_terminal_at"])
         self.assertIsNotNone(mutation_gate(self.state, "project", self.workspace))
         self.harness.retire_claim_clocks_for_mutation("project", "review")
@@ -373,6 +388,20 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         self.dispatcher = library.WorkerDispatcher(self.workspace, self.rpc, self.binding)
         queued = library.message(self.workspace, "pilot", "Resume the remaining native proof", environment=self.env)
         self.dispatcher.process_pending()
+        runner_env = {**self.env, 'DE67_WORKSPACE': str(self.workspace),
+                      'DE67_DEADLINE_STATE': str(self.state), 'DE67_LINEAGE': 'project',
+                      'DE67_SUPERVISOR_PID': 'supervisor-b'}
+        guard = codex_runner.CoordinatorLoopGuard(
+            initial_unbound_tasks=('task-a',),
+            roster_resolver=codex_runner._roster_resolver(self.workspace, runner_env),
+            claim_recorder=codex_runner._claim_recorder(runner_env),
+            task_terminal=codex_runner._task_terminal_resolver(runner_env),
+        )
+        guard.observe({'type': 'thread.started', 'thread_id': 'sol-b'})
+        guard.reconcile_handoffs()
+        self.assertEqual(guard.unbound_tasks, ())
+        guard.observe({'type': 'item.started', 'item': {
+            'type': 'collab_tool_call', 'tool': 'wait', 'status': 'in_progress'}})
         self.assertEqual(library.request_status(self.workspace, queued["request_id"])["state"], "submitted")
         self.assertEqual(active_worker_coordinator_session(self.state, "project"), "sol-b")
         after = library._task(self.state, "project", "task-a")
@@ -380,6 +409,49 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
             self.assertEqual(after[key], before[key])
         self.assertEqual(self.rpc.turn_count, 2)
         self.assertEqual(self.harness.connection.execute("SELECT COUNT(*) FROM worker_claims").fetchone()[0], 1)
+        record = codex_runner._claim_recorder(runner_env)
+        for task, worker, coordinator in [('task-a', 'different-worker', 'sol-b'),
+                                          ('unknown-task', before['worker_id'], 'sol-b'),
+                                          ('task-a', before['worker_id'], 'foreign-coordinator')]:
+            with self.subTest(task=task, worker=worker, coordinator=coordinator):
+                with self.assertRaises(codex_runner.RunnerError):
+                    record(task, worker, coordinator)
+        foreign = codex_runner._claim_recorder({**runner_env, 'DE67_SUPERVISOR_PID': 'foreign-supervisor'})
+        with self.assertRaises(codex_runner.RunnerError):
+            foreign('task-a', before['worker_id'], 'sol-b')
+        with closing(library._connect(self.workspace, write=True)) as db:
+            saved_supervisor = db.execute('SELECT claim_supervisor_id FROM assignments WHERE task_id=?',
+                                         ('task-a',)).fetchone()[0]
+            db.execute('UPDATE assignments SET claim_supervisor_id=? WHERE task_id=?',
+                       ('foreign-claim-owner', 'task-a'))
+            db.commit()
+        with self.assertRaises(codex_runner.RunnerError):
+            record('task-a', before['worker_id'], 'sol-b')
+        with closing(library._connect(self.workspace, write=True)) as db:
+            db.execute('UPDATE assignments SET claim_supervisor_id=? WHERE task_id=?',
+                       (saved_supervisor, 'task-a'))
+            db.commit()
+        record('task-a', before['worker_id'], 'sol-b')
+        with closing(library._connect(self.workspace)) as db:
+            original_binding = db.execute('SELECT binding FROM assignments WHERE task_id=?',
+                                          ('task-a',)).fetchone()[0]
+        for field in ('workspace', 'deadline_state', 'lineage'):
+            changed = json.loads(original_binding)
+            changed[field] = 'foreign-binding'
+            with closing(library._connect(self.workspace, write=True)) as db:
+                db.execute('UPDATE assignments SET binding=? WHERE task_id=?',
+                           (json.dumps(changed), 'task-a'))
+                db.commit()
+            with self.subTest(field=field), self.assertRaises(codex_runner.RunnerError):
+                record('task-a', before['worker_id'], 'sol-b')
+        with closing(library._connect(self.workspace, write=True)) as db:
+            db.execute('UPDATE assignments SET binding=? WHERE task_id=?', (original_binding, 'task-a'))
+            db.commit()
+        record('task-a', before['worker_id'], 'sol-b')
+        self.assertEqual(self.harness.connection.execute("SELECT COUNT(*) FROM worker_claims").fetchone()[0], 1)
+        self.assertEqual(tuple(self.harness.connection.execute('SELECT * FROM worker_claims').fetchone()), before_claim)
+        self.assertEqual(self.harness.connection.execute(
+            "SELECT COUNT(*) FROM worker_checkpoints WHERE kind='delegated'").fetchone()[0], 1)
         self.settle()
 
     def test_new_sol_cannot_adopt_running_assignment(self):
@@ -426,7 +498,7 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
 
     def test_owner_correction_during_thread_load_rejects_before_claim_or_generation(self):
         owner = self.workspace / ".de67/WEC.md"
-        owner.write_text("Original owner instruction\n", encoding="utf-8")
+        owner.write_text("<!-- DE67:OWNER-CONTRACT:BEGIN -->\nOriginal owner instruction\n<!-- DE67:OWNER-CONTRACT:END -->\n", encoding="utf-8")
         self.worker()
         request = self.assign()
         original_call = self.rpc.call
@@ -434,7 +506,7 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         def owner_changes_during_load(method, params):
             result = original_call(method, params)
             if method == "thread/start":
-                owner.write_text("Corrected owner instruction\n", encoding="utf-8")
+                owner.write_text("<!-- DE67:OWNER-CONTRACT:BEGIN -->\nCorrected owner instruction\n<!-- DE67:OWNER-CONTRACT:END -->\n", encoding="utf-8")
             return result
 
         with patch.object(self.rpc, "call", side_effect=owner_changes_during_load):

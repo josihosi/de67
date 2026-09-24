@@ -255,7 +255,7 @@ def solar_filaments() -> str:
 
 
 def worker_emblem(model: str) -> str:
-    emblem = ('<path fill="#7ee6c2" d="M25 4a14 14 0 1 0 0 28A16 16 0 0 1 25 4Z"/>'
+    emblem = ('<path fill="#8ff0cf" stroke="#d5fff0" stroke-width="1.2" stroke-linejoin="round" d="M25 4A15 15 0 1 0 25 32C13 29 13 7 25 4Z"/>'
               if model == "luna" else
               '<circle cx="18" cy="18" r="14" fill="#77accb"/><path fill="#cee2e7" d="M9 8Q13 4 18 4L20 7 17 10 18 12 15 14 14 18 11 17 10 13 7 12ZM18 19Q22 17 25 20L25 24 22 27 21 30 19 28 19 24 16 22Z"/><path d="M6 16A12 12 0 0 1 13 7" fill="none" stroke="#e2f1f3" stroke-opacity=".45" stroke-width=".8" stroke-linecap="round"/>')
     if model == "astra":
@@ -521,25 +521,9 @@ def _read_snapshot(path: Path) -> tuple[str, dict[str, Any]]:
 
 
 def _read_specification_snapshot(path: Path) -> tuple[str, dict[str, Any]]:
-    """Read the migrated FS through the shared method resolver, without writes."""
-    if not (path.parent / "FS.md").exists():
-        return _read_snapshot(path)
-    import importlib.util
-    resolver = Path(os.environ.get(
-        "DE67_SPECIFICATION_SCRIPT",
-        str(Path.home() / ".codex/skills/de67/de-67-3/scripts/specification.py"),
-    ))
-    spec = importlib.util.spec_from_file_location("_de67_dashboard_specification", resolver)
-    if spec is None or spec.loader is None:
-        raise OSError("FS resolver is unavailable")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    selected = module.resolve(path.parent)
-    text, identity = _read_snapshot(selected.path)
-    if text != selected.text:
-        raise OSError("specification changed while it was being read")
-    identity["path"] = str(selected.path)
+    """Read the canonical FS with the same visible decode errors as other panels."""
+    text, identity = _read_snapshot(path)
+    identity["path"] = str(path)
     return text, identity
 
 
@@ -1334,28 +1318,68 @@ def _active_mutator(workspace: Path, sessions_root: Path) -> dict[str, str] | No
     return {"id": str(row[0]), "effort": str(row[3])}
 
 
+def _worker_execution(workspace: Path, claims: dict[str, str]) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+    """Join retained claims to current library execution without changing claim history."""
+    registry = workspace / ".de67/state/worker-library/registry.sqlite3"
+    if not registry.exists():
+        return claims, {}
+    clock = json.loads((workspace / ".de67/state/workspace.json").read_text())["clock"]
+    state = Path(clock["state"]).expanduser()
+    if not state.is_absolute():
+        state = workspace / state
+    connection = sqlite3.connect(registry.resolve().as_uri() + "?mode=ro", uri=True, timeout=0)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            "SELECT a.worker_id,a.status,a.binding,w.model,w.effort FROM assignments a "
+            "JOIN workers w ON a.name=w.name AND a.worker_id=w.thread_id "
+            "WHERE a.state_path=? AND a.lineage=? ORDER BY a.updated_at",
+            (str(state.resolve()), clock["lineage"])).fetchall()
+    finally:
+        connection.close()
+    owners, metadata = dict(claims), {}
+    for row in rows:
+        worker = row["worker_id"]
+        if worker not in claims:
+            continue
+        owners.pop(worker, None)
+        binding = json.loads(row["binding"])
+        if (row["status"] != "running"
+                or binding.get("workspace") != str(workspace.resolve())
+                or binding.get("deadline_state") != str(state.resolve())
+                or binding.get("lineage") != clock["lineage"]):
+            continue
+        owners[worker] = binding["thread_id"]
+        metadata[worker] = {"model": row["model"], "effort": row["effort"]}
+    return owners, metadata
+
+
 def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     """Project active roster subagents from Codex's existing read-only session records."""
-    counts = {model: {effort: 0 for effort in ("low", "medium", "high", "max")}
-              for model in ("luna", "terra", "astra", "sol")}
+    counts = {model: {effort: 0 for effort in ("low", "medium", "high", "xhigh", "max")}
+              for model in ("luna", "sol", "astra")}
     mutator = _active_mutator(workspace, sessions_root)
     counted = {mutator["id"]} if mutator else set()
     if mutator:
         counts["astra"][mutator["effort"]] += 1
     active_claims = _active_worker_claims(workspace)
+    metadata = {}
+    if active_claims:
+        active_claims, metadata = _worker_execution(workspace, active_claims)
     if active_claims == {}:
         return {"counts": counts, "available": True}
+    active_coordinator_id = _active_coordinator_id(workspace) or (
+        next(iter(active_claims.values())) if active_claims else None
+    )
     index = sessions_root.parent / "state_5.sqlite"
     if active_claims and index.is_file():
         owners = set(active_claims.values())
-        if len(owners) != 1:
-            raise ValueError("active worker ownership is ambiguous")
         uri = f"file:{quote(str(index), safe='/:')}?mode=ro"
         connection = sqlite3.connect(uri, uri=True, timeout=0)
         try:
             # Library workers have durable owners but need not have native
             # spawn edges. Seed their helper trees from those same claims.
-            seeds = sorted(owners | set(active_claims))
+            seeds = sorted(owners | set(active_claims) | ({active_coordinator_id} if active_coordinator_id else set()))
             values = ",".join("(?)" for _ in seeds)
             rows = connection.execute(
                 f"WITH RECURSIVE tree(id) AS (VALUES {values} UNION "
@@ -1372,9 +1396,6 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     root_path: Path | None = None
     root: dict[str, Any] = {}
     target = workspace.resolve()
-    active_coordinator_id = _active_coordinator_id(workspace) or (
-        next(iter(active_claims.values())) if active_claims else None
-    )
     for path in paths:
         candidate = _session_header(path)
         try:
@@ -1392,7 +1413,6 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
             break
     if root_path is None or not root.get("id"):
         return {"counts": counts, "available": False, "error": "active Codex session unavailable"}
-    active_claims = _active_worker_claims(workspace)
     candidates: list[tuple[Path, dict[str, Any]]] = []
     for path in paths:
         if path == root_path:
@@ -1409,7 +1429,8 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     # Durable claims identify current primaries, including reused library
     # workers. Codex's native spawn tree supplies their helper descendants.
     root_id = str(root["id"])
-    descendants = {root_id}
+    primary_owners = {root_id} | set((active_claims or {}).values())
+    descendants = set(primary_owners)
     pending = candidates
     while pending:
         next_pending: list[tuple[Path, dict[str, Any]]] = []
@@ -1424,8 +1445,8 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
                 continue
             if (
                 active_claims is not None
-                and parent == root_id
-                and active_claims.get(candidate_id) != root_id
+                and parent in primary_owners
+                and active_claims.get(candidate_id) != parent
             ):
                 # A direct coordinator child is a primary worker only while its
                 # durable claim belongs to this coordinator. Do not inherit the
@@ -1436,9 +1457,9 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
             changed = True
             if active_claims is None and _session_complete(path):
                 continue
-            if active_claims is not None and parent != root_id and _session_complete(path):
+            if active_claims is not None and candidate_id not in active_claims and _session_complete(path):
                 continue
-            context = _trace_fuel(path)
+            context = metadata.get(candidate_id) or _trace_fuel(path)
             model = str(context.get("model", "")).lower().rsplit("-", 1)[-1]
             effort = str(context.get("effort", "")).lower()
             if model in counts and effort in counts[model] and candidate_id not in counted:
@@ -1602,7 +1623,7 @@ def fuel_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
                     session_windows.setdefault(session, []).extend(worker_windows[root])
     finally:
         connection.close()
-    totals = {"astra": 0, "coordinator": 0, "terra": 0, "luna": 0, "other": 0}
+    totals = {"astra": 0, "coordinator": 0, "sol": 0, "luna": 0, "other": 0}
     known = 0
     now = time.time()
     bins = [0] * 24  # One-hour display bins over the last twenty-four hours.
@@ -2024,7 +2045,7 @@ class Dashboard:
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             root = self.workspace / ".de67"
-            dfs = self._markdown_source("dfs", root / "DFS.md")
+            dfs = self._markdown_source("dfs", root / "FS.md")
             ledger = self._markdown_source("ledger", root / "work-ledger.md")
             clock = self._clock_source()
             clock_data = clock.get("data", {})
@@ -2412,7 +2433,7 @@ nav{{margin:16px 0 24px;border-color:#30303b}}nav a{{font-size:11px}}
 .cosmos .scale-heading strong{{font-size:13px;font-weight:400;color:#c7ccd7}}
 .cosmos .scale-heading span{{display:none}}
 .cosmos .model-emblem{{grid-column:2;grid-row:2;align-self:start;width:30px;height:30px;margin:9px 0 0}}
-.cosmos .worker-scale[data-model="terra"] .worker-dot{{fill:#8abbd6}}
+.cosmos .worker-scale[data-model="sol"] .worker-dot{{fill:#f2bd63}}
 .cosmos .worker-scale[data-model="luna"] .worker-dot{{fill:#7ee6c2}}
 .cosmos .worker-scale[data-model="astra"] .worker-dot{{fill:#fff0d6;filter:drop-shadow(0 0 4px #ffdc9d)}}
 .cosmos .worker-scale[data-model="astra"] .model-emblem{{filter:drop-shadow(0 0 4px #ffdc9d)}}

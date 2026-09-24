@@ -18,6 +18,60 @@ import mutator_session
 
 
 class AppServerTransportTests(unittest.TestCase):
+    def test_rpc_backpressure_keeps_connection_and_retains_failure_boundaries(self):
+        try:
+            from websockets.sync.client import unix_connect
+            from websockets.sync.server import unix_serve
+        except ImportError:
+            self.skipTest('Optional App Server websocket dependency unavailable')
+        import threading
+        import time
+
+        sent = threading.Event()
+
+        def handler(connection):
+            for index in range(4):
+                connection.send(json.dumps({'method': 'notice', 'params': {'index': index}}))
+            sent.set()
+            for raw in connection:
+                request = json.loads(raw)
+                if request['method'] == 'ignore':
+                    continue
+                if request['method'] == 'close':
+                    connection.close(1011, 'fixture peer failure')
+                    return
+                connection.send(json.dumps({'id': request['id'], 'result': 'alive'}))
+
+        def connect(path, **kwargs):
+            kwargs.setdefault('ping_timeout', .05)
+            return unix_connect(path, ping_interval=.02, max_queue=1, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            socket = Path(directory) / 'rpc.sock'
+            with unix_serve(handler, str(socket), ping_interval=None) as server:
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                rpc = None
+                try:
+                    with patch('websockets.sync.client.unix_connect', side_effect=connect):
+                        rpc = transport.Rpc(socket)
+                    self.assertTrue(sent.wait(2))
+                    time.sleep(.2)  # Consumer delay exceeds the scaled heartbeat deadline.
+                    self.assertEqual([rpc.receive(1)['params']['index'] for _ in range(4)], list(range(4)))
+                    self.assertEqual(rpc.call('echo', {}, timeout=1), 'alive')
+                    with self.assertRaisesRegex(transport.RpcError, 'receipt timed out'):
+                        rpc.call('ignore', {}, timeout=.05)
+                    rpc.send({'id': 99, 'method': 'close', 'params': {}})
+                    with self.assertRaisesRegex(transport.RpcError, 'fixture peer failure'):
+                        rpc.receive(1)
+                    with self.assertRaisesRegex(transport.RpcError, 'fixture peer failure'):
+                        rpc.send({'id': 100, 'method': 'echo', 'params': {}})
+                finally:
+                    if rpc is not None:
+                        rpc.close()
+                    server.shutdown()
+                    thread.join(2)
+
     def test_service_cleanup_retains_reparented_descendants_and_rechecks_birth(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -110,7 +164,7 @@ class AppServerTransportTests(unittest.TestCase):
                 env = {'DE67_RUNNER_ACTIVE_DIR': str(run_dir), 'CODEX_HOME': str(workspace / 'codex'),
                        'DE67_PROCESS_ROLE': role, 'DE67_COORDINATOR_RUN_ID': 'run',
                        'DE67_COORDINATOR_RESUME_SESSION': resume,
-                       'DE67_COORDINATOR_MODEL': 'gpt-6-astra' if role == 'mutation-reviewer' else 'gpt-5.6-sol',
+                       'DE67_COORDINATOR_MODEL': 'gpt-6-astra' if role == 'mutation-reviewer' else 'gpt-6-sol',
                        'DE67_COORDINATOR_REASONING_EFFORT': 'ultra' if role == 'mutation-reviewer' else 'low'}
                 with patch.dict(os.environ, env, clear=True), patch.object(transport.sys, 'platform', 'darwin'), \
                      patch.object(transport.signal, 'signal'), patch.object(transport.subprocess, 'Popen', Server), \
@@ -146,7 +200,7 @@ class AppServerTransportTests(unittest.TestCase):
                 self.assertEqual(persisted['state'], 'idle')
 
             # The persistent mutator must not turn coordinator resets into resumes.
-            env.update(DE67_PROCESS_ROLE='coordinator', DE67_COORDINATOR_MODEL='gpt-5.6-sol')
+            env.update(DE67_PROCESS_ROLE='coordinator', DE67_COORDINATOR_MODEL='gpt-6-sol')
 
             with patch.dict(os.environ, env, clear=True), patch.object(transport.sys, 'platform', 'darwin'), \
                  patch.object(transport.signal, 'signal'), patch.object(transport.subprocess, 'Popen', Server), \

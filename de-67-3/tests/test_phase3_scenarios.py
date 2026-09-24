@@ -112,7 +112,7 @@ class Phase3ScenarioTests(unittest.TestCase):
             "## Current delivery frontier\n\n- Waiting work: execute the revised route.\n",
             encoding="utf-8",
         )
-        (de67 / "DFS.md").write_text("🔴 R-008 remains open.\n", encoding="utf-8")
+        (de67 / "FS.md").write_text("🔴 R-008 remains open.\n", encoding="utf-8")
         with DeadlineHarness(self.state) as harness:
             harness.start_task("project", "explore", "R-008", 100, now=0)
             harness.complete_task("project", "explore", "Strategy known.", now=1)
@@ -159,7 +159,7 @@ class Phase3ScenarioTests(unittest.TestCase):
             "## Active work\n\n- [ ] R-027 — Finish the remaining live proof.\n",
             encoding="utf-8",
         )
-        (de67 / "DFS.md").write_text("- [ ] 🔴 R-027 — Live proof remains.\n", encoding="utf-8")
+        (de67 / "FS.md").write_text("- [ ] 🔴 R-027 — Live proof remains.\n", encoding="utf-8")
         with DeadlineHarness(self.state) as harness:
             harness.start_task("project", "explore", "R-027", 100, now=0)
             harness.complete_task("project", "explore", "Strategy known.", now=1)

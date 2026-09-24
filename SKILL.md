@@ -64,7 +64,7 @@ When the user supplies the de67 repository and asks Codex to install or integrat
 4. Verify that `codex` and `python` resolve in the execution environment. Phase 3's bundled runner
    invokes the local Codex CLI; do not replace it with a machine-specific wrapper.
 5. Use Astra high for the Phase-2 owner and Astra medium for the Phase-3 mutation reviewer.
-   Ordinary delivery keeps a Sol low coordinator and Luna/Terra workers. Verify the required models
+   Ordinary delivery keeps a Sol low coordinator and Luna/Sol workers. Verify the required models
    in the target runtime; report unavailable capability rather than silently substituting a model.
 6. Run the skill validator when available, then run the bundled Python tests before reporting the
    installation complete.

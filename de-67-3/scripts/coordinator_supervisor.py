@@ -29,7 +29,7 @@ from blocker_adapter import (
 from instruction_context import common_guidance
 from agent_mailbox import communication_contract
 from deadline_harness import DeadlineError, DeadlineHarness
-from policy_kernel import current_owner_contract, worker_selection_contract
+from policy_kernel import current_owner_contract
 from specification import SpecificationError, resolve
 from repository_checkpoint import (
     RepositoryCheckpointError,
@@ -473,7 +473,7 @@ def runtime_worker_owners(
     return {
         str(worker): str(parent)
         for worker, parent, model in rows
-        if any(name in str(model or "").lower() for name in ("luna", "terra"))
+        if any(name in str(model or "").lower() for name in ("luna", "sol", "astra", "terra"))
     } | owners
 
 
@@ -1083,6 +1083,22 @@ def coordinator_continuation_prompt() -> str:
         "Use current state and changed evidence, not a replay of prior instructions or history. "
         "Continue live coordination; wait_agent when no useful decision remains while workers "
         "are outstanding. The supervisor still owns process and restart transitions.\n"
+    )
+
+
+def worker_selection_contract() -> str:
+    return (
+        "Only GPT-6 Luna, GPT-6 Sol and GPT-6 Astra may execute new work, including native helpers and resumed workers. "
+        "Model choice: use GPT-6 Luna for playtesting, clear execution and ordinary repairs; GPT-6 Sol for "
+        "coupled implementation or difficult diagnosis; GPT-6 Astra when stronger implementation judgment "
+        "may reduce uncertainty or rework. Sol also owns coordination in its separate coordinator role. After a "
+        "hard repair, prefer Luna for substantial remaining playtesting when the handoff saves total "
+        "work; preserve useful context and live ownership. "
+        "Thinking effort: for coding, generally prefer max on Luna/Sol and low on Astra. For other "
+        "work, choose effort for the reasoning needed. These are preferences, not escalation gates "
+        "or quotas; use judgment. Choose only available pairs from model_choices. Judge completed outcomes and total "
+        "work, including helpers, handoffs and retries. Give each worker a focused assignment; an "
+        "Astra worker is separate from the persistent mutator."
     )
 
 
@@ -2022,7 +2038,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lineage", required=True)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--run-root", required=True)
-    parser.add_argument("--coordinator-model", default="gpt-5.6-sol")
+    parser.add_argument("--coordinator-model", default="gpt-6-sol")
     parser.add_argument(
         "--coordinator-reasoning-effort",
         choices=("low", "medium", "high", "xhigh", "max", "ultra"),

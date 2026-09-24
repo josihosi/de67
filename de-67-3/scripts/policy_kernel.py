@@ -438,7 +438,7 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
 
 
 def worker_helper_contract() -> str:
-    return ('When native helpers and Luna are available, use model="gpt-5.6-luna", '
+    return ('When native helpers and Luna are available, use model="gpt-6-luna", '
             'fork_turns="none" and suitable effort for bounded discovery or suitable execution. '
             'Otherwise use focused local retrieval within this task. Helpers never own coordination '
             'records; the primary worker collects or stops them before returning. '
@@ -508,17 +508,14 @@ def _write_worker_dispatch_packet(
     return packet.resolve(), digest
 
 
-def worker_selection_contract() -> str:
-    return 'Default to Luna for playtesting, clear execution and ordinary repairs. An unknown result or a broad assignment that might need debugging does not itself justify Terra. Use Terra for a concrete hard problem: coupled implementation, difficult diagnosis or demonstrated repair difficulty. After that problem is resolved, give substantial remaining execution to Luna when the handoff saves total work, preserving useful understanding and live ownership. Sol retains coordination; Terra can use Luna helpers without becoming another coordinator. Select model and effort separately: low for clear execution, medium for bounded reasoning, high for competing explanations; Luna also supports xhigh/max. Reassess from results, including helper and handoff costs, without quotas or a selection report. Explicitly choose gpt-5.6-luna or gpt-5.6-terra and effort from model_choices; Sol is not an ordinary worker.'
-
-
 def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
     """Expose available worker capabilities without choosing for the coordinator."""
     path = workspace / ".de67/state/workspace.json"
     configured = json.loads(path.read_text(encoding="utf-8")).get("worker_capabilities") if path.is_file() else None
     efforts_by_model = {
-        "gpt-5.6-luna": ("low", "medium", "high", "xhigh", "max"),
-        "gpt-5.6-terra": ("low", "medium", "high"),
+        "gpt-6-luna": ("low", "medium", "high", "xhigh", "max"),
+        "gpt-6-sol": ("low", "medium", "high", "xhigh", "max", "ultra"),
+        "gpt-6-astra": ("low", "medium", "high", "xhigh", "max", "ultra"),
     }
     capabilities = configured if configured is not None else [
         {"model": model, "reasoning_effort": effort}
@@ -528,18 +525,16 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
         raise PolicyError("worker_capabilities must be a list")
     result = []
     for value in capabilities:
-        if not isinstance(value, dict) or value.get("model") not in {"gpt-5.6-luna", "gpt-5.6-terra"}:
+        if not isinstance(value, dict) or value.get("model") not in efforts_by_model:
             continue
         choice = {"model": value["model"], "reasoning_effort": value.get("reasoning_effort", "medium")}
         # Setup records successfully probed pairs; defaults do not restrict that roster.
-        if not isinstance(choice["reasoning_effort"], str) or not re.fullmatch(
-            r"[A-Za-z0-9][A-Za-z0-9._-]*", choice["reasoning_effort"]
-        ):
+        if choice["reasoning_effort"] not in efforts_by_model[choice["model"]]:
             raise PolicyError("Unsupported worker reasoning effort")
         if choice not in result:
             result.append(choice)
     if not result:
-        raise PolicyError("No configured Luna/Terra worker capability is available")
+        raise PolicyError("No configured ordinary-worker capability is available")
     return result
 
 

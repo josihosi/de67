@@ -35,7 +35,7 @@ MODULE_PATH = Path(workspace_setup.__file__).resolve()
 
 VERIFIED_WORKERS = (
     ("gpt-6-luna", "high"),
-    ("gpt-5.6-terra", "low"),
+    ("gpt-6-sol", "low"),
 )
 
 
@@ -612,7 +612,7 @@ class WorkspaceSetupTests(unittest.TestCase):
 
     def test_phase_two_records_only_successfully_probed_worker_pairs(self) -> None:
         self.freeze_dfs()
-        passed = (("gpt-6-luna", "high"), ("gpt-5.6-terra", "low"))
+        passed = (("gpt-6-luna", "high"), ("gpt-6-sol", "low"))
 
         configure(
             self.workspace,
@@ -628,21 +628,21 @@ class WorkspaceSetupTests(unittest.TestCase):
             config["worker_capabilities"],
             [
                 {"model": "gpt-6-luna", "reasoning_effort": "high"},
-                {"model": "gpt-5.6-terra", "reasoning_effort": "low"},
+                {"model": "gpt-6-sol", "reasoning_effort": "low"},
             ],
         )
 
-    def test_phase_two_requires_luna_terra_and_distinct_efforts(self) -> None:
+    def test_phase_two_requires_luna_sol_and_distinct_efforts(self) -> None:
         self.freeze_dfs()
 
         invalid_rosters = (
             (),
             (("gpt-6-luna", "high"),),
-            (("gpt-6-luna", "high"), ("gpt-5.6-terra", "high")),
-            (("gpt-5.6-luna", "high"), ("gpt-5.6-terra", "low")),
+            (("gpt-6-luna", "high"), ("gpt-6-sol", "high")),
+            (("gpt-5.6-luna", "high"), ("gpt-6-sol", "low")),
             (("gpt-6-luna", "low"), ("gpt-6-luna", "medium")),
-            (("gpt-6-luna", "high"), ("gpt-5.6-terra", "low"), ("gpt-6-luna", "high")),
-            (("gpt-6-luna", "high"), ("gpt-5.6-terra", "invalid effort")),
+            (("gpt-6-luna", "high"), ("gpt-6-sol", "low"), ("gpt-6-luna", "high")),
+            (("gpt-6-luna", "high"), ("gpt-6-sol", "invalid effort")),
         )
         for roster in invalid_rosters:
             with self.subTest(roster=roster), self.assertRaises(SetupError):
@@ -666,7 +666,7 @@ class WorkspaceSetupTests(unittest.TestCase):
 
         replacement = (
             ("gpt-6-luna", "low"),
-            ("gpt-5.6-terra", "medium"),
+            ("gpt-6-sol", "medium"),
         )
         configure(
             self.workspace,
@@ -682,7 +682,7 @@ class WorkspaceSetupTests(unittest.TestCase):
             config["worker_capabilities"],
             [
                 {"model": "gpt-6-luna", "reasoning_effort": "low"},
-                {"model": "gpt-5.6-terra", "reasoning_effort": "medium"},
+                {"model": "gpt-6-sol", "reasoning_effort": "medium"},
             ],
         )
 

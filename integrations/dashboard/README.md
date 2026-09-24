@@ -42,7 +42,7 @@ The dashboard uses only Python's standard library. It keeps the last good Markdo
 in memory when a source becomes unavailable. A missing workspace, locked database, malformed text,
 unknown schema, failed process probe, or dashboard crash cannot stop or mutate de67.
 
-The overview shows active Luna, Terra, and Sol workers by reasoning effort from Codex's existing local
+The overview shows active Luna, Sol, and Astra workers by reasoning effort from Codex's existing local
 session records. It does not add worker fields or coordinator reporting. Use `--codex-sessions PATH`
 when the session root is not `~/.codex/sessions`; an unavailable source leaves only that table
 unavailable. The mutation tile combines completed deadline, integrity, and random mutations and
@@ -60,6 +60,19 @@ The report stays in memory until the clock changes. The dashboard does not creat
 snapshots, history files, or refresh artifacts. A missing or failed sidecar cannot stop de67.
 The plot keeps current closure gaps around the claim, draws product and test cosine similarity
 along each spoke, and shows the sidecar's categorical trajectory observations without scoring them.
+
+## Weekly subscription fuel
+
+Add `--subscription-codex /path/to/codex` to show account-wide weekly allowance remaining,
+percentage used, and the reset date in the dashboard host's time zone. This optional source
+reads `account/rateLimits/read` over a private Codex App Server connection once per minute;
+it makes no model requests and does not write the project workspace. The existing campaign
+fresh-token chart remains separate from subscription quota.
+
+The lowercase red `ngmi` means percentage used exceeds percentage of the weekly window elapsed:
+continuing that weekly average would exhaust the allowance before reset. It is a pace estimate,
+not a prediction of future activity. Missing reset data leaves pace unknown. A failed read
+preserves the last good value marked stale and suppresses the pace verdict until a fresh read.
 
 ## Optional Fratbro status
 

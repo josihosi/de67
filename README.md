@@ -117,6 +117,8 @@ library; the optional narrator makes model calls only when configured.
   narrator, session sources, and network exposure.
 - **[OpenClaw owner contact](integrations/openclaw_discord/README.md):** a separate, optional route
   for one human answer when no executable route remains.
+- **[Pit Crew evidence advisories](integrations/jev_pit_crew/README.md):** optional, provider-free,
+  coordinator-only evidence relationship notices.
 
 ## Go deeper
 
@@ -132,6 +134,7 @@ library; the optional narrator makes model calls only when configured.
 | Clear, auditable artifacts | [Writing guideline](references/controlled-english.md) |
 | Live progress website | [Dashboard](integrations/dashboard/README.md) |
 | Optional owner contact | [OpenClaw adapter](integrations/openclaw_discord/README.md) |
+| Optional evidence advisories | [Jev Pit Crew](integrations/jev_pit_crew/README.md) |
 | Moving tested lab work into a release | [Release promotion](RELEASE_PROMOTION.md) |
 
 ## Lab now. Release when proven.

@@ -5,6 +5,10 @@ description: Explicit third phase of de67. Use when the user says `de67 3` to de
 
 # de67 3 — delivery router
 
+Only GPT-6 Sol, GPT-6 Luna and GPT-6 Astra may run new work. Prefer Luna for workers;
+use Sol for coordination. GPT-5.6 and Terra are retired. Live C-AOL harness playtests
+are Luna-only; other workers delegate them to a GPT-6 Luna subagent.
+
 This file routes Phase 3; it is not the coordinator procedure.
 
 The invocation authorizes implementation of the frozen FS in the named working repository. Do not
@@ -57,7 +61,7 @@ an explicit start instead of becoming an automatic restart loop. Direct
 foreground execution of `coordinator_supervisor.py` is reserved for tests and attended diagnosis,
 not an ordinary Phase-3 launch.
 
-The supervisor launches an ordinary `gpt-5.6-sol` coordinator at low against the compiled workspace
+The supervisor launches an ordinary `gpt-6-sol` coordinator at low against the compiled workspace
 policy. The coordinator asks the kernel for the next transition and supplies the relevant context
 and role-specific obligations for that route. A due mutation blocks new dispatch. Once all
 already-live worker windows are terminal, the coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh

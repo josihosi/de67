@@ -37,7 +37,7 @@ Broader method candidates use their existing validation boundary. Consume only s
 resolved by the review.
 
 A rare universal review exists only for a persisted `k = 30` plus historical `DFS.md` receipt lane with proved
-`gpt-5.6-sol`/`ultra` capability. It records the isolated whole-method or FS candidate and
+`gpt-6-sol`/`ultra` capability. It records the isolated whole-method or FS candidate and
 falsifiable proof plan. The candidate may challenge kernel, clock, guard, and supervisor
 architecture, but it cannot edit live state, self-promote, weaken the user outcome or honest proof,
 falsify evidence, exceed authority, or erase attempt accounting.

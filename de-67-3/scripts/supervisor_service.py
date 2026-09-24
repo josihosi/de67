@@ -65,7 +65,7 @@ def service_spec(workspace_value: str | Path) -> ServiceSpec:
                   "--state", str(state), "--lineage", lineage,
                   "--workspace", str(identity.workspace), "--run-root",
                   str(identity.workspace / ".de67/state/coordinator-runs"),
-                  "--coordinator-model", "gpt-5.6-sol",
+                  "--coordinator-model", "gpt-6-sol",
                   "--coordinator-reasoning-effort", "low", "--runner",
                   python, str(scripts / "codex_runner.py")]
     stdout, stderr = identity.log_directory / "stdout.log", identity.log_directory / "stderr.log"

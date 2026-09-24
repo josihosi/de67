@@ -254,31 +254,40 @@ def solar_filaments() -> str:
     return ''.join(paths)
 
 
-def render_worker_scale(model: str, counts: dict[str, int]) -> str:
+def worker_emblem(model: str) -> str:
+    emblem = ('<path fill="#8ff0cf" stroke="#d5fff0" stroke-width="1.2" stroke-linejoin="round" d="M25 4A15 15 0 1 0 25 32C13 29 13 7 25 4Z"/>'
+              if model == "luna" else
+              '<circle cx="18" cy="18" r="14" fill="#77accb"/><path fill="#cee2e7" d="M9 8Q13 4 18 4L20 7 17 10 18 12 15 14 14 18 11 17 10 13 7 12ZM18 19Q22 17 25 20L25 24 22 27 21 30 19 28 19 24 16 22Z"/><path d="M6 16A12 12 0 0 1 13 7" fill="none" stroke="#e2f1f3" stroke-opacity=".45" stroke-width=".8" stroke-linecap="round"/>')
+    if model == "astra":
+        emblem = '<path fill="#fff0d6" d="m18 2 3.7 11.2L34 13l-9.8 7.4L28 32l-10-6.6L8 32l3.8-11.6L2 13l12.3.2Z"/><circle cx="18" cy="18" r="3" fill="#fffbe5"/>'
+    return emblem
+
+
+def render_worker_scale(counts: dict[str, dict[str, int]]) -> str:
+    models = ("astra", "terra", "luna")
     levels = ("low", "medium", "high", "max")
-    total = sum(counts.get(level, 0) for level in levels)
-    description = ", ".join(f"{level}: {counts.get(level, 0)}" for level in levels)
-    # Leave room for worker clusters to float above the reasoning axis.
     marks = ['<line class="strength-axis" x1="48" y1="114" x2="348" y2="114"/>']
     for index, level in enumerate(levels):
         x = 48 + index * 100
-        count = counts.get(level, 0)
+        active = [model for model in models for _ in range(max(0, counts.get(model, {}).get(level, 0)))]
         marks.append(f'<circle class="strength-stop" cx="{x}" cy="114" r="2"/>')
-        for dx, dy in worker_dot_positions(count):
-            marks.append(f'<circle class="worker-dot" cx="{x + dx:.3f}" cy="{58 + dy:.3f}" r="4.67"><title>{_escape(model.title())} · {level.title()} reasoning</title></circle>')
-        if count > 12:
-            marks.append(f'<text class="strength-overflow" x="{x}" y="8">+{count - 12}</text>')
-        marks.append(f'<text class="strength-label" x="{x}" y="156">{level.title()}</text>')
-    emblem = ('<path fill="#7ee6c2" d="M25 4a14 14 0 1 0 0 28A16 16 0 0 1 25 4Z"/>'
-              if model == "luna" else
-              '<circle cx="18" cy="18" r="14" fill="#77accb"/><path fill="#cee2e7" d="M9 8Q13 4 18 4L20 7 17 10 18 12 15 14 14 18 11 17 10 13 7 12ZM18 19Q22 17 25 20L25 24 22 27 21 30 19 28 19 24 16 22Z"/><path d="M6 16A12 12 0 0 1 13 7" fill="none" stroke="#e2f1f3" stroke-opacity=".45" stroke-width=".8" stroke-linecap="round"/>')
-    return (
-        f'<div class="worker-scale" data-model="{model}"><div class="scale-heading"><strong>{_escape(model.title())}</strong>'
-        f'<span><b>{total}</b> active</span></div>'
-        f'<svg class="model-emblem" viewBox="0 0 36 36" aria-hidden="true">{emblem}</svg>'
-        f'<svg viewBox="0 0 396 170" role="img" aria-label="{_escape(model.title() + ": " + description)}">'
-        + "".join(marks) + '</svg></div>'
-    )
+        for model, (dx, dy) in zip(active, worker_dot_positions(len(active))):
+            marks.append(f'<g class="worker-dot" data-model="{model}" transform="translate({x + dx - 6:.3f} {58 + dy - 6:.3f})">'
+                         f'<title>{model} · {level} reasoning</title>'
+                         f'<svg width="12" height="12" viewBox="0 0 36 36">{worker_emblem(model)}</svg></g>')
+        if len(active) > 12:
+            marks.append(f'<text class="strength-overflow" x="{x}" y="8">+{len(active) - 12}</text>')
+        marks.append(f'<text class="strength-label" x="{x}" y="156">{level}</text>')
+    legend = []
+    descriptions = []
+    for model in models:
+        description = model + ": " + ", ".join(f"{level}: {counts.get(model, {}).get(level, 0)}" for level in levels)
+        descriptions.append(description)
+        legend.append(f'<div role="img" aria-label="{_escape(description)}" title="{_escape(description)}"><span>{model}</span>'
+                      f'<svg class="model-emblem" viewBox="0 0 36 36" aria-hidden="true">{worker_emblem(model)}</svg></div>')
+    return ('<div class="worker-scale">'
+            f'<svg class="shared-worker-axis" viewBox="0 0 396 170" role="img" aria-label="{_escape("; ".join(descriptions))}">'
+            + "".join(marks) + '</svg><div class="worker-legend">' + "".join(legend) + '</div></div>')
 
 
 def render_work_digest(text: str) -> str:
@@ -509,6 +518,13 @@ def _read_snapshot(path: Path) -> tuple[str, dict[str, Any]]:
         "mtime": after.st_mtime,
         "invalid_utf8": invalid_utf8,
     }
+
+
+def _read_specification_snapshot(path: Path) -> tuple[str, dict[str, Any]]:
+    """Read the canonical FS with the same visible decode errors as other panels."""
+    text, identity = _read_snapshot(path)
+    identity["path"] = str(path)
+    return text, identity
 
 
 def parse_ledger(text: str) -> dict[str, Any]:
@@ -1267,24 +1283,103 @@ def coordinator_activity(workspace: Path, sessions_root: Path) -> str:
     return _session_activity(Path(row[0])) if row else "unknown"
 
 
+def _active_mutator(workspace: Path, sessions_root: Path) -> dict[str, str] | None:
+    """Read the existing persistent session binding; it grants no worker ownership."""
+    binding_path = workspace / ".de67/state/mutator-session.json"
+    if not binding_path.is_file():
+        return None
+    binding = json.loads(binding_path.read_text(encoding="utf-8"))
+    if (binding.get("state") != "active"
+            or Path(binding.get("workspace", "")).resolve() != workspace.resolve()):
+        return None
+    pid = binding.get("runner_pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        pass
+    index = sessions_root.parent / "state_5.sqlite"
+    uri = f"file:{quote(str(index), safe='/:')}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, timeout=0)
+    try:
+        row = connection.execute(
+            "SELECT id, cwd, model, reasoning_effort FROM threads WHERE id = ?",
+            (binding.get("thread_id"),),
+        ).fetchone()
+    finally:
+        connection.close()
+    if row is None or Path(row[1]).resolve() != workspace.resolve():
+        raise ValueError("active mutator session metadata unavailable")
+    if row[2] != "gpt-6-astra" or row[3] not in ("low", "medium", "high", "max"):
+        raise ValueError("active mutator model or reasoning effort unavailable")
+    return {"id": str(row[0]), "effort": str(row[3])}
+
+
+def _worker_execution(workspace: Path, claims: dict[str, str]) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+    """Join retained claims to current library execution without changing claim history."""
+    registry = workspace / ".de67/state/worker-library/registry.sqlite3"
+    if not registry.exists():
+        return claims, {}
+    clock = json.loads((workspace / ".de67/state/workspace.json").read_text())["clock"]
+    state = Path(clock["state"]).expanduser()
+    if not state.is_absolute():
+        state = workspace / state
+    connection = sqlite3.connect(registry.resolve().as_uri() + "?mode=ro", uri=True, timeout=0)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            "SELECT a.worker_id,a.status,a.binding,w.model,w.effort FROM assignments a "
+            "JOIN workers w ON a.name=w.name AND a.worker_id=w.thread_id "
+            "WHERE a.state_path=? AND a.lineage=? ORDER BY a.updated_at",
+            (str(state.resolve()), clock["lineage"])).fetchall()
+    finally:
+        connection.close()
+    owners, metadata = dict(claims), {}
+    for row in rows:
+        worker = row["worker_id"]
+        if worker not in claims:
+            continue
+        owners.pop(worker, None)
+        binding = json.loads(row["binding"])
+        if (row["status"] != "running"
+                or binding.get("workspace") != str(workspace.resolve())
+                or binding.get("deadline_state") != str(state.resolve())
+                or binding.get("lineage") != clock["lineage"]):
+            continue
+        owners[worker] = binding["thread_id"]
+        metadata[worker] = {"model": row["model"], "effort": row["effort"]}
+    return owners, metadata
+
+
 def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     """Project active roster subagents from Codex's existing read-only session records."""
-    counts = {model: {effort: 0 for effort in ("low", "medium", "high", "max")}
-              for model in ("luna", "terra", "sol")}
+    counts = {model: {effort: 0 for effort in ("low", "medium", "high", "xhigh", "max")}
+              for model in ("luna", "sol", "astra")}
+    mutator = _active_mutator(workspace, sessions_root)
+    counted = {mutator["id"]} if mutator else set()
+    if mutator:
+        counts["astra"][mutator["effort"]] += 1
     active_claims = _active_worker_claims(workspace)
+    metadata = {}
+    if active_claims:
+        active_claims, metadata = _worker_execution(workspace, active_claims)
     if active_claims == {}:
         return {"counts": counts, "available": True}
+    active_coordinator_id = _active_coordinator_id(workspace) or (
+        next(iter(active_claims.values())) if active_claims else None
+    )
     index = sessions_root.parent / "state_5.sqlite"
     if active_claims and index.is_file():
         owners = set(active_claims.values())
-        if len(owners) != 1:
-            raise ValueError("active worker ownership is ambiguous")
         uri = f"file:{quote(str(index), safe='/:')}?mode=ro"
         connection = sqlite3.connect(uri, uri=True, timeout=0)
         try:
             # Library workers have durable owners but need not have native
             # spawn edges. Seed their helper trees from those same claims.
-            seeds = sorted(owners | set(active_claims))
+            seeds = sorted(owners | set(active_claims) | ({active_coordinator_id} if active_coordinator_id else set()))
             values = ",".join("(?)" for _ in seeds)
             rows = connection.execute(
                 f"WITH RECURSIVE tree(id) AS (VALUES {values} UNION "
@@ -1301,9 +1396,6 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     root_path: Path | None = None
     root: dict[str, Any] = {}
     target = workspace.resolve()
-    active_coordinator_id = _active_coordinator_id(workspace) or (
-        next(iter(active_claims.values())) if active_claims else None
-    )
     for path in paths:
         candidate = _session_header(path)
         try:
@@ -1321,7 +1413,6 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
             break
     if root_path is None or not root.get("id"):
         return {"counts": counts, "available": False, "error": "active Codex session unavailable"}
-    active_claims = _active_worker_claims(workspace)
     candidates: list[tuple[Path, dict[str, Any]]] = []
     for path in paths:
         if path == root_path:
@@ -1338,7 +1429,8 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     # Durable claims identify current primaries, including reused library
     # workers. Codex's native spawn tree supplies their helper descendants.
     root_id = str(root["id"])
-    descendants = {root_id}
+    primary_owners = {root_id} | set((active_claims or {}).values())
+    descendants = set(primary_owners)
     pending = candidates
     while pending:
         next_pending: list[tuple[Path, dict[str, Any]]] = []
@@ -1353,8 +1445,8 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
                 continue
             if (
                 active_claims is not None
-                and parent == root_id
-                and active_claims.get(candidate_id) != root_id
+                and parent in primary_owners
+                and active_claims.get(candidate_id) != parent
             ):
                 # A direct coordinator child is a primary worker only while its
                 # durable claim belongs to this coordinator. Do not inherit the
@@ -1365,13 +1457,14 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
             changed = True
             if active_claims is None and _session_complete(path):
                 continue
-            if active_claims is not None and parent != root_id and _session_complete(path):
+            if active_claims is not None and candidate_id not in active_claims and _session_complete(path):
                 continue
-            context = _trace_fuel(path)
+            context = metadata.get(candidate_id) or _trace_fuel(path)
             model = str(context.get("model", "")).lower().rsplit("-", 1)[-1]
             effort = str(context.get("effort", "")).lower()
-            if model in counts and effort in counts[model]:
+            if model in counts and effort in counts[model] and candidate_id not in counted:
                 counts[model][effort] += 1
+                counted.add(candidate_id)
         if not changed:
             break
         pending = next_pending
@@ -1393,7 +1486,7 @@ def _trace_fuel(path: Path, *, windows: list[tuple[float, float | None]] | None 
     if cached is None or stat.st_size < cached["offset"] or cached["windows"] != selection:
         cached = {"offset": 0, "fresh": None, "observed": 0, "partial": False, "points": [],
                   "model": None, "effort": None, "worker_points": [], "windows": selection,
-                  "worker_totals": {"terra": 0, "luna": 0, "other": 0}}
+                  "worker_totals": {"astra": 0, "terra": 0, "luna": 0, "other": 0}}
         _TOKEN_TRACES[key] = cached
 
     def record(delta: int, timestamp: float | None = None) -> None:
@@ -1405,7 +1498,7 @@ def _trace_fuel(path: Path, *, windows: list[tuple[float, float | None]] | None 
                        for start, end in selection):
                 return
         model = str(cached["model"]).lower().rsplit("-", 1)[-1]
-        role = model if model in ("terra", "luna") else "other"
+        role = model if model in ("astra", "terra", "luna") else "other"
         cached["observed"] += delta
         cached["worker_totals"][role] += delta
         if timestamp is not None:
@@ -1579,8 +1672,8 @@ def render_fuel(fuel: dict[str, Any]) -> str:
     ceiling = next(step * magnitude for step in (1, 2, 2.5, 5, 10) if step * magnitude >= peak)
     def axis_label(value: float) -> str:
         return f"{value / 1000000:g}m" if value >= 1000000 else f"{value / 1000:g}k" if value >= 1000 else f"{value:g}"
-    roles = [("astra", "mutator", "#fff0d6"), ("coordinator", "coordinator", "#eabd69"),
-             ("terra", "worker Terra", "#77accb"), ("luna", "worker Luna", "#82dfbd")]
+    roles = [("astra", "astra", "#fff0d6"), ("coordinator", "coordinator", "#eabd69"),
+             ("terra", "worker terra", "#77accb"), ("luna", "worker luna", "#82dfbd")]
     if totals.get("other", 0):
         roles.append(("other", "other workers", "#9997a0"))
     cumulative = [0] * len(bins)
@@ -1641,6 +1734,185 @@ def render_fuel(fuel: dict[str, Any]) -> str:
 
 
 
+def read_subscription_limits(codex: str, timeout: float = 15) -> dict[str, Any]:
+    """Read account quota over a private stdio connection; never start a model turn."""
+    import queue
+
+    flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+    process = subprocess.Popen(
+        [codex, "app-server", "--listen", "stdio://"], cwd=Path.home(),
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        text=True, encoding="utf-8", **flags,
+    )
+    replies: queue.Queue[Any] = queue.Queue()
+
+    def receive() -> None:
+        try:
+            for line in process.stdout:
+                try:
+                    replies.put(json.loads(line))
+                except ValueError:
+                    continue
+        finally:
+            replies.put(None)
+
+    reader = threading.Thread(target=receive, daemon=True)
+    reader.start()
+    deadline = time.monotonic() + timeout
+
+    def send(message: dict[str, Any]) -> None:
+        process.stdin.write(json.dumps(message) + "\n")
+        process.stdin.flush()
+
+    def response(identifier: int) -> dict[str, Any]:
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError("Subscription read timed out")
+            try:
+                message = replies.get(timeout=left)
+            except queue.Empty:
+                raise TimeoutError("Subscription read timed out") from None
+            if message is None:
+                raise RuntimeError("Subscription connection closed")
+            if isinstance(message, dict) and message.get("id") == identifier:
+                if "error" in message:
+                    raise RuntimeError("Subscription read unavailable")
+                return message["result"]
+
+    try:
+        send({"id": 1, "method": "initialize", "params": {
+            "clientInfo": {"name": "de67_dashboard", "version": "1"}}})
+        response(1)
+        send({"method": "initialized"})
+        send({"id": 2, "method": "account/rateLimits/read"})
+        return response(2)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        reader.join(timeout=1)
+        process.stdin.close()
+        process.stdout.close()
+
+
+def weekly_subscription(result: dict[str, Any], now: float) -> dict[str, Any]:
+    """Select the Codex weekly bucket, not a model-specific or five-hour limit."""
+    buckets = result.get("rateLimitsByLimitId")
+    bucket = buckets.get("codex") if isinstance(buckets, dict) else result.get("rateLimits")
+    if not isinstance(bucket, dict):
+        return {"available": False}
+    for name in ("primary", "secondary"):
+        window = bucket.get(name)
+        if not isinstance(window, dict) or window.get("windowDurationMins") != 10080:
+            continue
+        used = window.get("usedPercent")
+        if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used):
+            continue
+        used = min(100.0, max(0.0, used))
+        reset = window.get("resetsAt")
+        if isinstance(reset, bool) or not isinstance(reset, (int, float)) or not math.isfinite(reset):
+            reset = None
+        seconds = 10080 * 60
+        elapsed = now - (reset - seconds) if reset is not None else None
+        pace = used / (100 * elapsed / seconds) if elapsed is not None and 0 < elapsed < seconds else None
+        return {"available": True, "used": used, "remaining": 100 - used,
+                "reset": reset, "pace": pace, "ngmi": pace is not None and pace > 1,
+                "observed": now}
+    return {"available": False}
+
+
+class SubscriptionUsage:
+    """Optional, cached account read. Network work never holds the dashboard lock."""
+    def __init__(self, codex: str, refresh_seconds: float = 60) -> None:
+        self.codex = codex
+        self.refresh_seconds = refresh_seconds
+        self._lock = threading.Lock()
+        self._state: dict[str, Any] = {"available": False, "loading": True}
+        self._next = 0.0
+        self._running = False
+
+    def _refresh(self) -> None:
+        try:
+            state = weekly_subscription(read_subscription_limits(self.codex), time.time())
+            if not state.get("available"):
+                raise ValueError("Weekly allowance unavailable")
+        except Exception:
+            with self._lock:
+                state = dict(self._state, stale=True, loading=False)
+        with self._lock:
+            self._state = state
+            self._running = False
+            self._next = time.monotonic() + self.refresh_seconds
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            if not self._running and time.monotonic() >= self._next:
+                self._running = True
+                threading.Thread(target=self._refresh, daemon=True).start()
+            state = dict(self._state)
+        if state.get("reset") is not None and state["reset"] <= time.time():
+            state["stale"] = True
+        return state
+
+
+# Trusted widget CSS travels with the fragment so already-open tabs receive visual updates.
+SUBSCRIPTION_STYLE = """<style>.galaxy{height:260px;pointer-events:none}
+.galaxy svg{position:absolute;top:0;left:0;height:500px;pointer-events:auto}
+.subscription{position:absolute;top:125px;left:28px;width:250px;z-index:2;display:grid;gap:7px;color:#bcb2c9}
+.subscription>small{font-size:10px;letter-spacing:.08em}
+.subscription-reading{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.subscription-reading strong{font-size:27px;color:#e8e0ed;font-weight:400;white-space:nowrap}
+.subscription-reading strong span{font-size:inherit;color:inherit;letter-spacing:0}
+.subscription-status{font-size:27px;color:#8ad5b3;font-weight:400;text-transform:none}
+.subscription-tank{height:12px;background:#382c40;border-radius:6px;overflow:hidden;mask-image:repeating-linear-gradient(to right,#000 0,#000 calc(8.333333% - 3px),transparent calc(8.333333% - 3px),transparent 8.333333%)}
+.subscription-tank>i{display:block;height:100%;background:#f7ac66;border-radius:0}
+.subscription{padding:14px 0;width:250px;left:0;top:72px}
+.work-clock{padding-left:0;padding-right:0}
+.work-clock,.mutation-total{border:0;background:transparent;border-radius:0}
+
+.subscription>span{font-size:10px;line-height:1.6;color:#b2a6be}
+.subscription.ngmi .subscription-status{color:#ff787f}
+
+.subscription.stale .subscription-status{color:#c7aa79}
+@media(max-width:650px){
+.galaxy{height:145px}.galaxy svg{height:320px}
+.subscription{position:relative;top:auto;left:0;width:min(100%,300px);margin:0 0 28px}
+}
+</style>"""
+
+
+def render_subscription(state: dict[str, Any] | None) -> str:
+    if state is None:
+        return ""
+    if not state.get("available"):
+        status = "checking allowance…" if state.get("loading") else "usage unavailable"
+        return SUBSCRIPTION_STYLE + f'<aside class="subscription"><small>fuel</small><span>{status}</span></aside>'
+    remaining = state["remaining"]
+    stale = state.get("stale", False)
+    tone = " stale" if stale else " ngmi" if state.get("ngmi") else ""
+    reset = state.get("reset")
+    reset_text = (time.strftime("%d %b", time.localtime(reset))
+                  if reset is not None else "unavailable")
+    pace = state.get("pace")
+    status = "stale reading" if stale else "ngmi" if state.get("ngmi") else "" if pace is not None else "pace unknown"
+    pace_text = f'{pace:.2f}x pace' if pace is not None and not stale else "pace unknown"
+    title = ("Account-wide subscription allowance, including work outside this campaign. "
+             "Pace compares percentage used with percentage of the week elapsed. "
+             "ngmi means continuing that average would exhaust the allowance before reset; it is an estimate.")
+    return (SUBSCRIPTION_STYLE + f'<aside class="subscription{tone}" title="{_escape(title)}">'
+            f'<div class="subscription-reading"><strong><span>fuel</span> {remaining:g}%</strong>'
+            f'<b class="subscription-status">{status}</b></div>'
+            f'<div class="subscription-tank" role="meter" aria-label="Weekly allowance remaining" '
+            f'aria-valuemin="0" aria-valuemax="100" aria-valuenow="{remaining:g}">'
+            f'<i style="width:{remaining:g}%"></i></div>'
+            + f'<span>{pace_text}, reset {reset_text}</span></aside>')
+
+
 class Dashboard:
     def __init__(self, workspace: Path, refresh_seconds: int = 30,
                  sessions_root: Path | None = None,
@@ -1648,7 +1920,8 @@ class Dashboard:
                  fratbro_script: Path | None = None,
                  fratbro_cache: Path | None = None,
                  fratbro_codex: str = "codex",
-                 mutator_activity_db: Path | None = None) -> None:
+                 mutator_activity_db: Path | None = None,
+                 subscription_codex: str | None = None) -> None:
         self.workspace = workspace
         self.refresh_seconds = refresh_seconds
         self.sessions_root = sessions_root or Path.home() / ".codex/sessions"
@@ -1656,6 +1929,7 @@ class Dashboard:
         self.fratbro_script = fratbro_script
         self.fratbro_cache = fratbro_cache
         self.fratbro_codex = fratbro_codex
+        self.subscription = SubscriptionUsage(subscription_codex) if subscription_codex else None
         self.mutator_activity_db = mutator_activity_db
         self._lock = threading.Lock()
         self._good: dict[str, dict[str, Any]] = {}
@@ -1704,7 +1978,8 @@ class Dashboard:
 
     def _markdown_source(self, name: str, path: Path) -> dict[str, Any]:
         try:
-            text, identity = _read_snapshot(path)
+            text, identity = (_read_specification_snapshot(path) if name == "dfs"
+                              else _read_snapshot(path))
             value = {"text": text, "html": render_markdown(text), "identity": identity,
                      "observed": time.time(), "stale": False, "error": None}
             self._good[name] = value
@@ -1818,6 +2093,7 @@ class Dashboard:
                 mutator_activity = {"glowing": False, "status": "unavailable"}
             return {"dfs": dfs, "ledger": ledger, "clock": clock, "sidecar": sidecar,
                     "fratbro": fratbro, "fuel": fuel, "mutator_activity": mutator_activity,
+                    "subscription": self.subscription.snapshot() if self.subscription else None,
                     "process": process,
                     "workers": workers, "process_error": process_error, "observed": time.time()}
 
@@ -1905,9 +2181,7 @@ class Dashboard:
         else:
             worker_counts = workers.get("counts", {})
             worker_body = (
-                '<div class="roster-scales">' + "".join(
-                    render_worker_scale(model, worker_counts.get(model, {}))
-                    for model in ("terra", "luna")) + '</div>'
+                '<div class="roster-scales">' + render_worker_scale(worker_counts) + '</div>'
                 if workers.get("available") else
                 f'<p class="subtle">Workers unavailable · {_escape(workers.get("error", "unknown source"))}</p>'
             )
@@ -1915,11 +2189,11 @@ class Dashboard:
                          "on" if coordinator == "running" else
                          "waiting" if coordinator == "waiting" else
                          "unknown" if coordinator == "unknown" else "off")
-            mutator_activity = state.get("mutator_activity", {})
-            astra_state = "on" if mutation_running or mutator_activity.get("glowing") else "unknown" if clock.get("error") else "off"
-            astra_label = "Astra mutator: " + ("reviewing" if mutation_running else "idle")
-            if mutator_activity.get("status") not in (None, "disabled", "idle"):
-                astra_label += " · conversation " + mutator_activity["status"]
+            astra_counts = worker_counts.get("astra", {})
+            astra_total = sum(astra_counts.values())
+            astra_state = "on" if astra_total else "off" if workers.get("available") else "unknown"
+            astra_label = (f"Astra: {astra_total} active · workers and mutator" if workers.get("available")
+                           else "Astra: activity unavailable")
             sun_activity = process.get("activity", "unknown") if sun_state == "on" else sun_state
             import random
             rng = random.Random(67)
@@ -1928,7 +2202,7 @@ class Dashboard:
             # sparse foreground stars. Refreshing state does not reshuffle the sky.
             for i in range(3600):
                 x = rng.uniform(0, 1100)
-                center = 222 - .13 * x + 15 * math.sin(x / 125) + 6 * math.sin(x / 39)
+                center = 440 - .28 * x + 15 * math.sin(x / 180) + 6 * math.sin(x / 65)
                 width = 19 + 22 * math.exp(-((x - 400) / 230) ** 2) + 7 * math.sin(x / 83) ** 2
                 if i < 2750:
                     arm = -16 if rng.random() < .58 else 19
@@ -1939,10 +2213,10 @@ class Dashboard:
                     radius = rng.uniform(.25, .70)
                     opacity = rng.uniform(.22, .70)
                 else:
-                    y = rng.uniform(8, 312)
+                    y = rng.uniform(8, 492)
                     radius = rng.uniform(.35, 1.05)
                     opacity = rng.uniform(.16, .68)
-                if not 5 < y < 315:
+                if not 5 < y < 495:
                     continue
                 if i % 131 == 0:
                     radius, opacity = 1.25, .95
@@ -1950,7 +2224,7 @@ class Dashboard:
                 # SVG edges, rather than ending the foreground stars in a strip.
                 distance = abs(y - center)
                 envelope = .12 + .88 * math.exp(-(distance / (width * 1.8)) ** 2)
-                edge = min(1.0, y / 45, (320 - y) / 70, x / 45, (1100 - x) / 45)
+                edge = min(1.0, y / 45, (500 - y) / 70, x / 45, (1100 - x) / 45)
                 edge = max(0.0, edge)
                 opacity *= envelope * edge * edge * (3 - 2 * edge)
                 stars.append(f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{radius:.2f}" opacity="{opacity:.2f}"/>')
@@ -1970,12 +2244,13 @@ class Dashboard:
                 f'<div class="mutation-total"><small>mutations</small><strong>{_escape(mutations)}</strong>'
                 f'<span title="{_escape(random_note)}">{_escape(due)}</span></div></div>'
                 f'<div class="galaxy {astra_state}" title="{_escape(astra_label)}" role="img" aria-label="{_escape(astra_label)}">'
-                '<svg viewBox="0 0 1100 320" preserveAspectRatio="none" aria-hidden="true"><defs><filter id="dust"><feGaussianBlur stdDeviation="10"/></filter></defs>'
+                '<svg viewBox="0 0 1100 500" preserveAspectRatio="none" aria-hidden="true"><defs><filter id="dust"><feGaussianBlur stdDeviation="10"/></filter></defs>'
                 '<g fill="none" stroke="currentColor" filter="url(#dust)">'
-                '<path d="M-20 207Q100 213 205 179T385 158T570 129T785 97T1120 66" stroke-width="20" opacity=".055"/>'
-                '<path d="M-20 246Q100 262 225 218T405 216T595 166T805 142T1120 110" stroke-width="15" opacity=".045"/>'
+                '<path d="M-20 425Q180 414 380 325T740 235T1120 110" stroke-width="20" opacity=".055"/>'
+                '<path d="M-20 462Q180 454 380 365T740 275T1120 150" stroke-width="15" opacity=".045"/>'
                 '</g>'
                 '<g fill="currentColor">' + "".join(stars) + '</g></svg></div>'
+                f'{render_subscription(state.get("subscription"))}'
                 '<div class="cosmos-deck">'
                 f'<div class="sun {sun_state} activity-{_escape(sun_activity)}" title="Coordinator: {_escape(sun_activity)}" role="img" aria-label="Coordinator: {_escape(sun_activity)}">'
                 '<span>coordinator</span><svg viewBox="0 0 320 320" aria-hidden="true">'
@@ -2149,13 +2424,19 @@ nav{{margin:16px 0 24px;border-color:#30303b}}nav a{{font-size:11px}}
 .sun>span{{font-size:12px;letter-spacing:.1em}}.sun svg{{display:block;width:100%;height:auto;margin-top:16px}}
 .cosmos .roster-scales{{grid-template-columns:1fr;gap:4px}}
 .cosmos .worker-scale{{width:min(100%,469px);justify-self:center;display:grid;grid-template-columns:minmax(0,1fr) 65px;column-gap:8px;align-items:center}}
-.cosmos .worker-scale>svg:not(.model-emblem){{grid-column:1;grid-row:1/3;height:170px;justify-self:start;width:auto;max-width:100%}}
+.cosmos .worker-scale>svg:not(.model-emblem){{grid-column:1;grid-row:1;height:170px;justify-self:start;width:auto;max-width:100%}}
+.worker-legend{{grid-column:2;grid-row:1;display:grid;gap:4px;text-align:center}}
+.worker-legend>div{{display:grid;justify-items:center;gap:3px}}
+.worker-legend span{{font-size:11px;color:#c7ccd7}}
+.cosmos .worker-legend .model-emblem{{grid-column:auto;grid-row:auto;width:30px;height:30px;margin:0}}
 .cosmos .scale-heading{{grid-column:2;grid-row:1;align-self:end;padding:0;display:block}}
 .cosmos .scale-heading strong{{font-size:13px;font-weight:400;color:#c7ccd7}}
 .cosmos .scale-heading span{{display:none}}
 .cosmos .model-emblem{{grid-column:2;grid-row:2;align-self:start;width:30px;height:30px;margin:9px 0 0}}
 .cosmos .worker-scale[data-model="terra"] .worker-dot{{fill:#8abbd6}}
 .cosmos .worker-scale[data-model="luna"] .worker-dot{{fill:#7ee6c2}}
+.cosmos .worker-scale[data-model="astra"] .worker-dot{{fill:#fff0d6;filter:drop-shadow(0 0 4px #ffdc9d)}}
+.cosmos .worker-scale[data-model="astra"] .model-emblem{{filter:drop-shadow(0 0 4px #ffdc9d)}}
 .cosmos .strength-label{{font-size:10px;fill:#9597a5}}.cosmos .strength-axis{{stroke:#42434e}}
 @media(max-width:650px){{
 main{{padding:24px 18px}}header h1{{font-size:42px}}.cosmos-meta{{gap:12px}}.work-clock{{max-width:68%;padding:12px}}.work-clock strong{{font-size:11px}}.work-clock>span{{font-size:19px}}.mutation-total>span{{max-width:86px;line-height:1.5}}
@@ -2336,6 +2617,7 @@ code,pre{{background:#15111b}}
 @media(max-width:800px){{.radar-stage{{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"map map" "left right";gap:16px}}.radar-scope{{width:min(100%,430px);margin:auto}}.trajectory .radar-links{{display:none}}.radar-idle{{grid-template-areas:"map";grid-template-columns:1fr}}}}
 @media(max-width:500px){{.trajectory{{padding:20px 16px}}.radar-stage{{display:flex;flex-direction:column;align-items:stretch}}.radar-scope{{order:0}}.radar-contacts{{display:contents}}.radar-contact{{order:var(--contact-order)}}.radar-detail{{grid-template-columns:minmax(0,1fr);gap:6px}}.radar-contact p{{font-size:12px}}.radar-kicker{{gap:6px}}}}
 
+
 </style><script src="/live_refresh.js" defer></script></head><body><main data-dashboard data-refresh-seconds="{self.refresh_seconds}"><header id="dashboard-header"><h1 class="supervisor-{_escape(supervisor)}" title="Supervisor: {_escape(supervisor)}" aria-label="de67 · supervisor {_escape(supervisor)}">de67</h1><span>{_escape(self.workspace.name)}</span></header>{nav}<div id="refresh-status" class="subtle" role="status">{refresh_label}</div><div id="dashboard-content">{body}</div><footer id="dashboard-sources">{''.join(source_bits)}</footer></main></body></html>'''
         return page.encode("utf-8")
 
@@ -2346,9 +2628,10 @@ def serve(workspace: Path, bind: str, port: int, refresh_seconds: int,
           fratbro_script: Path | None = None,
           fratbro_cache: Path | None = None,
           fratbro_codex: str = "codex",
-          mutator_activity_db: Path | None = None) -> None:
+          mutator_activity_db: Path | None = None,
+          subscription_codex: str | None = None) -> None:
     dashboard = Dashboard(workspace.resolve(), refresh_seconds, sessions_root, sidecar_script,
-                          fratbro_script, fratbro_cache, fratbro_codex, mutator_activity_db)
+                          fratbro_script, fratbro_cache, fratbro_codex, mutator_activity_db, subscription_codex)
 
     class Server(ThreadingHTTPServer):
         def server_bind(self) -> None:
@@ -2411,6 +2694,8 @@ def main() -> None:
                         help="Codex executable used only by the optional narrator")
     parser.add_argument("--mutator-activity-db", type=Path, default=None,
                         help="Optional dedicated OpenClaw mutator agent SQLite store; activity lights the galaxy")
+    parser.add_argument("--subscription-codex", default=None,
+                        help="Optional Codex executable for account-wide weekly quota; no model calls")
     args = parser.parse_args()
     if args.refresh_seconds < 0:
         parser.error("--refresh-seconds cannot be negative")
@@ -2418,7 +2703,7 @@ def main() -> None:
         parser.error("--fratbro-script and --fratbro-cache must be configured together")
     serve(args.workspace, args.bind, args.port, args.refresh_seconds,
           args.codex_sessions, args.sidecar_script, args.fratbro_script, args.fratbro_cache,
-          args.fratbro_codex, args.mutator_activity_db)
+          args.fratbro_codex, args.mutator_activity_db, args.subscription_codex)
 
 
 if __name__ == "__main__":

@@ -29,6 +29,24 @@ def source_policy() -> dict:
     return json.loads(SOURCE.read_text(encoding="utf-8"))
 
 
+class MutationWindDownTests(unittest.TestCase):
+    def test_pending_mutation_delivers_cleanup_reminder_without_changing_route(self):
+        facts = {"deadline_incident", "live_task"}
+        decision = kernel.decide(source_policy(), facts)
+        reply = kernel.decision_json(decision, facts)
+        self.assertEqual(reply["action"], "wait_for_mutation_quiescence")
+        reminder = reply["coordinator_next_action"]
+        for text in ["request id", "turn id", "PID/birth", "transport", "unfinished recoverable task",
+                     "without replaying", "never patch lifecycle SQLite"]:
+            self.assertIn(text, reminder)
+        self.assertNotIn("coordinator_next_action", kernel.decision_json(
+            kernel.decide(source_policy(), {"deadline_incident"}), {"deadline_incident"}))
+
+    def test_supervisor_continuation_repeats_fallback_for_pending_mutation(self):
+        from coordinator_supervisor import coordinator_continuation_prompt, mutation_wind_down_contract
+        self.assertIn(mutation_wind_down_contract(), coordinator_continuation_prompt())
+
+
 class WorkerCapabilityTests(unittest.TestCase):
     def test_dispatch_preserves_setup_recorded_efforts(self):
         with tempfile.TemporaryDirectory() as directory:

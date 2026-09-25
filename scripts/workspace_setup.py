@@ -611,6 +611,10 @@ def configure(
         configured_workers = _worker_capabilities(
             worker_capabilities, required=True
         )
+        # Fresh probes add evidence; a partial setup probe is not a roster reset.
+        for capability in _configured_worker_capabilities(existing_config or {}):
+            if capability not in configured_workers:
+                configured_workers.append(capability)
     else:
         if worker_capabilities:
             raise SetupError("Worker capabilities are recorded only while binding the clock")

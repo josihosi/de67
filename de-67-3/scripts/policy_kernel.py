@@ -259,13 +259,18 @@ def decide(policy: Mapping[str, Any], facts: Iterable[str]) -> Decision:
 
 
 def decision_json(decision: Decision, facts: Iterable[str]) -> dict[str, Any]:
-    return {
+    payload = {
         "action": decision.action,
         "rule": decision.rule_id,
         "reads": list(decision.reads),
         "obligations": list(decision.obligations),
         "facts": sorted(set(facts)),
     }
+
+    if decision.action == "wait_for_mutation_quiescence":
+        from coordinator_supervisor import mutation_wind_down_contract
+        payload["coordinator_next_action"] = mutation_wind_down_contract()
+    return payload
 
 
 def _ledger_objective(route: str) -> str:
@@ -536,9 +541,6 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
         # Setup records successfully probed pairs; defaults do not restrict that roster.
         if choice["reasoning_effort"] not in efforts_by_model[choice["model"]]:
             raise PolicyError("Unsupported worker reasoning effort")
-        if (choice["model"] == "gpt-6-astra"
-                and choice["reasoning_effort"] not in efforts_by_model[choice["model"]]):
-            raise PolicyError("Unsupported ordinary-worker model and reasoning effort")
         if choice not in result:
             result.append(choice)
     if not result:

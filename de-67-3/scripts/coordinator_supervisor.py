@@ -1084,6 +1084,29 @@ def live_coordination_contract() -> str:
     return "Use worker_library.py message/wait for named workers; use native send_message/followup_task/wait_agent for native children. Native workers address /root. Sol owns direction and scope. While a worker owns execution, resolve an independent source, interface or acceptance question when its answer can change the current work or successor, and send the useful finding through that worker's message route. Preserve exclusive input/edit ownership and do not duplicate the worker's investigation. At useful coordination boundaries, inspect compact CPU, memory pressure/swap and task-owned process state when it can reveal missed cleanup or a stalled operation. Reconcile games, bridges, helpers and builds with active assignments and explicit retained-session purposes. Sol owns noticing and arranging cleanup when a worker forgets; verified finished or unused task-owned processes may be closed through their supported graceful lifecycle without asking again. Check exact PID/birth identity and OS exit, preserving journals, unsaved state and exclusive input ownership. Low CPU, age or RSS alone does not establish disuse; keep active work, Josef's applications, shared services in use and intentionally retained sessions. For a stalled active operation, diagnose the specific process and coordinate bounded recovery with its worker; report an exact unresolved ownership or recovery gap while continuing independent work. Use no monitoring daemon, fixed polling quota or arbitrary kill threshold. If no such question remains, waiting is correct. When execution reveals a substantial independent tooling problem, decide who owns it without interrupting useful live state or handing off merely for a changed tactic. After hard diagnosis, reassess whether Luna can perform substantial remaining execution at lower total cost. Apply the returned-work judgment in the result ingress contract before settling consequential changes. Carry forward current findings, retiring source-specific advice once regression proof absorbs it. Notice recurring context/tool obstructions in worker evidence and commission a bounded repair through the existing work ledger; validate that it removes the demonstrated repetition. DE67 method edits retain exclusive mutation/guard ownership. Do not convert worker discovery transcripts into coordinator context or request parallel summaries, periodic reports or new receipts. Use current-root token_usage in work_context as feedback with helper/handoff costs; distinguish expected savings from measured use, never quotas. At worker return or a natural adoption event, reassess remaining whole-claim proof against its immutable deadline; schedule the unmet boundary with an honest estimate. When no useful decision remains, use the worker's wait route, waking no later than the item deadline; apply policy at routing transitions."
 
 
+def mutation_wind_down_contract() -> str:
+    """Remind the coordinator what to reconcile before exclusive review."""
+    return (
+        "Mutation pending: wind down and reconcile workers; dispatch no new work. "
+        "Use worker_library list/status/wait for named workers and native child status for native helpers. "
+        "Ask active owners to reach a safe checkpoint, return their turn, and report retained saves, "
+        "evidence, child turns and exact game/bridge/helper PID ownership. A returned turn may leave "
+        "an unfinished recoverable task; do not complete, abandon or release that task just to clear review. "
+        "If a catalogue still says running after an owner stop or worker return, inspect its exact "
+        "assignment, request id, turn id, coordinator/server binding and last event. Compare those "
+        "with the transport's actual thread/turn state and the owning server's PID/birth identity. "
+        "A stale running flag, old event or quiet CPU alone proves neither activity nor abandonment. "
+        "Use supported reconciliation to record a verified returned/interrupted turn without replaying "
+        "canceled work. Do not repeatedly wait on the same unchanged stale row. If the available route "
+        "cannot reconcile it, report the exact identities, transport evidence and missing operation "
+        "to the supervisor/reviewer; never patch lifecycle SQLite or manufacture a terminal result. "
+        "Arrange graceful cleanup of verified finished task-owned processes through their owners, "
+        "preserving unsaved work and intentional retained sessions. Keep exclusive review blocked "
+        "while an editing turn or its ownership remains genuinely uncertain. Once workers are quiet, "
+        "rerun policy and retire when directed; the external supervisor owns reviewer launch."
+    )
+
+
 def coordinator_continuation_prompt() -> str:
     """Resume the same session without replaying its stable role contracts."""
     return (
@@ -1096,6 +1119,8 @@ def coordinator_continuation_prompt() -> str:
         "are outstanding. The external supervisor owns coordinator/reviewer launches and restarts; "
         "you own coordination of task processes, including supported graceful cleanup under the "
         "existing identity, unsaved-state and input-ownership safeguards.\n"
+        + "If policy reports wait_for_mutation_quiescence, apply this fallback reminder: "
+        + mutation_wind_down_contract()
     )
 
 
@@ -1150,6 +1175,7 @@ def coordinator_prompt(
         "Never review, apply, or resolve a mutation. When the compiled policy says retire_for_mutation_review, dispatch no worker, make no guidance change, and exit immediately so the external supervisor can run the exclusive reviewer.",
         "Do not infer policy from workspace guideline prose; those files are legacy differential fixtures on this branch.",
         worker_selection_contract(),
+        "When a mutation is pending: " + mutation_wind_down_contract(),
         "For every newly spawned ordinary worker, set fork_turns=\"none\" and provide a self-contained task brief. Never omit model selection or pass coordinator or predecessor history. Reusing an already relevant worker remains allowed.",
         coordinator_ledger_contract(),
         ordinary_worker_evidence_contract(),

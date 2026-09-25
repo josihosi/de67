@@ -22,7 +22,7 @@ de67 3   orchestrate implementation, testing, and repair
 | Experimental optional Jev retrieval | [Jev Telescope guide](integrations/jev_telescope/README.md) |
 | Experimental optional Jev evidence advisories | [Jev Pit Crew guide](integrations/jev_pit_crew/README.md) |
 | Problems and recovery | [Troubleshooting](docs/troubleshooting.md) |
-| Release contents and promotion | [GPT-6 release notes](docs/releases/3.2.0.md) and [release promotion](RELEASE_PROMOTION.md) |
+| Release contents and promotion | [GPT-6 release notes](docs/releases/3.2.1.md) and [release promotion](RELEASE_PROMOTION.md) |
 
 The core skill works without optional integrations. The Jev add-ons are separate experimental packages; installing them does not enable provider calls by default. Existing workspaces with a GPT-5.6 capability roster need successful GPT-6 probes before new Phase-3 work. Historical records remain evidence.
 

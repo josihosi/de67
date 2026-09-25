@@ -235,6 +235,17 @@ class WorkspaceSetupTests(unittest.TestCase):
                 bind_clock=False,
             )
 
+    def test_partial_refreeze_probes_preserve_astra_and_higher_effort(self):
+        self.freeze_dfs()
+        broad = (*VERIFIED_WORKERS, ("gpt-6-astra", "low"),
+                 ("gpt-6-astra", "high"), ("gpt-6-sol", "max"))
+        configure(self.workspace, [("origin", "dev")], bind_clock=True,
+                  lineage="stable-lineage", worker_capabilities=broad)
+        configure(self.workspace, [("origin", "dev")], bind_clock=True,
+                  worker_capabilities=VERIFIED_WORKERS)
+        roster = json.loads((self.workspace / CONFIG_RELATIVE_PATH).read_text())["worker_capabilities"]
+        self.assertEqual({(x["model"], x["reasoning_effort"]) for x in roster}, set(broad))
+
     def test_repeated_setup_is_idempotent_and_rejects_added_target(self) -> None:
         self.freeze_dfs()
         first = configure(
@@ -656,7 +667,7 @@ class WorkspaceSetupTests(unittest.TestCase):
 
         self.assertFalse((self.workspace / CONFIG_RELATIVE_PATH).exists())
 
-    def test_repeated_phase_two_setup_replaces_the_roster_with_fresh_probe_results(self) -> None:
+    def test_repeated_phase_two_setup_adds_probe_results_without_erasing_roster(self) -> None:
         self.freeze_dfs()
         configure(
             self.workspace,
@@ -684,6 +695,8 @@ class WorkspaceSetupTests(unittest.TestCase):
             [
                 {"model": "gpt-6-luna", "reasoning_effort": "low"},
                 {"model": "gpt-6-sol", "reasoning_effort": "medium"},
+                {"model": "gpt-6-luna", "reasoning_effort": "high"},
+                {"model": "gpt-6-sol", "reasoning_effort": "low"},
             ],
         )
 

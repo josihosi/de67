@@ -1543,7 +1543,9 @@ class DeadlineHarness:
                     ),
                 )
 
-    def synchronize_delivery_statuses(self, *, persist: bool = True) -> tuple[str, ...]:
+    def synchronize_delivery_statuses(
+        self, *, persist: bool = True, repair_missing: bool = True
+    ) -> tuple[str, ...]:
         """Project durable acceptance into the ledger without changing FS.md."""
         workspace = _workspace_for_state(self.state_path)
         if workspace is None:
@@ -1576,7 +1578,18 @@ class DeadlineHarness:
             claim_id = str(acceptance["claim_id"])
             current = _ledger_claim_block(ledger, claim_id)
             if current is None:
-                raise DeadlineError(f"Accepted claim {claim_id} lacks a work-ledger projection")
+                if not repair_missing:
+                    raise DeadlineError(f"Accepted claim {claim_id} lacks a work-ledger projection")
+                # The ledger is a projection, not the durable acceptance store.
+                # Restore only the latest bound-lineage receipt; never invent proof
+                # or silently accept an existing unchecked assignment.
+                checked = "x" if acceptance["invalidated_at"] is None else " "
+                heading = "## Recovered delivery records"
+                if heading not in ledger.splitlines():
+                    ledger = ledger.rstrip() + "\n\n" + heading + "\n"
+                current = f"- [{checked}] {claim_id} — Restored from durable delivery state."
+                ledger = ledger.rstrip() + "\n\n" + current + "\n"
+                changed.append(claim_id)
             receipt = (
                 f"  - Durable acceptance: #{acceptance['acceptance_number']} via "
                 f"`{acceptance['task_id']}`; SQLite evidence is authoritative."
@@ -1591,16 +1604,19 @@ class DeadlineHarness:
                 projected = _open_ledger_baseline(current)
             if projected != current:
                 ledger = _replace_ledger_claim_block(ledger, claim_id, projected)
-                changed.append(claim_id)
+                if claim_id not in changed:
+                    changed.append(claim_id)
         if persist and changed:
             temporary = ledger_path.with_name(f".{ledger_path.name}.{os.getpid()}.tmp")
             temporary.write_text(ledger, encoding="utf-8")
             os.replace(temporary, ledger_path)
         return tuple(changed)
 
-    def synchronize_dfs_statuses(self, *, persist: bool = True) -> tuple[str, ...]:
+    def synchronize_dfs_statuses(
+        self, *, persist: bool = True, repair_missing: bool = True
+    ) -> tuple[str, ...]:
         """Historical API name; delivery status always projects into the ledger."""
-        return self.synchronize_delivery_statuses(persist=persist)
+        return self.synchronize_delivery_statuses(persist=persist, repair_missing=repair_missing)
 
     def _bound_lineage_id(self) -> str:
         rows = self.connection.execute("SELECT lineage_id FROM lineage_binding").fetchall()
@@ -5006,7 +5022,7 @@ class DeadlineHarness:
             )
             result = dict(self._claim(lineage_id, claim_id))
             result.update(recorded=True, owner_request=owner_request)
-            self.synchronize_dfs_statuses(persist=False)
+            self.synchronize_dfs_statuses(persist=False, repair_missing=False)
             self.connection.commit()
             result["dfs_status_synchronized"] = list(self.synchronize_dfs_statuses())
             return result
@@ -5131,7 +5147,7 @@ class DeadlineHarness:
             result = dict(self._claim(lineage_id, claim_id))
             result["basis_task_id"] = basis_task_id
             result["contradicted_premise"] = contradicted_premise
-            self.synchronize_dfs_statuses(persist=False)
+            self.synchronize_dfs_statuses(persist=False, repair_missing=False)
             self.connection.commit()
             result["dfs_status_synchronized"] = list(
                 self.synchronize_dfs_statuses()
@@ -5658,7 +5674,7 @@ class DeadlineHarness:
             result["deadline_missed"] = (
                 self._claim_deadline_incident(lineage_id, claim_id) is not None
             )
-            self.synchronize_dfs_statuses(persist=False)
+            self.synchronize_dfs_statuses(persist=False, repair_missing=False)
             self.connection.commit()
             result["dfs_status_synchronized"] = list(
                 self.synchronize_dfs_statuses()

@@ -320,7 +320,8 @@ class SupervisorServiceTests(unittest.TestCase):
                 scripts / "coordinator_supervisor.py",
             )
             (scripts / "codex_runner.py").touch()
-            environment = os.environ.copy()
+            environment = {key: value for key, value in os.environ.items()
+                           if not key.startswith("DE67_")}
             environment.update({"DE67_CODEX": "/usr/bin/true", "DE67_TMUX": shutil.which("tmux") or ""})
             command = [sys.executable, str(launcher)]
             try:
@@ -396,7 +397,8 @@ class SupervisorServiceTests(unittest.TestCase):
             shutil.copy2(fixture_root / "service_stack_fake_codex.py", fake_codex)
             fake_codex.chmod(0o755)
 
-            environment = os.environ.copy()
+            environment = {key: value for key, value in os.environ.items()
+                           if not key.startswith("DE67_")}
             environment.update({
                 "DE67_CODEX": str(fake_codex),
                 "DE67_TMUX": shutil.which("tmux") or "",

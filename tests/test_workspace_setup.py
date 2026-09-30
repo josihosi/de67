@@ -181,19 +181,27 @@ class WorkspaceSetupTests(unittest.TestCase):
         self.assertEqual(state.read_bytes(), before)
         self.assertFalse((self.workspace / CONFIG_RELATIVE_PATH).exists())
 
-    def test_refreeze_setup_rejects_incompatible_projection_before_push(self) -> None:
+    def test_refreeze_setup_recovers_missing_projection_without_editing_authoring_state(self) -> None:
         self.accepted_projection()
         ledger = self.workspace / ".de67/work-ledger.md"
         ledger.write_text("# Ledger\n")
         state = self.workspace / DEADLINE_STATE_RELATIVE_PATH
-        before = state.read_bytes()
+        before = {path: path.read_bytes() for path in
+                  (state, ledger, self.workspace / ".de67/FS.md")}
+        workspace_setup._validate_delivery_projection(self.workspace, state)
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        with closing(sqlite3.connect(state)) as connection:
+            accepted_before = connection.execute("SELECT * FROM claim_acceptances").fetchall()
         with patch.object(workspace_setup, "push_checkpoints") as push:
-            with self.assertRaisesRegex(SetupError, "Accepted claim R-001 lacks a work-ledger projection"):
-                configure(self.workspace, [("origin", "dev")], bind_clock=True,
-                          worker_capabilities=VERIFIED_WORKERS)
-        push.assert_not_called()
-        self.assertEqual(state.read_bytes(), before)
-        self.assertFalse((self.workspace / CONFIG_RELATIVE_PATH).exists())
+            configure(self.workspace, [("origin", "dev")], bind_clock=True,
+                      worker_capabilities=VERIFIED_WORKERS)
+        push.assert_called_once()
+        for path in (ledger, self.workspace / ".de67/FS.md"):
+            self.assertEqual(path.read_bytes(), before[path])
+        with closing(sqlite3.connect(state)) as connection:
+            self.assertEqual(connection.execute("SELECT * FROM claim_acceptances").fetchall(),
+                             accepted_before)
+        self.assertTrue((self.workspace / CONFIG_RELATIVE_PATH).exists())
 
     def test_refreeze_projection_preserves_history_and_fresh_obligations(self) -> None:
         self.accepted_projection()

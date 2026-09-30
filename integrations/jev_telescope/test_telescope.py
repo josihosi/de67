@@ -53,7 +53,7 @@ class TelescopeTests(unittest.TestCase):
         packet = self.run_eval(lambda body, timeout: response(body, {self.target: "direct"}))
         self.assertEqual([i["id"] for i in packet["items"]], [self.target])
         item = packet["items"][0]
-        self.assertEqual(item["excerpt"], (self.root / item["path"]).read_text())
+        self.assertEqual(item["excerpt"], (self.root / item["path"]).read_bytes().decode("utf-8"))
         self.assertEqual(item["sha256"], t.digest((self.root / item["path"]).read_bytes()))
         self.assertEqual(item["handle"]["lines"], [1, 3])
 

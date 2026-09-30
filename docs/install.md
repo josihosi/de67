@@ -103,3 +103,7 @@ in PowerShell. Use `jev-pit-crew` in the archive name for that separate add-on. 
 set its workspace mode and limits explicitly, and run its documented tests before enabling it.
 To remove Pit Crew, keep the shared `jev_telescope/provider_guard.py` file if Telescope is also
 installed; remove only files owned by the add-on being retired.
+
+Jev Telescope additionally needs a working `rg` in its Python process's `PATH`. On Windows,
+a WinGet alias may be unlaunchable even when ripgrep is installed; add the installed executable's
+directory to that launch environment's `PATH` and verify `rg --version` there.

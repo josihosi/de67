@@ -55,11 +55,25 @@ class WorkerCapabilityTests(unittest.TestCase):
             config.parent.mkdir(parents=True)
             choices = [
                 {'model': 'gpt-6-luna', 'reasoning_effort': 'low'},
-                {'model': 'gpt-6-sol', 'reasoning_effort': 'xhigh'},
-                {'model': 'gpt-6-sol', 'reasoning_effort': 'max'},
+                {'model': 'gpt-6.1-sol', 'reasoning_effort': 'xhigh'},
+                {'model': 'gpt-6.1-sol', 'reasoning_effort': 'max'},
             ]
             config.write_text(json.dumps({'worker_capabilities': choices}), encoding='utf-8')
             self.assertEqual(kernel.worker_model_choices(workspace), choices)
+
+    def test_existing_sol6_roster_exposes_sol61_without_rewriting_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            config = workspace / '.de67/state/workspace.json'
+            config.parent.mkdir(parents=True)
+            original = json.dumps({'worker_capabilities': [
+                {'model': 'gpt-6-sol', 'reasoning_effort': 'max'},
+                {'model': 'gpt-6.1-sol', 'reasoning_effort': 'max'},
+            ]})
+            config.write_text(original)
+            self.assertEqual(kernel.worker_model_choices(workspace), [
+                {'model': 'gpt-6.1-sol', 'reasoning_effort': 'max'}])
+            self.assertEqual(config.read_text(), original)
 
     def test_setup_recorded_astra_effort_is_not_capped_by_preference(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -987,7 +1001,7 @@ class PolicyKernelTests(unittest.TestCase):
             arguments = calls[0]["example_call"]["arguments"]
             self.assertEqual(arguments["fork_turns"], "none")
             self.assertNotIn("model", arguments)
-            self.assertEqual({c['model'] for c in calls[0]['model_choices']}, {'gpt-6-luna','gpt-6-sol','gpt-6-astra'})
+            self.assertEqual({c['model'] for c in calls[0]['model_choices']}, {'gpt-6-luna','gpt-6.1-sol','gpt-6-astra'})
             for choice in calls[0]['model_choices']:
                 completed_call = {**arguments, **choice}
                 self.assertEqual(completed_call['task_name'], calls[0]['task_name'])
@@ -1351,12 +1365,13 @@ class PolicyKernelTests(unittest.TestCase):
                 harness.normalize_external_supervisor_start("project", now=6)
                 harness.start_task("project", "new", "R-CONT", 100, now=7)
 
-            call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
+            call = next(call for call in kernel.unbound_worker_spawns(workspace, state, "project")
+                        if call["task_id"] == "new")
             packet_text = Path(call["dispatch_packet"]["path"]).read_text(encoding="utf-8")
             self.assertIn(receipt["receipt_id"], packet_text)
             references = list((de67 / "state/worker-dispatch").glob("*-context-*.md"))
-            self.assertEqual(len(references), 1)
-            reference = references[0]
+            self.assertEqual(len(references), 2)
+            reference = next(path for path in references if str(path.resolve()) in packet_text)
             self.assertIn(str(reference.resolve()), packet_text)
             self.assertIn(hashlib.sha256(reference.read_bytes()).hexdigest(), packet_text)
             self.assertIn("Directly related evidence", reference.read_text())
@@ -1381,7 +1396,7 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertIn("apply only where still relevant to the current assignment", packet_text)
             self.assertIn("not current instructions; independent contributions", packet_text)
             self.assertIn('"task_id": "interrupted"', packet_text)
-            self.assertIn('"attempt_terminal_kind": "restart_normalized"', packet_text)
+            self.assertIn('"attempt_terminal_kind": null', packet_text)
             self.assertLess(packet_text.index("session/current-status.json"), packet_text.index("src/response.cpp"))
 
     def test_exploration_packet_selects_owner_not_cross_reference(self) -> None:

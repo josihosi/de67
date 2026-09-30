@@ -5,7 +5,7 @@ description: Explicit third phase of de67. Use when the user says `de67 3` to de
 
 # de67 3 — delivery router
 
-Only GPT-6 Sol, GPT-6 Luna and GPT-6 Astra may run new work. Prefer Luna for workers;
+Only GPT-6.1 Sol, GPT-6 Luna and GPT-6 Astra may run new work. Prefer Luna for workers;
 use Sol for coordination. GPT-5.6 and Terra are retired. Live C-AOL harness playtests
 are Luna-only; other workers delegate them to a GPT-6 Luna subagent.
 
@@ -61,7 +61,7 @@ an explicit start instead of becoming an automatic restart loop. Direct
 foreground execution of `coordinator_supervisor.py` is reserved for tests and attended diagnosis,
 not an ordinary Phase-3 launch.
 
-The supervisor launches an ordinary `gpt-6-sol` coordinator at low against the compiled workspace
+The supervisor launches an ordinary `gpt-6.1-sol` coordinator at low against the compiled workspace
 policy. The coordinator asks the kernel for the next transition and supplies the relevant context
 and role-specific obligations for that route. A due mutation blocks new dispatch. Once all
 already-live worker turns have returned and are no longer editing, the coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh
@@ -91,3 +91,12 @@ A disproved strategy is nonterminal while recoverable repository work remains. M
 is the only planned fresh-coordinator boundary.
 An abnormal process exit remains recoverable, but it is recorded as recovery rather than treated as
 a policy restart. The external supervisor exclusively launches and acknowledges every process.
+
+## Recovery
+
+When machinery blocks authorized work, first consider removing or relaxing the restriction if it
+protects no necessary outcome or safety property. Otherwise use bounded recovery: report briefly
+what is wrong and the concrete supported action that fixes it. Verify the coordinator has both the
+authority and working capability to perform that action; do not prescribe an inaccessible edit or
+an impossible retry. Route a genuinely protected repair to its existing owner with the exact
+blocker. Preserve accepted evidence and real lifecycle records, and stop unchanged retry loops.

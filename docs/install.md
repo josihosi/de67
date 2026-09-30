@@ -16,7 +16,7 @@ LLM endpoint is not a substitute. See the [Codex App Server documentation](https
 | Bundled detached Phase 3 service | macOS and `tmux`; the current service launcher is macOS-only |
 | Native Windows | CLI transport and shared logic; the Unix App Server route is not implemented |
 
-The configured roles are GPT-6 Astra high for specification, GPT-6 Sol low for coordination,
+The configured roles are GPT-6 Astra high for specification, GPT-6.1 Sol low for coordination,
 GPT-6 Luna and Sol for workers, and GPT-6 Astra medium for mutation review. Phase 2 probes the
 needed model/effort combinations and records actual availability. Named workers run with full filesystem access; install and run
 this workflow only in the user's intended execution environment.

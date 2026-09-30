@@ -295,8 +295,11 @@ def _command(codex: str, workspace: Path, environment: dict[str, str]) -> list[s
             ]
         )
     if environment.get("DE67_COORDINATOR_RUN_ID"):
-        model = environment.get("DE67_COORDINATOR_MODEL", "gpt-6-sol").strip()
-        if model not in {"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}:
+        model = environment.get("DE67_COORDINATOR_MODEL", "gpt-6.1-sol").strip()
+        # Migrate an already-running supervisor's old launch setting.
+        if model == "gpt-6-sol":
+            model = "gpt-6.1-sol"
+        if model not in {"gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"}:
             raise RunnerError("Retired model: use GPT-6 Luna, Sol or Astra")
         effort = environment.get(
             "DE67_COORDINATOR_REASONING_EFFORT", "low"
@@ -689,6 +692,8 @@ def run(
         raise RunnerError("Provide non-empty prompt text on standard input")
 
     selected_environment = os.environ.copy() if environment is None else environment.copy()
+    if selected_environment.get("DE67_COORDINATOR_MODEL") == "gpt-6-sol":
+        selected_environment["DE67_COORDINATOR_MODEL"] = "gpt-6.1-sol"
     prompt = current_coordinator_prompt(workspace, prompt, selected_environment)
     codex = _codex_executable(selected_environment)
     root_value = selected_environment.get("DE67_RUNNER_ROOT", "").strip()

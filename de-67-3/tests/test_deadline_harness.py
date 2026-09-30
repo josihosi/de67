@@ -449,7 +449,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             "changed_paths": changed_paths,
             "interval_windows": 30,
             "selected_lane": "DFS.md",
-            "reviewer_model": "gpt-6-sol",
+            "reviewer_model": "gpt-6.1-sol",
             "reviewer_effort": "ultra",
             "capability_roster_digest": capability_roster_digest,
         }
@@ -466,7 +466,7 @@ class DeadlineHarnessTests(unittest.TestCase):
                 selected_lane, reviewer_model, reviewer_effort,
                 capability_roster_digest
             ) VALUES (?, 'project', ?, 31, ?, ?, 30, 'DFS.md',
-                      'gpt-6-sol', 'ultra', ?)
+                      'gpt-6.1-sol', 'ultra', ?)
             """,
             (
                 receipt_id,
@@ -479,6 +479,16 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.harness.connection.commit()
         return receipt_id
 
+    def test_legacy_sol_roster_snapshot_matches_migrated_dispatch(self):
+        self.write_sol_ultra_capability()
+        config = self.state_path.parent / "workspace.json"
+        original = config.read_text().replace("gpt-6.1-sol", "gpt-6-sol")
+        config.write_text(original)
+        proved, reason, digest = self.harness._sol_ultra_capability_snapshot()
+        self.assertTrue(proved)
+        self.assertEqual(digest, hashlib.sha256(original.encode()).hexdigest())
+        self.assertEqual(config.read_text(), original)
+
     def write_sol_ultra_capability(self) -> None:
         (self.state_path.parent / "workspace.json").write_text(
             json.dumps(
@@ -486,7 +496,7 @@ class DeadlineHarnessTests(unittest.TestCase):
                     "version": 1,
                     "worker_capabilities": [
                         {
-                            "model": "gpt-6-sol",
+                            "model": "gpt-6.1-sol",
                             "reasoning_effort": "ultra",
                         }
                     ],
@@ -2463,6 +2473,51 @@ class DeadlineHarnessTests(unittest.TestCase):
         self.assertEqual(changed, ("R-001",))
         self.assertIn("Durable acceptance: #1 via `closure`", ledger)
         self.assertNotIn("Durable acceptance: #2 via `other-closure`", ledger)
+
+    def test_missing_historical_projection_recovers_once_without_changing_proof(self) -> None:
+        workspace, fs = self.functional_projection_workspace()
+        self.establish_accepted_claim()
+        before = tuple(self.harness.connection.execute(
+            "SELECT * FROM claim_acceptances"
+        ).fetchone())
+        ledger = workspace / ".de67/work-ledger.md"
+        ledger.write_text("# Ledger\n\n## Active work\n\n- [ ] R-OTHER — Keep current work.\n")
+        original = ledger.read_text()
+        self.assertEqual(self.harness.synchronize_delivery_statuses(persist=False), ("R-001",))
+        self.assertEqual(ledger.read_text(), original)
+        self.assertEqual(self.harness.synchronize_delivery_statuses(), ("R-001",))
+        self.assertIn("- [x] R-001", ledger.read_text())
+        self.assertIn("Durable acceptance: #1 via `closure`", ledger.read_text())
+        self.assertIn("- [ ] R-OTHER — Keep current work.", ledger.read_text())
+        self.assertEqual(self.harness.synchronize_delivery_statuses(), ())
+        self.assertEqual(tuple(self.harness.connection.execute(
+            "SELECT * FROM claim_acceptances"
+        ).fetchone()), before)
+        self.assertEqual((workspace / ".de67/FS.md").read_text(), fs)
+
+    def test_missing_invalidated_projection_restores_open_not_accepted(self) -> None:
+        workspace, _ = self.functional_projection_workspace()
+        self.establish_accepted_claim()
+        self.harness.connection.execute(
+            "UPDATE claim_acceptances SET invalidated_at = 8 WHERE claim_id = 'R-001'"
+        )
+        self.harness.connection.commit()
+        ledger = workspace / ".de67/work-ledger.md"
+        ledger.write_text("# Ledger\n")
+        self.assertEqual(self.harness.synchronize_dfs_statuses(), ("R-001",))
+        self.assertIn("- [ ] R-001", ledger.read_text())
+        self.assertNotIn("Durable acceptance:", ledger.read_text())
+        self.assertEqual(self.harness.synchronize_dfs_statuses(), ())
+
+    def test_projection_recovery_does_not_overwrite_existing_open_claim(self) -> None:
+        workspace, _ = self.functional_projection_workspace()
+        self.establish_accepted_claim()
+        ledger = workspace / ".de67/work-ledger.md"
+        ledger.write_text("# Ledger\n\n- [ ] R-001 — Conflicting current assignment.\n")
+        original = ledger.read_text()
+        with self.assertRaisesRegex(DeadlineError, "lacks a checked"):
+            self.harness.synchronize_dfs_statuses()
+        self.assertEqual(ledger.read_text(), original)
 
     def test_failed_late_acceptance_preserves_the_new_deadline_miss(self) -> None:
         self.harness.start_task("project", "explore", "R-LATE", 5, now=0)

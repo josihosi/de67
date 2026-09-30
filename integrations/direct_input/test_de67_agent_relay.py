@@ -321,35 +321,85 @@ class RelayTests(unittest.TestCase):
         self.relay.reconcile()
         self.assertEqual(job["status"], "replied")
 
-    def test_acknowledgment_does_not_hide_the_final_answer(self):
-        self.relay.accept(self.message(1, 'hello'))
+    def test_acknowledgment_does_not_hide_followup_or_final(self):
+        self.relay.accept(self.message(1, 'mutator: hello'))
         job = self.relay.jobs['1']
         job.update(status='applied', thread_id='fresh', turn_id='turn')
         self.relay.observe('mutator', self.event({'type': 'agentMessage', 'id': 'ack',
             'phase': 'commentary', 'text': 'Checking that now.'}))
         self.relay.replies()
         self.assertEqual(job['status'], 'awaiting_final')
-        self.relay.observe('mutator', self.event({'type': 'agentMessage', 'id': 'noise',
-            'phase': 'commentary', 'text': 'Routine unrelated progress.'}))
+        self.relay.observe('mutator', self.event({'type': 'agentMessage', 'id': 'detail',
+            'phase': 'commentary', 'text': 'Here is the measured explanation.'}))
         self.relay.replies()
-        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(len(self.sent), 2)
         self.relay.observe('mutator', self.event({'type': 'agentMessage', 'id': 'answer',
             'phase': 'final_answer', 'text': 'Here is the actual answer.'}))
         self.relay.replies()
         self.assertEqual(job['status'], 'replied')
-        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(len(self.sent), 3)
         self.assertIn('actual answer', self.sent[-1][0])
 
-    def test_final_in_same_buffer_replaces_unsent_acknowledgment(self):
-        self.relay.accept(self.message(1, 'hello'))
+
+    def test_multiple_buffered_replies_are_preserved_in_order(self):
+        self.relay.accept(self.message(1, 'mutator: hello'))
         job = self.relay.jobs['1']
         job.update(status='applied', thread_id='fresh', turn_id='turn')
         for identity, phase in [('ack', 'commentary'), ('answer', 'final_answer')]:
             self.relay.observe('mutator', self.event({'type': 'agentMessage', 'id': identity,
                 'phase': phase, 'text': identity}))
         self.relay.replies()
+        self.assertEqual(len(self.sent), 2)
+        self.assertIn('ack', self.sent[0][0])
+        self.assertIn('answer', self.sent[1][0])
+
+
+    def test_reconnect_delivers_missing_followups_once_without_replaying_history(self):
+        self.relay.accept(self.message(1, 'mutator: why slow?'))
+        job = self.relay.jobs['1']
+        job.update(status='awaiting_final', thread_id='fresh', turn_id='turn', reply_item_id='ack')
+        self.relay.save(job)
+        self.relay = Relay(self.config)  # Legacy delivered-ack migration.
+        self.relay.send = lambda *args: self.sent.append(args)
+        rpc = FakeRpc()
+        rpc.history = [
+            {'item': {'type': 'agentMessage', 'id': 'detail', 'phase': 'commentary', 'text': 'Measured answer'}},
+            {'item': {'type': 'agentMessage', 'id': 'ack', 'phase': 'commentary', 'text': 'Checking'}},
+            {'item': {'type': 'agentMessage', 'id': 'earlier', 'phase': 'commentary', 'text': 'Old progress'}},
+            {'item': {'type': 'userMessage', 'clientId': 'discord:1'}},
+        ]
+        for _ in range(2):
+            self.relay.recover_history('mutator', rpc)
+            self.relay.replies()
+        self.assertEqual([text for text, *_ in self.sent], ['**Mutator**\nMeasured answer'])
+        self.relay = Relay(self.config)
+        self.relay.send = lambda *args: self.sent.append(args)
+        self.relay.recover_history('mutator', rpc)
+        self.relay.observe('mutator', self.event(rpc.history[0]['item']))
+        self.relay.replies()
         self.assertEqual(len(self.sent), 1)
-        self.assertIn('answer', self.sent[0][0])
+
+
+    def test_pending_delivery_establishes_anchor_before_shared_turn_history(self):
+        for identity in (1, 2):
+            self.relay.accept(self.message(identity, 'mutator: question'))
+            self.relay.jobs[str(identity)].update(status='awaiting_final', thread_id='fresh',
+                                                 turn_id='turn', reply_item_id='ack')
+        self.relay.jobs['1'].update(status='reply_pending', reply_item_id='detail',
+                                   answer='New detail', reply_final=False)
+        self.relay.sent_reply_ids.add('ack')
+        rpc = FakeRpc()
+        rpc.history = [
+            {'item': {'type': 'agentMessage', 'id': 'detail', 'phase': 'commentary', 'text': 'New detail'}},
+            {'item': {'type': 'agentMessage', 'id': 'old', 'phase': 'commentary', 'text': 'Old hidden progress'}},
+            {'item': {'type': 'agentMessage', 'id': 'ack', 'phase': 'commentary', 'text': 'Ack'}},
+            {'item': {'type': 'userMessage', 'clientId': 'discord:2'}},
+            {'item': {'type': 'userMessage', 'clientId': 'discord:1'}},
+        ]
+        self.relay.recover_history('mutator', rpc)
+        self.relay.replies()
+        self.assertEqual([text for text, *_ in self.sent], ['**Mutator**\nNew detail'])
+
 
     def test_history_before_owner_input_cannot_supply_its_answer(self):
         self.relay.accept(self.message(1, 'hello'))

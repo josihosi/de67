@@ -89,9 +89,9 @@ Images are delivered as native image input. Other files are local file reference
 Audio attachments use the configured Whisper executable (`turbo`, CPU); a text caption
 can supply the `coordinator:` prefix.
 
-The relay forwards the first acknowledgment and the final answer, suppressing intervening
-routine commentary. When both arrive together, only the final answer is sent. Uncertain
-delivery is reported and never automatically resent; persisted native message receipts
+The relay forwards each distinct agent reply, including follow-up commentary, in order.
+Native message IDs prevent duplicate output after history recovery or reconnect. Uncertain
+owner-input delivery is reported and never automatically resent; persisted native message receipts
 can recover the result. A confirmed delivery without a final answer is distinguished
 from an unconfirmed delivery. Receipt recovery reads only the original turn and never
 feeds historical transcripts into a new agent.

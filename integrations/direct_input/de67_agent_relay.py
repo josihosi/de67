@@ -64,6 +64,10 @@ class Relay:
             raise RuntimeError("Initialize the Discord cursor at the explicit channel cutover")
         self.state = json.loads(self.state_path.read_text(encoding="utf-8"))
         self.jobs = {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in self.jobs_dir.glob("*.json")}
+        self.sent_reply_ids = set(self.state.get("sent_reply_ids", []))
+        self.sent_reply_ids.update(job["reply_item_id"] for job in self.jobs.values()
+                                   if job.get("reply_item_id") and job["status"] in
+                                   {"awaiting_final", "replied"})
         self.connections: dict[str, tuple[dict[str, Any], Rpc]] = {}
         self.history_rpc: Rpc | None = None
         self.mutator_process: subprocess.Popen[Any] | None = None
@@ -71,6 +75,7 @@ class Relay:
             if job["status"] == "submitting":
                 job["status"] = "uncertain"
                 self.save(job)
+
 
     def save(self, job: dict[str, Any]) -> None:
         atomic_json(self.jobs_dir / f"{job['id']}.json", job)
@@ -330,16 +335,20 @@ class Relay:
         if item.get("type") == "userMessage":
             client_id = item.get("clientId", "") or ""
             job = self.jobs.get(client_id.removeprefix("discord:"))
-            if (job and job["status"] in {"submitted", "submitting", "uncertain", "applied"}
+            if (job and job["status"] in {"submitted", "submitting", "uncertain"}
                     and job.get("thread_id") == payload.get("threadId") and job["role"] == role):
                 job["status"] = "applied"
                 self.save(job)
                 self.log("applied", id=job["id"], role=role, thread_id=job["thread_id"])
         elif item.get("type") == "agentMessage" and item.get("text"):
+            if item["id"] in self.sent_reply_ids:
+                return
+            # Flush a prior item before recording another; a buffered final must
+            # not overwrite an unsent substantive progress answer.
+            self.replies()
             final = item.get("phase") != "commentary"
             jobs = [job for job in self.jobs.values()
-                    if (job["status"] == "applied" or
-                        (final and job["status"] in {"awaiting_final", "reply_pending"}))
+                    if job["status"] in {"applied", "awaiting_final"}
                     and (eligible_ids is None or job["id"] in eligible_ids)
                     and job["role"] == role and job.get("thread_id") == payload.get("threadId")
                     and (not payload.get("turnId") or job.get("turn_id") == payload["turnId"])]
@@ -350,6 +359,7 @@ class Relay:
                                reply_final=final)
                     self.save(job)
 
+
     def drain(self, role: str, rpc: Rpc) -> None:
         while True:
             try:
@@ -359,6 +369,7 @@ class Relay:
             self.observe(role, message)
 
     def recover_history(self, role: str, rpc: Rpc) -> None:
+        self.replies()  # Establish durable delivery anchors before replaying history.
         for job in self.jobs.values():
             if (job["role"] != role or job["status"] != "uncertain"
                     or not job.get("thread_id") or job.get("turn_id")):
@@ -399,13 +410,25 @@ class Relay:
                 cursor = page.get("nextCursor")
                 if not cursor:
                     break
+            # Output belongs to the shared turn, not each owner-message job.
+            # Resume after its latest delivered item even if a crash left older
+            # delivery anchors in some job files.
+            ordered = [entry.get("item", entry) for entry in reversed(items)]
+            anchors = self.sent_reply_ids | {job["reply_item_id"] for job in self.jobs.values()
+                if job.get("thread_id") == thread_id and job.get("turn_id") == turn_id
+                and job["status"] in {"awaiting_final", "replied"} and job.get("reply_item_id")}
+            last_delivered = max((index for index, item in enumerate(ordered)
+                                  if item.get("id") in anchors), default=-1)
             seen: set[str] = set()
-            for entry in reversed(items):
+            for index, entry in enumerate(reversed(items)):
                 item = entry.get("item", entry)
                 if item.get("type") == "userMessage":
                     seen.add((item.get("clientId") or "").removeprefix("discord:"))
+                if item.get("type") == "agentMessage" and index <= last_delivered:
+                    continue
                 self.observe(role, {"method": "item/completed", "params": {
                     "threadId": thread_id, "turnId": entry.get("turnId"), "item": item}}, seen)
+
 
     def history_connection(self) -> Rpc | None:
         if self.history_rpc is None:
@@ -430,10 +453,15 @@ class Relay:
                 groups.setdefault(job["reply_item_id"], []).append(job)
         for item_id, jobs in groups.items():
             last = jobs[-1]
-            self.send(f"**{last['role'].capitalize()}**\n{last['answer']}", last["id"], item_id)
+            if item_id not in self.sent_reply_ids:
+                self.send(f"**{last['role'].capitalize()}**\n{last['answer']}", last["id"], item_id)
+                self.sent_reply_ids.add(item_id)
+                self.state["sent_reply_ids"] = sorted(self.sent_reply_ids)
+                atomic_json(self.state_path, self.state)
             for job in jobs:
                 job["status"] = "replied" if job.get("reply_final", True) else "awaiting_final"
                 self.save(job)
+
 
     def reconcile(self) -> None:
         if self.mutator_process is not None:

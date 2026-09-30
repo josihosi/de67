@@ -3,6 +3,7 @@ import concurrent.futures
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -10,7 +11,7 @@ SCRIPTS=Path(__file__).resolve().parents[1]/'scripts'
 sys.path.insert(0,str(SCRIPTS))
 from deadline_harness import DeadlineHarness
 from worker_receipt import receipt_envelope
-from work_context import context_view, record_dispatch, record_run, thread_records, ContextError, dispatch_evidence_index
+from work_context import context_view, compact_task_view, record_dispatch, record_run, thread_records, ContextError, dispatch_evidence_index
 import policy_kernel
 
 
@@ -32,6 +33,54 @@ class WorkContextTests(unittest.TestCase):
                 h.start_task('project',task,'R-CONT',100,now=1+i)
                 h.claim_worker('project',task,'worker-'+task,'coordinator','supervisor',now=3+i)
         return state
+
+    def test_task_cli_defaults_to_exact_lifecycle_and_retrievable_proof(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);state=self.setup_state(root)
+            with DeadlineHarness(state) as h:
+                for task in ('branch-a','branch-b'):
+                    h.record_worker_result_receipt('project',task,'worker-'+task,
+                        receipt(task,'worker-'+task,'sessions/'+task),now=5)
+            record_dispatch(root,state,'project','branch-a',root/'packet-a.md','digest-a',
+                            {'related_tasks':['branch-b']})
+            record_dispatch(root,state,'project','branch-b',root/'packet-b.md','digest-b',{})
+            argv=[sys.executable,str(SCRIPTS/'work_context.py'),'--workspace',str(root),
+                  '--state',str(state),'--lineage','project','--task','branch-a']
+            compact=json.loads(subprocess.check_output(argv,text=True))
+            self.assertEqual([t['task_id'] for t in compact['tasks']],['branch-a'])
+            self.assertEqual([r['task_id'] for r in compact['current_proof']],['branch-a'])
+            proof=compact['current_proof'][0]
+            self.assertEqual(proof['evidence_ceiling'],['branch-a preparation only'])
+            self.assertEqual(proof['first_open_boundary'],'Observe independent response')
+            recovered=json.loads(subprocess.check_output(proof['retrieve_argv'],text=True))
+            self.assertEqual(recovered['receipts'][0]['receipt']['bindings'],{'session':'sessions/branch-a'})
+            self.assertEqual([d['task'] for d in compact['dispatches']],['branch-a'])
+            self.assertEqual(compact['dispatches'][0]['path'],str(root/'packet-a.md'))
+            self.assertEqual(compact['deferred_context']['tasks'],1)
+            related=json.loads(subprocess.check_output(compact['full_history_argv'],text=True))
+            self.assertEqual({t['task_id'] for t in related['tasks']},{'branch-a','branch-b'})
+            original=context_view(root,state,'project',task='branch-a',full=True)
+            full=json.loads(subprocess.check_output(argv+['--full'],text=True))
+            for key in ('tasks','selected_context','related_results','dispatches','receipts'):
+                self.assertEqual(full[key],original[key])
+
+    def test_compact_task_keeps_bound_workers_even_after_reassignment(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);state=self.setup_state(root)
+            view=context_view(root,state,'project',task='branch-a')
+            def worker(name,thread,task):
+                return {'name':name,'thread_id':thread,'status':'running','job':'full job',
+                        'assignment':{'task_id':task,'lineage':'project','error':'visible error'}}
+            view['worker_library']['workers']=[
+                worker('bound','worker-branch-a','new-task'),
+                worker('pending','pending-thread','branch-a'),
+                worker('unrelated','worker-branch-b','branch-b')]
+            compact=compact_task_view(view)
+            self.assertEqual([w['name'] for w in compact['worker_library']['workers']],['bound','pending'])
+            self.assertEqual(compact['worker_library']['workers'][0]['assignment']['task_id'],'new-task')
+            self.assertEqual(compact['worker_library']['workers'][1]['assignment']['error'],'visible error')
+            self.assertEqual(compact['deferred_context']['workers'],1)
+            self.assertEqual(len(view['worker_library']['workers']),3)  # Projection never mutates source.
 
     def test_concurrent_contributions_restart_and_exact_branch_context(self):
         with tempfile.TemporaryDirectory() as d:

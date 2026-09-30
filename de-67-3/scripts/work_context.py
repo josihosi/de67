@@ -410,6 +410,71 @@ def provider_context(workspace: Path, evidence: dict) -> dict:
     except json.JSONDecodeError as e:raise ContextError('Context provider returned invalid JSON') from e
 
 
+def compact_task_view(context: dict) -> dict:
+    """CLI status for one exact task; internal dispatch consumers retain context_view."""
+    task=context['task']
+    tasks=[item for item in context['tasks'] if item['task_id']==task]
+    worker_ids={item['worker_id'] for item in tasks if item.get('worker_id')}
+    sessions={item['coordinator_session_id'] for item in tasks if item.get('coordinator_session_id')}
+    cli=context['full_history_argv'][:-1]
+    workers=context['worker_library']
+    relevant_workers=[]
+    for worker in workers.get('workers',[]):
+        assignment=worker.get('assignment') or {}
+        if (worker.get('thread_id') not in worker_ids and
+                not (assignment.get('task_id')==task and assignment.get('lineage')==context['lineage'])):
+            continue
+        relevant_workers.append({key:worker[key] for key in
+                                 ('name','thread_id','model','effort','status','assignment') if key in worker})
+    proof=[]
+    for item in context['selected_context']:
+        receipt=item['receipt']
+        if receipt['task_id']!=task:
+            continue
+        entry={key:receipt.get(key) for key in
+               ('receipt_id','task_id','worker_id','recorded_at','disposition','finding_kind',
+                'verdict','summary','evidence_ceiling','first_divergence','accepted_no_replay',
+                'active_work','first_open_boundary')}
+        entry['retrieve_argv']=[*cli,'--receipt',receipt['receipt_id'],'--full']
+        entry['artifact_count']=len(receipt.get('artifact_refs',[]))
+        proof.append(entry)
+    threads=context['thread_records']
+    records=[]
+    for record in threads['records']:
+        relationships=[item for item in record['relationships'] if item['task_id']==task]
+        if relationships:
+            records.append(record|{'relationships':relationships})
+    result={key:context[key] for key in ('schema','observed_at','lineage','claim','task')}
+    result.update(view='exact-task-status',tasks=tasks,current_proof=proof,
+        worker_library={key:value for key,value in workers.items() if key!='workers'}|{'workers':relevant_workers},
+        dispatches=[item for item in context['dispatches'] if item['task']==task],
+        runner_records=[{key:item[key] for key in ('path','role','run_id','session_id','recorded_at')}|
+                        {'available_artifacts':[name for name,metadata in item['metadata'].items()
+                                                if metadata.get('available')]}
+                        for item in context['runner_records'] if item['session_id'] in sessions],
+        thread_records={'records':records,
+            'unavailable_thread_ids':[identity for identity in threads['unavailable_thread_ids']
+                                      if identity in worker_ids|sessions],
+            'errors':threads['errors'],'evidence_limit':threads['evidence_limit']},
+        current_ledger=str(Path(workers['workspace'])/'.de67/work-ledger.md'),
+        history_query_argv=context['history_query_argv'],
+        full_history_argv=context['full_history_argv'],
+        task_full_argv=[*cli,'--task',task,'--full'],
+        deferred_context={'tasks':len(context['tasks'])-len(tasks),
+            'workers':len(workers.get('workers',[]))-len(relevant_workers),
+            'related_results':len(context['related_results'])-len(proof),
+            'runner_artifact_metadata':'Full file paths, sizes and freshness are in task_full_argv; '
+                'available_artifacts names resolve under each exact runner path.',
+            'matching_receipts_in_history':context['receipt_count']},
+        evidence_limit='Exact task lifecycle, bound named workers and latest task proof/frontier only. '
+            'This is a status projection, not the current owner contract. --full restores the original '
+            'claim context, dispatch relationships and all matching receipts without truncation; '
+            'each proof has an exact full-receipt retrieval command.')
+    if 'checkpoint_worker_template' in context:
+        result['checkpoint_worker_template']=context['checkpoint_worker_template']
+    return result
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--workspace',type=Path,required=True)
@@ -417,7 +482,7 @@ def main():
     p.add_argument('--lineage',required=True)
     for flag in ('claim','task','contains','receipt'):
         p.add_argument('--'+flag)
-    p.add_argument('--full',action='store_true')
+    p.add_argument('--full',action='store_true',help='Full matching history; --task defaults to exact task status and proof retrieval handles')
     p.add_argument('--usage',action='store_true',help='Only current coordinator-tree token usage; --full includes source details')
     p.add_argument('--rebuild',action='store_true',help='Rebuild only derived receipt index; retain source, runs and dispatch relationships')
     a=p.parse_args()
@@ -426,6 +491,8 @@ def main():
         return
     result=context_view(a.workspace,a.state,a.lineage,claim=a.claim,task=a.task,
                         contains=a.contains,receipt_id=a.receipt,full=a.full,rebuild=a.rebuild)
+    if a.task is not None and not a.full and a.contains is None and a.receipt is None:
+        result=compact_task_view(result)
     if not any((a.claim,a.task,a.contains,a.receipt,a.full)):
         result['token_usage']=token_usage_view(a.workspace,a.state,a.lineage)
     print(json.dumps(result,ensure_ascii=False,indent=2))

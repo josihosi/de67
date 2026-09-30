@@ -91,3 +91,12 @@ A disproved strategy is nonterminal while recoverable repository work remains. M
 is the only planned fresh-coordinator boundary.
 An abnormal process exit remains recoverable, but it is recorded as recovery rather than treated as
 a policy restart. The external supervisor exclusively launches and acknowledges every process.
+
+## Recovery
+
+When machinery blocks authorized work, first consider removing or relaxing the restriction if it
+protects no necessary outcome or safety property. Otherwise use bounded recovery: report briefly
+what is wrong and the concrete supported action that fixes it. Verify the coordinator has both the
+authority and working capability to perform that action; do not prescribe an inaccessible edit or
+an impossible retry. Route a genuinely protected repair to its existing owner with the exact
+blocker. Preserve accepted evidence and real lifecycle records, and stop unchanged retry loops.

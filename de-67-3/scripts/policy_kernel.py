@@ -1038,14 +1038,6 @@ def workspace_facts(
                 "SELECT * FROM tasks WHERE lineage_id = ? ORDER BY started_at DESC",
                 (lineage_id,),
             ).fetchall()
-            epoch_generation = None
-            if _table_exists(connection, "external_supervisor_epochs"):
-                epoch = connection.execute(
-                    "SELECT generation FROM external_supervisor_epochs "
-                    "WHERE lineage_id = ? ORDER BY generation DESC LIMIT 1",
-                    (lineage_id,),
-                ).fetchone()
-                epoch_generation = int(epoch[0]) if epoch is not None else None
             terminal_task_ids = {str(row["task_id"]) for row in rows
                                  if row["attempt_terminal_at"] is not None}
             nonterminal = [row for row in rows if row["attempt_terminal_at"] is None]
@@ -1082,18 +1074,14 @@ def workspace_facts(
                 facts.add("unbound_task")
             if not nonterminal:
                 for row in rows:
-                    if epoch_generation is not None and int(
-                        row["supervisor_epoch_generation"]
-                    ) < epoch_generation:
-                        continue
                     kind = row["attempt_terminal_kind"]
-                    if kind == "restart_normalized":
-                        break
-                    if kind:
-                        if not _terminal_result_was_consumed(
-                            connection, lineage_id, row
-                        ):
-                            facts.add(f"worker_{kind}")
+                    if (kind == "restart_normalized" or (
+                            kind == "abandoned" and "abandonment_reason" in row.keys()
+                            and row["abandonment_reason"]
+                            == "external_supervisor_restart_normalization")):
+                        continue
+                    if kind and not _terminal_result_was_consumed(connection, lineage_id, row):
+                        facts.add(f"worker_{kind}")
                         break
         for table, fact in (
             ("claim_deadline_generation_incidents", "deadline_incident"),

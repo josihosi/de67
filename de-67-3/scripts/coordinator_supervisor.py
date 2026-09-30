@@ -1191,10 +1191,11 @@ def coordinator_prompt(
             "it acknowledges this exact restart generation."
         )
         lines.append(
-            "The mutation retired every earlier claim deadline. Read the current ledger and "
-            "remaining FS route, then set one new whole-item deadline you can honestly deliver. "
-            "Include worker startup, diagnosis, implementation, repair, build, rerun, evidence "
-            "return, coordination, known unknowns, and an uncertainty margin; inherit no prior duration."
+            "Resume unfinished work from its persisted task, worker, checkpoint, and deadline. "
+            "An administrative process or model restart does not retire those records. "
+            "If a mutation actually retired a claim deadline, read the remaining FS route and "
+            "set an honest new whole-item deadline through the existing lifecycle before dispatch; "
+            "include startup, diagnosis, implementation, build, rerun, evidence, and uncertainty."
         )
         if restart_reason:
             lines.append(

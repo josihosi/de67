@@ -182,7 +182,7 @@ class SupervisorServiceTests(unittest.TestCase):
                 supervisor_service.start_service(self.workspace)
         remove.assert_not_called()
 
-    def test_explicit_start_normalizes_runtime_ownership_but_preserves_project_truth(self):
+    def test_explicit_start_preserves_work_ownership_clock_and_project_truth(self):
         dfs = self.workspace / ".de67/FS.md"
         ledger = self.workspace / ".de67/work-ledger.md"
         mutations = self.workspace / ".de67/mutation-suggestions.md"
@@ -253,92 +253,43 @@ class SupervisorServiceTests(unittest.TestCase):
             self.state, "lineage", now=4000,
         )
 
-        self.assertEqual(result, {"abandoned_attempts": 1, "released_restart_claim": True})
+        self.assertEqual(result, {"abandoned_attempts": 0, "released_restart_claim": True})
         with DeadlineHarness(self.state) as harness:
-            completed = harness.connection.execute(
-                "SELECT attempt_terminal_kind, completion_evidence FROM tasks "
-                "WHERE lineage_id = 'lineage' AND task_id = 'complete'"
-            ).fetchone()
+            completed = harness._task("lineage", "complete")
             self.assertEqual(completed["attempt_terminal_kind"], "completed")
             self.assertEqual(completed["completion_evidence"], "terminal proof")
-            stale = harness.connection.execute(
-                "SELECT attempt_terminal_kind, abandonment_reason FROM tasks "
-                "WHERE lineage_id = 'lineage' AND task_id = 'stale'"
-            ).fetchone()
-            self.assertEqual(stale["attempt_terminal_kind"], "restart_normalized")
-            self.assertEqual(
-                stale["abandonment_reason"],
-                "external_supervisor_restart_normalization",
-            )
+            stale = harness._task("lineage", "stale")
+            self.assertIsNone(stale["attempt_terminal_at"])
+            self.assertIsNone(stale["abandonment_reason"])
             claim = harness.connection.execute(
-                "SELECT released_at, release_reason FROM worker_claims "
-                "WHERE lineage_id = 'lineage' AND task_id = 'stale'"
+                "SELECT * FROM worker_claims WHERE task_id = 'stale'"
             ).fetchone()
-            self.assertEqual(claim["released_at"], 4000)
-            self.assertEqual(claim["release_reason"], "restart_normalized")
+            self.assertIsNone(claim["released_at"])
+            self.assertEqual(claim["worker_id"], "worker-old")
+            self.assertEqual(claim["coordinator_session_id"], "coordinator-old")
+            self.assertEqual(claim["supervisor_id"], "supervisor-old")
             preserved = harness.coordinator_restart_status("lineage")["coordinator_restart"]
             self.assertTrue(preserved.get("required", preserved.get("pending")))
             self.assertEqual(preserved["generation"], generation)
             self.assertIsNone(preserved["expected_run_id"])
-            retired = harness.connection.execute(
-                "SELECT retired_at, retirement_reason FROM claim_deadline_generations "
-                "WHERE lineage_id = 'lineage' AND claim_id = 'R-001' AND generation = 1"
-            ).fetchone()
-            self.assertEqual(retired["retired_at"], 4000)
-            self.assertEqual(
-                retired["retirement_reason"],
-                "external_supervisor_restart_normalization",
-            )
-            idle_retired = harness.connection.execute(
-                "SELECT retired_at, retirement_reason FROM claim_deadline_generations "
-                "WHERE lineage_id = 'lineage' AND claim_id = 'R-002' AND generation = 1"
-            ).fetchone()
-            self.assertEqual(idle_retired["retired_at"], 4000)
-            self.assertEqual(
-                harness.list_tasks(now=23)["random_mutation"], mutation_before
-            )
-            self.assertEqual(
-                harness.connection.execute(
-                    "SELECT COUNT(*) FROM incidents WHERE lineage_id = 'lineage'"
-                ).fetchone()[0],
-                0,
-            )
-            facts = workspace_facts(
-                self.workspace, self.state, "lineage", now=4000,
-            )
-            self.assertNotIn("worker_abandoned", facts)
-            self.assertNotIn("worker_completed", facts)
-            self.assertNotIn("worker_restart_normalized", facts)
-            self.assertNotIn("open_claim", facts)
-            self.assertNotIn("deadline_expired", facts)
-            harness.claim_coordinator_restart(
-                "lineage", generation, "fresh-run", now=4000,
-            )
-            harness.acknowledge_coordinator_restart(
-                "lineage", generation, "fresh-run", now=4000,
-            )
-            replacement = harness.start_task(
-                "lineage", "replacement", "R-001", 3600, now=4001,
-            )
-            self.assertEqual(replacement["deadline_generation"], 2)
-            self.assertEqual(replacement["deadline_at"], 7601)
-            self.assertEqual(
-                harness.connection.execute(
-                    "SELECT supervisor_epoch_generation FROM tasks "
-                    "WHERE lineage_id = 'lineage' AND task_id = 'replacement'"
-                ).fetchone()[0],
-                1,
-            )
-            fresh_facts = workspace_facts(
-                self.workspace, self.state, "lineage", now=4001,
-            )
-            self.assertIn("open_claim", fresh_facts)
-            self.assertNotIn("deadline_expired", fresh_facts)
-            idle_replacement = harness.start_task(
-                "lineage", "idle-replacement", "R-002", 3600, now=4002,
-            )
-            self.assertEqual(idle_replacement["deadline_generation"], 2)
-            self.assertEqual(idle_replacement["deadline_at"], 7602)
+            self.assertEqual(harness._claim("lineage", "R-001")["deadline_at"], 3601)
+            self.assertIsNone(harness._claim("lineage", "R-001")["retired_at"])
+            self.assertIsNone(harness._claim("lineage", "R-002")["retired_at"])
+            self.assertEqual(harness.list_tasks(now=23)["random_mutation"], mutation_before)
+            self.assertEqual(harness.connection.execute(
+                "SELECT COUNT(*) FROM external_supervisor_epochs WHERE lineage_id = 'lineage'"
+            ).fetchone()[0], 1)
+            facts = workspace_facts(self.workspace, self.state, "lineage", now=4000)
+            self.assertIn("live_task", facts)
+            self.assertIn("open_claim", facts)
+            self.assertIn("deadline_expired", facts)
+            harness.claim_coordinator_restart("lineage", generation, "fresh-run", now=4000)
+            harness.acknowledge_coordinator_restart("lineage", generation, "fresh-run", now=4000)
+            resumed = harness.start_task("lineage", "stale", "R-001", 3600, now=4001)
+            self.assertFalse(resumed["attempt_created"])
+            self.assertEqual(resumed["deadline_generation"], 1)
+            self.assertEqual(resumed["deadline_at"], 3601)
+            self.assertTrue(resumed["deadline_missed"])
         self.assertEqual(dfs.read_text(), "frozen product truth\n")
         self.assertEqual(ledger.read_text(), "unfinished work projection\n")
         self.assertEqual(mutations.read_text(), "queued mutation truth\n")

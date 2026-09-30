@@ -1410,6 +1410,8 @@ class CoordinatorSupervisorTests(unittest.TestCase):
 
         self.assertIn("exact owner-authorized restart reason", prompt)
         self.assertIn("Return to the still-red R-008 tooling route.", prompt)
+        self.assertNotIn("The mutation retired every earlier claim deadline", prompt)
+        self.assertIn("administrative process or model restart does not retire", prompt)
 
     def test_ordinary_worker_route_retrieves_successive_evidence_slices(self) -> None:
         prompt = coordinator_prompt(

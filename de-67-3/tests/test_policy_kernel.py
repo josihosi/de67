@@ -1365,12 +1365,13 @@ class PolicyKernelTests(unittest.TestCase):
                 harness.normalize_external_supervisor_start("project", now=6)
                 harness.start_task("project", "new", "R-CONT", 100, now=7)
 
-            call = kernel.unbound_worker_spawns(workspace, state, "project")[0]
+            call = next(call for call in kernel.unbound_worker_spawns(workspace, state, "project")
+                        if call["task_id"] == "new")
             packet_text = Path(call["dispatch_packet"]["path"]).read_text(encoding="utf-8")
             self.assertIn(receipt["receipt_id"], packet_text)
             references = list((de67 / "state/worker-dispatch").glob("*-context-*.md"))
-            self.assertEqual(len(references), 1)
-            reference = references[0]
+            self.assertEqual(len(references), 2)
+            reference = next(path for path in references if str(path.resolve()) in packet_text)
             self.assertIn(str(reference.resolve()), packet_text)
             self.assertIn(hashlib.sha256(reference.read_bytes()).hexdigest(), packet_text)
             self.assertIn("Directly related evidence", reference.read_text())
@@ -1395,7 +1396,7 @@ class PolicyKernelTests(unittest.TestCase):
             self.assertIn("apply only where still relevant to the current assignment", packet_text)
             self.assertIn("not current instructions; independent contributions", packet_text)
             self.assertIn('"task_id": "interrupted"', packet_text)
-            self.assertIn('"attempt_terminal_kind": "restart_normalized"', packet_text)
+            self.assertIn('"attempt_terminal_kind": null', packet_text)
             self.assertLess(packet_text.index("session/current-status.json"), packet_text.index("src/response.cpp"))
 
     def test_exploration_packet_selects_owner_not_cross_reference(self) -> None:

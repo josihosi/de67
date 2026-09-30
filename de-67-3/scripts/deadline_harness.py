@@ -4047,6 +4047,31 @@ class DeadlineHarness:
                 ).fetchone()
                 if anchor is None:
                     raise DeadlineError("Claim has no worker attempt")
+                if (existing is None and claim["retired_at"] is not None
+                        and claim["retirement_reason"] == "external_supervisor_restart_normalization"):
+                    unresolved = self.connection.execute(
+                        """SELECT 1 FROM tasks WHERE lineage_id = ? AND claim_id = ?
+                             AND deadline_generation = ? AND (
+                                 attempt_terminal_at IS NULL
+                                 OR attempt_terminal_kind = 'restart_normalized'
+                                 OR abandonment_reason = 'external_supervisor_restart_normalization'
+                             ) LIMIT 1""",
+                        (lineage_id, claim_id, claim["deadline_generation"]),
+                    ).fetchone()
+                    if unresolved is not None:
+                        raise DeadlineError(
+                            "Administratively retired claim must restore its existing "
+                            "task before a new attempt can be dispatched"
+                        )
+                    # Completed work stays terminal; only administrative clock
+                    # retirement is undone, before the ordinary deadline checks.
+                    self.connection.execute(
+                        """UPDATE claim_deadline_generations
+                           SET retired_at = NULL, retirement_reason = NULL
+                           WHERE lineage_id = ? AND claim_id = ? AND generation = ?""",
+                        (lineage_id, claim_id, claim["deadline_generation"]),
+                    )
+                    claim = self._claim(lineage_id, claim_id)
                 self._record_miss_if_due(anchor, started_at)
             if (
                 existing is None
@@ -4080,26 +4105,20 @@ class DeadlineHarness:
             advanced_deadline_generation = False
             if existing is None and claim is not None:
                 if claim["retired_at"] is not None:
-                    administrative_restart = (
-                        claim["retirement_reason"]
-                        == "external_supervisor_restart_normalization"
-                    )
-                    restart = None
-                    if not administrative_restart:
-                        restart = self.connection.execute(
-                            """
-                            SELECT * FROM coordinator_restart_requests
-                            WHERE lineage_id = ? AND acknowledged_at IS NOT NULL
-                              AND requested_at >= ?
-                            ORDER BY generation DESC LIMIT 1
-                            """,
-                            (lineage_id, claim["retired_at"]),
-                        ).fetchone()
-                        if restart is None:
-                            raise DeadlineError(
-                                "A retired mutation clock requires its acknowledged fresh "
-                                "coordinator before a new deadline can be armed"
-                            )
+                    restart = self.connection.execute(
+                        """
+                        SELECT * FROM coordinator_restart_requests
+                        WHERE lineage_id = ? AND acknowledged_at IS NOT NULL
+                          AND requested_at >= ?
+                        ORDER BY generation DESC LIMIT 1
+                        """,
+                        (lineage_id, claim["retired_at"]),
+                    ).fetchone()
+                    if restart is None:
+                        raise DeadlineError(
+                            "A retired mutation clock requires its acknowledged fresh "
+                            "coordinator before a new deadline can be armed"
+                        )
                     next_generation = int(claim["deadline_generation"]) + 1
                     self.connection.execute(
                         """
@@ -4355,7 +4374,7 @@ class DeadlineHarness:
             task = self._task(lineage_id, task_id)
             if not created and task["claim_id"] != claim_id:
                 raise DeadlineError("Repeated start cannot change claim id")
-            if not created and task["estimate_seconds"] != claim["estimate_seconds"]:
+            if not created and task["estimate_seconds"] != attempt_estimate:
                 raise DeadlineError("Repeated start cannot change estimate")
             if not created and task["phase_at_dispatch"] != dispatch_phase:
                 raise DeadlineError("Repeated start cannot change dispatch phase")
@@ -4366,6 +4385,8 @@ class DeadlineHarness:
                 raise DeadlineError("Repeated start cannot change dispatch phase epoch")
             if not created and task["closure_gap_id"] != selected_gap_id:
                 raise DeadlineError("Repeated start cannot change closure gap")
+            if not created and self._restore_restart_normalized_task(task, claim):
+                self._record_miss_if_due(self._task(lineage_id, task_id), started_at)
             result = self._status(lineage_id, task_id, started_at)
             result["created"] = created
             result["attempt_created"] = created
@@ -5203,17 +5224,68 @@ class DeadlineHarness:
             self.connection.rollback()
             raise
 
+    def _restore_restart_normalized_task(
+        self, task: sqlite3.Row, claim: sqlite3.Row
+    ) -> bool:
+        """Undo legacy process-reload retirement on an exact repeated start.
+
+        External supervisor epochs retain the administrative normalization audit;
+        dispatch clocks, worker identities and checkpoints are never replaced.
+        Actual terminal results and mutation retirement remain authoritative.
+        """
+        reason = "external_supervisor_restart_normalization"
+        if not (
+            task["attempt_terminal_kind"] in {"restart_normalized", "abandoned"}
+            and task["abandonment_reason"] == reason
+            and task["attempt_terminal_at"] is not None
+            and task["completed_at"] is None
+            and task["integrity_breached_at"] is None
+            and self._worker_finding(task["lineage_id"], task["task_id"]) is None
+        ):
+            return False
+        if task["deadline_generation"] != claim["deadline_generation"]:
+            raise DeadlineError("Cannot restore an attempt from an older deadline generation")
+        if claim["retired_at"] is not None and claim["retirement_reason"] != reason:
+            raise DeadlineError("Cannot restore a task whose deadline was retired by a mutation")
+        owner = self.connection.execute(
+            "SELECT * FROM worker_claims WHERE lineage_id = ? AND task_id = ?",
+            (task["lineage_id"], task["task_id"]),
+        ).fetchone()
+        if (owner is not None and owner["released_at"] is not None
+                and owner["release_reason"] != "restart_normalized"):
+            raise DeadlineError("Cannot restore ownership released for another reason")
+        self.connection.execute(
+            """UPDATE tasks SET terminal_at = NULL, attempt_terminal_at = NULL,
+                   attempt_terminal_kind = NULL, abandoned_at = NULL,
+                   abandonment_reason = NULL
+               WHERE lineage_id = ? AND task_id = ?""",
+            (task["lineage_id"], task["task_id"]),
+        )
+        self.connection.execute(
+            """UPDATE worker_claims SET released_at = NULL, release_reason = NULL
+               WHERE lineage_id = ? AND task_id = ?
+                 AND release_reason = 'restart_normalized'""",
+            (task["lineage_id"], task["task_id"]),
+        )
+        self.connection.execute(
+            """UPDATE claim_deadline_generations
+               SET retired_at = NULL, retirement_reason = NULL
+               WHERE lineage_id = ? AND claim_id = ? AND generation = ?
+                 AND retirement_reason = ?""",
+            (task["lineage_id"], task["claim_id"], task["deadline_generation"], reason),
+        )
+        return True
+
     def normalize_external_supervisor_start(
         self,
         lineage_id: str,
         *,
         now: float | None = None,
     ) -> dict[str, Any]:
-        """Remove prior-epoch runtime ownership before one explicit start."""
+        """Record a process reload without terminating work or renewing its clock."""
 
         lineage_id = self._identity(lineage_id, "Lineage id")
         normalized_at = self._now(now)
-        reason = "external_supervisor_restart_normalization"
         self._begin()
         try:
             self._bind_lineage(lineage_id)
@@ -5227,50 +5299,6 @@ class DeadlineHarness:
                 "(lineage_id, generation, normalized_at) VALUES (?, ?, ?)",
                 (lineage_id, epoch, normalized_at),
             )
-            active = self.connection.execute(
-                """
-                SELECT * FROM tasks
-                WHERE lineage_id = ? AND attempt_terminal_at IS NULL
-                ORDER BY started_at, task_id
-                """,
-                (lineage_id,),
-            ).fetchall()
-            for task in active:
-                self.connection.execute(
-                    """
-                    UPDATE tasks
-                    SET terminal_at = ?, attempt_terminal_at = ?,
-                        attempt_terminal_kind = 'restart_normalized',
-                        abandoned_at = ?, abandonment_reason = ?
-                    WHERE lineage_id = ? AND task_id = ?
-                    """,
-                    (
-                        normalized_at, normalized_at, normalized_at, reason,
-                        lineage_id, task["task_id"],
-                    ),
-                )
-                self.connection.execute(
-                    """
-                    UPDATE worker_claims
-                    SET released_at = ?, release_reason = 'restart_normalized'
-                    WHERE lineage_id = ? AND task_id = ? AND released_at IS NULL
-                    """,
-                    (normalized_at, lineage_id, task["task_id"]),
-                )
-            self.connection.execute(
-                """
-                UPDATE claim_deadline_generations
-                SET retired_at = ?, retirement_reason = ?
-                WHERE lineage_id = ? AND retired_at IS NULL
-                  AND generation = (
-                    SELECT MAX(latest.generation)
-                    FROM claim_deadline_generations AS latest
-                    WHERE latest.lineage_id = claim_deadline_generations.lineage_id
-                      AND latest.claim_id = claim_deadline_generations.claim_id
-                  )
-                """,
-                (normalized_at, reason, lineage_id),
-            )
             released = self.connection.execute(
                 """
                 UPDATE coordinator_restart_requests
@@ -5282,7 +5310,7 @@ class DeadlineHarness:
             ).rowcount
             self.connection.commit()
             return {
-                "abandoned_attempts": len(active),
+                "abandoned_attempts": 0,
                 "released_restart_claim": released > 0,
             }
         except Exception:
@@ -7562,7 +7590,13 @@ def main(argv: list[str] | None = None) -> int:
                                 )
                             )
                         )
-                        if not may_advance_generation:
+                        task_exists = harness.connection.execute(
+                            "SELECT 1 FROM tasks WHERE lineage_id = ? AND task_id = ?",
+                            (arguments.lineage, arguments.task),
+                        ).fetchone()
+                        if (task_exists is not None or not may_advance_generation
+                                or claim["retirement_reason"]
+                                == "external_supervisor_restart_normalization"):
                             claim_estimate = float(claim["estimate_seconds"])
                     result = harness.start_task(
                         arguments.lineage,

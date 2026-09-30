@@ -18,6 +18,7 @@ import mutator_session
 
 
 class AppServerTransportTests(unittest.TestCase):
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
     def test_rpc_backpressure_keeps_connection_and_retains_failure_boundaries(self):
         try:
             from websockets.sync.client import unix_connect
@@ -211,6 +212,7 @@ class AppServerTransportTests(unittest.TestCase):
             self.assertTrue(servers[-1].stopped)
             self.assertFalse(list((workspace / 'codex/state/de67-input').glob('*.sock')))
 
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
     def test_reviews_and_owner_input_resume_original_owner_without_gate_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -286,6 +288,7 @@ class AppServerTransportTests(unittest.TestCase):
             self.assertIn({'type': 'text', 'text': 'User Message: retain me'}, turn['input'])
             self.assertEqual(json.loads(receipt.read_text())['state'], 'submitted')
 
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
     def test_lock_prevents_a_second_mutation_owner(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -308,6 +311,7 @@ class AppServerTransportTests(unittest.TestCase):
                 contender.close()
                 owner.close()
 
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
     def test_review_startup_failure_keeps_shared_conversation_recoverable(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -381,6 +385,19 @@ class AppServerTransportTests(unittest.TestCase):
                 self.assertTrue(command[1].endswith("codex_app_server_runner.py"))
             self.assertEqual(codex_runner._command("codex", workspace,
                              {"DE67_AGENT_TRANSPORT": "cli"})[:2], ["codex", "exec"])
+
+    def test_windows_preserves_cli_and_rejects_unix_transport_before_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            with patch("codex_runner.sys.platform", "win32"), patch.object(transport.subprocess, "Popen") as launch:
+                command = codex_runner._command("codex", workspace, {"DE67_AGENT_TRANSPORT": "cli"})
+                self.assertEqual(command[:2], ["codex", "exec"])
+                with self.assertRaisesRegex(codex_runner.RunnerError, "macOS or Linux"):
+                    codex_runner._command("codex", workspace, {"DE67_AGENT_TRANSPORT": "app-server"})
+                with self.assertRaisesRegex(transport.RpcError, "macOS or Linux"):
+                    transport.run("codex", workspace, "Windows transport boundary")
+                launch.assert_not_called()
+            self.assertFalse((workspace / ".de67").exists())
 
     def test_unknown_transport_is_not_silently_ignored(self):
         with tempfile.TemporaryDirectory() as directory:

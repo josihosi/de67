@@ -12,6 +12,7 @@ import multiprocessing
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import socket
 import subprocess
@@ -159,9 +160,14 @@ def gather(workspace, query, terms, config, deadline):
     # Redirect inventory output to disk so huge trees cannot grow Python's memory without bound.
     with tempfile.TemporaryFile() as inventory:
         try:
-            result = subprocess.run(["rg", "--files", "--hidden", "--", *roots], cwd=workspace,
-                                    stdout=inventory, stderr=subprocess.DEVNULL,
-                                    timeout=max(.01, deadline - time.monotonic())) if roots else None
+            executable = shutil.which("rg") if roots else None
+            if roots and executable is None:
+                raise TelescopeError("rg inventory unavailable")
+            # WinGet publishes a symlink that CreateProcess may reject; launch the
+            # same selected installation's canonical executable on every platform.
+            command = [str(Path(executable).resolve()), "--files", "--hidden", "--", *roots] if roots else None
+            result = subprocess.run(command, cwd=workspace, stdout=inventory, stderr=subprocess.DEVNULL,
+                                    timeout=max(.01, deadline - time.monotonic())) if command else None
         except subprocess.TimeoutExpired:
             info.update(truncated=True, reason="retrieval_timeout")
             return [], info

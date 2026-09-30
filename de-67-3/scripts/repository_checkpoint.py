@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import argparse
 import hashlib
 import json
@@ -216,7 +218,7 @@ def checkpoint_repository(
         return {"status": "disabled", "reason": "workspace target is not configured"}
     _validate_git_target(workdir, target)
 
-    with sqlite3.connect(state) as connection:
+    with closing(sqlite3.connect(state)) as connection, connection:
         connection.row_factory = sqlite3.Row
         _initialize(connection)
         row = connection.execute(

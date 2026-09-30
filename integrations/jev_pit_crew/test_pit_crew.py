@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import closing
+
 import importlib.util
 import json
 import os
@@ -182,7 +184,7 @@ class PitCrewTests(WorkerFixture, unittest.TestCase):
             "Investigating cache invalidation retry behavior found a stale cache.")
 
         def settle_peer(body: dict[str, object], timeout: float) -> dict[str, object]:
-            with sqlite3.connect(self.state) as db:
+            with closing(sqlite3.connect(self.state)) as db, db:
                 db.execute("UPDATE tasks SET attempt_terminal_at=? WHERE lineage_id=? AND task_id=?",
                            (time.time(), "project", "task-b"))
             return self.notice(body, timeout)

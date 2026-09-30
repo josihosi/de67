@@ -206,13 +206,15 @@ def _worker_capabilities(
         if len(pair) != 2:
             raise SetupError("Worker capabilities use MODEL REASONING_EFFORT")
         model, effort = (str(value).strip() for value in pair)
+        if model == "gpt-6-sol":
+            model = "gpt-6.1-sol"
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", model) or not re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9._-]*", effort
         ):
             raise SetupError("Worker capabilities use MODEL REASONING_EFFORT")
         efforts = {
             "gpt-6-luna": {"low", "medium", "high", "xhigh", "max"},
-            "gpt-6-sol": {"low", "medium", "high", "xhigh", "max", "ultra"},
+            "gpt-6.1-sol": {"low", "medium", "high", "xhigh", "max", "ultra"},
             "gpt-6-astra": {"low", "medium", "high", "xhigh", "max", "ultra"},
         }
         if model not in efforts or effort not in efforts[model]:
@@ -224,7 +226,7 @@ def _worker_capabilities(
         result.append({"model": model, "reasoning_effort": effort})
     if required:
         models = {item["model"] for item in result}
-        required_models = {"gpt-6-luna", "gpt-6-sol"}
+        required_models = {"gpt-6-luna", "gpt-6.1-sol"}
         if not required_models.issubset(models):
             raise SetupError("Record successfully probed Luna and Sol capabilities")
         if len({item["reasoning_effort"] for item in result}) < 2:

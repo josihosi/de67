@@ -1126,8 +1126,8 @@ def coordinator_continuation_prompt() -> str:
 
 def worker_selection_contract() -> str:
     return (
-        "Only GPT-6 Luna, GPT-6 Sol and GPT-6 Astra may execute new work, including native helpers and resumed workers. "
-        "Model choice: use GPT-6 Luna for playtesting, clear execution and ordinary repairs; GPT-6 Sol for "
+        "Only GPT-6 Luna, GPT-6.1 Sol and GPT-6 Astra may execute new work, including native helpers and resumed workers. "
+        "Model choice: use GPT-6 Luna for playtesting, clear execution and ordinary repairs; GPT-6.1 Sol for "
         "coupled implementation or difficult diagnosis; GPT-6 Astra when stronger implementation judgment "
         "may reduce uncertainty or rework. Sol also owns coordination in its separate coordinator role. After a "
         "hard repair, prefer Luna for substantial remaining playtesting when the handoff saves total "
@@ -2061,7 +2061,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lineage", required=True)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--run-root", required=True)
-    parser.add_argument("--coordinator-model", default="gpt-6-sol")
+    parser.add_argument("--coordinator-model", default="gpt-6.1-sol")
     parser.add_argument(
         "--coordinator-reasoning-effort",
         choices=("low", "medium", "high", "xhigh", "max", "ultra"),

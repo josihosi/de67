@@ -2,7 +2,7 @@
 
 > Don't let your vibe coding project turn 67. Stop aura farming and start building. You need to **de67**.
 
-de67 helps a Codex team discuss an idea, freeze a specification grounded in the code, and carry implementation through testing and repair. A GPT-6 Sol coordinator assigns GPT-6 Luna and Sol workers; GPT-6 Astra handles independent review. The ledger and deadline clock keep evidence and progress across handoffs.
+de67 helps a Codex team discuss an idea, freeze a specification grounded in the code, and carry implementation through testing and repair. A GPT-6.1 Sol coordinator assigns GPT-6 Luna and Sol workers; GPT-6 Astra handles independent review. The ledger and deadline clock keep evidence and progress across handoffs.
 
 ```text
 de67 1   plan and discuss the idea
@@ -10,7 +10,7 @@ de67 2   inspect the code and freeze the specification
 de67 3   orchestrate implementation, testing, and repair
 ```
 
-[![Synthetic de67 dashboard demo with active GPT-6 Sol, Luna, and Astra workers, campaign fuel, and trajectory radar.](docs/assets/dashboard-overview.png)](integrations/dashboard/README.md)
+[![Synthetic de67 dashboard demo with active GPT-6.1 Sol, Luna, and Astra workers, campaign fuel, and trajectory radar.](docs/assets/dashboard-overview.png)](integrations/dashboard/README.md)
 
 *Synthetic demo of the release candidate dashboard. The dashboard and its narrator are optional.*
 

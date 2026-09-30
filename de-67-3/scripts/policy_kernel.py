@@ -524,7 +524,7 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
     configured = json.loads(path.read_text(encoding="utf-8")).get("worker_capabilities") if path.is_file() else None
     efforts_by_model = {
         "gpt-6-luna": ("low", "medium", "high", "xhigh", "max"),
-        "gpt-6-sol": ("low", "medium", "high", "xhigh", "max", "ultra"),
+        "gpt-6.1-sol": ("low", "medium", "high", "xhigh", "max", "ultra"),
         "gpt-6-astra": ("low", "medium", "high", "xhigh", "max", "ultra"),
     }
     capabilities = configured if configured is not None else [
@@ -535,6 +535,8 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
         raise PolicyError("worker_capabilities must be a list")
     result = []
     for value in capabilities:
+        if isinstance(value, dict) and value.get("model") == "gpt-6-sol":
+            value = {**value, "model": "gpt-6.1-sol"}
         if not isinstance(value, dict) or value.get("model") not in efforts_by_model:
             continue
         choice = {"model": value["model"], "reasoning_effort": value.get("reasoning_effort", "medium")}

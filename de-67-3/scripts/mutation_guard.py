@@ -395,7 +395,7 @@ def require_universal_random_review(
         )
     if not bool(row["universal_required"]):
         reason = row["universal_capability_reason"] or (
-            "the due-time workspace roster did not prove gpt-6-sol/ultra"
+            "the due-time workspace roster did not prove gpt-6.1-sol/ultra"
         )
         raise GuardError(f"Universal review was deferred at due time: {reason}")
     if (
@@ -660,7 +660,7 @@ def _ensure_universal_receipt_schema(connection: sqlite3.Connection) -> None:
             changed_paths TEXT NOT NULL,
             interval_windows INTEGER NOT NULL CHECK (interval_windows = 30),
             selected_lane TEXT NOT NULL CHECK (selected_lane = 'DFS.md'),
-            reviewer_model TEXT NOT NULL CHECK (reviewer_model IN ('gpt-5.6-sol', 'gpt-6-sol')),
+            reviewer_model TEXT NOT NULL CHECK (reviewer_model IN ('gpt-5.6-sol', 'gpt-6-sol', 'gpt-6.1-sol')),
             reviewer_effort TEXT NOT NULL CHECK (reviewer_effort = 'ultra'),
             capability_roster_digest TEXT,
             UNIQUE (lineage_id, cycle_number, receipt_id),
@@ -683,17 +683,17 @@ def _ensure_universal_receipt_schema(connection: sqlite3.Connection) -> None:
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'universal_review_receipts'"
     ).fetchone()
     schema = str(schema_row[0]) if schema_row else ""
-    if "gpt-6-sol" not in schema:
-        old_check = r"CHECK\s*\(\s*reviewer_model\s*=\s*'gpt-5\.6-sol'\s*\)"
+    if "gpt-6.1-sol" not in schema:
+        old_check = r"CHECK\s*\(\s*reviewer_model\s*(?:=\s*'gpt-5\.6-sol'|IN\s*\(\s*'gpt-5\.6-sol'\s*,\s*'gpt-6-sol'\s*\))\s*\)"
         widened, replacements = re.subn(
             old_check,
-            "CHECK (reviewer_model IN ('gpt-5.6-sol', 'gpt-6-sol'))",
+            "CHECK (reviewer_model IN ('gpt-5.6-sol', 'gpt-6-sol', 'gpt-6.1-sol'))",
             schema,
             count=1,
             flags=re.IGNORECASE,
         )
         widened, table_replacements = re.subn(
-            r"\bCREATE TABLE(?: IF NOT EXISTS)? universal_review_receipts\b",
+            r'\bCREATE TABLE(?: IF NOT EXISTS)? "?universal_review_receipts\b"?' ,
             "CREATE TABLE universal_review_receipts_v2",
             widened,
             count=1,
@@ -754,7 +754,7 @@ def persist_universal_review_receipt(
         "changed_paths": list(changed_paths),
         "interval_windows": 30,
         "selected_lane": DFS_FILE,
-        "reviewer_model": "gpt-6-sol",
+        "reviewer_model": "gpt-6.1-sol",
         "reviewer_effort": "ultra",
         "capability_roster_digest": capability_roster_digest,
     }
@@ -809,7 +809,7 @@ def persist_universal_review_receipt(
                 candidate_digest, changed_paths, interval_windows,
                 selected_lane, reviewer_model, reviewer_effort,
                 capability_roster_digest
-            ) VALUES (?, ?, ?, ?, ?, ?, 30, 'DFS.md', 'gpt-6-sol', 'ultra', ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, 30, 'DFS.md', 'gpt-6.1-sol', 'ultra', ?)
             """,
             (
                 receipt_id,

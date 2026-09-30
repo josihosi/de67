@@ -164,7 +164,7 @@ class AppServerTransportTests(unittest.TestCase):
                 env = {'DE67_RUNNER_ACTIVE_DIR': str(run_dir), 'CODEX_HOME': str(workspace / 'codex'),
                        'DE67_PROCESS_ROLE': role, 'DE67_COORDINATOR_RUN_ID': 'run',
                        'DE67_COORDINATOR_RESUME_SESSION': resume,
-                       'DE67_COORDINATOR_MODEL': 'gpt-6-astra' if role == 'mutation-reviewer' else 'gpt-6-sol',
+                       'DE67_COORDINATOR_MODEL': 'gpt-6-astra' if role == 'mutation-reviewer' else 'gpt-6.1-sol',
                        'DE67_COORDINATOR_REASONING_EFFORT': 'ultra' if role == 'mutation-reviewer' else 'low'}
                 with patch.dict(os.environ, env, clear=True), patch.object(transport.sys, 'platform', 'darwin'), \
                      patch.object(transport.signal, 'signal'), patch.object(transport.subprocess, 'Popen', Server), \
@@ -174,7 +174,7 @@ class AppServerTransportTests(unittest.TestCase):
                 self.assertEqual(launch[0], 'thread/resume' if resume else 'thread/start')
                 self.assertEqual(launch[1]['approvalPolicy'], 'never')
                 self.assertEqual(launch[1]['sandbox'], 'danger-full-access')
-                self.assertEqual(launch[1]['model'], env['DE67_COORDINATOR_MODEL'])
+                self.assertEqual(launch[1]['model'], 'gpt-6.1-sol' if resume == 'legacy-sol' else env['DE67_COORDINATOR_MODEL'])
                 self.assertTrue(servers[-1].stopped)
                 self.assertFalse(list((workspace / '.de67/state').glob('*-input.json')))
                 self.assertFalse(list((workspace / 'codex/state/de67-input').glob('*.sock')))
@@ -200,7 +200,7 @@ class AppServerTransportTests(unittest.TestCase):
                 self.assertEqual(persisted['state'], 'idle')
 
             # The persistent mutator must not turn coordinator resets into resumes.
-            env.update(DE67_PROCESS_ROLE='coordinator', DE67_COORDINATOR_MODEL='gpt-6-sol')
+            env.update(DE67_PROCESS_ROLE='coordinator', DE67_COORDINATOR_MODEL='gpt-6.1-sol')
 
             with patch.dict(os.environ, env, clear=True), patch.object(transport.sys, 'platform', 'darwin'), \
                  patch.object(transport.signal, 'signal'), patch.object(transport.subprocess, 'Popen', Server), \

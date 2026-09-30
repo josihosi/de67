@@ -311,6 +311,8 @@ def describe(workspace: Path, name: str, job: str | None = None, *, model: str |
                 raise WorkerLibraryError("Revise a worker's reusable job only while it is idle")
             from policy_kernel import worker_model_choices
             model, effort = model or worker["model"], effort or worker["effort"]
+            if model == "gpt-6-sol":
+                model = "gpt-6.1-sol"
             if {"model": model, "reasoning_effort": effort} not in worker_model_choices(Path(workspace)):
                 raise WorkerLibraryError("Choose an available ordinary-worker model and effort")
             db.execute("UPDATE workers SET job=?,model=?,effort=? WHERE name=?",
@@ -698,7 +700,10 @@ class WorkerDispatcher:
                 with closing(_connect(self.workspace)) as db:
                     assignment = dict(db.execute("SELECT * FROM assignments WHERE id=?", (request["assignment_id"],)).fetchone())
                     worker = _worker(db, request["name"])
-                if worker["model"] not in {"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}:
+                # Upgrade the next turn, preserving the conversation and past receipts.
+                if worker["model"] == "gpt-6-sol":
+                    worker["model"] = "gpt-6.1-sol"
+                if worker["model"] not in {"gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"}:
                     raise WorkerLibraryError("Worker model is retired; use GPT-6 Luna, Sol or Astra")
                 from policy_kernel import worker_model_choices
                 if {"model": worker["model"], "reasoning_effort": worker["effort"]} not in worker_model_choices(self.workspace):
@@ -750,7 +755,7 @@ class WorkerDispatcher:
                     if revision != assignment["assignment_revision"]:
                         raise WorkerLibraryError("Assignment changed while its worker conversation was loading; prepare its current packet again")
                 with closing(_connect(self.workspace, write=True)) as db, db:
-                    db.execute("UPDATE workers SET thread_id=? WHERE name=?", (thread["id"], worker["name"]))
+                    db.execute("UPDATE workers SET thread_id=?,model=? WHERE name=?", (thread["id"], worker["model"], worker["name"]))
                 assignment["worker_id"] = thread["id"]
                 self._update(assignment["id"], worker_id=thread["id"])
                 phase = "claiming"

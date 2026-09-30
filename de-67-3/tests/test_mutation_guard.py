@@ -88,11 +88,33 @@ class MutationGuardTests(unittest.TestCase):
             connection.execute("""INSERT INTO universal_review_receipts
                 (receipt_id, lineage_id, cycle_number, validated_at, candidate_digest,
                  changed_paths, interval_windows, selected_lane, reviewer_model, reviewer_effort)
-                VALUES ('new', 'project', 2, 2.0, 'candidate', '[]', 30, 'DFS.md', 'gpt-6-sol', 'ultra')""")
+                VALUES ('new', 'project', 2, 2.0, 'candidate', '[]', 30, 'DFS.md', 'gpt-6.1-sol', 'ultra')""")
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 connection.execute("UPDATE universal_review_receipts SET candidate_digest='changed' WHERE receipt_id='old'")
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 connection.execute("DELETE FROM universal_review_receipts WHERE receipt_id='new'")
+
+    def test_sol6_receipt_schema_widens_for_sol61_and_preserves_old_row(self):
+        with sqlite3.connect(":memory:") as connection:
+            guard._ensure_universal_receipt_schema(connection)
+            schema = connection.execute("SELECT sql FROM sqlite_master WHERE name='universal_review_receipts'").fetchone()[0]
+            connection.execute("DROP TABLE universal_review_receipts")
+            connection.execute(schema.replace(", 'gpt-6.1-sol'", ""))
+            # SQLite quotes the name after the prior release's table rebuild.
+            connection.execute("ALTER TABLE universal_review_receipts RENAME TO prior_receipts")
+            connection.execute("ALTER TABLE prior_receipts RENAME TO universal_review_receipts")
+            connection.execute("""INSERT INTO universal_review_receipts
+                (receipt_id,lineage_id,cycle_number,validated_at,candidate_digest,changed_paths,
+                 interval_windows,selected_lane,reviewer_model,reviewer_effort)
+                VALUES ('old','project',1,1,'digest','[]',30,'DFS.md','gpt-6-sol','ultra')""")
+            guard._ensure_universal_receipt_schema(connection)
+            self.assertEqual(connection.execute("SELECT reviewer_model FROM universal_review_receipts").fetchone()[0], "gpt-6-sol")
+            connection.execute("""INSERT INTO universal_review_receipts
+                (receipt_id,lineage_id,cycle_number,validated_at,candidate_digest,changed_paths,
+                 interval_windows,selected_lane,reviewer_model,reviewer_effort)
+                VALUES ('new','project',2,2,'digest','[]',30,'DFS.md','gpt-6.1-sol','ultra')""")
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+                connection.execute("DELETE FROM universal_review_receipts WHERE receipt_id='old'")
 
     def test_canonical_work_ledger_template_has_no_fake_active_item(self) -> None:
         self.assertEqual(guard.active_work_items(WORK_LEDGER_TEXT), ())
@@ -1689,7 +1711,7 @@ class MutationGuardTests(unittest.TestCase):
                     "version": 1,
                     "worker_capabilities": [
                         {
-                            "model": "gpt-6-sol",
+                            "model": "gpt-6.1-sol",
                             "reasoning_effort": capability_effort,
                         }
                     ],
@@ -1725,7 +1747,7 @@ class MutationGuardTests(unittest.TestCase):
                         "version": 1,
                         "worker_capabilities": [
                             {
-                                "model": "gpt-6-sol",
+                                "model": "gpt-6.1-sol",
                                 "reasoning_effort": "ultra",
                             }
                         ],
@@ -1784,7 +1806,7 @@ class MutationGuardTests(unittest.TestCase):
         )
         self.assertEqual(result, 1)
         self.assertIn("deferred at due time", output)
-        self.assertIn("no persisted gpt-6-sol/ultra probe", output)
+        self.assertIn("no persisted gpt-6.1-sol/ultra probe", output)
 
     def test_universal_receipt_is_atomic_immutable_and_required_for_resolution(self) -> None:
         baseline, candidate = self.method_candidate_roots()
@@ -1812,7 +1834,7 @@ class MutationGuardTests(unittest.TestCase):
             self.assertEqual(receipt["cycle_number"], cycle)
             self.assertEqual(receipt["interval_windows"], 30)
             self.assertEqual(receipt["selected_lane"], "DFS.md")
-            self.assertEqual(receipt["reviewer_model"], "gpt-6-sol")
+            self.assertEqual(receipt["reviewer_model"], "gpt-6.1-sol")
             self.assertEqual(receipt["reviewer_effort"], "ultra")
             self.assertEqual(
                 receipt["capability_roster_digest"],
@@ -1904,7 +1926,7 @@ class MutationGuardTests(unittest.TestCase):
                     "version": 1,
                     "worker_capabilities": [
                         {
-                            "model": "gpt-6-sol",
+                            "model": "gpt-6.1-sol",
                             "reasoning_effort": "xhigh",
                         }
                     ],

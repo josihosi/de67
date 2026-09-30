@@ -1320,7 +1320,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("exposes a contradiction or a missing causal step", prompt)
         self.assertIn("Internal machine state and FS detail", prompt)
         self.assertIn('fork_turns="none"', prompt)
-        self.assertIn("Only GPT-6 Luna, GPT-6 Sol and GPT-6 Astra", prompt)
+        self.assertIn("Only GPT-6 Luna, GPT-6.1 Sol and GPT-6 Astra", prompt)
         self.assertIn("Never omit model selection", prompt)
         self.assertIn("pass coordinator or predecessor history", prompt)
         # Verify the complete producing contract reaches routing without freezing its prose.
@@ -1533,7 +1533,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(arguments.coordinator_model, "gpt-6-sol")
+        self.assertEqual(arguments.coordinator_model, "gpt-6.1-sol")
         self.assertEqual(arguments.coordinator_reasoning_effort, "low")
         self.assertEqual(arguments.runner, ["runner", "--runner-owned-option"])
 
@@ -1563,7 +1563,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.run_root,
             extra_env={
                 **self.environment("mutation-lifecycle"),
-                "DE67_COORDINATOR_MODEL": "gpt-6-sol",
+                "DE67_COORDINATOR_MODEL": "gpt-6.1-sol",
                 "DE67_COORDINATOR_REASONING_EFFORT": "low",
             },
             run_id_factory=lambda _generation: "fresh-low-coordinator",
@@ -1576,7 +1576,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         ])
         self.assertEqual(
             [(event["model"], event["effort"]) for event in events],
-            [("gpt-6-astra", "medium"), ("gpt-6-sol", "low")],
+            [("gpt-6-astra", "medium"), ("gpt-6.1-sol", "low")],
         )
         reviewer_run = next(
             path for path in self.run_root.iterdir() if path.name.startswith("mutation-")
@@ -1617,7 +1617,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.run_root,
             extra_env={
                 **self.environment("mutation-after-coordinator"),
-                "DE67_COORDINATOR_MODEL": "gpt-6-sol",
+                "DE67_COORDINATOR_MODEL": "gpt-6.1-sol",
                 "DE67_COORDINATOR_REASONING_EFFORT": "low",
             },
             run_id_factory=lambda _generation: next(run_ids),

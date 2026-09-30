@@ -55,11 +55,25 @@ class WorkerCapabilityTests(unittest.TestCase):
             config.parent.mkdir(parents=True)
             choices = [
                 {'model': 'gpt-6-luna', 'reasoning_effort': 'low'},
-                {'model': 'gpt-6-sol', 'reasoning_effort': 'xhigh'},
-                {'model': 'gpt-6-sol', 'reasoning_effort': 'max'},
+                {'model': 'gpt-6.1-sol', 'reasoning_effort': 'xhigh'},
+                {'model': 'gpt-6.1-sol', 'reasoning_effort': 'max'},
             ]
             config.write_text(json.dumps({'worker_capabilities': choices}), encoding='utf-8')
             self.assertEqual(kernel.worker_model_choices(workspace), choices)
+
+    def test_existing_sol6_roster_exposes_sol61_without_rewriting_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            config = workspace / '.de67/state/workspace.json'
+            config.parent.mkdir(parents=True)
+            original = json.dumps({'worker_capabilities': [
+                {'model': 'gpt-6-sol', 'reasoning_effort': 'max'},
+                {'model': 'gpt-6.1-sol', 'reasoning_effort': 'max'},
+            ]})
+            config.write_text(original)
+            self.assertEqual(kernel.worker_model_choices(workspace), [
+                {'model': 'gpt-6.1-sol', 'reasoning_effort': 'max'}])
+            self.assertEqual(config.read_text(), original)
 
     def test_setup_recorded_astra_effort_is_not_capped_by_preference(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -987,7 +1001,7 @@ class PolicyKernelTests(unittest.TestCase):
             arguments = calls[0]["example_call"]["arguments"]
             self.assertEqual(arguments["fork_turns"], "none")
             self.assertNotIn("model", arguments)
-            self.assertEqual({c['model'] for c in calls[0]['model_choices']}, {'gpt-6-luna','gpt-6-sol','gpt-6-astra'})
+            self.assertEqual({c['model'] for c in calls[0]['model_choices']}, {'gpt-6-luna','gpt-6.1-sol','gpt-6-astra'})
             for choice in calls[0]['model_choices']:
                 completed_call = {**arguments, **choice}
                 self.assertEqual(completed_call['task_name'], calls[0]['task_name'])

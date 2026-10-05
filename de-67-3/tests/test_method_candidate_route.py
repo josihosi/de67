@@ -1,4 +1,5 @@
 from pathlib import Path
+from contextlib import closing
 import json
 import subprocess
 import sys
@@ -48,7 +49,7 @@ class MethodCandidateRouteTests(unittest.TestCase):
             self.assertNotIn(".de67/FS.md slice for " + CLAIM, packet)
             self.assertNotIn(".agents/skills/caol-harness/SKILL.md", packet)
             import sqlite3
-            with sqlite3.connect(state) as db:
+            with closing(sqlite3.connect(state)) as db:
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM worker_claims").fetchone()[0], 0)
 
     def test_markers_cannot_escape_owning_item_or_fence(self):

@@ -25,8 +25,11 @@ from codex_app_server_runner import Rpc, RpcError, atomic_json
 
 
 def route_message(text: str) -> tuple[str, str]:
-    prefix = re.match(r"^\s*coordinator:\s*", text, re.IGNORECASE)
-    return ("coordinator", text[prefix.end():]) if prefix else ("mutator", text)
+    prefix = re.match(r"^\s*(mutator|m|coordinator):\s*", text, re.IGNORECASE)
+    if prefix:
+        role = "coordinator" if prefix.group(1).lower() == "coordinator" else "mutator"
+        return role, text[prefix.end():]
+    return "coordinator", text
 
 
 def is_owner_message(message: dict[str, Any], config: dict[str, Any]) -> bool:
@@ -75,7 +78,6 @@ class Relay:
             if job["status"] == "submitting":
                 job["status"] = "uncertain"
                 self.save(job)
-
 
     def save(self, job: dict[str, Any]) -> None:
         atomic_json(self.jobs_dir / f"{job['id']}.json", job)
@@ -272,7 +274,9 @@ class Relay:
         try:
             binding = json.loads(path.read_text(encoding="utf-8"))
             if (binding.get("role") != role or binding.get("workspace") != str(self.workspace)
-                    or binding.get("state") != "active"):
+                    or not (binding.get("state") == "active" or
+                            (role == "coordinator" and binding.get("state") == "finished"
+                             and binding.get("idle_owner_resume") is True))):
                 return None
             os.kill(binding["server_pid"], 0)
             os.kill(binding["runner_pid"], 0)
@@ -291,10 +295,14 @@ class Relay:
                                    "capabilities": {"experimentalApi": True}})
             rpc.send({"method": "initialized", "params": {}})
             thread = rpc.call("thread/read", {"threadId": binding["thread_id"], "includeTurns": False})["thread"]
-            if thread["cwd"] != str(self.workspace) or thread["status"]["type"] != "active":
+            if thread["cwd"] != str(self.workspace) or thread["status"]["type"] not in (
+                    {"active", "idle"} if binding.get("idle_owner_resume") is True else {"active"}):
                 rpc.close()
                 return None
-            # Subscribe to an already-loaded agent. Never create an agent or start a turn here.
+            if binding.get("state") == "finished" and thread["status"]["type"] != "idle":
+                rpc.close()
+                return None
+            # Subscribe to the existing conversation; never create a replacement agent.
             rpc.call("thread/resume", {"threadId": binding["thread_id"], "excludeTurns": True})
         except Exception:
             rpc.close()
@@ -308,8 +316,19 @@ class Relay:
                    run_id=binding["run_id"])
         self.save(job)
         try:
-            rpc.call("turn/steer", {"threadId": binding["thread_id"], "expectedTurnId": binding["turn_id"],
-                     "input": inputs, "clientUserMessageId": "discord:" + job["id"]})
+            if (binding.get("role") == "coordinator" and binding.get("state") == "finished"
+                    and binding.get("idle_owner_resume") is True):
+                # A lost start receipt must be recovered by client ID across turns,
+                # not looked up under the previous, completed turn.
+                job["turn_id"] = None
+                self.save(job)
+                turn = rpc.call("turn/start", {"threadId": binding["thread_id"],
+                    "input": inputs, "clientUserMessageId": "discord:" + job["id"]})["turn"]
+                binding.update(turn_id=turn["id"], state="active")
+                job["turn_id"] = turn["id"]
+            else:
+                rpc.call("turn/steer", {"threadId": binding["thread_id"], "expectedTurnId": binding["turn_id"],
+                         "input": inputs, "clientUserMessageId": "discord:" + job["id"]})
         except Exception as error:
             # Explicit rejections have not accepted input. A missing receipt is ambiguous.
             if (isinstance(error, RpcError) and error.code == -32600
@@ -358,7 +377,6 @@ class Relay:
                     job.update(status="reply_pending", answer=answer, reply_item_id=item["id"],
                                reply_final=final)
                     self.save(job)
-
 
     def drain(self, role: str, rpc: Rpc) -> None:
         while True:
@@ -429,7 +447,6 @@ class Relay:
                 self.observe(role, {"method": "item/completed", "params": {
                     "threadId": thread_id, "turnId": entry.get("turnId"), "item": item}}, seen)
 
-
     def history_connection(self) -> Rpc | None:
         if self.history_rpc is None:
             socket = Path(self.config.get("codexHome", str(Path.home() / ".codex"))) / "app-server-control/app-server-control.sock"
@@ -462,6 +479,14 @@ class Relay:
                 job["status"] = "replied" if job.get("reply_final", True) else "awaiting_final"
                 self.save(job)
 
+    def coordinator_is_off(self) -> bool:
+        # A completed turn, worker wait, or handoff is not a stopped service.
+        try:
+            from supervisor_service import status_service
+            _, status = status_service(self.workspace)
+            return status == "stopped"
+        except Exception:
+            return False  # Unknown availability is not evidence of shutdown.
 
     def reconcile(self) -> None:
         if self.mutator_process is not None:
@@ -498,7 +523,8 @@ class Relay:
                                     job.update(status="failed", error=str(error))
                                     self.save(job)
                                     continue
-                            if not job.get("waiting_notified"):
+                            if (not job.get("waiting_notified")
+                                    and (role != "coordinator" or self.coordinator_is_off())):
                                 self.send(f"Saved for the {role}'s next active session.", job["id"], job["id"] + ":waiting")
                                 job["waiting_notified"] = True
                                 self.save(job)

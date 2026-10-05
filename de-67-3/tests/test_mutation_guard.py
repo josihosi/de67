@@ -116,6 +116,7 @@ class MutationGuardTests(unittest.TestCase):
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 connection.execute("DELETE FROM universal_review_receipts WHERE receipt_id='old'")
 
+
     def test_canonical_work_ledger_template_has_no_fake_active_item(self) -> None:
         self.assertEqual(guard.active_work_items(WORK_LEDGER_TEXT), ())
 

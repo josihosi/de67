@@ -396,10 +396,10 @@ class DashboardTests(unittest.TestCase):
         for peak, label in ((0,"1"),(1800,"2k"),(9000000,"10m")):
             page = dashboard_module.render_fuel({"available":True,"totals":{"coordinator":1,"sol":2,"luna":4,"astra":3,"other":0},
                 "bins":[peak] + [0]*23,"series":{role:[peak if role == "sol" else 0]+[0]*23 for role in ("astra","coordinator","sol","luna","other")},"partial":True})
-            self.assertIn('aria-label="coordinator: 1 fresh tokens"', page)
-            self.assertIn('aria-label="worker sol: 2 fresh tokens"', page)
+            self.assertNotIn('aria-label="coordinator:', page)
+            self.assertIn('aria-label="sol: 3 fresh tokens"', page)
             self.assertIn('aria-label="worker luna: 4 fresh tokens"', page)
-            self.assertEqual(page.count('class="fuel-series"'), 4)
+            self.assertEqual(page.count('class="fuel-series"'), 3)
             self.assertLess(page.index("<svg"), page.index('class="fuel-total"'))
             self.assertIn('aria-label="astra: 3 fresh tokens"', page)
             self.assertLess(page.index('</svg>'), page.index('class="fuel-legend"'))
@@ -419,9 +419,9 @@ class DashboardTests(unittest.TestCase):
                 "series": {role: [0] * 24 for role in roles}, "partial": False})
             plot = page.split('class="fuel-bars"', 1)[1]
             labels = re.findall(r'aria-label="([^":]+):', plot)
-            self.assertEqual(labels, ["astra", "coordinator", "worker sol", "worker luna"])
+            self.assertEqual(labels, ["astra", "sol", "worker luna"])
             positions = [float(value) for value in re.findall(r'<em style="left:([0-9.]+)%', plot)]
-            self.assertEqual(len(positions), sum(value > 0 for value in values))
+            self.assertEqual(len(positions), sum(value > 0 for value in (values[0], values[1] + values[2], values[3])))
             self.assertTrue(all(0 <= value <= 100 for value in positions))
             self.assertIn('data-role="astra" style="color:#fff0d6"', page)
             if values[0] == 13000000:

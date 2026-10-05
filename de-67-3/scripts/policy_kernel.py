@@ -320,8 +320,10 @@ def _referenced_entrypoints(*values: str) -> list[str]:
     return result
 
 
-def current_owner_contract(workspace: Path) -> str:
+def current_owner_contract(workspace: Path, *, audience: str = "coordinator") -> str:
     """Carry explicit delivery corrections, never the Phase-2 WEC handoff."""
+    if audience not in {"coordinator", "worker"}:
+        raise PolicyError("Unknown owner-contract audience")
     path = workspace / ".de67/WEC.md"
     if not path.is_file():
         return ""
@@ -339,6 +341,20 @@ def current_owner_contract(workspace: Path) -> str:
         if not marker or end in before or not body.strip():
             raise PolicyError("Owner contract markers are empty or out of order")
         body = body.strip()
+    # Assignment instructions are coordinator context, not a worker delegation duty.
+    # Preserve the original owner text; select only its explicitly marked audience.
+    coord_begin = "<!-- DE67:COORDINATOR-ONLY:BEGIN -->"
+    coord_end = "<!-- DE67:COORDINATOR-ONLY:END -->"
+    if coord_begin in body or coord_end in body:
+        if body.count(coord_begin) != 1 or body.count(coord_end) != 1:
+            raise PolicyError("Coordinator owner context requires one complete marked section")
+        shared_before, _, tail = body.partition(coord_begin)
+        coordinator, marker, shared_after = tail.partition(coord_end)
+        if not marker or coord_end in shared_before or not coordinator.strip():
+            raise PolicyError("Coordinator owner context markers are empty or out of order")
+        body = "\n".join(part.strip() for part in (
+            shared_before, coordinator if audience == "coordinator" else "", shared_after
+        ) if part.strip())
     return (
         "Current owner contract (.de67/WEC.md marked section sha256 "
         + hashlib.sha256(body.encode("utf-8")).hexdigest() + "):\n" + body + "\n"
@@ -709,7 +725,7 @@ def unbound_worker_spawns(
                                  if str((workspace / item["source"]).resolve()) not in injected]
             except ContextError as error:
                 raise PolicyError(str(error)) from error
-            owner_contract = current_owner_contract(workspace)
+            owner_contract = current_owner_contract(workspace, audience="worker")
             message = (
                 f"Own assigned {phase} work {task_id} for outcome {claim_id}"
                 + (f", focus {gap_id} revision {revision}. " if gap_id else ". ")

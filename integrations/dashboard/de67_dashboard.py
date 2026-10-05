@@ -1659,23 +1659,25 @@ def render_fuel(fuel: dict[str, Any]) -> str:
         return f"{value / 1000000:.2f}m" if value >= 1000000 else f"{value / 1000:.1f}k" if value >= 1000 else str(value)
     if not fuel.get("available"):
         return '<aside class="fuel"><small>fresh tokens</small><strong>—</strong><span>usage unavailable</span></aside>'
-    totals = fuel["totals"]
+    totals = dict(fuel["totals"])
     total = sum(totals.values())
+    totals["sol"] += totals.get("coordinator", 0)
+    series = dict(fuel["series"])
+    series["sol"] = [a + b for a, b in zip(series["sol"], series["coordinator"])]
     title = ("Indexed campaign sessions and descendants; input − cached input + output. "
              "Includes completed workers and Astra reviews; excludes narrator and unrelated sessions. "
              + ("Some session accounting is unavailable; shown total is partial." if fuel["partial"] else "")
              + f" Exact observed total: {total:,}.")
-    bins = fuel["bins"]
+    bins = [sum(values) for values in zip(series["astra"], series["sol"], series["luna"])]
     peak = max(bins) or 1
     # Round the scale upward to readable steps; keep zero honest during idle periods.
     magnitude = 10 ** math.floor(math.log10(peak))
     ceiling = next(step * magnitude for step in (1, 2, 2.5, 5, 10) if step * magnitude >= peak)
     def axis_label(value: float) -> str:
         return f"{value / 1000000:g}m" if value >= 1000000 else f"{value / 1000:g}k" if value >= 1000 else f"{value:g}"
-    roles = [("astra", "astra", "#fff0d6"), ("coordinator", "coordinator", "#eabd69"),
-             ("sol", "worker sol", "#77accb"), ("luna", "worker luna", "#82dfbd")]
-    if totals.get("other", 0):
-        roles.append(("other", "other workers", "#9997a0"))
+    roles = [("astra", "astra", "#fff0d6"),
+             ("sol", "sol", "#f2bd63"), ("luna", "worker luna", "#82dfbd")]
+    title += " Sol includes coordinator and Sol workers. Other model usage is included in the campaign total but omitted from the plots."
     cumulative = [0] * len(bins)
     layers = []
     def coordinates(values: list[int]) -> list[str]:
@@ -1683,7 +1685,7 @@ def render_fuel(fuel: dict[str, Any]) -> str:
                 for i, value in enumerate(values)]
     for role, label, color in roles:
         baseline = coordinates(cumulative)
-        cumulative = [a + b for a, b in zip(cumulative, fuel["series"][role])]
+        cumulative = [a + b for a, b in zip(cumulative, series[role])]
         upper = coordinates(cumulative)
         layers.append(f'<g class="fuel-series" data-role="{role}" style="color:{color}">'
                       f'<title>{label}</title><polygon points="{" ".join(upper + baseline[::-1])}" '
@@ -1726,7 +1728,7 @@ def render_fuel(fuel: dict[str, Any]) -> str:
         + f'<b>{compact(totals[role])}</b></span>'
         for role, label, color in roles)
     return (f'<aside class="fuel" title="{_escape(title)}">'
-            f'<div class="fuel-spark" role="img" aria-label="Stacked fresh-token use over the last twenty-four hours; upper edge is the total. Linear right axis: 0 to {axis_label(ceiling)} tokens per hour.">'
+            f'<div class="fuel-spark" role="img" aria-label="Stacked fresh-token use over the last twenty-four hours; upper edge is the displayed roles combined. Linear right axis: 0 to {axis_label(ceiling)} tokens per hour.">'
             f'<svg viewBox="0 0 140 122" preserveAspectRatio="none" aria-hidden="true">{"".join(layers)}</svg><div class="fuel-spark-axis">{ticks}</div></div>'
             f'<span class="fuel-period">tokens / hour · last 24h</span>{legend}<div class="fuel-bars" title="Dot positions use a logarithmic axis spanning the positive role totals. Zero totals have no dot. Tooltips show exact totals."><small>role totals · log scale</small>{rows}{bar_axis}</div>'
             f'<strong class="fuel-total"><span>total</span>{compact(total)}{"<sup>~</sup>" if fuel["partial"] else ""}</strong>'

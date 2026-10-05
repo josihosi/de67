@@ -276,7 +276,7 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
                        "runner_pid": os.getpid(), "server_pid": server.pid, "socket": str(socket),
                        "thread_id": thread_id, "turn_id": turn_id, "state": "active"}
             if role == "coordinator":
-                binding.update(deadline_state=os.environ.get("DE67_DEADLINE_STATE"),
+                binding.update(idle_owner_resume=True, deadline_state=os.environ.get("DE67_DEADLINE_STATE"),
                                lineage=os.environ.get("DE67_LINEAGE"),
                                supervisor_id=os.environ.get("DE67_SUPERVISOR_PID"))
             atomic_json(address, binding)
@@ -320,6 +320,11 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
                 if method in {"item/started", "item/completed"}:
                     emit({"type": method.replace("/", "."), "item": normalize_item(payload["item"])})
                 elif method == "turn/started":
+                    # Owner input can wake this same conversation while workers run.
+                    turn_id = payload["turn"]["id"]
+                    coordinator_done = False
+                    binding.update(turn_id=turn_id, state="active")
+                    atomic_json(address, binding)
                     emit({"type": "turn.started", "turn_id": payload["turn"]["id"]})
                 elif method == "turn/completed" and payload["turn"]["id"] == turn_id:
                     completed = payload["turn"]["status"] == "completed"

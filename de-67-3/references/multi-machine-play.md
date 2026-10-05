@@ -1,6 +1,6 @@
 # One coordinator, host-specific execution
 
-Use one central coordinator and the existing shared project ledger for this project. Workers
+Use one central coordinator and the existing shared project ledger for the selected project. Workers
 execute on the selected host; supervisor lifecycle/sync orchestration is not competing product
 coordination. Do not load this reference for ordinary single-host work without a relevant need.
 
@@ -52,11 +52,11 @@ for a successful ordinary run.
 1. Prove per-run writable-root/registry/input isolation through actual launch entrypoints before
    enabling concurrent games. Check alias/collision, stale binding, wrong host and failed startup;
    separate process/window targeting from exclusive access to an entire desktop input surface.
-2. Mac mini is the owner-selected source of truth for DE67-lab and C-AOL dev. Windows
-   source dirtiness or divergent source commits are not a merge/preservation gate: replace conflicting
-   Windows source with the selected Mac snapshot. Bind exact repository roots and Mac source identity
-   (including intended uncommitted source, if selected), transfer and verify that snapshot before
-   new Windows work. Do not overwrite the Mac to match Windows. Source replacement excludes runtime
+2. When the owner explicitly selects one host as the source of truth, bind exact repository roots
+   and the selected source identity (including intended uncommitted source, if selected). Transfer
+   and verify that snapshot before new work on the destination host. Replace conflicting destination
+   source only within that authorization; preserve unselected changes until their disposition is
+   agreed. Do not overwrite the authoritative host to match the destination. Source replacement excludes runtime
    DBs, saves, logs, credentials and unrelated repositories; do not use blanket directory deletion to
    achieve it. An offline host or file locks held by an owned run are actual execution blockers, not
    authority to fake a mirror. Public release and installed skill activation remain separate. Git

@@ -10,7 +10,7 @@ The archive contains these distinct routes; enable only the one the user wants:
 
 | Route | Purpose and setup |
 | --- | --- |
-| Direct owner conversation | Send owner messages, images, files, or voice into the native mutator; prefix `coordinator:` to address Sol. Follow [direct input](../direct_input/README.md). |
+| Direct owner conversation | Send owner messages, images, files, or voice into the native coordinator; prefix `mutator:` or `m:` to address the reviewer. Follow [direct input](../direct_input/README.md). |
 | Blocked-only notification | Ask the owner a question only when no executable route remains. Follow [blocker adapter](README.md) and its [agent contract](AGENTS.md). |
 | Task-bound consultation | Optional coordinator consultation with a configured OpenClaw agent, without posing as owner input. Follow [advisory adapter](../openclaw_advisory/README.md). |
 

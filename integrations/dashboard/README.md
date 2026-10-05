@@ -4,6 +4,14 @@ This optional package serves a small, read-only view of one de67 workspace. It r
 `.de67/FS.md`, `.de67/work-ledger.md`, the deadline SQLite database, and supervisor process state.
 It does not import de67 core, write workspace state, or require OpenClaw.
 
+## Install and start
+
+Use `de67-3.3.1-dashboard.zip` with the **3.3.1 core**. Verify its entry in `SHA256SUMS`,
+then extract the archive's `de67/` directory into the same skills parent as the core.
+For example, use `unzip de67-3.3.1-dashboard.zip -d /path/to/skills-parent` on Unix or
+`Expand-Archive de67-3.3.1-dashboard.zip -DestinationPath C:\path\to\skills-parent -Force`
+in PowerShell. Python 3.10+ is sufficient for local serving; no hosting account is required.
+
 Run on loopback:
 
 ```sh

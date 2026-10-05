@@ -1,7 +1,6 @@
-<p align="center">
-  <a href="docs/assets/de67-explainer.mp4?raw=true"><img src="docs/assets/de67-explainer-thumbnail.png" width="240" alt="Watch de67: From an idea to software you can check" /></a><br />
-  <a href="docs/assets/de67-explainer.mp4?raw=true"><strong>Watch the illustrated explainer · 2:41</strong></a>
-</p>
+https://github.com/user-attachments/assets/37324dba-d66a-48f1-b628-5e36448b267c
+
+*Illustrated explainer · 2:41. [Download the MP4](docs/assets/de67-explainer.mp4?raw=true).*
 
 # de67
 

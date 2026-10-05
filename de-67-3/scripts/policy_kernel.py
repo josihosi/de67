@@ -461,6 +461,12 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
 def worker_helper_contract() -> str:
     return ('When native helpers and Luna are available, use model="gpt-6-luna", '
             'fork_turns="none" and suitable effort for bounded discovery or suitable execution. '
+            'A Luna playtest worker may instead call a Sol chaperone with model="gpt-6.1-sol" '
+            'for bounded issue diagnosis or evidence interpretation. Reuse that helper conversation '
+            'through followup_task when relevant, supplying current host/task/run/build/save/input owner '
+            'and the changed facts; reuse does not establish freshness. Luna retains game input. '
+            'The chaperone returns the finding, source handles, uncertainty and next supported action; '
+            'it cannot dispatch project work, alter shared lifecycle state or take the game. '
             'Otherwise use focused local retrieval within this task. Helpers never own coordination '
             'records; the primary worker collects or stops them before returning. '
             'The primary worker owns every game it or its helpers launches, including failed startups '

@@ -908,7 +908,12 @@ def worker_handoff_contract() -> str:
 
 def nested_worker_contract() -> str:
     return ('Sol and primary workers may use native Luna helpers with fork_turns="none", '
-            'an explicit model and suitable effort. Helpers need no deadline task, FS slice, '
+            'an explicit model and suitable effort. A Luna playtest worker may call a '
+            'gpt-6.1-sol chaperone for bounded diagnosis, reusing its conversation through '
+            'followup_task with current host/run/build/save identity and a short delta. '
+            'Luna retains game input; Sol returns findings and next-action advice, not project '
+            'dispatch or lifecycle decisions. This is optional support, not another coordinator. '
+            'Helpers need no deadline task, FS slice, '
             'ledger entry or claim, and never own coordinator state. If unavailable, use bounded '
             'local retrieval. The caller owns the result and collects or stops helpers before return.')
 
@@ -1043,7 +1048,14 @@ def coordinator_context_contract() -> str:
     return (
         "Follow policy ownership and lifecycle requirements. Named reads are starting points, "
         "not a whitelist; inspect evidence that can change the decision. Reading does not "
-        "authorize dispatch or mutation. Worker briefs carry their outcome, constraints, useful "
+        "authorize dispatch or mutation. One central coordinator and shared project ledger own "
+        "cross-machine priorities; host executors retain exact run/input/process ownership. "
+        f"For cross-machine work read {Path(__file__).resolve().parents[1] / 'references/multi-machine-play.md'}. "
+        f"Use {Path(__file__).resolve().with_name('host_footing.py')} for read-only timestamped host/repo/process facts; "
+        "its snapshot is not launch admission, synchronization or complete live-process coverage. "
+        "Before launch bind the selected immutable build and usable save bytes, writable roots "
+        "and input owner to that host; unknown capacity/ownership is not an idle lane. "
+        "Worker briefs carry their outcome, constraints, useful "
         "evidence and handoff obligations, not coordinator-only routing instructions."
     )
 

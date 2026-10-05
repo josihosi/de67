@@ -18,6 +18,7 @@ import mutator_session
 
 
 class AppServerTransportTests(unittest.TestCase):
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
     def test_rpc_backpressure_keeps_connection_and_retains_failure_boundaries(self):
         try:
             from websockets.sync.client import unix_connect
@@ -122,6 +123,7 @@ class AppServerTransportTests(unittest.TestCase):
                 self.assertFalse(address.exists())
                 self.assertFalse(socket.exists())
 
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
     def test_role_launch_reset_resume_compaction_and_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -220,6 +222,7 @@ class AppServerTransportTests(unittest.TestCase):
             self.assertTrue(servers[-1].stopped)
             self.assertFalse(list((workspace / 'codex/state/de67-input').glob('*.sock')))
 
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
     def test_reviews_and_owner_input_resume_original_owner_without_gate_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -295,6 +298,75 @@ class AppServerTransportTests(unittest.TestCase):
             self.assertIn({'type': 'text', 'text': 'User Message: retain me'}, turn['input'])
             self.assertEqual(json.loads(receipt.read_text())['state'], 'submitted')
 
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
+    def test_mail_lock_race_records_definite_deferral_without_starting_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = workspace / "run"
+            run_dir.mkdir()
+            transport.atomic_json(workspace / ".de67/state/workspace.json", {"persistent_mutator": True})
+            session = mutator_session.MutatorSession(workspace)
+            session.acquire(lambda: False)
+            receipt = workspace / "receipt.json"
+            env = {"DE67_RUNNER_ACTIVE_DIR": str(run_dir), "CODEX_HOME": str(workspace / "codex"),
+                   "DE67_PROCESS_ROLE": "mutation-reviewer", "DE67_INITIAL_MAIL_ID": "original",
+                   "DE67_MAIL_LAUNCH_RECEIPT": str(receipt)}
+            try:
+                with patch.dict(os.environ, env, clear=True), patch.object(transport.signal, "signal"), \
+                     patch.object(transport.subprocess, "Popen") as launch:
+                    self.assertEqual(transport.run("codex", workspace, "ordinary mail"), 0)
+                    launch.assert_not_called()
+                self.assertEqual(json.loads(receipt.read_text())["state"], "deferred")
+            finally:
+                session.close()
+
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
+    def test_agent_mail_initial_turn_resumes_owner_and_delivers_original_once(self):
+        from agent_mailbox import enqueue, mailbox
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = workspace / "run"
+            run_dir.mkdir()
+            transport.atomic_json(workspace / ".de67/state/workspace.json", {"persistent_mutator": True})
+            mutator_session.MutatorSession(workspace).record("owner-thread", state="idle")
+            mail = enqueue(workspace, "mutator", "coordinator", "reply to consultation")
+            calls = []
+            class Server:
+                pid = 999
+                stopped = False
+                def __init__(self, argv, **kwargs): Path(argv[-1].removeprefix("unix://")).touch()
+                def poll(self): return 0 if self.stopped else None
+                def terminate(self): self.stopped = True
+                def wait(self, **kwargs): return 0
+            class Client:
+                def __init__(self, socket): self.notifications = []
+                def send(self, message): pass
+                def call(self, method, params):
+                    calls.append((method, params))
+                    if method == "thread/resume": return {"thread": {"id": params["threadId"]}}
+                    if method == "turn/start":
+                        self.notifications = [{"method": "turn/completed", "params": {
+                            "threadId": "owner-thread", "turn": {"id": "mail-turn", "status": "completed"}}}]
+                        return {"turn": {"id": "mail-turn"}}
+                def close(self): pass
+            env = {"DE67_RUNNER_ACTIVE_DIR": str(run_dir), "CODEX_HOME": str(workspace / "codex"),
+                   "DE67_PROCESS_ROLE": "mutation-reviewer", "DE67_COORDINATOR_RUN_ID": "mail-run",
+                   "DE67_INITIAL_MAIL_ID": mail["id"], "DE67_COORDINATOR_MODEL": "gpt-6-astra"}
+            with patch.dict(os.environ, env, clear=True), patch.object(transport.signal, "signal"), \
+                 patch.object(transport.subprocess, "Popen", Server), patch.object(transport, "Rpc", Client), \
+                 redirect_stdout(io.StringIO()):
+                self.assertEqual(transport.run("codex", workspace, "ordinary conversation guidance"), 0)
+                self.assertEqual(transport.run("codex", workspace, "ordinary conversation guidance"), 0)
+            starts = [params for method, params in calls if method == "turn/start"]
+            self.assertEqual(len(starts), 1)
+            self.assertEqual(starts[0]["threadId"], "owner-thread")
+            self.assertEqual(starts[0]["clientUserMessageId"], "de67-agent:" + mail["id"])
+            self.assertIn("not owner input", starts[0]["input"][-1]["text"])
+            self.assertFalse(any(method == "thread/start" for method, _ in calls))
+            receipt = json.loads((mailbox(workspace, "mutator") / (mail["id"] + ".json")).read_text())
+            self.assertEqual(receipt["state"], "delivered")
+
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
     def test_owner_wakes_finished_coordinator_without_stopping_workers(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -349,6 +421,7 @@ class AppServerTransportTests(unittest.TestCase):
             self.assertTrue(observations[0]["idle_owner_resume"])
             self.assertEqual(observations[-1], "shutdown")
 
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
     def test_lock_prevents_a_second_mutation_owner(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -371,6 +444,7 @@ class AppServerTransportTests(unittest.TestCase):
                 contender.close()
                 owner.close()
 
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
     def test_review_startup_failure_keeps_shared_conversation_recoverable(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -444,6 +518,19 @@ class AppServerTransportTests(unittest.TestCase):
                 self.assertTrue(command[1].endswith("codex_app_server_runner.py"))
             self.assertEqual(codex_runner._command("codex", workspace,
                              {"DE67_AGENT_TRANSPORT": "cli"})[:2], ["codex", "exec"])
+
+    def test_windows_preserves_cli_and_rejects_unix_transport_before_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            with patch("codex_runner.sys.platform", "win32"), patch.object(transport.subprocess, "Popen") as launch:
+                command = codex_runner._command("codex", workspace, {"DE67_AGENT_TRANSPORT": "cli"})
+                self.assertEqual(command[:2], ["codex", "exec"])
+                with self.assertRaisesRegex(codex_runner.RunnerError, "macOS or Linux"):
+                    codex_runner._command("codex", workspace, {"DE67_AGENT_TRANSPORT": "app-server"})
+                with self.assertRaisesRegex(transport.RpcError, "macOS or Linux"):
+                    transport.run("codex", workspace, "Windows transport boundary")
+                launch.assert_not_called()
+            self.assertFalse((workspace / ".de67").exists())
 
     def test_unknown_transport_is_not_silently_ignored(self):
         with tempfile.TemporaryDirectory() as directory:

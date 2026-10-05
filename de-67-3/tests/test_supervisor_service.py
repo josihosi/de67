@@ -310,17 +310,18 @@ class SupervisorServiceTests(unittest.TestCase):
                 json.dumps({"workspace": str(workspace.resolve()),
                             "clock": {"state": str(state.resolve()), "lineage": "smoke"}})
             )
-            scripts = base / "scripts"
-            scripts.mkdir()
+            skill = base / "skill"
+            shutil.copytree(SCRIPTS.parents[1], skill,
+                            ignore=shutil.ignore_patterns(".git", "__pycache__"))
+            scripts = skill / "de-67-3/scripts"
             launcher = scripts / "supervisor_service.py"
-            shutil.copy2(SCRIPTS / "supervisor_service.py", launcher)
-            shutil.copy2(SCRIPTS / "deadline_harness.py", scripts / "deadline_harness.py")
             shutil.copy2(
                 Path(__file__).parent / "fixtures/service_fake_supervisor.py",
                 scripts / "coordinator_supervisor.py",
             )
             (scripts / "codex_runner.py").touch()
-            environment = os.environ.copy()
+            environment = {key: value for key, value in os.environ.items()
+                           if not key.startswith("DE67_")}
             environment.update({"DE67_CODEX": "/usr/bin/true", "DE67_TMUX": shutil.which("tmux") or ""})
             command = [sys.executable, str(launcher)]
             try:
@@ -388,18 +389,16 @@ class SupervisorServiceTests(unittest.TestCase):
                  "clock": {"state": str(state), "lineage": "stack-test"}}
             ))
 
-            scripts = base / "scripts"
-            scripts.mkdir()
-            for name in (
-                "supervisor_service.py", "coordinator_supervisor.py", "codex_runner.py",
-                "deadline_harness.py", "blocker_adapter.py", "policy_kernel.py",
-            ):
-                shutil.copy2(SCRIPTS / name, scripts / name)
+            skill = base / "skill"
+            shutil.copytree(SCRIPTS.parents[1], skill,
+                            ignore=shutil.ignore_patterns(".git", "__pycache__"))
+            scripts = skill / "de-67-3/scripts"
             fake_codex = scripts / "service_stack_fake_codex.py"
             shutil.copy2(fixture_root / "service_stack_fake_codex.py", fake_codex)
             fake_codex.chmod(0o755)
 
-            environment = os.environ.copy()
+            environment = {key: value for key, value in os.environ.items()
+                           if not key.startswith("DE67_")}
             environment.update({
                 "DE67_CODEX": str(fake_codex),
                 "DE67_TMUX": shutil.which("tmux") or "",

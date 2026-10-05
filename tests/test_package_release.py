@@ -36,7 +36,9 @@ class ReleasePackageTests(unittest.TestCase):
                 "integrations/jev_telescope/provider_guard.py": "guard code\n",
                 "integrations/jev_pit_crew/README.md": "pit crew setup\n",
                 "integrations/jev_pit_crew/pit_crew.py": "pit crew code\n",
+                "de-67-3/agents_ignore_todo.md": "owner-local maintenance note\n",
                 "docs/verification/history.md": "local development evidence\n",
+                "docs/token-audit-2026-09-16.json": "historical lab report\n",
             }
             for path, text in tracked.items():
                 target = root / path
@@ -58,9 +60,13 @@ class ReleasePackageTests(unittest.TestCase):
                     names = set(archive.namelist())
                     self.assertNotIn("de67/private.log", names)
                     self.assertNotIn("de67/docs/verification/history.md", names)
+                    self.assertNotIn("de67/de-67-3/agents_ignore_todo.md", names)
+                    self.assertNotIn("de67/docs/token-audit-2026-09-16.json", names)
                     manifest_path = next(p for p in names if p.startswith("de67/package-manifests/"))
                     manifest = json.loads(archive.read(manifest_path))
                     self.assertEqual(manifest["source_commit"], report["source_commit"])
+                    self.assertEqual(manifest["stability"],
+                                     "experimental" if manifest["package"].startswith("jev-") else "stable")
                     for path, digest in manifest["files"].items():
                         self.assertEqual(hashlib.sha256(archive.read("de67/" + path)).hexdigest(), digest)
                     if manifest["package"] == "core":

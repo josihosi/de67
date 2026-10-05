@@ -27,7 +27,9 @@ ADDONS = {"dashboard": {"dashboard"},
 def package_for(path: str) -> str | None:
     parts = PurePosixPath(path).parts
     if (parts[0] in {".github", ".gitignore"}
+            or path == "de-67-3/agents_ignore_todo.md"
             or path.startswith("docs/verification/")
+            or path.startswith("docs/token-audit-2026-09-16.")
             or (path.startswith("docs/alignment-audit-") and path.endswith(".md"))):
         return None  # Historical lab evidence and repository configuration are not installations.
     if any(part in {".git", ".de67", "__pycache__", "node_modules", ".venv"}
@@ -83,6 +85,7 @@ def build(root: Path, ref: str, version: str, output: Path) -> dict:
         manifest = {
             "package": name, "version": version, "source_commit": revision,
             "requires_core": None if name == "core" else version,
+            "stability": "experimental" if name.startswith("jev-") else "stable",
             "files": {path: hashlib.sha256(value[0]).hexdigest()
                       for path, value in sorted(members.items())},
         }

@@ -16,7 +16,7 @@ class MutatorSession:
         self.path = self.workspace / ".de67/state/mutator-session.json"
         self.lock = None
 
-    def acquire(self, stopped: Callable[[], bool]) -> None:
+    def acquire(self, stopped: Callable[[], bool], *, wait: bool = True) -> None:
         # The optional transport runs on macOS/Linux. Keep imports portable for tests.
         import fcntl
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -26,6 +26,8 @@ class MutatorSession:
                 fcntl.flock(self.lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return
             except BlockingIOError:
+                if not wait:
+                    break
                 time.sleep(.1)
         self.close()
         raise RuntimeError("Mutator session launch stopped while another invocation owned it")
@@ -51,13 +53,14 @@ class MutatorSession:
 
 
 def owner_prompt(workspace: Path, scripts: Path, python: str) -> str:
+    from coordinator_supervisor import scoped_product_clarification_contract
     return (
         f"You are Josef's persistent Astra mutator for DE67 in {workspace}.\n"
         "Respond to his User Message directly. Retain conversation continuity across invocations; "
         "old invocation bindings and finished requests are history, not current instructions. "
         "Sol is the delivery coordinator. Discussion and read-only diagnosis may proceed while "
-        "Sol and workers continue. Before changing active method or product state, use the existing "
-        "DE67 exclusive mutation lifecycle and verify that coordinator and workers are quiet. "
+        "Sol and workers continue. "
+        + scoped_product_clarification_contract() + "\n"
         "Respect any owner stop; resume work only when authorized. Use current installed DE67 "
         "guidance and the actual workspace state for mutation validation and restart ownership. "
         "Do not create a second coordinator or a competing mutation reviewer. "

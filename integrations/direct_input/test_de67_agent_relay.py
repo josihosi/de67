@@ -2,6 +2,7 @@ import json
 import queue
 import io
 import tempfile
+import sys
 import unittest
 import urllib.error
 from pathlib import Path
@@ -61,6 +62,112 @@ class RelayTests(unittest.TestCase):
 
     def event(self, item, thread="fresh"):
         return {"method": "item/completed", "params": {"threadId": thread, "turnId": "turn", "item": item}}
+
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
+    def test_agent_mail_wakes_idle_without_owner_input_or_discord_message(self):
+        from agent_mailbox import enqueue, mailbox
+        message = enqueue(self.relay.workspace, "coordinator", "mutator", "report")
+        binding = {**self.binding("coordinator", "same"), "state": "finished", "agent_mail_idle_wake": True}
+        rpc = FakeRpc()
+        rpc.call = lambda method, params: rpc.calls.append((method, params)) or {"turn": {"id": "wake"}}
+        self.relay.connect = lambda role: (binding, rpc)
+        self.relay.agent_mail_review_clear = lambda: True
+        with patch("supervisor_service.status_service", return_value=(None, "pid=42")):
+            self.relay.reconcile_agent_mail()
+            self.relay.reconcile_agent_mail()
+        self.assertEqual(len(rpc.calls), 1)
+        self.assertEqual(rpc.calls[0][1]["clientUserMessageId"], "de67-agent:" + message["id"])
+        self.assertEqual(rpc.calls[0][1]["threadId"], "same")
+        self.assertIn("not owner input", rpc.calls[0][1]["input"][0]["text"])
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.relay.jobs, {})
+
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
+    def test_agent_mail_legacy_runner_waits_for_natural_upgrade(self):
+        from agent_mailbox import enqueue, pending
+        enqueue(self.relay.workspace, "coordinator", "mutator", "report")
+        rpc = FakeRpc()
+        self.relay.connect = lambda role: ({**self.binding(role), "state": "finished"}, rpc)
+        self.relay.agent_mail_review_clear = lambda: True
+        with patch("supervisor_service.status_service", return_value=(None, "pid=42")):
+            self.relay.reconcile_agent_mail()
+        self.assertEqual(rpc.calls, [])
+        self.assertEqual(len(pending(self.relay.workspace, "coordinator")), 1)
+
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
+    def test_agent_mail_does_not_wake_stopped_unknown_or_active_recipient(self):
+        from agent_mailbox import enqueue, pending
+        enqueue(self.relay.workspace, "coordinator", "mutator", "report")
+        rpc = FakeRpc()
+        self.relay.connect = lambda role: ({**self.binding(role), "state": "active"}, rpc)
+        self.relay.agent_mail_review_clear = lambda: True
+        for status in ("stopped", "legacy-launchagent-loaded", "pid=42"):
+            with patch("supervisor_service.status_service", return_value=(None, status)):
+                self.relay.reconcile_agent_mail()
+        with patch("supervisor_service.status_service", side_effect=RuntimeError("unknown")):
+            self.relay.reconcile_agent_mail()
+        self.assertEqual(rpc.calls, [])
+        self.assertEqual(len(pending(self.relay.workspace, "coordinator")), 1)
+
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
+    def test_agent_mail_review_gate_and_active_review_block_both_directions(self):
+        import sqlite3
+        from contextlib import closing
+        from agent_mailbox import enqueue, pending
+        state = self.root / "clock.sqlite3"
+        with closing(sqlite3.connect(state)) as db:
+            db.execute("CREATE TABLE supervisor_attempts(lineage_id TEXT, role TEXT, finished_at REAL)")
+        atomic_json(self.relay.workspace / ".de67/state/workspace.json",
+                    {"clock": {"state": str(state), "lineage": "lineage"}})
+        for role in ("coordinator", "mutator"):
+            enqueue(self.relay.workspace, role, "peer", "report")
+        self.relay.connect = lambda role: self.fail("review must block connection/wake")
+        with patch("supervisor_service.status_service", return_value=(None, "pid=42")), \
+             patch("coordinator_supervisor.mutation_gate", return_value=object()):
+            self.relay.reconcile_agent_mail()
+        with closing(sqlite3.connect(state)) as db:
+            db.execute("INSERT INTO supervisor_attempts VALUES ('lineage','mutation-reviewer',NULL)")
+            db.commit()
+        with patch("supervisor_service.status_service", return_value=(None, "pid=42")), \
+             patch("coordinator_supervisor.mutation_gate") as gate:
+            self.relay.reconcile_agent_mail()
+            gate.assert_not_called()
+        self.assertTrue(all(len(pending(self.relay.workspace, r)) == 1 for r in ("coordinator", "mutator")))
+
+    @unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
+    def test_agent_mail_mutator_uses_existing_context_and_never_queues_behind_review(self):
+        from mutator_session import MutatorSession
+        import os
+        atomic_json(self.relay.workspace / ".de67/state/workspace.json", {"persistent_mutator": True})
+        session = MutatorSession(self.relay.workspace)
+        session.record("same-owner", state="idle")
+        session.acquire(lambda: False)
+        with patch("de67_agent_relay.subprocess.Popen") as launch:
+            self.assertFalse(self.relay.start_mail_mutator("mail-id"))
+            launch.assert_not_called()
+        session.close()
+        class Process:
+            pid = 123
+            stdin = io.StringIO()
+            def poll(self): return None
+        process = Process()
+        with patch("de67_agent_relay.subprocess.Popen", return_value=process) as launch, \
+             patch.dict(os.environ, {"DE67_MUTATION_GATE_JSON": "old-review", "DE67_INITIAL_INPUT_PATH": "old-owner"}):
+            self.assertTrue(self.relay.start_mail_mutator("mail-id"))
+            env = launch.call_args.kwargs["env"]
+            self.assertEqual(env["DE67_INITIAL_MAIL_ID"], "mail-id")
+            self.assertNotIn("DE67_INITIAL_INPUT_PATH", env)
+            self.assertNotIn("DE67_MUTATION_GATE_JSON", env)
+            self.assertFalse(self.relay.start_mail_mutator("mail-id"))
+            self.assertEqual(launch.call_count, 1)
+            process.poll = lambda: 0
+            self.assertFalse(self.relay.start_mail_mutator("mail-id"))
+            atomic_json(self.relay.root / "agent-mail-launches/mail-id/launch-receipt.json",
+                        {"state": "deferred", "reason": "conversation lock busy"})
+            process.stdin = io.StringIO()
+            self.assertTrue(self.relay.start_mail_mutator("mail-id"))
+            self.assertEqual(launch.call_count, 2)
+        self.relay.mutator_process = None
 
     def test_idle_coordinator_owner_input_resumes_once_then_steers(self):
         self.relay.accept(self.message(1, "you back?"))

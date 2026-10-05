@@ -1051,7 +1051,7 @@ class DeadlineHarness:
         )
         self.connection.executescript(
             """
-            CREATE TRIGGER claim_acceptance_closure_sequence_is_immutable
+            CREATE TRIGGER IF NOT EXISTS claim_acceptance_closure_sequence_is_immutable
             BEFORE UPDATE ON claim_acceptances
             WHEN NEW.closure_sequence IS NOT OLD.closure_sequence
             BEGIN

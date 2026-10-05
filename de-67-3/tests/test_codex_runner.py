@@ -86,7 +86,8 @@ class CodexRunnerTests(unittest.TestCase):
         gate = "Resolve durable random gate cycle 9; no coordinator may start here.\n"
         bindings = '\nCurrent invocation bindings (use these values directly; exact):\n{"run":"unchanged"}'
         old = prefix + gate + bindings
-        env = {"DE67_PROCESS_ROLE": "mutation-reviewer"}
+        env = {"DE67_PROCESS_ROLE": "mutation-reviewer",
+               "DE67_MUTATION_GATE_JSON": json.dumps({"kind": "random", "identity": "cycle 9"})}
         refreshed = codex_runner.current_coordinator_prompt(self.workspace, old, env)
         self.assertIn(gate, refreshed)
         self.assertTrue(refreshed.endswith(bindings))

@@ -16,8 +16,10 @@ LLM endpoint is not a substitute. See the [Codex App Server documentation](https
 | Bundled detached Phase 3 service | macOS and `tmux`; the current service launcher is macOS-only |
 | Native Windows | CLI transport and shared logic; the Unix App Server route is not implemented |
 
+Named Luna and Sol workers request the Fast service tier on start, resume and new turns; Astra is unchanged. Returned `fast`/`priority` values establish the requested route, not measured per-turn speed or native helper inheritance.
+
 The configured roles are GPT-6 Astra high for specification, GPT-6.1 Sol low for coordination,
-GPT-6 Luna and Sol for workers, and GPT-6 Astra medium for mutation review. Phase 2 probes the
+GPT-6 Luna and GPT-6.1 Sol for workers, and GPT-6 Astra medium for mutation review. Phase 2 probes the
 needed model/effort combinations and records actual availability. Named workers run with full filesystem access; install and run
 this workflow only in the user's intended execution environment.
 
@@ -85,6 +87,25 @@ old execution ownership; it is not a harmless reload. Do not delete state to mak
 Legacy `DFS.md` is supported. A migrated `FS.md` requires its hash-bound `DFS.md` compatibility
 pointer; do not edit the pointer as a second specification.
 
-Optional packages: [dashboard](../integrations/dashboard/README.md) and
-[Discord](../integrations/openclaw_discord/SETUP.md). Diagnose failures with
+Optional packages: [dashboard](../integrations/dashboard/README.md),
+[Discord](../integrations/openclaw_discord/SETUP.md),
+[experimental Jev Telescope](../integrations/jev_telescope/README.md), and
+[experimental Jev Pit Crew](../integrations/jev_pit_crew/README.md).
+Install each add-on archive only when the user wants that capability. Telescope requires `rg`;
+both Jev routes default to off and require explicit workspace configuration. To remove either,
+set its mode to `off`, verify ordinary de67 operation, then remove that add-on's files while
+preserving any durable audit state in the project. Diagnose failures with
 [troubleshooting](troubleshooting.md).
+
+For an authorized Jev installation, verify the archive against `SHA256SUMS`, then extract its
+`de67/` directory into the same skills parent as the matching core. For example, run
+`unzip de67-VERSION-jev-telescope.zip -d /path/to/skills-parent` on Unix or
+`Expand-Archive de67-VERSION-jev-telescope.zip -DestinationPath C:\path\to\skills-parent -Force`
+in PowerShell. Use `jev-pit-crew` in the archive name for that separate add-on. Read its guide,
+set its workspace mode and limits explicitly, and run its documented tests before enabling it.
+To remove Pit Crew, keep the shared `jev_telescope/provider_guard.py` file if Telescope is also
+installed; remove only files owned by the add-on being retired.
+
+Jev Telescope additionally needs a working `rg` in its Python process's `PATH`. On Windows,
+a WinGet alias may be unlaunchable even when ripgrep is installed; add the installed executable's
+directory to that launch environment's `PATH` and verify `rg --version` there.

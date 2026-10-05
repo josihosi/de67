@@ -30,10 +30,6 @@ BINDING_FIELDS = ("workspace", "run_id", "thread_id", "runner_pid", "server_pid"
                   "socket", "deadline_state", "lineage", "supervisor_id")
 
 
-def _root(workspace: Path) -> Path:
-    return Path(workspace).resolve() / ".de67/state/worker-library"
-
-
 def _pit_crew_boundary(workspace: Path, assignment: Mapping[str, Any]) -> None:
     """Offer one completed audit append to the optional Pit Crew package.
 
@@ -68,6 +64,10 @@ def _pit_crew_boundary(workspace: Path, assignment: Mapping[str, Any]) -> None:
         # An optional advisory must never block an audit event or alter worker
         # dispatch semantics.  Its own durable state is inspectable when enabled.
         return
+
+
+def _root(workspace: Path) -> Path:
+    return Path(workspace).resolve() / ".de67/state/worker-library"
 
 
 def _connect(workspace: Path, *, write: bool = False) -> sqlite3.Connection | None:
@@ -554,6 +554,7 @@ class WorkerDispatcher:
                                      "observed_at": time.time(), **message}, ensure_ascii=False) + "\n")
         _pit_crew_boundary(self.workspace, assignment)
 
+
     def _prepared_delivery(self, assignment: Mapping[str, Any], worker_id: str | None) -> tuple[str, dict[str, Any]]:
         from worker_packet import delivery_text
         current = Path(assignment["packet"]).read_bytes()
@@ -740,9 +741,29 @@ class WorkerDispatcher:
                 self._request_update(request["id"], "submitting")
                 params = {"cwd": str(self.workspace), "model": worker["model"], "approvalPolicy": "never",
                           "sandbox": "danger-full-access", "config": {"model_reasoning_effort": worker["effort"]}}
+                worker_fast = worker["model"] in {"gpt-6-luna", "gpt-6.1-sol"}
+                if worker_fast:
+                    params["serviceTier"] = "fast"
+                    params["config"]["features.fast_mode"] = True
                 if worker["thread_id"]:
                     params.update(threadId=worker["thread_id"], excludeTurns=True)
-                thread = self.rpc.call("thread/resume" if worker["thread_id"] else "thread/start", params)["thread"]
+                thread_method = "thread/resume" if worker["thread_id"] else "thread/start"
+                if worker_fast:
+                    self._audit(assignment, {"method": "de67/workerSpeed/requested", "params": {
+                        "rpcMethod": thread_method, "threadId": worker["thread_id"],
+                        "requestId": request["id"], "requestedTier": "fast"}})
+                loaded = self.rpc.call(thread_method, params)
+                thread = loaded["thread"]
+                if worker_fast:
+                    configured_tier = loaded.get("serviceTier")
+                    self._audit(assignment, {"method": "de67/workerSpeed/configured", "params": {
+                        "rpcMethod": thread_method, "threadId": thread["id"], "requestId": request["id"],
+                        "requestedTier": "fast", "returnedConfiguredTier": configured_tier,
+                        "tierFieldPresent": "serviceTier" in loaded, "perTurnTelemetry": False}})
+                    if configured_tier not in {"fast", "priority"}:
+                        self._notice(assignment, "Worker " + worker["name"] + " requested Fast; App Server returned "
+                                     + (repr(configured_tier) if "serviceTier" in loaded else "no configured tier")
+                                     + ". Fast execution is unverified; see worker speed audit evidence.")
                 if worker["thread_id"] and thread["id"] != worker["thread_id"]:
                     raise WorkerLibraryError("Resumed worker conversation identity changed")
                 if thread.get("cwd") is not None and Path(thread["cwd"]).resolve() != self.workspace:
@@ -785,9 +806,16 @@ class WorkerDispatcher:
                     prompt = request["message"]
                 phase = "starting-turn"
                 self._update(assignment["id"], status="submitting", turn_id=None, error=None)
-                turn = self.rpc.call("turn/start", {"threadId": thread["id"], "effort": worker["effort"],
+                turn_params = {"threadId": thread["id"], "effort": worker["effort"],
                     "clientUserMessageId": "de67-worker:" + request["id"],
-                    "input": [{"type": "text", "text": prompt + "\nDE67 worker request: " + request["id"]}]})["turn"]
+                    "input": [{"type": "text", "text": prompt + "\nDE67 worker request: " + request["id"]}]}
+                if worker_fast:
+                    # This override cannot change a turn that App Server steers.
+                    turn_params["serviceTierForTurn"] = "fast"
+                    self._audit(assignment, {"method": "de67/workerSpeed/requested", "params": {
+                        "rpcMethod": "turn/start", "threadId": thread["id"], "requestId": request["id"],
+                        "requestedTier": "fast", "tierField": "serviceTierForTurn"}})
+                turn = self.rpc.call("turn/start", turn_params)["turn"]
                 self._update(assignment["id"], status="running", turn_id=turn["id"])
                 self._request_update(request["id"], "submitted")
             except Exception as error:

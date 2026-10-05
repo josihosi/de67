@@ -850,11 +850,49 @@ def persist_universal_review_receipt(
             connection.close()
 
 
+def validate_scoped_dfs_amendment(before: Path, candidate: Path,
+                                  authorized_claims: tuple[str, ...]) -> tuple[str, ...]:
+    """Validate explicitly owner-authorized red-slice edits, not grant authority.
+
+    No status ceremony or legacy heading layout is required. Acceptance, stable
+    identities and every byte outside the named slices remain protected.
+    """
+    baseline, proposed = read_markdown(before), read_markdown(candidate)
+    old, new = parse_dfs_slices(baseline), parse_dfs_slices(proposed)
+    if not authorized_claims or not old:
+        raise GuardError("Scoped amendment requires named owner-authorized claims and slices")
+    if [(x.slice_id, x.claim_id) for x in old] != [(x.slice_id, x.claim_id) for x in new]:
+        raise GuardError("Scoped amendment must preserve slice identities and order")
+    old_claims = _claims_by_id(_stable_claim_records(baseline), "baseline")
+    if _stable_claim_records(baseline) != _stable_claim_records(proposed):
+        raise GuardError("Scoped amendment must preserve claim identities and acceptance status")
+    for claim in authorized_claims:
+        record = old_claims.get(claim)
+        if record is None or record[1] != " " or not record[2] or not any(x.claim_id == claim for x in old):
+            raise GuardError("Scoped amendment requires an existing red sliced claim: " + claim)
+    outside_old, outside_new = baseline, proposed
+    changed = []
+    for a, b in zip(old, new):
+        if a.claim_id in authorized_claims:
+            outside_old = outside_old.replace(a.content, "", 1)
+            outside_new = outside_new.replace(b.content, "", 1)
+            if a.content != b.content:
+                changed.append(a.slice_id)
+        elif a.content != b.content:
+            raise GuardError("Scoped amendment changed an unauthorized slice: " + a.slice_id)
+    if outside_old != outside_new:
+        raise GuardError("Scoped amendment changed content outside authorized slices")
+    if not changed:
+        raise GuardError("Scoped amendment makes no change")
+    return tuple(changed)
+
+
 def validate_random_review_mutation(
     baseline_root: Path,
     candidate_root: Path,
     *,
     selected_lane: str,
+    owner_claims: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
     """Validate trajectory-driven local changes; the stored lane is a review seed."""
 
@@ -886,9 +924,14 @@ def validate_random_review_mutation(
             if _meaningful_markdown(baseline_files[name]) == _meaningful_markdown(candidate_files[name]):
                 raise GuardError("Random guideline mutation cannot be whitespace-only")
         elif name == DFS_FILE:
-            validate_random_dfs_mutation(
-                baseline_specification.path, candidate_specification.path
-            )
+            if owner_claims:
+                validate_scoped_dfs_amendment(
+                    baseline_specification.path, candidate_specification.path, owner_claims
+                )
+            else:
+                validate_random_dfs_mutation(
+                    baseline_specification.path, candidate_specification.path
+                )
     return changed
 
 
@@ -2337,6 +2380,8 @@ def build_parser() -> argparse.ArgumentParser:
     random_review.add_argument("--state", type=Path, required=True)
     random_review.add_argument("--lineage", required=True)
     random_review.add_argument("--cycle", type=int, required=True)
+    random_review.add_argument("--owner-claim", action="append", default=[],
+                               help="Explicitly owner-authorized red claim to amend; records scope, does not grant authority")
     random_review.add_argument("--ledger-candidate", type=Path)
     random_review.add_argument("--method-baseline", type=Path)
     random_review.add_argument("--method-candidate", type=Path)
@@ -2508,6 +2553,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.baseline,
                 arguments.candidate,
                 selected_lane=lane,
+                owner_claims=tuple(arguments.owner_claim),
             )
             if (arguments.method_baseline is None) != (
                 arguments.method_candidate is None

@@ -1,7 +1,6 @@
 # Jev Telescope
 
-Experimental optional add-on for one-shot retrieval by Sol and workers. Install its separate
-archive only on request. Python 3.10+ and `rg` are required;
+Optional, one-shot retrieval for Sol and workers. Python 3.10+ and `rg` are required;
 the HTTP adapter uses the Python standard library. No daemon, embedding index, model
 SDK, or orchestration changes. Off is the default and does not change existing briefs.
 

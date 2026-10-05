@@ -86,7 +86,8 @@ class CodexRunnerTests(unittest.TestCase):
         gate = "Resolve durable random gate cycle 9; no coordinator may start here.\n"
         bindings = '\nCurrent invocation bindings (use these values directly; exact):\n{"run":"unchanged"}'
         old = prefix + gate + bindings
-        env = {"DE67_PROCESS_ROLE": "mutation-reviewer"}
+        env = {"DE67_PROCESS_ROLE": "mutation-reviewer",
+               "DE67_MUTATION_GATE_JSON": json.dumps({"kind": "random", "identity": "cycle 9"})}
         refreshed = codex_runner.current_coordinator_prompt(self.workspace, old, env)
         self.assertIn(gate, refreshed)
         self.assertTrue(refreshed.endswith(bindings))
@@ -117,7 +118,7 @@ class CodexRunnerTests(unittest.TestCase):
             observed = harness.coordinator_restart_status("project")["coordinator_restart"]
         self.assertTrue(observed["pending"])
         self.assertIsNone(observed["acknowledged_at"])
-        for extra in ({"DE67_PROCESS_ROLE": "mutation-reviewer"}, {"DE67_COORDINATOR_RESUME_SESSION": "same-session"}):
+        for extra in ({"DE67_PROCESS_ROLE": "mutation-reviewer"},):
             self.assertEqual(codex_runner.current_coordinator_prompt(self.workspace, old, {**env, **extra}), old)
         self.assertEqual(codex_runner.current_coordinator_prompt(self.workspace, "Custom prompt", env), "Custom prompt")
         with self.assertRaisesRegex(codex_runner.RunnerError, "invocation bindings"):

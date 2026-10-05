@@ -25,7 +25,7 @@ from instruction_context import common_guidance
 from worker_packet import standing_section
 from agent_mailbox import communication_contract
 from work_context import context_view, provider_context, record_dispatch, dispatch_evidence_index
-from mutation_guard import extract_dfs_slices, _active_work_blocks, _ledger_slice_ids, GuardError
+from mutation_guard import extract_dfs_slices, _active_work_blocks, _ledger_slice_ids, _outside_fences, GuardError
 from specification import SpecificationError, resolve
 
 
@@ -320,8 +320,10 @@ def _referenced_entrypoints(*values: str) -> list[str]:
     return result
 
 
-def current_owner_contract(workspace: Path) -> str:
+def current_owner_contract(workspace: Path, *, audience: str = "coordinator") -> str:
     """Carry explicit delivery corrections, never the Phase-2 WEC handoff."""
+    if audience not in {"coordinator", "worker"}:
+        raise PolicyError("Unknown owner-contract audience")
     path = workspace / ".de67/WEC.md"
     if not path.is_file():
         return ""
@@ -339,6 +341,20 @@ def current_owner_contract(workspace: Path) -> str:
         if not marker or end in before or not body.strip():
             raise PolicyError("Owner contract markers are empty or out of order")
         body = body.strip()
+    # Assignment instructions are coordinator context, not a worker delegation duty.
+    # Preserve the original owner text; select only its explicitly marked audience.
+    coord_begin = "<!-- DE67:COORDINATOR-ONLY:BEGIN -->"
+    coord_end = "<!-- DE67:COORDINATOR-ONLY:END -->"
+    if coord_begin in body or coord_end in body:
+        if body.count(coord_begin) != 1 or body.count(coord_end) != 1:
+            raise PolicyError("Coordinator owner context requires one complete marked section")
+        shared_before, _, tail = body.partition(coord_begin)
+        coordinator, marker, shared_after = tail.partition(coord_end)
+        if not marker or coord_end in shared_before or not coordinator.strip():
+            raise PolicyError("Coordinator owner context markers are empty or out of order")
+        body = "\n".join(part.strip() for part in (
+            shared_before, coordinator if audience == "coordinator" else "", shared_after
+        ) if part.strip())
     return (
         "Current owner contract (.de67/WEC.md marked section sha256 "
         + hashlib.sha256(body.encode("utf-8")).hexdigest() + "):\n" + body + "\n"
@@ -366,6 +382,7 @@ def _worker_read_plan(
     entrypoints: Sequence[str],
     *,
     playtest: bool,
+    method_candidate: bool = False,
 ) -> list[dict[str, str]]:
     plan: list[dict[str, str]] = []
     for entrypoint in entrypoints:
@@ -380,8 +397,9 @@ def _worker_read_plan(
         })
     plan.extend([
         {
-            "source": f".de67/FS.md slice for {claim_id}",
-            "reason": "read on demand if the compact packet leaves the product or proof boundary ambiguous",
+            "source": (f".de67/work-ledger.md staged method boundary for {claim_id}"
+                       if method_candidate else f".de67/FS.md slice for {claim_id}"),
+            "reason": "read on demand if the compact packet leaves the assigned outcome or proof boundary ambiguous",
         },
         {
             "source": f".de67/work-ledger.md item for {claim_id}",
@@ -391,8 +409,51 @@ def _worker_read_plan(
     return plan
 
 
+def _method_candidate_blocks(ledger: str) -> tuple[tuple[str, str], ...]:
+    """Explicit staged-method items use the existing ledger, not product FS IDs."""
+    lines = ledger.splitlines()
+    visible = list(_outside_fences(ledger))
+    boundaries = [n - 1 for n, line in visible
+                  if re.match(r"^- \[[ xX]\] |^#{1,6} ", line)]
+    blocks = []
+    for n, line in visible:
+        match = re.match(r"^- \[ \] ([a-z][a-z0-9-]*) — \S", line)
+        if not match:
+            continue
+        end = next((b for b in boundaries if b > n - 1), len(lines))
+        block = "\n".join(lines[n - 1:end])
+        if any(re.match(r"^  - Method candidate:", row) for _, row in _outside_fences(block)):
+            blocks.append((match.group(1), block))
+    return tuple(blocks)
+
+
+def _method_candidate_route(ledger: str, claim_id: str, task_id: str) -> tuple[str, str] | None:
+    blocks = [block for owner, block in _method_candidate_blocks(ledger) if owner == claim_id
+              and re.search(r"^  - Assignment " + re.escape(task_id) + r":", "\n".join(line for _, line in _outside_fences(block)), re.MULTILINE)]
+    if not blocks:
+        return None
+    if len(blocks) != 1:
+        raise PolicyError("Ambiguous method candidate assignment for " + task_id)
+    markers = [line.partition("Method candidate:")[2]
+               for _, line in _outside_fences(blocks[0]) if line.startswith("  - Method candidate:")]
+    if len(markers) != 1 or not markers[0].strip():
+        raise PolicyError("Method candidate requires one nonempty staging boundary")
+    return blocks[0], (
+        "Staged method candidate: " + markers[0].strip() + "\n"
+        "Use the current owner-authorized outcome; this ledger marker grants no new authority. "
+        "Stage candidate code, context and controls in the assignment's workspace artifact route. "
+        "Do not edit installed method/runtime, activate the candidate, change policy/lifecycle state, "
+        "or perform real-host synchronization. Exclusive review and supervisor activation remain separate. "
+        "No product FS slice or gameplay acceptance is implied by this assignment."
+    )
+
+
 def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[str, str]:
     ledger_path = workspace / ".de67/work-ledger.md"
+    ledger = ledger_path.read_text(encoding="utf-8")
+    method = _method_candidate_route(ledger, claim_id, task_id)
+    if method is not None:
+        return method
     try:
         specification = resolve(workspace / ".de67")
     except SpecificationError as error:
@@ -445,6 +506,12 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
 def worker_helper_contract() -> str:
     return ('When native helpers and Luna are available, use model="gpt-6-luna", '
             'fork_turns="none" and suitable effort for bounded discovery or suitable execution. '
+            'A Luna playtest worker may instead call a Sol chaperone with model="gpt-6.1-sol" '
+            'for bounded issue diagnosis or evidence interpretation. Reuse that helper conversation '
+            'through followup_task when relevant, supplying current host/task/run/build/save/input owner '
+            'and the changed facts; reuse does not establish freshness. Luna retains game input. '
+            'The chaperone returns the finding, source handles, uncertainty and next supported action; '
+            'it cannot dispatch project work, alter shared lifecycle state or take the game. '
             'Otherwise use focused local retrieval within this task. Helpers never own coordination '
             'records; the primary worker collects or stops them before returning. '
             'The primary worker owns every game it or its helpers launches, including failed startups '
@@ -668,7 +735,8 @@ def unbound_worker_spawns(
                 *_referenced_entrypoints(outcome, frontier, proof_route),
                 *receipt_entrypoints,
             ]))
-            playtest = any(
+            method_candidate = proof_route.startswith("Staged method candidate: ")
+            playtest = not method_candidate and any(
                 word in " ".join((outcome, frontier, proof_route)).lower()
                 for word in ("playtest", "cockpit", "witness", "scenario registry")
             )
@@ -679,6 +747,7 @@ def unbound_worker_spawns(
                 claim_id,
                 entrypoints,
                 playtest=playtest,
+                method_candidate=method_candidate,
             )
             task_name = "task_" + task_id.encode("utf-8").hex()
             reference_context = (
@@ -688,7 +757,7 @@ def unbound_worker_spawns(
                                               "relationship", "source_bytes")}
                     if receipts else item for item in context["related_results"]
                   ], ensure_ascii=False, sort_keys=True) + "\n"
-                + "Broader product contract (not a task-sized completion requirement):\n" + proof_route + "\n"
+                + ("Staged method boundary:\n" if method_candidate else "Broader product contract (not a task-sized completion requirement):\n") + proof_route + "\n"
                 + "Claim ledger context (independent contributions retained):\n" + ledger_route + "\n"
                 + "Directly related evidence, at its original scope:\n"
                 + json.dumps(dispatch_evidence_index(context, detailed=True), ensure_ascii=False, sort_keys=True, indent=2) + "\n"
@@ -709,11 +778,12 @@ def unbound_worker_spawns(
                                  if str((workspace / item["source"]).resolve()) not in injected]
             except ContextError as error:
                 raise PolicyError(str(error)) from error
-            owner_contract = current_owner_contract(workspace)
+            owner_contract = current_owner_contract(workspace, audience="worker")
             message = (
                 f"Own assigned {phase} work {task_id} for outcome {claim_id}"
                 + (f", focus {gap_id} revision {revision}. " if gap_id else ". ")
                 + f"Scope: {assignment_scope}. "
+                + ((proof_route + "\n") if method_candidate else "")
                 + "Judge task completion against this assignment; preserve broader claim requirements independently.\n"
                 + ("Assigned closure route:\n" + str(gap["proof_route"]) + "\n" if gap else "")
                 + "\n" + standing_section("common-guidance", common_guidance(workspace))
@@ -1272,7 +1342,7 @@ def workspace_facts(
         facts.add("blocked_ledger")
     # Execution labels only count in the selected frontier or active unchecked items.
     # Historical accepted text and owner-only gap proof cannot create a worker route.
-    blocks = _active_work_blocks(ledger_text)
+    blocks = (*_active_work_blocks(ledger_text), *_method_candidate_blocks(ledger_text))
     frontier_match = re.search(r"(?ms)^## Current delivery frontier\s*$\n(.*?)(?=^## |\Z)", ledger_text)
     route_texts = [(reference.split()[0], block) for reference, block in blocks]
     if not blocks:
@@ -1317,7 +1387,7 @@ def workspace_facts(
             facts.add("pending_suggestions")
     try:
         specification = resolve(workspace / ".de67")
-        open_work = "🔴" in specification.text or bool(_active_work_blocks(ledger_text))
+        open_work = "🔴" in specification.text or bool(_active_work_blocks(ledger_text) or _method_candidate_blocks(ledger_text))
     except SpecificationError:
         open_work = False
     facts.add("red_dfs_work" if open_work else "dfs_complete")

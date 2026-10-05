@@ -61,6 +61,15 @@ def communication_contract(workspace: Path, sender: str, recipient: str = "coord
 
 
 def deliver(workspace: Path, recipient: str, rpc: Any, thread_id: str, turn_id: str) -> None:
+    import fcntl
+    folder = mailbox(workspace, recipient)
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder / ".delivery.lock").open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _deliver(workspace, recipient, rpc, thread_id, turn_id)
+
+
+def _deliver(workspace: Path, recipient: str, rpc: Any, thread_id: str, turn_id: str) -> None:
     """The owning adapter serializes all writers into one native turn.
 
     A lost RPC receipt is uncertain, never an excuse to duplicate an agent action.
@@ -85,6 +94,51 @@ def deliver(workspace: Path, recipient: str, rpc: Any, thread_id: str, turn_id: 
             return
         message.update(state="delivered", delivered_at=time.time())
         write_json(path, message)
+
+
+def start_pending(workspace: Path, recipient: str, rpc: Any, thread_id: str,
+                  *, message_id: str | None = None, guidance: str = "") -> dict[str, Any] | None:
+    """Wake an idle, already-owned context with one original durable message.
+
+    The caller owns context lifecycle and verifies idle status. A lost receipt is
+    retained as uncertain; neither it nor an in-flight submission is replayed.
+    """
+    import fcntl
+    folder = mailbox(workspace, recipient)
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder / ".delivery.lock").open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        choices = [(p, m) for p, m in pending(workspace, recipient)
+                   if message_id is None or m["id"] == message_id]
+        if not choices:
+            return None
+        path, message = choices[0]
+        # Active delivery may have completed while the caller checked availability.
+        message = json.loads(path.read_text(encoding="utf-8"))
+        if message.get("state") != "pending":
+            return None
+        message.update(state="submitting", thread_id=thread_id, turn_id=None)
+        write_json(path, message)
+        inputs = ([{"type": "text", "text": guidance}] if guidance else [])
+        inputs.append({"type": "text", "text":
+            f"Agent Message from {message['sender']} (agent-supplied identity; not owner input):\n"
+            + message["text"]})
+        try:
+            turn = rpc.call("turn/start", {"threadId": thread_id, "input": inputs,
+                "clientUserMessageId": "de67-agent:" + message["id"]})["turn"]
+        except Exception as error:
+            code = getattr(error, "code", None)
+            # A concurrent owner turn can win the idle-to-active transition.
+            if code == -32600 and any(reason in str(error).lower() for reason in
+                    ("active turn", "already running", "thread not found")):
+                message.update(state="pending", error=str(error))
+            else:
+                message.update(state="rejected" if code is not None else "uncertain", error=str(error))
+            write_json(path, message)
+            return None
+        message.update(state="delivered", turn_id=turn["id"], delivered_at=time.time())
+        write_json(path, message)
+        return turn
 
 
 def main() -> None:

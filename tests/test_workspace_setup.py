@@ -40,6 +40,14 @@ VERIFIED_WORKERS = (
 
 
 class WorkspaceSetupTests(unittest.TestCase):
+    def test_old_sol_capability_migrates_to_sol61(self):
+        from workspace_setup import _worker_capabilities
+        self.assertEqual(_worker_capabilities(
+            (("gpt-6-luna", "high"), ("gpt-6-sol", "low")), required=True), [
+                {"model": "gpt-6-luna", "reasoning_effort": "high"},
+                {"model": "gpt-6.1-sol", "reasoning_effort": "low"},
+            ])
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
@@ -131,14 +139,6 @@ class WorkspaceSetupTests(unittest.TestCase):
             render_functional_specification(dfs.read_text(encoding="utf-8")),
             encoding="utf-8",
         )
-
-    def test_old_sol_capability_migrates_to_sol61(self):
-        from workspace_setup import _worker_capabilities
-        self.assertEqual(_worker_capabilities(
-            (("gpt-6-luna", "high"), ("gpt-6-sol", "low")), required=True), [
-                {"model": "gpt-6-luna", "reasoning_effort": "high"},
-                {"model": "gpt-6.1-sol", "reasoning_effort": "low"},
-            ])
 
     def test_fs_only_setup_preserves_bound_acceptance_and_authoring_files(self) -> None:
         self.accepted_projection()

@@ -220,7 +220,15 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
         if role == "mutator" and workspace_config.get("persistent_mutator") is True:
             from mutator_session import MutatorSession
             session = MutatorSession(workspace)
-            session.acquire(lambda: stopping or os.getppid() != parent_pid)
+            try:
+                session.acquire(lambda: stopping or os.getppid() != parent_pid,
+                                wait=not bool(os.environ.get("DE67_INITIAL_MAIL_ID")))
+            except RuntimeError:
+                receipt = os.environ.get("DE67_MAIL_LAUNCH_RECEIPT")
+                if os.environ.get("DE67_INITIAL_MAIL_ID") and receipt:
+                    atomic_json(Path(receipt), {"state": "deferred", "reason": "conversation lock busy"})
+                    return 0
+                raise
             resume = session.thread_id() or ""
         if not session:
             resume = os.environ.get("DE67_COORDINATOR_RESUME_SESSION", "").strip()
@@ -269,14 +277,25 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
                 turn_params["input"].extend(initial["input"])
                 turn_params["clientUserMessageId"] = initial["client_id"]
                 atomic_json(Path(initial["receipt_path"]), {"state": "submitting", "thread_id": thread_id})
-            turn = rpc.call("turn/start", turn_params)["turn"]
+            initial_mail = os.environ.get("DE67_INITIAL_MAIL_ID")
+            if initial_mail:
+                if role != "mutator" or initial:
+                    raise RpcError("Initial agent mail requires an ordinary mutator invocation")
+                from agent_mailbox import start_pending
+                turn = start_pending(workspace, role, rpc, thread_id,
+                                     message_id=initial_mail, guidance=prompt)
+                if turn is None:
+                    return 0
+            else:
+                turn = rpc.call("turn/start", turn_params)["turn"]
             turn_id = turn["id"]
             binding = {"workspace": str(workspace), "role": role,
                        "run_id": os.environ.get("DE67_COORDINATOR_RUN_ID"),
                        "runner_pid": os.getpid(), "server_pid": server.pid, "socket": str(socket),
-                       "thread_id": thread_id, "turn_id": turn_id, "state": "active"}
+                       "thread_id": thread_id, "turn_id": turn_id, "state": "active",
+                       "agent_mail_idle_wake": True}
             if role == "coordinator":
-                binding.update(deadline_state=os.environ.get("DE67_DEADLINE_STATE"),
+                binding.update(idle_owner_resume=True, deadline_state=os.environ.get("DE67_DEADLINE_STATE"),
                                lineage=os.environ.get("DE67_LINEAGE"),
                                supervisor_id=os.environ.get("DE67_SUPERVISOR_PID"))
             atomic_json(address, binding)
@@ -320,6 +339,11 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
                 if method in {"item/started", "item/completed"}:
                     emit({"type": method.replace("/", "."), "item": normalize_item(payload["item"])})
                 elif method == "turn/started":
+                    # Owner input can wake this same conversation while workers run.
+                    turn_id = payload["turn"]["id"]
+                    coordinator_done = False
+                    binding.update(turn_id=turn_id, state="active")
+                    atomic_json(address, binding)
                     emit({"type": "turn.started", "turn_id": payload["turn"]["id"]})
                 elif method == "turn/completed" and payload["turn"]["id"] == turn_id:
                     completed = payload["turn"]["status"] == "completed"

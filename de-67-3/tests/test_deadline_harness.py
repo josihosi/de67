@@ -28,6 +28,16 @@ from deadline_harness import (  # noqa: E402
 
 
 class DeadlineHarnessTests(unittest.TestCase):
+    def test_legacy_sol_roster_snapshot_matches_migrated_dispatch(self):
+        self.write_sol_ultra_capability()
+        config = self.state_path.parent / "workspace.json"
+        original = config.read_text().replace("gpt-6.1-sol", "gpt-6-sol")
+        config.write_text(original)
+        proved, reason, digest = self.harness._sol_ultra_capability_snapshot()
+        self.assertTrue(proved)
+        self.assertEqual(digest, hashlib.sha256(original.encode()).hexdigest())
+        self.assertEqual(config.read_text(), original)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.state_path = Path(self.temporary.name) / "state.sqlite"
@@ -478,16 +488,6 @@ class DeadlineHarnessTests(unittest.TestCase):
         )
         self.harness.connection.commit()
         return receipt_id
-
-    def test_legacy_sol_roster_snapshot_matches_migrated_dispatch(self):
-        self.write_sol_ultra_capability()
-        config = self.state_path.parent / "workspace.json"
-        original = config.read_text().replace("gpt-6.1-sol", "gpt-6-sol")
-        config.write_text(original)
-        proved, reason, digest = self.harness._sol_ultra_capability_snapshot()
-        self.assertTrue(proved)
-        self.assertEqual(digest, hashlib.sha256(original.encode()).hexdigest())
-        self.assertEqual(config.read_text(), original)
 
     def write_sol_ultra_capability(self) -> None:
         (self.state_path.parent / "workspace.json").write_text(

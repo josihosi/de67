@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -565,14 +566,14 @@ def pending_mutation_suggestions(workspace: Path) -> tuple[MutationSuggestion, .
         if entry.lower() == "none.":
             continue
         match = re.match(
-            r"^(?:Owner-authorized\s+)?\[(trigger|defer)\]:?\s+(.+)$",
+            r"^(?:Owner-authorized\s+)?\[(trigger|defer|deferred)\]:?\s+(.+)$",
             entry,
             re.IGNORECASE,
         )
         if match is None:
             suggestions.append(MutationSuggestion("trigger", entry))
         else:
-            suggestions.append(MutationSuggestion(match.group(1).lower(), entry))
+            suggestions.append(MutationSuggestion("defer" if match.group(1).lower() == "deferred" else match.group(1).lower(), entry))
     return tuple(suggestions)
 
 
@@ -852,6 +853,27 @@ def ordinary_worker_evidence_contract() -> str:
             'ordinary investigation and changed tactics remain within worker autonomy.')
 
 
+def scoped_product_clarification_contract() -> str:
+    """Shared scope/ownership boundary for ordinary owner consultation."""
+    return (
+        "For an explicitly owner-authorized clarification of the same current product outcome, "
+        "diagnose the triggering evidence and necessary related facts. A bug label, agent report or "
+        "validator success grants no authority; a changed outcome or rejected/unclear authority "
+        "needs the owner's decision. Respect owner stops. Replace obsolete wording only in the "
+        "existing authorized red FS slice and validate before applying with "
+        "mutation_guard.validate_scoped_dfs_amendment; preserve identities, accepted proof and "
+        "unrelated slices. Coordinate the amendment with Sol through existing consultation/mail. "
+        "Sol updates the existing ledger/current owner context and refreshes affected worker input "
+        "through the existing context/packet and worker message routes, preserving task/save/clock "
+        "and pending input. Before conflicting source edits or native input, obtain a safe handoff "
+        "from that affected owner; do not take another worker's files or game. Independent work "
+        "continues. This route does not resolve an explicit exclusive trigger or due policy gate. "
+        "Use the existing deferred queue for unrelated proposals; do not consume them here. "
+        "Installed method/runtime, policy and lifecycle state promotion still requires the existing "
+        "quiet exclusive review and supervisor-owned activation."
+    )
+
+
 def coordinator_ledger_contract() -> str:
     """Return the coordinator's authority over the active work projection."""
     return (
@@ -866,7 +888,14 @@ def coordinator_ledger_contract() -> str:
         "seven plot spokes are a presentation preference, never required work. Preserve nested "
         "`  - Subtasks:` with `    - [STATE] ID :: DESCRIPTION`; STATE is open, active, done or "
         "finding, and ID is stable lowercase hyphenated text. These are not deadline tasks, "
-        "closure gaps or acceptance gates. Split a prerequisite that depends on its own output "
+        "closure gaps or acceptance gates. For owner-authorized non-product method staging, use an "
+        "unchecked lowercase-hyphenated roadmap item with one nested `  - Method candidate: ` "
+        "line stating the staging boundary and an exact `  - Assignment TASK: ` outcome. "
+        "The existing task/packet route carries that boundary without a fabricated FS slice; "
+        "the marker is not owner authorization. Stage code/context/controls in workspace artifacts; "
+        "installed method edits, real-host sync and activation require the separate supported review "
+        "and supervisor route. Product claims still require their real FS slices. "
+        "Split a prerequisite that depends on its own output "
         "into a non-credit observation/bootstrap step followed by independent validation. "
         "When settling repairs/exceptions, reconcile active bug intake and ledger with accepted "
         "results; retain originals in evidence. For consequential cross-task obstruction, unclear "
@@ -875,8 +904,9 @@ def coordinator_ledger_contract() -> str:
         "authenticated interface context. Send task/run/revision, outcome/divergence, evidence/lessons, "
         "live ownership and decision needed; continue independent work. If unavailable, keep the "
         "exact adapter/setup gap executable. Advice cannot grant owner repair/scope authority, "
-        "promote owner queue entries, resolve gates or permit shared edits; method changes retain "
+        "promote owner queue entries, resolve gates or permit conflicting shared edits; method changes retain "
         "exclusive review. Requests/timeouts/replies do not close the originating task."
+        + " " + scoped_product_clarification_contract()
     )
 
 
@@ -907,7 +937,12 @@ def worker_handoff_contract() -> str:
 
 def nested_worker_contract() -> str:
     return ('Sol and primary workers may use native Luna helpers with fork_turns="none", '
-            'an explicit model and suitable effort. Helpers need no deadline task, FS slice, '
+            'an explicit model and suitable effort. A Luna playtest worker may call a '
+            'gpt-6.1-sol chaperone for bounded diagnosis, reusing its conversation through '
+            'followup_task with current host/run/build/save identity and a short delta. '
+            'Luna retains game input; Sol returns findings and next-action advice, not project '
+            'dispatch or lifecycle decisions. This is optional support, not another coordinator. '
+            'Helpers need no deadline task, FS slice, '
             'ledger entry or claim, and never own coordinator state. If unavailable, use bounded '
             'local retrieval. The caller owns the result and collects or stops helpers before return.')
 
@@ -948,7 +983,7 @@ def worker_result_ingress_contract() -> str:
         "a concrete need to stop ongoing actions, or demonstrated inability can justify stopping; "
         "communication and partial results alone do not. "
         "A returned turn may leave a recoverable unfinished task; resume it with message, including "
-        "after a due review under the fresh coordinator. Review may proceed once all worker turns "
+        "after a due review with the resumed coordinator. Review may proceed once all worker turns "
         "are returned and no longer editing. Preserve the task, missed deadline and returned evidence. "
         "Context exhaustion alone does not require abandonment or replacement. "
         "When accepting returned work, reconcile all worker/helper game attempts, including failed "
@@ -1042,7 +1077,14 @@ def coordinator_context_contract() -> str:
     return (
         "Follow policy ownership and lifecycle requirements. Named reads are starting points, "
         "not a whitelist; inspect evidence that can change the decision. Reading does not "
-        "authorize dispatch or mutation. Worker briefs carry their outcome, constraints, useful "
+        "authorize dispatch or mutation. One central coordinator and shared project ledger own "
+        "cross-machine priorities; host executors retain exact run/input/process ownership. "
+        f"For cross-machine work read {Path(__file__).resolve().parents[1] / 'references/multi-machine-play.md'}. "
+        f"Use {Path(__file__).resolve().with_name('host_footing.py')} for read-only timestamped host/repo/process facts; "
+        "its snapshot is not launch admission, synchronization or complete live-process coverage. "
+        "Before launch bind the selected immutable build and usable save bytes, writable roots "
+        "and input owner to that host; unknown capacity/ownership is not an idle lane. "
+        "Worker briefs carry their outcome, constraints, useful "
         "evidence and handoff obligations, not coordinator-only routing instructions."
     )
 
@@ -1066,7 +1108,7 @@ def named_worker_contract(workspace: Path) -> str:
         "and emit the completed wait result; a shell yield alone needs no model decision. "
         "Bound the whole wait by the next task deadline and at most 60 seconds. Read raw worker "
         "event logs only to resolve a concrete question that status, messages or result artifacts leave open. Native collaboration "
-        "tools address native children. After a mutation a fresh Sol reads the current FS, ledger, owner "
+        "tools address native children. After a mutation the same Sol conversation resumes and reads the current FS, ledger, owner "
         "corrections, relevant accepted evidence and worker catalogue. Write the next brief from that "
         "current frontier: changed outcome/premises, useful retained facts, invalidated assumptions and "
         "first unresolved question. Idle named workers retain their conversations across Sol restarts. "
@@ -1081,7 +1123,7 @@ def named_worker_contract(workspace: Path) -> str:
 
 
 def live_coordination_contract() -> str:
-    return "Use worker_library.py message/wait for named workers; use native send_message/followup_task/wait_agent for native children. Native workers address /root. Sol owns direction and scope. While a worker owns execution, resolve an independent source, interface or acceptance question when its answer can change the current work or successor, and send the useful finding through that worker's message route. Preserve exclusive input/edit ownership and do not duplicate the worker's investigation. At useful coordination boundaries, inspect compact CPU, memory pressure/swap and task-owned process state when it can reveal missed cleanup or a stalled operation. Reconcile games, bridges, helpers and builds with active assignments and explicit retained-session purposes. Sol owns noticing and arranging cleanup when a worker forgets; verified finished or unused task-owned processes may be closed through their supported graceful lifecycle without asking again. Check exact PID/birth identity and OS exit, preserving journals, unsaved state and exclusive input ownership. Low CPU, age or RSS alone does not establish disuse; keep active work, Josef's applications, shared services in use and intentionally retained sessions. For a stalled active operation, diagnose the specific process and coordinate bounded recovery with its worker; report an exact unresolved ownership or recovery gap while continuing independent work. Use no monitoring daemon, fixed polling quota or arbitrary kill threshold. If no such question remains, waiting is correct. When execution reveals a substantial independent tooling problem, decide who owns it without interrupting useful live state or handing off merely for a changed tactic. After hard diagnosis, reassess whether Luna can perform substantial remaining execution at lower total cost. Apply the returned-work judgment in the result ingress contract before settling consequential changes. Carry forward current findings, retiring source-specific advice once regression proof absorbs it. Notice recurring context/tool obstructions in worker evidence and commission a bounded repair through the existing work ledger; validate that it removes the demonstrated repetition. DE67 method edits retain exclusive mutation/guard ownership. Do not convert worker discovery transcripts into coordinator context or request parallel summaries, periodic reports or new receipts. Use current-root token_usage in work_context as feedback with helper/handoff costs; distinguish expected savings from measured use, never quotas. At worker return or a natural adoption event, reassess remaining whole-claim proof against its immutable deadline; schedule the unmet boundary with an honest estimate. When no useful decision remains, use the worker's wait route, waking no later than the item deadline; apply policy at routing transitions."
+    return "Use worker_library.py message/wait for named workers; use native send_message/followup_task/wait_agent for native children. Native workers address /root. Sol owns direction and scope. While a worker owns execution, resolve an independent source, interface or acceptance question when its answer can change the current work or successor, and send the useful finding through that worker's message route. Preserve exclusive input/edit ownership and do not duplicate the worker's investigation. At useful coordination boundaries, inspect compact CPU, memory pressure/swap and task-owned process state when it can reveal missed cleanup or a stalled operation. Reconcile games, bridges, helpers and builds with active assignments and explicit retained-session purposes. Sol owns noticing and arranging cleanup when a worker forgets; verified finished or unused task-owned processes may be closed through their supported graceful lifecycle without asking again. Check exact PID/birth identity and OS exit, preserving journals, unsaved state and exclusive input ownership. Low CPU, age or RSS alone does not establish disuse; keep active work, Josef's applications, shared services in use and intentionally retained sessions. For a stalled active operation, diagnose the specific process and coordinate bounded recovery with its worker; report an exact unresolved ownership or recovery gap while continuing independent work. Use no monitoring daemon, fixed polling quota or arbitrary kill threshold. If no such question remains, waiting is correct. Answer the owner's question directly once. Later progress messages should add a meaningful result, changed plan, blocker or decision; an ongoing worker and the absence of a new result are not new information. Do not repeat waiting/worker-active reminders or re-explain an answered question merely because the turn stays open. Respond normally to new owner messages; concise communication must not hide failures or requested status. When execution reveals a substantial independent tooling problem, decide who owns it without interrupting useful live state or handing off merely for a changed tactic. After hard diagnosis, reassess whether Luna can perform substantial remaining execution at lower total cost. Apply the returned-work judgment in the result ingress contract before settling consequential changes. Carry forward current findings, retiring source-specific advice once regression proof absorbs it. Notice recurring context/tool obstructions in worker evidence and commission a bounded repair through the existing work ledger; validate that it removes the demonstrated repetition. DE67 method edits retain exclusive mutation/guard ownership. Do not convert worker discovery transcripts into coordinator context or request parallel summaries, periodic reports or new receipts. Use current-root token_usage in work_context as feedback with helper/handoff costs; distinguish expected savings from measured use, never quotas. At worker return or a natural adoption event, reassess remaining whole-claim proof against its immutable deadline; schedule the unmet boundary with an honest estimate. When no useful decision remains, use the worker's wait route, waking no later than the item deadline; apply policy at routing transitions."
 
 
 def mutation_wind_down_contract() -> str:
@@ -1128,15 +1170,16 @@ def worker_selection_contract() -> str:
     return (
         "Only GPT-6 Luna, GPT-6.1 Sol and GPT-6 Astra may execute new work, including native helpers and resumed workers. "
         "Model choice: use GPT-6 Luna for playtesting, clear execution and ordinary repairs; GPT-6.1 Sol for "
-        "coupled implementation or difficult diagnosis; GPT-6 Astra when stronger implementation judgment "
-        "may reduce uncertainty or rework. Sol also owns coordination in its separate coordinator role. After a "
+        "coupled implementation or difficult diagnosis. Astra supplies exclusive mutation review judgment; "
+        "do not recommend Astra implementation workers unless the owner explicitly changes that direction. "
+        "Sol also owns coordination in its separate coordinator role. After a "
         "hard repair, prefer Luna for substantial remaining playtesting when the handoff saves total "
         "work; preserve useful context and live ownership. "
-        "Thinking effort: for coding, generally prefer max on Luna/Sol and low on Astra. For other "
-        "work, choose effort for the reasoning needed. These are preferences, not escalation gates "
-        "or quotas; use judgment. Choose only available pairs from model_choices. Judge completed outcomes and total "
+        "Thinking effort: choose from the available efforts for the task's reasoning needs and uncertainty; "
+        "max remains an option for difficult work, not the default for coding. "
+        "Do not change a running assignment merely to enforce an effort preference. Choose only available pairs from model_choices. Judge completed outcomes and total "
         "work, including helpers, handoffs and retries. Give each worker a focused assignment; an "
-        "Astra worker is separate from the persistent mutator."
+        "worker is separate from the persistent mutator; ordinary lint diagnostics stay with the worker."
     )
 
 
@@ -1172,7 +1215,7 @@ def coordinator_prompt(
         live_coordination_contract(),
         named_worker_contract(workspace),
         "Write every owner-facing text field rendered on the hosted dashboard in simple English. This includes ledger items, latest findings, waiting work, mutation or incident summaries, and any FS summary that the dashboard displays. First explain what happened and why it matters in terms any reader can understand. Then preserve the necessary technical identifiers and evidence, state what remains or happens next, and use one concrete statement per sentence. If the simple explanation exposes a contradiction or a missing causal step, record that problem instead of hiding it behind technical language. Internal machine state and FS detail that the dashboard does not display do not need this rewrite.",
-        "Never review, apply, or resolve a mutation. When the compiled policy says retire_for_mutation_review, dispatch no worker, make no guidance change, and exit immediately so the external supervisor can run the exclusive reviewer.",
+        "Never review, apply, or resolve an installed method, policy or lifecycle mutation. Narrow authorized same-outcome product clarification follows coordinator_ledger_contract(). When the compiled policy says retire_for_mutation_review, dispatch no worker, make no guidance change, and exit immediately so the external supervisor can run the exclusive reviewer.",
         "Do not infer policy from workspace guideline prose; those files are legacy differential fixtures on this branch.",
         worker_selection_contract(),
         "When a mutation is pending: " + mutation_wind_down_contract(),
@@ -1238,7 +1281,7 @@ def mutation_maintenance_contract() -> str:
         "over accumulating rules around symptoms. Improve information delivery or interagent "
         "communication where useful. Give agents clearer context and greater freedom to exercise "
         "judgment. Own authorized context changes directly; commission needed tooling through the "
-        "existing ledger for Sol. Preserve necessary evidence and ownership. Refine coordinator and "
+        "existing ledger for Sol. For an owner-authorized bug amendment, replace obsolete wording in the existing red FS slice with the failure, intended behavior, supported cause or open question, production boundary and meaningful proof. Use mutation_guard.validate_scoped_dfs_amendment or random-review owner_claims; retain the owner authority and report, without ceremonial thaw/refreeze steps. This validation records scope, not authority. Preserve necessary evidence and ownership. Refine coordinator and "
         "worker context for useful decisions and effective work, and keep Josef's conversation in "
         "the mutator's context, including during reviews. Validate the smallest supported correction "
         "and compare subsequent comparable work when available, including review, helper, provider, "
@@ -1248,12 +1291,46 @@ def mutation_maintenance_contract() -> str:
     )
 
 
+def mutation_review_contract(kind: str) -> str:
+    """Keep event diagnosis focused; periodic reviews retain the broader audit."""
+    if kind in {"random", "random mutation"}:
+        return mutation_maintenance_contract()
+    return (
+        "This is an event-triggered review. Diagnose the triggering batch and necessary related "
+        "source evidence; do not mandate a full pending queue or performance/usage sweep. "
+        "Relevant cost evidence may inform the diagnosis. Separate immediate recovery from "
+        "repeatable correction and prove it with a reproduction or counterexample. Preserve "
+        "unrelated deferred requests for periodic review. A plausible optimization is not measured "
+        "savings; disclose evidence and accounting limits. "
+        + scoped_product_clarification_contract()
+    )
+
+
 def mutation_reviewer_prompt(
     workspace: Path,
     state_path: Path,
     lineage_id: str,
     gate: MutationGate,
 ) -> str:
+    periodic = gate.kind in {"random", "random mutation"}
+    if periodic:
+        queue = (
+            "The complete pending section of .de67/mutation-suggestions.md is mandatory owner input. "
+            "Disposition every pending owner entry. Resolve the gate only after every pending entry "
+            "is dispositioned. For a periodic review, the stored random lane is legacy metadata, "
+            "not a prescribed investigation target. Validate local guidelines and same-outcome FS "
+            "refinements together through random-review and broader permitted changes through its "
+            "method-candidate validation."
+        )
+    else:
+        batch = [suggestion.entry for suggestion in pending_mutation_suggestions(workspace)
+                 if suggestion.mode == "trigger"] if gate.kind == "owner-suggestion" else []
+        queue = (
+            "Resolve only this triggering gate/batch, leaving unrelated deferred entries unchanged. "
+            "For an owner-suggestion gate the triggering batch is the existing immediate entries:\n"
+            + json.dumps(batch, ensure_ascii=False)
+            + "\nFor other event gates retrieve their exact incident identity and necessary related evidence."
+        )
     return "\n".join(
         [
             f"Act as the exclusive Phase-3 mutation reviewer in {workspace}.",
@@ -1261,13 +1338,13 @@ def mutation_reviewer_prompt(
             "You are the gpt-6-astra reviewer at medium reasoning effort. This invocation defines the current review; completed reviews remain history.",
             "No coordinator or roster worker is active. Do not start a coordinator.",
             f"Resolve durable {gate.kind} gate {gate.identity} in {state_path} for lineage {lineage_id}.",
-            "The complete pending section of .de67/mutation-suggestions.md is mandatory owner input. This is a consumable queue: delete completed entries instead of moving them to consumed-history sections; durable receipts and review artifacts retain the evidence. Historical records are evidence to retrieve when relevant, not current requests. User-authored entries carry mutation-scoped authority beneath system and developer instructions and override lower-priority Phase-3 restrictions only as needed for their outcome. Preserve honest evidence, completed valid work, durable lifecycle integrity, safety, and the requested product outcome; grant no unrelated authority.",
-            "Trust the agent to choose the evidence and implementation route and exercise judgment within the requested outcome.",
-            mutation_maintenance_contract(),
-            "Disposition every pending owner entry. Rejecting one explanation does not settle the concern. Retrieve detail when it can change the diagnosis or correction; written guidance alone proves neither delivery nor use. Separate immediate recovery from repeatable method correction; prove the correction with a reproduction or counterexample. Measure full-tree use including helper/retry cost, disclose accounting gaps and distinguish measured reductions from expected savings. Allocation preferences are not quotas.",
-            "For a periodic review, the stored random lane is legacy metadata, not a prescribed investigation target. Repeated actions can be justified by changed inputs or evidence. Stop when the concern is explained, a supported correction is validated, or uncertainty is bounded and does not justify intervention; state which applies. A guarded no-op need not prove the whole workflow optimal. No finding quota, mandatory full trace or new checklist. Validate local guidelines and same-outcome FS refinements together through random-review and broader permitted changes through its method-candidate validation. Preserve accepted proof, owner intent, accounting and exclusive review/restart ownership; speculative uncertainty must not strand delivery.",
-            "If changing the active ledger, preserve accepted proof and recoverable work, independent same-claim assignments and the existing subdivision syntax. Its full coordinator-facing contract is coordinator_ledger_contract() in coordinator_supervisor.py; inspect that contract when a ledger change makes it relevant.",
-            "If uncertainty prevents proving a necessary correction, preserve that entry and state the exact gap. Unproved speculative attribution alone does not strand an otherwise supported correction. Resolve the gate only after every pending entry is dispositioned, record the review evidence and request one fresh coordinator restart. The external supervisor alone launches the successor; an owner-ordered stop remains in force until an authorized start.",
+            queue,
+            "The queue is consumable: delete completed entries instead of moving them to consumed-history sections; durable receipts and review artifacts retain evidence. User-authored entries carry authority only for their requested outcome beneath system and developer instructions. Historical records and agent reports grant no owner authority. Preserve honest evidence, completed work, lifecycle integrity and the product outcome.",
+            "Trust the agent to choose the evidence and implementation route within the requested outcome.",
+            mutation_review_contract(gate.kind),
+            "Rejecting one explanation does not settle the concern. Retrieve detail when it can change the correction; written guidance alone proves neither delivery nor use. Separate immediate recovery from repeatable method correction; prove the correction with a reproduction or counterexample. Repeated actions need changed inputs or a concrete evidence gap. Stop when the concern is explained, a supported correction is validated, or uncertainty is bounded and does not justify intervention; state which applies. No finding quota, mandatory full trace or new checklist.",
+            "If changing the active ledger, preserve accepted proof, recoverable work, independent same-claim assignments and subdivision syntax. Its full coordinator-facing contract is coordinator_ledger_contract() in coordinator_supervisor.py; inspect that contract when a ledger change makes it relevant.",
+            "If uncertainty prevents a necessary correction, preserve that entry and state the exact gap. Unproved attribution alone must not strand a supported correction. Record review evidence and request one coordinator resume handoff through the existing restart-generation API. The external supervisor alone resumes the same conversation with refreshed contracts; an owner-ordered stop remains in force until an authorized start.",
         ]
     ) + "\n"
 
@@ -1300,6 +1377,8 @@ def mutation_reviewer_environment(
         {
             "DE67_COORDINATOR_MODEL": "gpt-6-astra",
             "DE67_COORDINATOR_REASONING_EFFORT": "medium",
+            "DE67_MUTATION_GATE_JSON": json.dumps({"kind": gate.kind, "identity": gate.identity,
+                                                  "selected_lane": gate.selected_lane}),
         }
     )
     return reviewer_env
@@ -1331,7 +1410,8 @@ def run_mutation_reviewer(
         extra_env=reviewer_env,
         prompt_override=prompt_source.mutation_reviewer_prompt(
             workspace, state_path, lineage_id, gate
-        ),
+        ) + ("\n\nContinuation: " + reviewer_env["DE67_MUTATION_RECOVERY_REASON"]
+             if reviewer_env.get("DE67_MUTATION_RECOVERY_REASON") else ""),
         role="mutation-reviewer",
     )
 
@@ -1354,19 +1434,39 @@ def _complete_mutation_review(
             lineage_id,
             f"{gate.kind} {gate.identity}",
         )
+    continuation_for = None
+    continued = set()
     while True:
         gate_key = (gate.kind, gate.identity)
-        if gate_key in consumed:
+        is_continuation = continuation_for == gate_key
+        if gate_key in consumed and not is_continuation:
             raise SupervisorError(
-                f"Mutation gate repeated without resolution: {gate.kind} {gate.identity}"
+                f"Mutation gate repeated without resolution: {gate.kind} {gate.identity}. "
+                "The bounded reviewer retry is exhausted; ordinary work remains stopped. "
+                "Recovery: the authorized reviewer must finish the pending review in the same "
+                "conversation, preserve any genuine blocker, and request one coordinator resume "
+                "handoff after resolution. Once resolved, restart the stopped supervisor with: "
+                + shlex.join([sys.executable, str(Path(__file__).with_name("supervisor_service.py")),
+                              "start", "--workspace", str(workspace)])
+                + ". Do not restart unresolved review loops, clear the queue without disposition, "
+                "terminalize unfinished tasks, or edit SQLite."
             )
         consumed.add(gate_key)
         run_id = f"mutation-{uuid.uuid4().hex}"
         if journal is not None:
             journal.begin(
                 "mutation-reviewer",
-                f"{gate.kind}:{gate.identity}",
+                f"{gate.kind}:{gate.identity}" + (":continuation" if is_continuation else ""),
                 run_id,
+            )
+        review_env = dict(extra_env or {})
+        if is_continuation:
+            review_env["DE67_MUTATION_RECOVERY_REASON"] = (
+                "Your previous turn ended but this review gate remains pending. An interim owner "
+                "answer is not review completion. Continue the existing review and conversation "
+                "from saved evidence; do not repeat completed investigations. Disposition remaining "
+                "input and request the existing coordinator resume handoff when complete. If genuinely "
+                "blocked, preserve the entry and state the exact blocker. Ordinary work stays stopped."
             )
         result = run_mutation_reviewer(
             runner_command,
@@ -1375,7 +1475,7 @@ def _complete_mutation_review(
             lineage_id,
             run_root,
             gate,
-            extra_env=extra_env,
+            extra_env=review_env,
             run_id=run_id,
         )
         if journal is not None:
@@ -1390,6 +1490,14 @@ def _complete_mutation_review(
             )
         remaining = mutation_gate(state_path, lineage_id, workspace)
         if remaining is not None:
+            remaining_key = (remaining.kind, remaining.identity)
+            # A conversational answer may end a turn before durable review closeout.
+            # Offer one explicit continuation, never an unbounded reviewer loop.
+            if remaining_key == gate_key and gate_key not in continued:
+                continued.add(gate_key)
+                continuation_for = gate_key
+            else:
+                continuation_for = None
             gate = remaining
             continue
         # The reviewer may have atomically promoted the method while this
@@ -1402,9 +1510,9 @@ def _complete_mutation_review(
         if not restart.required or restart.generation is None:
             _mark_protocol_failure(
                 result,
-                "Mutation reviewer resolved the gate without requesting one fresh coordinator",
+                "Mutation reviewer resolved the gate without requesting one coordinator resume handoff",
             )
-            raise SupervisorError("Resolved mutation lacks its fresh-coordinator handoff")
+            raise SupervisorError("Resolved mutation lacks its coordinator resume handoff")
         return restart
 
 
@@ -2021,8 +2129,9 @@ def _run_supervisor_locked(
             )
             return 1
         # A durable semantic restart (mutation, incident retirement, or owner
-        # reply) starts a new coordinator lifecycle. Failed decisions from an
-        # earlier lifecycle must not consume this one's bounded opportunities.
+        # reply) refreshes the lifecycle contracts. The fresh runner resolves the
+        # prior coordinator conversation for resumption; failed decisions from
+        # before review do not consume this handoff's bounded opportunities.
         failed_decision_opportunities = 0
         restart = after
         generation = after.generation

@@ -3,9 +3,13 @@ import json
 import sqlite3
 import tempfile
 import threading
+import sys
 import unittest
 from pathlib import Path
 from subprocess import CompletedProcess
+
+if sys.platform == "win32":
+    raise unittest.SkipTest("OpenClaw advisory adapter requires Unix flock")
 
 from advisory_consult import AdvisoryAdapter, AuthorizationError, assignment_revision
 

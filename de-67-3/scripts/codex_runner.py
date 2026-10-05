@@ -6,6 +6,7 @@ from __future__ import annotations
 from contextlib import closing
 
 import argparse
+from contextlib import closing
 import json
 import os
 import shutil
@@ -625,19 +626,67 @@ def _claim_recorder(environment: dict[str, str]) -> Callable[[str, str, str | No
     return record
 
 
+def resume_after_mutation(workspace: Path, environment: dict[str, str]) -> None:
+    """Reuse the preceding coordinator at a supervisor-owned generation handoff.
+
+    Resolve in the fresh runner so an already-running supervisor picks up this
+    behavior too. The existing run index locates evidence; the original runner
+    event must confirm the identity. A failed resume never silently starts over.
+    """
+    if (environment.get("DE67_PROCESS_ROLE") != "coordinator"
+            or not environment.get("DE67_COORDINATOR_RESTART_GENERATION")
+            or environment.get("DE67_COORDINATOR_RESUME_SESSION")):
+        return
+    index = workspace / ".de67/state/work-context.sqlite3"
+    if not index.exists():
+        return  # Initial startup can precede any coordinator conversation.
+    with closing(sqlite3.connect(index.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+        row = db.execute(
+            "SELECT path,session_id FROM runs WHERE role='coordinator' AND lineage=? "
+            "ORDER BY recorded_at DESC LIMIT 1", (environment["DE67_LINEAGE"],)
+        ).fetchone()
+    if row is None:
+        return
+    path, session_id = row
+    if not session_id:
+        raise RunnerError("Previous coordinator has no verified resumable conversation")
+    with (Path(path) / "events.jsonl").open(encoding="utf-8") as source:
+        for line in source:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(event, dict) and event.get("type") == "thread.started":
+                if event.get("thread_id") != session_id:
+                    raise RunnerError("Coordinator run index disagrees with original session evidence")
+                environment["DE67_COORDINATOR_RESUME_SESSION"] = session_id
+                return
+    raise RunnerError("Previous coordinator run lacks its original thread identity")
+
+
 def current_coordinator_prompt(workspace: Path, prompt: str, environment: dict[str, str]) -> str:
     """Render stable role guidance in the fresh runner, not the long-lived supervisor.
 
     Continuations and custom prompts retain their supplied context; canonical reviewers retain
-    their gate and bindings while receiving current maintenance guidance. The supervisor
+    their gate and bindings while receiving current gate-specific guidance. The supervisor
     still owns process identity, restart acknowledgement and all invocation bindings.
     """
     if (environment.get("DE67_PROCESS_ROLE") == "mutation-reviewer"
             and prompt.startswith(f"Act as the exclusive Phase-3 mutation reviewer in {workspace}.\n")):
         # The long-lived supervisor retains the gate and invocation bindings; the fresh
-        # runner supplies the current role-owned maintenance guidance without reconstructing either.
-        from coordinator_supervisor import mutation_maintenance_contract
-        instruction = mutation_maintenance_contract()
+        # runner supplies current gate-specific guidance without reconstructing either.
+        raw_gate = environment.get("DE67_MUTATION_GATE_JSON")
+        if raw_gate is None:
+            return prompt  # Legacy supplied context; do not infer a broader review.
+        try:
+            gate = json.loads(raw_gate)
+            kind = gate["kind"]
+            if not isinstance(kind, str) or not kind:
+                raise ValueError("empty review kind")
+        except (ValueError, KeyError, TypeError) as error:
+            raise RunnerError("Reviewer prompt has invalid gate bindings") from error
+        from coordinator_supervisor import mutation_review_contract
+        instruction = mutation_review_contract(kind)
         marker = "\nCurrent invocation bindings (use these values directly;"
         body, separator, bindings = prompt.partition(marker)
         if not separator:
@@ -645,9 +694,14 @@ def current_coordinator_prompt(workspace: Path, prompt: str, environment: dict[s
         if instruction not in body:
             body += "\n" + instruction + "\n"
         return body + separator + bindings
+    generation_handoff = bool(environment.get("DE67_COORDINATOR_RESTART_GENERATION"))
+    canonical = prompt.startswith((
+        f"Act as a fresh Phase-3 delivery coordinator in {workspace}.\n",
+        f"You are the coordinator for Phase-3 delivery in {workspace}.\n",
+    ))
     if (environment.get("DE67_PROCESS_ROLE") != "coordinator"
-            or environment.get("DE67_COORDINATOR_RESUME_SESSION")
-            or not prompt.startswith(f"Act as a fresh Phase-3 delivery coordinator in {workspace}.\n")):
+            or (environment.get("DE67_COORDINATOR_RESUME_SESSION") and not generation_handoff)
+            or not canonical):
         return prompt
     marker = "\nCurrent invocation bindings (use these values directly;"
     body, separator, bindings = prompt.partition(marker)
@@ -673,6 +727,13 @@ def current_coordinator_prompt(workspace: Path, prompt: str, environment: dict[s
         finally:
             connection.close()
     rendered = coordinator_prompt(workspace, state, lineage, run_id, generation, reason).rstrip()
+    if generation_handoff and environment.get("DE67_COORDINATOR_RESUME_SESSION"):
+        rendered = (
+            "Resume the same coordinator conversation after the completed mutation. "
+            "The following current contracts supersede conflicting earlier instructions; "
+            "retain useful history and accepted evidence. Reconcile the review changes before "
+            "continuing unfinished work. Do not replay completed work.\n" + rendered
+        )
     # The supervisor supplies the attempt-specific recovery instruction after its stable role.
     recovery_marker = "\nRecovery: this is coordinator decision opportunity "
     _, recovery_separator, recovery = body.partition(recovery_marker)
@@ -696,6 +757,7 @@ def run(
     selected_environment = os.environ.copy() if environment is None else environment.copy()
     if selected_environment.get("DE67_COORDINATOR_MODEL") == "gpt-6-sol":
         selected_environment["DE67_COORDINATOR_MODEL"] = "gpt-6.1-sol"
+    resume_after_mutation(workspace, selected_environment)
     prompt = current_coordinator_prompt(workspace, prompt, selected_environment)
     codex = _codex_executable(selected_environment)
     root_value = selected_environment.get("DE67_RUNNER_ROOT", "").strip()

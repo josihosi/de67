@@ -116,6 +116,7 @@ class MutationGuardTests(unittest.TestCase):
             with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
                 connection.execute("DELETE FROM universal_review_receipts WHERE receipt_id='old'")
 
+
     def test_canonical_work_ledger_template_has_no_fake_active_item(self) -> None:
         self.assertEqual(guard.active_work_items(WORK_LEDGER_TEXT), ())
 
@@ -300,7 +301,8 @@ class MutationGuardTests(unittest.TestCase):
         result, output = self.run_guidelines_cli(state, "miss-2", "deadline_miss")
         self.assertEqual(result, 0, output)
         self.assertIn(guard.TASK_GUIDELINES, output)
-        receipt_id = output.rsplit("receipt ", 1)[1].strip()
+        receipt_id = output.split("; receipt ", 1)[1].splitlines()[0].strip()
+        self.assertRegex(receipt_id, r"^[0-9a-f]{64}$")
         connection = sqlite3.connect(state)
         connection.row_factory = sqlite3.Row
         try:
@@ -1822,7 +1824,8 @@ class MutationGuardTests(unittest.TestCase):
         )
 
         self.assertEqual(result, 0, output)
-        receipt_id = output.rsplit("receipt ", 1)[1].strip()
+        receipt_id = output.split("; receipt ", 1)[1].splitlines()[0].strip()
+        self.assertRegex(receipt_id, r"^[0-9a-f]{64}$")
         connection = sqlite3.connect(state)
         connection.row_factory = sqlite3.Row
         try:
@@ -1991,7 +1994,6 @@ class MutationGuardTests(unittest.TestCase):
             "stay with the same coordinator",
             normalized,
         )
-        self.assertIn("Mutation completion is the only planned fresh-coordinator boundary", normalized)
 
     def test_worker_lifecycle_is_not_a_task_requirement(self) -> None:
         combined = SKILL_TEXT + "\n" + TASK_GUIDANCE

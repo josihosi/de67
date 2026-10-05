@@ -1,7 +1,7 @@
 # Install de67
 
 These instructions are for Codex setting up de67 for its user. The core skill is independent of
-the optional dashboard, Discord, and experimental Jev packages. Use the matching version of each installed package.
+the optional dashboard and Discord packages. Use the matching version of each installed package.
 
 ## Requirements and platform scope
 
@@ -16,8 +16,10 @@ LLM endpoint is not a substitute. See the [Codex App Server documentation](https
 | Bundled detached Phase 3 service | macOS and `tmux`; the current service launcher is macOS-only |
 | Native Windows | CLI transport and shared logic; the Unix App Server route is not implemented |
 
+Named Luna and Sol workers request the Fast service tier on start, resume and new turns; Astra is unchanged. Returned `fast`/`priority` values establish the requested route, not measured per-turn speed or native helper inheritance.
+
 The configured roles are GPT-6 Astra high for specification, GPT-6.1 Sol low for coordination,
-GPT-6 Luna and Sol for workers, and GPT-6 Astra medium for mutation review. Phase 2 probes the
+GPT-6 Luna and GPT-6.1 Sol for workers, and GPT-6 Astra medium for mutation review. Phase 2 probes the
 needed model/effort combinations and records actual availability. Named workers run with full filesystem access; install and run
 this workflow only in the user's intended execution environment.
 

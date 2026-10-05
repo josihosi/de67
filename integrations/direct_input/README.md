@@ -2,23 +2,22 @@
 
 This optional relay sends Discord messages into DE67's existing native agent context:
 
-- Plain messages go to the active mutation reviewer.
-- A leading `coordinator:` routes that message to the active coordinator.
+- Plain messages and a leading `coordinator:` go to the coordinator.
+- A leading `mutator:` or `m:` goes to the mutation reviewer.
 - Input starts with `User Message:`. No importance keyword is needed.
 - With `persistent_mutator` enabled, owner messages and supervisor reviews use the
   same durable Astra conversation. Reviews resume its history with their current
   invocation instructions. Owner messages can reach Astra during an active review.
   One process lock prevents concurrent mutator invocations.
-- Coordinator messages wait for the next normal DE67 launch when Sol is inactive.
-- Intentional DE67 resets remain fresh launches. Only the supervisor's explicit
-  `DE67_COORDINATOR_RESUME_SESSION` requests a continuation.
+- Eligible idle coordinator conversations can receive a new owner turn while their workers continue. A stopped service queues input for its next authorized launch.
+- Mutation handoffs resume the same coordinator conversation through the supervisor's generation handoff, refreshing its contracts without replaying completed work.
 
 Native workers stay under their coordinator. Codex rejects external App Server input
 to native multi-agent children; owner input is limited to coordinator and mutator.
 Sol replies to workers using native `send_message` or `followup_task`. Workers without
 native outbound messaging use `de-67-3/scripts/agent_mailbox.py`, whose command is
 included in their task brief. Concurrent messages have separate durable records and
-the recipient's adapter serializes delivery into its active turn. Agent messages are
+the recipient's adapter serializes delivery into its active turn or wakes its eligible idle conversation using the original durable message. Agent messages are
 explicitly distinguished from owner input. All roles retain their configured
 models, effort, full-access sandbox, skills and computer-use capabilities.
 

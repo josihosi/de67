@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -14,6 +15,7 @@ import codex_app_server_runner as transport
 from agent_mailbox import pending
 
 
+@unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
 class WorkerLibraryTransportTests(WorkerFixture, unittest.TestCase):
     def test_sol_final_keeps_worker_alive_and_preserves_return_outside_sol_stream(self):
         self.exercise_early_sol_final()

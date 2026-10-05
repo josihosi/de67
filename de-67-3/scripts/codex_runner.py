@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import argparse
 from contextlib import closing
 import json
@@ -368,7 +370,7 @@ def _initial_recovered_workers(environment: dict[str, str]) -> dict[str, str]:
     state = Path(state_value).expanduser().resolve()
     if not state.is_file():
         return {}
-    with sqlite3.connect(f"file:{state}?mode=ro", uri=True) as connection:
+    with closing(sqlite3.connect(f"file:{state}?mode=ro", uri=True)) as connection, connection:
         rows = connection.execute(
             """
             SELECT task.task_id, claim.worker_id
@@ -666,15 +668,25 @@ def current_coordinator_prompt(workspace: Path, prompt: str, environment: dict[s
     """Render stable role guidance in the fresh runner, not the long-lived supervisor.
 
     Continuations and custom prompts retain their supplied context; canonical reviewers retain
-    their gate and bindings while receiving current maintenance guidance. The supervisor
+    their gate and bindings while receiving current gate-specific guidance. The supervisor
     still owns process identity, restart acknowledgement and all invocation bindings.
     """
     if (environment.get("DE67_PROCESS_ROLE") == "mutation-reviewer"
             and prompt.startswith(f"Act as the exclusive Phase-3 mutation reviewer in {workspace}.\n")):
         # The long-lived supervisor retains the gate and invocation bindings; the fresh
-        # runner supplies the current role-owned maintenance guidance without reconstructing either.
-        from coordinator_supervisor import mutation_maintenance_contract
-        instruction = mutation_maintenance_contract()
+        # runner supplies current gate-specific guidance without reconstructing either.
+        raw_gate = environment.get("DE67_MUTATION_GATE_JSON")
+        if raw_gate is None:
+            return prompt  # Legacy supplied context; do not infer a broader review.
+        try:
+            gate = json.loads(raw_gate)
+            kind = gate["kind"]
+            if not isinstance(kind, str) or not kind:
+                raise ValueError("empty review kind")
+        except (ValueError, KeyError, TypeError) as error:
+            raise RunnerError("Reviewer prompt has invalid gate bindings") from error
+        from coordinator_supervisor import mutation_review_contract
+        instruction = mutation_review_contract(kind)
         marker = "\nCurrent invocation bindings (use these values directly;"
         body, separator, bindings = prompt.partition(marker)
         if not separator:

@@ -7,6 +7,8 @@ without claiming that a real provider, agent outcome, or cost was observed.
 """
 from __future__ import annotations
 
+from contextlib import closing
+
 import argparse
 import json
 from pathlib import Path
@@ -116,7 +118,7 @@ def _packet(root: Path, task_id: str, objective: str, assumption: str | None = N
 
 
 def _active_tasks(path: Path, tasks: list[str]) -> None:
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         db.execute("CREATE TABLE tasks(lineage_id TEXT NOT NULL, task_id TEXT NOT NULL, attempt_terminal_at REAL)")
         db.executemany("INSERT INTO tasks(lineage_id,task_id,attempt_terminal_at) VALUES ('evaluation',?,NULL)",
                        [(task_id,) for task_id in tasks])
@@ -172,7 +174,7 @@ def _run_case(case: Mapping[str, Any]) -> dict[str, Any]:
             peer_packet = _packet(root, peer_task_id, scenario["peer_objective"])
             registry = root / ".de67" / "state" / "worker-library" / "registry.sqlite3"
             registry.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(registry) as db:
+            with closing(sqlite3.connect(registry)) as db, db:
                 db.execute("CREATE TABLE assignments(task_id TEXT, packet TEXT, state_path TEXT, lineage TEXT)")
                 db.execute("INSERT INTO assignments VALUES (?,?,?,?)",
                            (peer_task_id, str(peer_packet), str(state_path), "evaluation"))

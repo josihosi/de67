@@ -48,8 +48,9 @@ unfinished and resumable after the review.
 
 ## Mutation without losing the work
 
-Mutation changes the delivery method, not the requested product outcome. It runs with no coordinator
-or worker active and produces a guarded, receipt-backed change before delivery resumes.
+Method and policy promotion runs at a quiet junction with no coordinator or worker editing. The supervisor then resumes the same coordinator conversation with refreshed contracts, preserving useful history and accepted evidence.
+
+An explicitly owner-authorized clarification of the same product outcome can amend the named open FS slice and reach its affected worker while independent work continues. Scope validation preserves claim identities, accepted claims and all content outside that slice; it records the scope without granting authority. Explicit review triggers and installed method changes retain the quiet boundary.
 
 ```mermaid
 flowchart TD
@@ -61,7 +62,7 @@ flowchart TD
     Candidate --> Guard{Policy and contracts pass?}
     Guard -->|no| Preserve[Preserve current method and record the failure]
     Guard -->|yes| Apply[Promote change and mutation receipt]
-    Apply --> Fresh[Start a fresh coordinator]
+    Apply --> Fresh[Resume the same coordinator conversation]
     Fresh --> Continue[Continue the durable ledger]
 ```
 
@@ -78,7 +79,7 @@ adapt its approach within this workflow, but de67 is not a runtime-independent o
 framework. Moving it to another agent platform would require implementation and new validation.
 
 A returned turn is not a completed task. The coordinator can resume a named worker with its useful
-context intact, including under a fresh coordinator after review. Git checkpoints are chosen
+context intact, including after the coordinator resumes from review. Git checkpoints are chosen
 snapshots; a failed push is repairable and does not itself stop the delivery loop.
 
 The optional [dashboard](../integrations/dashboard/README.md) reads this state for the owner.

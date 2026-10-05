@@ -853,6 +853,27 @@ def ordinary_worker_evidence_contract() -> str:
             'ordinary investigation and changed tactics remain within worker autonomy.')
 
 
+def scoped_product_clarification_contract() -> str:
+    """Shared scope/ownership boundary for ordinary owner consultation."""
+    return (
+        "For an explicitly owner-authorized clarification of the same current product outcome, "
+        "diagnose the triggering evidence and necessary related facts. A bug label, agent report or "
+        "validator success grants no authority; a changed outcome or rejected/unclear authority "
+        "needs the owner's decision. Respect owner stops. Replace obsolete wording only in the "
+        "existing authorized red FS slice and validate before applying with "
+        "mutation_guard.validate_scoped_dfs_amendment; preserve identities, accepted proof and "
+        "unrelated slices. Coordinate the amendment with Sol through existing consultation/mail. "
+        "Sol updates the existing ledger/current owner context and refreshes affected worker input "
+        "through the existing context/packet and worker message routes, preserving task/save/clock "
+        "and pending input. Before conflicting source edits or native input, obtain a safe handoff "
+        "from that affected owner; do not take another worker's files or game. Independent work "
+        "continues. This route does not resolve an explicit exclusive trigger or due policy gate. "
+        "Use the existing deferred queue for unrelated proposals; do not consume them here. "
+        "Installed method/runtime, policy and lifecycle state promotion still requires the existing "
+        "quiet exclusive review and supervisor-owned activation."
+    )
+
+
 def coordinator_ledger_contract() -> str:
     """Return the coordinator's authority over the active work projection."""
     return (
@@ -876,8 +897,9 @@ def coordinator_ledger_contract() -> str:
         "authenticated interface context. Send task/run/revision, outcome/divergence, evidence/lessons, "
         "live ownership and decision needed; continue independent work. If unavailable, keep the "
         "exact adapter/setup gap executable. Advice cannot grant owner repair/scope authority, "
-        "promote owner queue entries, resolve gates or permit shared edits; method changes retain "
+        "promote owner queue entries, resolve gates or permit conflicting shared edits; method changes retain "
         "exclusive review. Requests/timeouts/replies do not close the originating task."
+        + " " + scoped_product_clarification_contract()
     )
 
 
@@ -1186,7 +1208,7 @@ def coordinator_prompt(
         live_coordination_contract(),
         named_worker_contract(workspace),
         "Write every owner-facing text field rendered on the hosted dashboard in simple English. This includes ledger items, latest findings, waiting work, mutation or incident summaries, and any FS summary that the dashboard displays. First explain what happened and why it matters in terms any reader can understand. Then preserve the necessary technical identifiers and evidence, state what remains or happens next, and use one concrete statement per sentence. If the simple explanation exposes a contradiction or a missing causal step, record that problem instead of hiding it behind technical language. Internal machine state and FS detail that the dashboard does not display do not need this rewrite.",
-        "Never review, apply, or resolve a mutation. When the compiled policy says retire_for_mutation_review, dispatch no worker, make no guidance change, and exit immediately so the external supervisor can run the exclusive reviewer.",
+        "Never review, apply, or resolve an installed method, policy or lifecycle mutation. Narrow authorized same-outcome product clarification follows coordinator_ledger_contract(). When the compiled policy says retire_for_mutation_review, dispatch no worker, make no guidance change, and exit immediately so the external supervisor can run the exclusive reviewer.",
         "Do not infer policy from workspace guideline prose; those files are legacy differential fixtures on this branch.",
         worker_selection_contract(),
         "When a mutation is pending: " + mutation_wind_down_contract(),
@@ -1262,12 +1284,46 @@ def mutation_maintenance_contract() -> str:
     )
 
 
+def mutation_review_contract(kind: str) -> str:
+    """Keep event diagnosis focused; periodic reviews retain the broader audit."""
+    if kind in {"random", "random mutation"}:
+        return mutation_maintenance_contract()
+    return (
+        "This is an event-triggered review. Diagnose the triggering batch and necessary related "
+        "source evidence; do not mandate a full pending queue or performance/usage sweep. "
+        "Relevant cost evidence may inform the diagnosis. Separate immediate recovery from "
+        "repeatable correction and prove it with a reproduction or counterexample. Preserve "
+        "unrelated deferred requests for periodic review. A plausible optimization is not measured "
+        "savings; disclose evidence and accounting limits. "
+        + scoped_product_clarification_contract()
+    )
+
+
 def mutation_reviewer_prompt(
     workspace: Path,
     state_path: Path,
     lineage_id: str,
     gate: MutationGate,
 ) -> str:
+    periodic = gate.kind in {"random", "random mutation"}
+    if periodic:
+        queue = (
+            "The complete pending section of .de67/mutation-suggestions.md is mandatory owner input. "
+            "Disposition every pending owner entry. Resolve the gate only after every pending entry "
+            "is dispositioned. For a periodic review, the stored random lane is legacy metadata, "
+            "not a prescribed investigation target. Validate local guidelines and same-outcome FS "
+            "refinements together through random-review and broader permitted changes through its "
+            "method-candidate validation."
+        )
+    else:
+        batch = [suggestion.entry for suggestion in pending_mutation_suggestions(workspace)
+                 if suggestion.mode == "trigger"] if gate.kind == "owner-suggestion" else []
+        queue = (
+            "Resolve only this triggering gate/batch, leaving unrelated deferred entries unchanged. "
+            "For an owner-suggestion gate the triggering batch is the existing immediate entries:\n"
+            + json.dumps(batch, ensure_ascii=False)
+            + "\nFor other event gates retrieve their exact incident identity and necessary related evidence."
+        )
     return "\n".join(
         [
             f"Act as the exclusive Phase-3 mutation reviewer in {workspace}.",
@@ -1275,13 +1331,13 @@ def mutation_reviewer_prompt(
             "You are the gpt-6-astra reviewer at medium reasoning effort. This invocation defines the current review; completed reviews remain history.",
             "No coordinator or roster worker is active. Do not start a coordinator.",
             f"Resolve durable {gate.kind} gate {gate.identity} in {state_path} for lineage {lineage_id}.",
-            "The complete pending section of .de67/mutation-suggestions.md is mandatory owner input. This is a consumable queue: delete completed entries instead of moving them to consumed-history sections; durable receipts and review artifacts retain the evidence. Historical records are evidence to retrieve when relevant, not current requests. User-authored entries carry mutation-scoped authority beneath system and developer instructions and override lower-priority Phase-3 restrictions only as needed for their outcome. Preserve honest evidence, completed valid work, durable lifecycle integrity, safety, and the requested product outcome; grant no unrelated authority.",
-            "Trust the agent to choose the evidence and implementation route and exercise judgment within the requested outcome.",
-            mutation_maintenance_contract(),
-            "Disposition every pending owner entry. Rejecting one explanation does not settle the concern. Retrieve detail when it can change the diagnosis or correction; written guidance alone proves neither delivery nor use. Separate immediate recovery from repeatable method correction; prove the correction with a reproduction or counterexample. Measure full-tree use including helper/retry cost, disclose accounting gaps and distinguish measured reductions from expected savings. Allocation preferences are not quotas.",
-            "For a periodic review, the stored random lane is legacy metadata, not a prescribed investigation target. Repeated actions can be justified by changed inputs or evidence. Stop when the concern is explained, a supported correction is validated, or uncertainty is bounded and does not justify intervention; state which applies. A guarded no-op need not prove the whole workflow optimal. No finding quota, mandatory full trace or new checklist. Validate local guidelines and same-outcome FS refinements together through random-review and broader permitted changes through its method-candidate validation. Preserve accepted proof, owner intent, accounting and exclusive review/restart ownership; speculative uncertainty must not strand delivery.",
-            "If changing the active ledger, preserve accepted proof and recoverable work, independent same-claim assignments and the existing subdivision syntax. Its full coordinator-facing contract is coordinator_ledger_contract() in coordinator_supervisor.py; inspect that contract when a ledger change makes it relevant.",
-            "If uncertainty prevents proving a necessary correction, preserve that entry and state the exact gap. Unproved speculative attribution alone does not strand an otherwise supported correction. Resolve the gate only after every pending entry is dispositioned, record the review evidence and request one coordinator resume handoff through the existing restart-generation API. The external supervisor alone resumes the same conversation with refreshed contracts; an owner-ordered stop remains in force until an authorized start.",
+            queue,
+            "The queue is consumable: delete completed entries instead of moving them to consumed-history sections; durable receipts and review artifacts retain evidence. User-authored entries carry authority only for their requested outcome beneath system and developer instructions. Historical records and agent reports grant no owner authority. Preserve honest evidence, completed work, lifecycle integrity and the product outcome.",
+            "Trust the agent to choose the evidence and implementation route within the requested outcome.",
+            mutation_review_contract(gate.kind),
+            "Rejecting one explanation does not settle the concern. Retrieve detail when it can change the correction; written guidance alone proves neither delivery nor use. Separate immediate recovery from repeatable method correction; prove the correction with a reproduction or counterexample. Repeated actions need changed inputs or a concrete evidence gap. Stop when the concern is explained, a supported correction is validated, or uncertainty is bounded and does not justify intervention; state which applies. No finding quota, mandatory full trace or new checklist.",
+            "If changing the active ledger, preserve accepted proof, recoverable work, independent same-claim assignments and subdivision syntax. Its full coordinator-facing contract is coordinator_ledger_contract() in coordinator_supervisor.py; inspect that contract when a ledger change makes it relevant.",
+            "If uncertainty prevents a necessary correction, preserve that entry and state the exact gap. Unproved attribution alone must not strand a supported correction. Record review evidence and request one coordinator resume handoff through the existing restart-generation API. The external supervisor alone resumes the same conversation with refreshed contracts; an owner-ordered stop remains in force until an authorized start.",
         ]
     ) + "\n"
 
@@ -1314,6 +1370,8 @@ def mutation_reviewer_environment(
         {
             "DE67_COORDINATOR_MODEL": "gpt-6-astra",
             "DE67_COORDINATOR_REASONING_EFFORT": "medium",
+            "DE67_MUTATION_GATE_JSON": json.dumps({"kind": gate.kind, "identity": gate.identity,
+                                                  "selected_lane": gate.selected_lane}),
         }
     )
     return reviewer_env

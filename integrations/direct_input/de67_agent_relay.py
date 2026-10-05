@@ -178,6 +178,107 @@ class Relay:
             raise
         return True
 
+    def agent_mail_review_clear(self) -> bool:
+        """Fail closed at the supervisor's existing exclusive-review boundary."""
+        import sqlite3
+        from contextlib import closing
+        config = json.loads((self.workspace / ".de67/state/workspace.json").read_text(encoding="utf-8"))
+        clock = config["clock"]
+        state = Path(clock["state"])
+        lineage = clock["lineage"]
+        with closing(sqlite3.connect(state.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            latest = db.execute("SELECT role, finished_at FROM supervisor_attempts WHERE lineage_id=? "
+                "ORDER BY started_at DESC, rowid DESC LIMIT 1", (lineage,)).fetchone()
+        # The supervisor serializes coordinator/reviewer invocations. Historical
+        # crashed reviews can retain an unfinished journal row after recovery;
+        # they are not the current exclusive owner once a later attempt exists.
+        if latest and latest[0] == "mutation-reviewer" and latest[1] is None:
+            return False
+        from coordinator_supervisor import mutation_gate
+        return mutation_gate(state, lineage, self.workspace) is None
+
+    def reconcile_agent_mail(self) -> None:
+        """Wake idle recipients without treating agent reports as owner input."""
+        from agent_mailbox import pending, start_pending
+        for role in ("coordinator", "mutator"):
+            if not pending(self.workspace, role):
+                continue
+            # Mail is never authority to start a stopped coordinator/service.
+            try:
+                from supervisor_service import status_service
+                _, status = status_service(self.workspace)
+                if status == "stopped" or status == "legacy-launchagent-loaded":
+                    continue
+                if not self.agent_mail_review_clear():
+                    continue
+                connected = self.connect(role)
+                if connected is not None:
+                    binding, rpc = connected
+                    if (role == "coordinator" and binding.get("state") == "finished"
+                            and binding.get("agent_mail_idle_wake") is True):
+                        turn = start_pending(self.workspace, role, rpc, binding["thread_id"])
+                        if turn is not None:
+                            # Publish through the owning runner's turn/started event.
+                            self.connections.pop(role, None)
+                            rpc.close()
+                    continue  # Active recipient's runner owns serial steering.
+                if role != "mutator":
+                    continue
+                self.start_mail_mutator(pending(self.workspace, role)[0][1]["id"])
+            except Exception as error:
+                self.log("agent_mail_waiting", role=role, error=str(error))
+
+    def start_mail_mutator(self, message_id: str) -> bool:
+        """Reuse the ordinary mutator launcher and its exclusive conversation lock."""
+        path = self.workspace / ".de67/state/workspace.json"
+        config = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if config.get("persistent_mutator") is not True:
+            return False
+        if self.mutator_process is not None and self.mutator_process.poll() is None:
+            return False
+        # Do not queue a second invocation behind an active owner/reviewer.
+        import fcntl
+        from mutator_session import MutatorSession, owner_prompt
+        session = MutatorSession(self.workspace)
+        session.path.parent.mkdir(parents=True, exist_ok=True)
+        with session.path.with_suffix(".lock").open("a+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            if not session.thread_id():
+                return False  # Mail cannot create a replacement owner conversation.
+        scripts = Path(__file__).resolve().parents[2] / "de-67-3/scripts"
+        python = config.get("agent_transport_python") or sys.executable
+        launch = self.root / "agent-mail-launches" / message_id
+        try:
+            launch.mkdir(parents=True)
+        except FileExistsError:
+            receipt = launch / "launch-receipt.json"
+            if not receipt.exists() or json.loads(receipt.read_text()).get("state") != "deferred":
+                # Unknown submission is never a reason to replay input.
+                return False
+        receipt = launch / "launch-receipt.json"
+        atomic_json(receipt, {"state": "starting"})
+        environment = dict(os.environ, DE67_AGENT_TRANSPORT="app-server",
+            DE67_AGENT_TRANSPORT_PYTHON=python, DE67_PROCESS_ROLE="mutation-reviewer",
+            DE67_COORDINATOR_MODEL="gpt-6-astra", DE67_COORDINATOR_REASONING_EFFORT="medium",
+            DE67_COORDINATOR_RUN_ID="agent-mail-" + message_id,
+            DE67_CODEX=self.config.get("codex") or shutil.which("codex") or "codex",
+            DE67_INITIAL_MAIL_ID=message_id, DE67_MAIL_LAUNCH_RECEIPT=str(receipt))
+        for key in ("DE67_COORDINATOR_RESUME_SESSION", "DE67_DEADLINE_STATE", "DE67_LINEAGE",
+                    "DE67_INITIAL_INPUT_PATH", "DE67_MUTATION_GATE_JSON"):
+            environment.pop(key, None)
+        with (launch / "output.jsonl").open("a", encoding="utf-8") as output:
+            self.mutator_process = subprocess.Popen([python, str(scripts / "codex_runner.py"),
+                "--cwd", str(self.workspace)], cwd=self.workspace, env=environment,
+                stdin=subprocess.PIPE, stdout=output, stderr=output, text=True)
+            self.mutator_process.stdin.write(owner_prompt(self.workspace, scripts, python)
+                + "\nThis invocation was woken by queued agent mail. It grants no mutation gate or owner authorization.\n")
+            self.mutator_process.stdin.close()
+        self.log("agent_mail_mutator_started", message_id=message_id, pid=self.mutator_process.pid)
+        return True
+
     def log(self, event: str, **detail: Any) -> None:
         with (self.root / "events.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"time": time.time(), "event": event, **detail}) + "\n")
@@ -548,6 +649,7 @@ class Relay:
                 if self.history_rpc:
                     self.history_rpc.close()
                     self.history_rpc = None
+        self.reconcile_agent_mail()
         self.replies()
         for job in self.jobs.values():
             if job["status"] in {"failed", "uncertain"} and not job.get("error_notified"):
@@ -611,6 +713,8 @@ def main() -> None:
     if claw["channels"]["discord"]["guilds"][config["guildId"]]["channels"][config["channelId"]].get("enabled") is not False:
         raise RuntimeError("This channel must be excluded from ordinary OpenClaw agent routing")
     relay = Relay(config)
+    relay.log("transport_loaded", pid=os.getpid(), agent_mail_idle_wake=True,
+              source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
     stopped = False
     def stop(_signal: int, _frame: Any) -> None:
         nonlocal stopped

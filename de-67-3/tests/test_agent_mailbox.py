@@ -7,10 +7,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from agent_mailbox import deliver, enqueue, mailbox, pending
+from agent_mailbox import deliver, enqueue, mailbox, pending, start_pending
 from codex_app_server_runner import RpcError
 
 
+@unittest.skipIf(sys.platform == "win32", "Unix App Server transport uses Unix sockets and flock")
 class MailboxTests(unittest.TestCase):
     def test_concurrent_workers_keep_distinct_messages_and_are_delivered_once(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -71,6 +72,67 @@ class MailboxTests(unittest.TestCase):
             receipt = json.loads((mailbox(workspace, "mutator") / (message["id"] + ".json")).read_text())
             self.assertEqual((receipt["state"], receipt["thread_id"], receipt["turn_id"]),
                              ("delivered", "review-thread", "review-turn"))
+
+    def test_idle_wake_starts_one_original_message_then_active_delivery_drains_rest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            messages = [enqueue(workspace, "coordinator", "mutator", text) for text in ("one", "two")]
+            calls = []
+            class Client:
+                def call(self, method, params):
+                    calls.append((method, params))
+                    return {"turn": {"id": "wake"}}
+            self.assertEqual(start_pending(workspace, "coordinator", Client(), "same"), {"id": "wake"})
+            deliver(workspace, "coordinator", Client(), "same", "wake")
+            self.assertIsNone(start_pending(workspace, "coordinator", Client(), "same"))
+            self.assertEqual([m for m, _ in calls], ["turn/start", "turn/steer"])
+            self.assertEqual([p["clientUserMessageId"] for _, p in calls],
+                             ["de67-agent:" + m["id"] for m in messages])
+
+    def test_idle_owner_contention_requeues_and_uncertain_start_never_replays(self):
+        for failure, expected in [(RpcError("already active turn", -32600), "pending"),
+                                  (RpcError("receipt lost"), "uncertain")]:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                message = enqueue(workspace, "coordinator", "mutator", "original")
+                calls = []
+                class Client:
+                    def call(self, method, params):
+                        calls.append(method)
+                        raise failure
+                start_pending(workspace, "coordinator", Client(), "same")
+                receipt = json.loads((mailbox(workspace, "coordinator") / (message["id"] + ".json")).read_text())
+                self.assertEqual(receipt["state"], expected)
+                if expected == "uncertain":
+                    start_pending(workspace, "coordinator", Client(), "same")
+                    deliver(workspace, "coordinator", Client(), "same", "active")
+                    self.assertEqual(calls, ["turn/start"])
+                else:
+                    class Accepted:
+                        def call(self, method, params): calls.append(method)
+                    deliver(workspace, "coordinator", Accepted(), "same", "owner")
+                    self.assertEqual(calls, ["turn/start", "turn/steer"])
+
+    def test_concurrent_idle_wake_and_active_delivery_claim_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            enqueue(workspace, "coordinator", "mutator", "one")
+            calls = []
+            barrier = threading.Barrier(2)
+            class Client:
+                def call(self, method, params):
+                    calls.append(method)
+                    return {"turn": {"id": "wake"}}
+            def start():
+                barrier.wait()
+                start_pending(workspace, "coordinator", Client(), "same")
+            def steer():
+                barrier.wait()
+                deliver(workspace, "coordinator", Client(), "same", "owner")
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                a, b = pool.submit(start), pool.submit(steer)
+                a.result(); b.result()
+            self.assertEqual(len(calls), 1)
 
 
 if __name__ == "__main__":

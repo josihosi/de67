@@ -53,9 +53,32 @@ class TelescopeTests(unittest.TestCase):
         packet = self.run_eval(lambda body, timeout: response(body, {self.target: "direct"}))
         self.assertEqual([i["id"] for i in packet["items"]], [self.target])
         item = packet["items"][0]
-        self.assertEqual(item["excerpt"], (self.root / item["path"]).read_text())
+        self.assertEqual(item["excerpt"], (self.root / item["path"]).read_bytes().decode("utf-8"))
         self.assertEqual(item["sha256"], t.digest((self.root / item["path"]).read_bytes()))
         self.assertEqual(item["handle"]["lines"], [1, 3])
+
+    def test_inventory_uses_canonical_selected_executable_and_keeps_roots(self):
+        selected = self.root / "rg-link"
+        target = self.root / "installed-rg"
+        target.touch()
+        selected.symlink_to(target)
+        observed = []
+        def inventory(command, **kwargs):
+            observed.append((command, kwargs["cwd"]))
+            kwargs["stdout"].write(b"source.py\n")
+            return type("Result", (), {"returncode": 0})()
+        with patch.object(t.shutil, "which", return_value=str(selected)), \
+             patch.object(t.subprocess, "run", side_effect=inventory):
+            pool, _ = t.gather(self.root, "order", [], self.config, time.monotonic() + 10)
+        self.assertEqual(observed, [([str(selected.resolve()), "--files", "--hidden", "--",
+                                    *self.config["paths"]], self.root)])
+        self.assertEqual([item["path"] for item in pool], ["source.py"])
+
+    def test_missing_inventory_command_reports_dependency_before_selection(self):
+        with patch.object(t.shutil, "which", return_value=None), patch.object(t.subprocess, "run") as run:
+            with self.assertRaisesRegex(t.TelescopeError, "rg inventory unavailable"):
+                t.gather(self.root, "order", [], self.config, time.monotonic() + 10)
+            run.assert_not_called()
 
     def test_all_irrelevant_is_valid_abstention_not_failure(self):
         packet = self.run_eval(lambda body, timeout: response(body))

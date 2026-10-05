@@ -29,7 +29,7 @@ understand and resolve. Accepted progress stays in durable state when an agent i
 
 When mutation review is due, new dispatch pauses and active workers can finish. A fresh,
 independent reviewer examines the method at a quiet junction. Guarded changes and receipts
-preserve the handoff, then a fresh coordinator resumes from the ledger.
+preserve the handoff, then the same coordinator conversation resumes with refreshed contracts.
 
 The machinery gives agents durable structure and leaves semantic judgment with the agents.
 
@@ -48,7 +48,7 @@ moving and supplies the suggestion to the next scheduled review. Both let you na
 you want the reviewer to address.
 
 The independent reviewer reads the complete ledger, applies owner-authorized changes through the
-guarded review route, and returns control to a fresh coordinator.
+guarded review route, and returns control to the same coordinator conversation.
 
 **[See mutation steering and the review lifecycle →](docs/how-de67-works.md#mutation-without-losing-the-work)**
 

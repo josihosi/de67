@@ -153,9 +153,11 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         self.assertEqual(starts[-1]["model"], "gpt-6-astra")
         self.assertEqual(starts[-1]["config"]["model_reasoning_effort"], "low")
 
-    def test_coding_max_effort_reaches_worker_runtime(self):
-        for model, name in (("gpt-6-luna", "luna-coder"), ("gpt-6.1-sol", "sol-coder")):
-            self.worker(name=name, model=model, effort="max")
+    def test_chosen_coding_effort_reaches_worker_runtime(self):
+        for model, name, effort in (("gpt-6-luna", "luna-coder", "max"),
+                                    ("gpt-6.1-sol", "sol-coder", "medium"),
+                                    ("gpt-6.1-sol", "sol-hard", "max")):
+            self.worker(name=name, model=model, effort=effort)
             self.assign(name=name, task_id=name)
             self.dispatcher.process_pending()
             start = next(params for method, params in reversed(self.rpc.calls)
@@ -163,8 +165,8 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
             turn = next(params for method, params in reversed(self.rpc.calls)
                         if method == "turn/start")
             self.assertEqual(start["model"], model)
-            self.assertEqual(start["config"]["model_reasoning_effort"], "max")
-            self.assertEqual(turn["effort"], "max")
+            self.assertEqual(start["config"]["model_reasoning_effort"], effort)
+            self.assertEqual(turn["effort"], effort)
 
     def prepared_text(self, task_id, owner, constraint="Current constraint version one"):
         from worker_packet import standing_section

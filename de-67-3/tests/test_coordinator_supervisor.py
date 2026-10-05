@@ -558,6 +558,17 @@ def restart_required(restart: dict[str, object]) -> bool:
 
 
 class ReviewerLaunchPromotionTests(unittest.TestCase):
+    def test_deferred_spelling_does_not_trigger_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / ".de67").mkdir()
+            (workspace / ".de67/mutation-suggestions.md").write_text(
+                "## Pending suggestions\n- [deferred] timing investigation\n"
+                "- Owner-authorized [deferred]: later concern\n"
+                "- [trigger] immediate concern\n- legacy concern\n")
+            self.assertEqual([item.mode for item in pending_mutation_suggestions(workspace)],
+                             ["defer", "defer", "trigger", "trigger"])
+
     def test_retained_supervisor_uses_promoted_machine_bindings(self):
         import coordinator_supervisor as supervisor
         gate = MutationGate("random", "cycle 13", "DFS.md")
@@ -1043,7 +1054,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("exited with code 7", error)
         self.assertIn("made no durable progress", error)
 
-    def test_unresolved_mutation_gate_is_not_reviewed_twice(self) -> None:
+    def test_unresolved_mutation_gate_has_one_corrective_continuation(self) -> None:
         self.write_work_documents(red=True, active=True)
         with DeadlineHarness(self.state_path) as harness:
             harness.complete_task("project", "seed", "terminal proof")
@@ -1057,7 +1068,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         ) as reviewer, patch(
             "coordinator_supervisor.mutation_gate", return_value=gate
         ):
-            with self.assertRaisesRegex(SupervisorError, "repeated without resolution"):
+            with self.assertRaisesRegex(SupervisorError, "repeated without resolution") as failure:
                 _complete_mutation_review(
                     self.runner_command(),
                     self.workspace,
@@ -1068,7 +1079,35 @@ class CoordinatorSupervisorTests(unittest.TestCase):
                     extra_env=self.environment("unacknowledged"),
                 )
 
-        self.assertEqual(reviewer.call_count, 1)
+        self.assertIn("supervisor_service.py", str(failure.exception))
+        self.assertIn("start --workspace", str(failure.exception))
+        self.assertIn(str(self.workspace), str(failure.exception))
+        self.assertIn("Do not restart unresolved review loops", str(failure.exception))
+        self.assertEqual(reviewer.call_count, 2)
+        self.assertIn("DE67_MUTATION_RECOVERY_REASON", reviewer.call_args.kwargs["extra_env"])
+
+    def test_interim_review_answer_continues_to_durable_resolution(self) -> None:
+        self.write_work_documents(red=True, active=True)
+        with DeadlineHarness(self.state_path) as harness:
+            harness.complete_task("project", "seed", "terminal proof")
+        gate = MutationGate("owner-suggestion", "interim-answer", None)
+        calls = []
+        def review(*args, **kwargs):
+            calls.append(kwargs)
+            folder = self.run_root / kwargs["run_id"]
+            folder.mkdir(parents=True)
+            if len(calls) == 2:
+                with DeadlineHarness(self.state_path) as harness:
+                    harness.request_coordinator_restart("project", "review now completed")
+            return ChildResult(kwargs["run_id"], folder, 0, True)
+        with patch("coordinator_supervisor.run_mutation_reviewer", side_effect=review), \
+             patch("coordinator_supervisor.mutation_gate", side_effect=[gate, None]):
+            restart = _complete_mutation_review(self.runner_command(), self.workspace,
+                self.state_path, "project", self.run_root, gate,
+                extra_env=self.environment("unacknowledged"))
+        self.assertTrue(restart.required)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("do not repeat completed investigations", calls[1]["extra_env"]["DE67_MUTATION_RECOVERY_REASON"])
 
     def test_supervision_event_signature_is_consumed_once(self) -> None:
         consumed: set[str] = set()
@@ -1296,6 +1335,17 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             for line in self.events.read_text(encoding="utf-8").splitlines()
         ]
 
+    def test_fresh_prompt_accepts_cached_pre_audience_owner_contract(self) -> None:
+        import coordinator_supervisor as supervisor
+        # A long-lived supervisor retains imported dependencies while refreshing
+        # its prompt source after an exclusive method mutation.
+        with patch("policy_kernel.current_owner_contract", lambda workspace: "legacy owner contract"):
+            fresh = supervisor._fresh_prompt_module()
+            prompt = fresh.coordinator_prompt(
+                self.workspace.resolve(), self.state_path.resolve(),
+                "project", "mixed-version-prompt", None)
+        self.assertIn("legacy owner contract", prompt)
+
     def test_supervisor_prompt_routes_only_compiled_workspace_policy(self) -> None:
         prompt = coordinator_prompt(
             self.workspace.resolve(),
@@ -1320,7 +1370,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("exposes a contradiction or a missing causal step", prompt)
         self.assertIn("Internal machine state and FS detail", prompt)
         self.assertIn('fork_turns="none"', prompt)
-        self.assertIn("Only GPT-6 Luna, GPT-6.1 Sol and GPT-6 Astra", prompt)
+        self.assertIn("Choose only available pairs from model_choices", prompt)
         self.assertIn("Never omit model selection", prompt)
         self.assertIn("pass coordinator or predecessor history", prompt)
         # Verify the complete producing contract reaches routing without freezing its prose.
@@ -1489,7 +1539,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("Separate immediate recovery from repeatable method correction", prompt)
         self.assertIn("prove the correction with a reproduction or counterexample", prompt)
         self.assertIn("preserve that entry and state the exact gap", prompt)
-        self.assertIn("external supervisor alone launches the successor", prompt)
+        self.assertIn("external supervisor alone resumes the same conversation", prompt)
         self.assertIn("coordinator_ledger_contract()", prompt)
         self.assertIn("when a ledger change makes it relevant", prompt)
         self.assertNotIn("test-and-task-guidelines.md", prompt)
@@ -1588,7 +1638,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         self.assertIn("repair the earliest preventable systemic cause", reviewer_prompt)
         self.assertIn("reproduction or counterexample", reviewer_prompt)
         self.assertIn("Resolve the gate only after every pending entry is dispositioned", reviewer_prompt)
-        self.assertIn("external supervisor alone launches the successor", reviewer_prompt)
+        self.assertIn("external supervisor alone resumes the same conversation", reviewer_prompt)
         self.assertNotIn("orchestrator-guidelines.md", reviewer_prompt)
         self.assertNotIn("test-and-task-guidelines.md", reviewer_prompt)
         self.assertNotIn("deadline_harness.py", reviewer_prompt)

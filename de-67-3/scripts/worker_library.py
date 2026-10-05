@@ -203,7 +203,7 @@ def _validate_packet(workspace: Path, state: Path, lineage: str, task_id: str,
         owner_digest = metadata.get("owner_contract_sha256") if isinstance(metadata, dict) else None
     except (TypeError, ValueError):
         owner_digest = None
-    if owner_digest != hashlib.sha256(current_owner_contract(workspace).encode("utf-8")).hexdigest():
+    if owner_digest != hashlib.sha256(current_owner_contract(workspace, audience="worker").encode("utf-8")).hexdigest():
         raise WorkerLibraryError("Owner instructions changed or were not bound to this packet; prepare its current packet again")
     from context_library import _assignment_revision, selected_context, task_view
     revision = _assignment_revision(workspace, task_id)

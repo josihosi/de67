@@ -159,16 +159,25 @@ class AppServerTransportTests(unittest.TestCase):
                         return {'turn': {'id': 'turn'}}
                 def close(self): pass
 
-            for role, resume in [('coordinator', ''), ('mutation-reviewer', ''), ('coordinator', 'saved')]:
+            for role, resume in [('coordinator', ''), ('mutation-reviewer', ''), ('coordinator', 'saved'), ('coordinator', 'legacy-sol'), ('coordinator', 'retired')]:
                 calls.clear()
                 env = {'DE67_RUNNER_ACTIVE_DIR': str(run_dir), 'CODEX_HOME': str(workspace / 'codex'),
                        'DE67_PROCESS_ROLE': role, 'DE67_COORDINATOR_RUN_ID': 'run',
                        'DE67_COORDINATOR_RESUME_SESSION': resume,
                        'DE67_COORDINATOR_MODEL': 'gpt-6-astra' if role == 'mutation-reviewer' else 'gpt-6.1-sol',
                        'DE67_COORDINATOR_REASONING_EFFORT': 'ultra' if role == 'mutation-reviewer' else 'low'}
+                if resume == 'legacy-sol':
+                    env['DE67_COORDINATOR_MODEL'] = 'gpt-6-sol'
+                if resume == 'retired':
+                    env['DE67_COORDINATOR_MODEL'] = 'gpt-5.6-sol'
                 with patch.dict(os.environ, env, clear=True), patch.object(transport.sys, 'platform', 'darwin'), \
                      patch.object(transport.signal, 'signal'), patch.object(transport.subprocess, 'Popen', Server), \
                      patch.object(transport, 'Rpc', Client), redirect_stdout(io.StringIO()):
+                    if resume == 'retired':
+                        with self.assertRaisesRegex(transport.RpcError, 'Retired model'):
+                            transport.run('codex', workspace, 'Current role prompt')
+                        self.assertFalse(any(method.startswith('thread/') for method, _ in calls))
+                        continue
                     self.assertEqual(transport.run('codex', workspace, 'Current role prompt'), 0)
                 launch = next((method, params) for method, params in calls if method.startswith('thread/'))
                 self.assertEqual(launch[0], 'thread/resume' if resume else 'thread/start')
@@ -285,6 +294,60 @@ class AppServerTransportTests(unittest.TestCase):
             self.assertEqual(turn['clientUserMessageId'], 'owner:1')
             self.assertIn({'type': 'text', 'text': 'User Message: retain me'}, turn['input'])
             self.assertEqual(json.loads(receipt.read_text())['state'], 'submitted')
+
+    def test_owner_wakes_finished_coordinator_without_stopping_workers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = workspace / "run"
+            run_dir.mkdir()
+            observations = []
+            class Server:
+                pid = 999
+                stopped = False
+                def __init__(self, argv, **kwargs): Path(argv[-1].removeprefix("unix://")).touch()
+                def poll(self): return 0 if self.stopped else None
+                def terminate(self): self.stopped = True
+                def wait(self, **kwargs): return 0
+            class Client:
+                def __init__(self, socket):
+                    self.notifications = []
+                    self.events = iter([
+                        {"method": "turn/completed", "params": {"threadId": "same", "turn": {"id": "first", "status": "completed"}}},
+                        {"method": "turn/started", "params": {"threadId": "same", "turn": {"id": "owner-wake"}}},
+                        {"method": "worker-return", "params": {}},
+                        {"method": "turn/completed", "params": {"threadId": "same", "turn": {"id": "owner-wake", "status": "completed"}}},
+                    ])
+                def send(self, message): pass
+                def call(self, method, params):
+                    if method.startswith("thread/"): return {"thread": {"id": "same"}}
+                    if method == "turn/start": return {"turn": {"id": "first"}}
+                def receive(self): return next(self.events)
+                def close(self): pass
+            class Workers:
+                active = True
+                def __init__(self, workspace, rpc, binding): self.binding = binding
+                def reconcile(self): pass
+                def process_pending(self): pass
+                def has_active_turns(self): return self.active
+                def observe(self, message):
+                    if message["method"] == "worker-return":
+                        self.active = False
+                        observations.append(dict(self.binding))
+                        return True
+                    return False
+                def shutdown(self): observations.append("shutdown")
+            env = {"DE67_RUNNER_ACTIVE_DIR": str(run_dir), "CODEX_HOME": str(workspace / "codex"),
+                "DE67_PROCESS_ROLE": "coordinator", "DE67_COORDINATOR_RUN_ID": "run",
+                "DE67_COORDINATOR_MODEL": "gpt-6.1-sol", "DE67_COORDINATOR_REASONING_EFFORT": "low",
+                "DE67_DEADLINE_STATE": "clock", "DE67_LINEAGE": "lineage", "DE67_SUPERVISOR_PID": "1"}
+            with patch.dict(os.environ, env, clear=True), patch.object(transport.signal, "signal"), \
+                 patch.object(transport.subprocess, "Popen", Server), patch.object(transport, "Rpc", Client), \
+                 patch("worker_library.WorkerDispatcher", Workers), redirect_stdout(io.StringIO()):
+                self.assertEqual(transport.run("codex", workspace, "prompt"), 0)
+            self.assertEqual(observations[0]["turn_id"], "owner-wake")
+            self.assertEqual(observations[0]["state"], "active")
+            self.assertTrue(observations[0]["idle_owner_resume"])
+            self.assertEqual(observations[-1], "shutdown")
 
     def test_lock_prevents_a_second_mutation_owner(self):
         with tempfile.TemporaryDirectory() as directory:

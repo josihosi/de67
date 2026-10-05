@@ -117,7 +117,7 @@ class CodexRunnerTests(unittest.TestCase):
             observed = harness.coordinator_restart_status("project")["coordinator_restart"]
         self.assertTrue(observed["pending"])
         self.assertIsNone(observed["acknowledged_at"])
-        for extra in ({"DE67_PROCESS_ROLE": "mutation-reviewer"}, {"DE67_COORDINATOR_RESUME_SESSION": "same-session"}):
+        for extra in ({"DE67_PROCESS_ROLE": "mutation-reviewer"},):
             self.assertEqual(codex_runner.current_coordinator_prompt(self.workspace, old, {**env, **extra}), old)
         self.assertEqual(codex_runner.current_coordinator_prompt(self.workspace, "Custom prompt", env), "Custom prompt")
         with self.assertRaisesRegex(codex_runner.RunnerError, "invocation bindings"):

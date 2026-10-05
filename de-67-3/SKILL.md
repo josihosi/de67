@@ -41,7 +41,7 @@ Unknown, corrupt, ambiguous, or unsupported policy fails closed instead of falli
 Policy mutations operate on a candidate machine source and contract corpus under `.de67/state/`.
 Promote the candidate source and compiled bytecode together only after `policy_kernel.py guard`
 proves every contract, temporal invariant, mutation-ledger route, deadline wake, and rule necessity.
-The successful promotion requests one fresh coordinator; failed candidates have no authority.
+The successful promotion requests one supervisor-owned resume of the same coordinator conversation; failed candidates have no authority.
 Compilation lowers object-shaped policy into positional instruction vectors, interns repeated
 symbols, and compresses the resulting tape. `policy_kernel.py decompile` must recover the normalized
 source exactly; lossy or noncanonical artifacts fail closed.
@@ -78,7 +78,7 @@ An `Owner-authorized [trigger]:` entry creates that exclusive gate as soon as wo
 `Owner-authorized [defer]:` entry remains mandatory queued reviewer input but does not wake, retire,
 or replace the ordinary coordinator; the next regularly due mutation review consumes it. Legacy
 unlabelled entries retain trigger behavior.
-Only then does the supervisor launch one fresh low coordinator. Product strategy and evidence
+Only then does the supervisor resume the same low coordinator conversation with the current contracts. Product strategy and evidence
 judgment remain model work inside the selected route.
 
 ## Terminal routing
@@ -88,7 +88,7 @@ transition stay with the same coordinator. A formal terminal finding also stays 
 coordinator; it is reserved for a contradicted assigned outcome, materially different owner outcome,
 real external decision, unavailable capability, irreversible risk, or an exhausted authorized route.
 A disproved strategy is nonterminal while recoverable repository work remains. Mutation completion
-is the only planned fresh-coordinator boundary.
+refreshes the contracts in the same coordinator conversation; it is not a fresh-session boundary.
 An abnormal process exit remains recoverable, but it is recorded as recovery rather than treated as
 a policy restart. The external supervisor exclusively launches and acknowledges every process.
 

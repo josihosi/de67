@@ -33,3 +33,12 @@ exclusive review. External process restarts preserve these records as described 
 
 Use `supervisor_service.py status` and `stop` for observation and shutdown. A stopped service never
 implies that FS or ledger work is complete.
+
+If an interrupted review exhausts its bounded corrective turn, its error includes the exact
+supported start command. The authorized reviewer finishes the same review and records its one
+resume handoff first; then start the stopped service to consume that handoff. Do not turn repeated
+owner conversation into an unbounded automatic model loop or restart an unresolved gate blindly.
+When recovery machinery blocks useful work, first consider removing the unnecessary condition.
+If it protects a real ownership/evidence boundary, retain it and give the responsible agent a short,
+executable correction within its authority. A recovery message must name what is wrong and the
+supported operation that can actually fix it; do not prescribe forbidden state edits.

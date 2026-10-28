@@ -44,10 +44,10 @@ class FuelTests(unittest.TestCase):
  def test_missing_indexed_session_stays_partial(self):
   self.ingest('root',self.row('root','r',5));v=read_campaign_fuel(self.w,self.sessions,now=60);self.assertTrue(v['partial']);self.assertGreater(v['gap_count'],0)
  def test_deployed_visuals_all_roles(self):
-  p=Path('/Users/josefhorvath/Library/Application Support/DE67 Dashboard/de67_dashboard.py');s=importlib.util.spec_from_file_location('deployed',p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+  p=Path(__file__).with_name('de67_dashboard.py');s=importlib.util.spec_from_file_location('deployed',p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
   for values in [dict(astra=0,coordinator=0,sol=0,terra=0,luna=0,other=0),dict(astra=1,coordinator=2,sol=3,terra=7,luna=5,other=0)]:
    f=dict(available=True,totals=values,series={k:[0]*23+[v] for k,v in values.items()},partial=True)
    h=m.render_fuel(f)
    for role in ['astra','sol','terra','luna']:self.assertIn('data-role="'+role+'"',h);self.assertIn('>'+role+'</span>',h)
-   self.assertIn('cumulative',h)
+   self.assertIn('partial',h)
 if __name__=='__main__':unittest.main()

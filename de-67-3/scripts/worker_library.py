@@ -299,6 +299,28 @@ def catalog(workspace: Path, state: Path | None = None, lineage: str | None = No
     return result
 
 
+def _handoff_request_unsettled(db: sqlite3.Connection, assignment: Mapping[str, Any]) -> bool:
+    for request in db.execute("SELECT * FROM requests WHERE name=? AND status IN ('pending','submitting','uncertain')",
+                              (assignment["name"],)):
+        # A lost receipt remains uncertain history. It need not block a later
+        # returned assignment once its earlier owner returned and transport is gone.
+        # Queued/submitting work and uncertainty on the current assignment still block.
+        if request["assignment_id"] == assignment["id"] or request["status"] != "uncertain":
+            return True
+        old = db.execute("SELECT * FROM assignments WHERE id=?", (request["assignment_id"],)).fetchone()
+        if (old is None or old["name"] != assignment["name"] or old["status"] != "returned"
+                or old["created_at"] >= assignment["created_at"]
+                or old["updated_at"] > assignment["created_at"]
+                or request["created_at"] >= assignment["created_at"]):
+            return True
+        try:
+            if any(_old_server_present(json.loads(raw)) for raw in (old["binding"], request["binding"])):
+                return True
+        except (KeyError, TypeError, ValueError, OSError):
+            return True
+    return False
+
+
 def describe(workspace: Path, name: str, job: str | None = None, *, model: str | None = None,
              effort: str | None = None,
              environment: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -329,7 +351,7 @@ def describe(workspace: Path, name: str, job: str | None = None, *, model: str |
                     raise WorkerLibraryError("Model handoff requires the current coordinator's still-owned assignment")
                 if not _same_binding(previous, binding) and _old_server_present(previous):
                     raise WorkerLibraryError("Previous worker App Server is still present")
-                if db.execute("SELECT 1 FROM requests WHERE name=? AND status IN ('pending','submitting','uncertain')", (name,)).fetchone():
+                if _handoff_request_unsettled(db, assignment):
                     raise WorkerLibraryError("Settle pending worker requests before a model handoff")
             from policy_kernel import worker_model_choices
             model, effort = model or worker["model"], effort or worker["effort"]

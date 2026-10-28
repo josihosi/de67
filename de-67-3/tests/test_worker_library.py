@@ -118,6 +118,58 @@ class WorkerFixture:
 
 
 class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
+    def test_returned_model_handoff_preserves_task_and_thread(self):
+        self.worker(model="gpt-6.1-sol", effort="high")
+        self.assign(); self.dispatcher.process_pending(); original = self.returned()
+        before = dict(self.harness.connection.execute("SELECT * FROM tasks WHERE task_id='task-a'").fetchone())
+        library.describe(self.workspace, "pilot", model="gpt-6.1-terra", effort="medium", environment=self.env)
+        library.message(self.workspace, "pilot", "Continue the same story with original Luna", environment=self.env)
+        self.dispatcher.process_pending()
+        resumes = [p for m,p in self.rpc.calls if m == "thread/resume"]
+        self.assertEqual(resumes[-1]["threadId"], original["worker_id"])
+        self.assertEqual(resumes[-1]["model"], "gpt-6.1-terra")
+        self.assertEqual(resumes[-1]["config"]["model_reasoning_effort"], "medium")
+        self.assertEqual([p for m,p in self.rpc.calls if m == "turn/start"][-1]["effort"], "medium")
+        after = dict(self.harness.connection.execute("SELECT * FROM tasks WHERE task_id='task-a'").fetchone())
+        self.assertEqual(before, after)
+        self.assertEqual(library.describe(self.workspace, "pilot")["assignment"]["id"], original["id"])
+
+    def test_model_handoff_rejects_active_pending_job_and_released(self):
+        self.worker(); self.assign(); self.dispatcher.process_pending()
+        def change(**kw):
+            return library.describe(self.workspace, "pilot", model="gpt-6.1-terra", effort="medium", environment=self.env, **kw)
+        with self.assertRaises(library.WorkerLibraryError): change()
+        self.returned()
+        with self.assertRaises(library.WorkerLibraryError): change(job="Different outcome")
+        with self.assertRaises(library.WorkerLibraryError):
+            library.describe(self.workspace, "pilot", model="gpt-5.6-terra", environment=self.env)
+        library.message(self.workspace, "pilot", "Pending input", environment=self.env)
+        with self.assertRaises(library.WorkerLibraryError): change()
+        self.dispatcher.process_pending(); self.returned()
+        with self.harness.connection:
+            self.harness.connection.execute("UPDATE worker_claims SET released_at=1 WHERE task_id='task-a'")
+        with self.assertRaises(library.WorkerLibraryError): change()
+
+    def test_returned_handoff_rejects_foreign_and_uncertain_request(self):
+        self.worker(); self.assign(); self.dispatcher.process_pending(); self.returned()
+        with closing(library._connect(self.workspace, write=True)) as db, db:
+            db.execute("UPDATE requests SET status='uncertain'")
+        with self.assertRaises(library.WorkerLibraryError):
+            library.describe(self.workspace, "pilot", model="gpt-6.1-terra", environment=self.env)
+        with closing(library._connect(self.workspace, write=True)) as db, db:
+            db.execute("UPDATE requests SET status='submitted'")
+        self.bind("foreign", "new-run", "new-supervisor")
+        with self.assertRaises(library.WorkerLibraryError):
+            library.describe(self.workspace, "pilot", model="gpt-6.1-terra", environment=self.env)
+        self.bind("sol-a", "new-run", "new-supervisor")
+        with patch.object(library, "_old_server_present", return_value=True):
+            with self.assertRaises(library.WorkerLibraryError):
+                library.describe(self.workspace, "pilot", model="gpt-6.1-terra", environment=self.env)
+        with patch.object(library, "_old_server_present", return_value=False):
+            changed = library.describe(self.workspace, "pilot", model="gpt-6.1-terra", effort="low", environment=self.env)
+        self.assertEqual(changed["model"], "gpt-6.1-terra")
+        self.assertEqual(changed["assignment"]["status"], "returned")
+
     def test_editing_idle_legacy_sol_worker_upgrades_model(self):
         self.worker(model="gpt-6.1-sol", effort="max")
         with closing(library._connect(self.workspace, write=True)) as db, db:

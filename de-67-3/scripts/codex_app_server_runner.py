@@ -248,8 +248,8 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
             # Migrate an already-running supervisor's old launch setting.
             if model == "gpt-6-sol":
                 model = "gpt-6.1-sol"
-            if model not in {"gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"}:
-                raise RpcError("Retired model: use GPT-6 Luna, Sol or Astra")
+            if model not in {"gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"}:
+                raise RpcError("Retired model: use GPT-6 Luna, GPT-6.1 Terra/Sol or GPT-6 Astra")
             effort = os.environ.get("DE67_COORDINATOR_REASONING_EFFORT", "low")
             params: dict[str, Any] = {
                 "cwd": str(workspace), "model": model, "approvalPolicy": "never",
@@ -334,6 +334,11 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
                 payload = message.get("params", {})
                 if payload.get("threadId") != thread_id:
                     continue
+                if method in {"thread/tokenUsage/updated", "item/completed", "turn/completed"}:
+                    from usage_projection import checkpoint_thread_usage
+                    accounting = checkpoint_thread_usage(workspace, thread_id, force=method == "turn/completed")
+                    if accounting.get("errors"):
+                        emit({"type": "de67.usage_checkpoint_gap", "thread_id": thread_id, "error_count": len(accounting["errors"]), "errors": accounting["errors"][:2]})
                 if not str(method).endswith("/delta") and not str(method).endswith("/outputDelta"):
                     emit({"type": "app_server.notification", **message})
                 if method in {"item/started", "item/completed"}:

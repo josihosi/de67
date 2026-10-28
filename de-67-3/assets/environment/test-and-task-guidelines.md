@@ -12,9 +12,15 @@ use honestly labelled interventions, rerun, or abandon an unproductive approach 
 the same outcome. Establish that the relevant condition had an opportunity to occur before
 interpreting its absence. Recover earlier success and compare its premises with the present run;
 communicate missing premises or ambiguity so the coordinator can steer the same investigation.
-A gameplay bug requires both observed contradiction under valid conditions and its causal code path;
+Report observations and suspected issues promptly with setup uncertainty explicit; players need not
+diagnose code to report what happened. Declaring an engine/gameplay bug requires observed contradiction
+under valid conditions and code-grounded causal evidence. Reporting is distinct from attribution,
+repair verification and acceptance;
 unsettled reproduction stays on the work ledger. When evidence ends one strategy, retire it and
 continue through a materially different evidence-backed route while recoverable work remains.
+Choose continuation, compatible checkpoint replay or fresh restart by expected remaining effort for
+valid evidence, including setup, qualification and cleanup. Preserve the outcome and accepted proof,
+not an expensive tactic; a recoverable fixture need not be rescued when a cheaper valid route exists.
 
 Repository-owned implementation, registry or manifest binding, scenario, fixture, harness, build,
 observation path, and executable proof route are reversible in-scope recovery. Repair or replace

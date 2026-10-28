@@ -1,4 +1,4 @@
-"""Incremental own-response usage in the existing disposable work-context index."""
+"""Incremental own-response accounting retained in the existing work-context index."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -54,9 +54,9 @@ def _ingest(db: sqlite3.Connection, record: dict) -> dict:
             or previous['file_identity'] != file_identity or stat.st_size < previous['offset']
             or (stat.st_size == previous['offset'] and stat.st_mtime_ns != previous['mtime_ns']))
         if reset:
-            for table in ('usage_sources', 'usage_turn_models', 'usage_responses'):
-                db.execute('DELETE FROM '+table+' WHERE id=?', (identity,))
-            previous = None
+            # Raw-log rotation/compaction is not a reversal of already observed usage.
+            # Re-read the replacement and deduplicate stable own-response identities.
+            previous['offset'] = 0
         offset = previous['offset'] if previous else 0
         window = previous['window_start'] if previous else None
         last = previous['last_event'] if previous else None
@@ -253,4 +253,54 @@ def usage_projection(db: sqlite3.Connection, metadata: dict, *, root_id: str, de
         result['sources'] = sources
     else:
         result['source_gaps'] = [s for s in sources if not s['complete']]
+    return result
+
+
+_CHECKPOINTED = {}
+
+def checkpoint_thread_usage(workspace: Path, identity: str, *, force: bool = False) -> dict:
+    """Bounded cadence within existing runner events; no dashboard writes or daemon."""
+    import os
+    from work_context import connect_index, thread_tree
+    key = (str(workspace), identity)
+    now = time.monotonic()
+    if not force and now - _CHECKPOINTED.get(key, -60) < 60:
+        return {"skipped": "interval"}
+    _CHECKPOINTED[key] = now
+    result = {"thread_id": identity, "sources": [], "errors": []}
+    try:
+        metadata = thread_tree(identity, codex_home=Path(os.environ.get('CODEX_HOME', Path.home()/'.codex')))
+        result['errors'].extend(metadata.get('errors', []))
+        result['errors'].extend(metadata.get('unavailable_thread_ids', []))
+        db = connect_index(workspace)
+        try:
+            _schema(db)
+            with db:
+                for record in metadata['records']:
+                    # No expensive historical backfill on a newly discovered large log.
+                    # Existing indexed sources continue from their recorded cursor.
+                    old = db.execute('SELECT * FROM usage_sources WHERE id=?', (record['id'],)).fetchone()
+                    path = Path(record['rollout_path'])
+                    try:
+                        stat = path.stat()
+                        same_file = old and old['file_identity'] == f'{stat.st_dev}:{stat.st_ino}' and stat.st_size >= old['offset']
+                        offset = old['offset'] if same_file else 0
+                        if stat.st_size - offset > 8 * 1024 * 1024:
+                            # Bounded current tail only; omitted older coverage is explicit.
+                            # Preserve all previously recorded response rows.
+                            start = stat.st_size - 8 * 1024 * 1024
+                            with path.open('rb') as stream:
+                                stream.seek(start); stream.readline(); start = stream.tell()
+                            stamp = datetime.now(timezone.utc).isoformat()
+                            db.execute('INSERT OR REPLACE INTO usage_sources VALUES (?,?,?,?,?,?,?,?,?)',
+                                (record['id'],str(path),f'{stat.st_dev}:{stat.st_ino}',start,
+                                 stat.st_mtime_ns,stat.st_size,old['window_start'] if old else stamp,
+                                 old['last_event'] if old else None,(old['issues'] if old else 0)+1))
+                    except OSError:
+                        pass
+                    result['sources'].append(_ingest(db, record))
+        finally:
+            db.close()
+    except (OSError, sqlite3.Error, ValueError) as error:
+        result['errors'].append(str(error))
     return result

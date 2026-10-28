@@ -1003,7 +1003,7 @@ class PolicyKernelTests(unittest.TestCase):
             arguments = calls[0]["example_call"]["arguments"]
             self.assertEqual(arguments["fork_turns"], "none")
             self.assertNotIn("model", arguments)
-            self.assertEqual({c['model'] for c in calls[0]['model_choices']}, {'gpt-6-luna','gpt-6.1-sol','gpt-6-astra'})
+            self.assertEqual({c['model'] for c in calls[0]['model_choices']}, {'gpt-6-luna','gpt-6.1-terra','gpt-6.1-sol','gpt-6-astra'})
             for choice in calls[0]['model_choices']:
                 completed_call = {**arguments, **choice}
                 self.assertEqual(completed_call['task_name'], calls[0]['task_name'])

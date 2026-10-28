@@ -214,6 +214,7 @@ def _worker_capabilities(
             raise SetupError("Worker capabilities use MODEL REASONING_EFFORT")
         efforts = {
             "gpt-6-luna": {"low", "medium", "high", "xhigh", "max"},
+            "gpt-6.1-terra": {"low", "medium", "high", "xhigh", "max", "ultra"},
             "gpt-6.1-sol": {"low", "medium", "high", "xhigh", "max", "ultra"},
             "gpt-6-astra": {"low", "medium", "high", "xhigh", "max", "ultra"},
         }

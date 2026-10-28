@@ -303,12 +303,34 @@ def describe(workspace: Path, name: str, job: str | None = None, *, model: str |
              effort: str | None = None,
              environment: Mapping[str, str] | None = None) -> dict[str, Any]:
     if any(value is not None for value in (job, model, effort)):
-        _authorize(workspace, environment)
+        binding = _authorize(workspace, environment)
         with closing(_connect(workspace, write=True)) as db:
             db.execute("BEGIN IMMEDIATE")
             worker = _worker(db, name)
-            if worker["retired_at"] is not None or not _idle(_latest(db, name)):
-                raise WorkerLibraryError("Revise a worker's reusable job only while it is idle")
+            assignment = _latest(db, name)
+            if worker["retired_at"] is not None:
+                raise WorkerLibraryError("Worker is retired")
+            if not _idle(assignment):
+                # A returned turn is a model handoff boundary, not task completion.
+                # Child/input settlement remains the coordinator's responsibility.
+                if job is not None or assignment["status"] != "returned":
+                    raise WorkerLibraryError("Revise a worker's reusable job only while it is idle; model/effort handoff requires a returned owner")
+                previous = json.loads(assignment["binding"])
+                task = _task(Path(assignment["state_path"]), assignment["lineage"], assignment["task_id"])
+                if (assignment["state_path"] != binding["deadline_state"]
+                        or assignment["lineage"] != binding["lineage"]
+                        or previous["thread_id"] != binding["thread_id"]
+                        or task["coordinator_session_id"] != binding["thread_id"]
+                        or task["released_at"] is not None
+                        or not worker["thread_id"]
+                        or task["worker_id"] != worker["thread_id"]
+                        or assignment["worker_id"] != worker["thread_id"]
+                        or task["supervisor_id"] != (assignment["claim_supervisor_id"] or str(previous["supervisor_id"]))):
+                    raise WorkerLibraryError("Model handoff requires the current coordinator's still-owned assignment")
+                if not _same_binding(previous, binding) and _old_server_present(previous):
+                    raise WorkerLibraryError("Previous worker App Server is still present")
+                if db.execute("SELECT 1 FROM requests WHERE name=? AND status IN ('pending','submitting','uncertain')", (name,)).fetchone():
+                    raise WorkerLibraryError("Settle pending worker requests before a model handoff")
             from policy_kernel import worker_model_choices
             model, effort = model or worker["model"], effort or worker["effort"]
             if model == "gpt-6-sol":
@@ -502,6 +524,12 @@ def wait(workspace: Path, name: str, timeout: float = 30) -> dict[str, Any]:
         value = describe(workspace, name)
         if value["status"] not in {"pending", "starting", "submitting", "running"} or time.monotonic() >= end:
             return value
+        # Existing durable mailbox interrupts a named-worker wait for another
+        # worker's result or owner-routed steering. Do not consume it here: the
+        # owning adapter still delivers and records the original message.
+        from agent_mailbox import pending
+        if pending(workspace, "coordinator"):
+            return {**value, "wake_reason": "coordinator_message"}
         time.sleep(min(.2, max(0, end - time.monotonic())))
 
 
@@ -704,8 +732,8 @@ class WorkerDispatcher:
                 # Upgrade the next turn, preserving the conversation and past receipts.
                 if worker["model"] == "gpt-6-sol":
                     worker["model"] = "gpt-6.1-sol"
-                if worker["model"] not in {"gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"}:
-                    raise WorkerLibraryError("Worker model is retired; use GPT-6 Luna, Sol or Astra")
+                if worker["model"] not in {"gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"}:
+                    raise WorkerLibraryError("Worker model is retired; use GPT-6 Luna, GPT-6.1 Terra/Sol or GPT-6 Astra")
                 from policy_kernel import worker_model_choices
                 if {"model": worker["model"], "reasoning_effort": worker["effort"]} not in worker_model_choices(self.workspace):
                     raise WorkerLibraryError("Worker model/effort is no longer available in the current roster")
@@ -850,6 +878,11 @@ class WorkerDispatcher:
         if row is None or not _same_binding(json.loads(row["binding"]), self.binding):
             return False
         assignment = dict(row)
+        if method in {"thread/tokenUsage/updated", "item/completed", "turn/completed"}:
+            from usage_projection import checkpoint_thread_usage
+            accounting = checkpoint_thread_usage(self.workspace, worker_id, force=method == "turn/completed")
+            if accounting.get("errors"):
+                self._audit(assignment, {"method": "de67/usageCheckpoint/gap", "params": {"thread_id": worker_id, "error_count": len(accounting["errors"]), "errors": accounting["errors"][:2]}})
         if method in {"turn/started", "item/started"}:
             self.inactive_uncertain.discard(assignment["id"])
         if not str(method).endswith(("/delta", "/outputDelta")):

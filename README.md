@@ -1,10 +1,6 @@
-https://github.com/user-attachments/assets/37324dba-d66a-48f1-b628-5e36448b267c
-
-*Illustrated explainer · 2:41. [Download the MP4](docs/assets/de67-explainer.mp4?raw=true).*
-
 # de67
 
-de67 helps a Codex team discuss an idea, freeze a specification grounded in the code, and carry implementation through testing and repair. The work ledger and deadline clock preserve useful evidence and progress across handoffs.
+de67 helps a Codex team plan an idea, inspect the code and freeze the intended work in a specification, then orchestrate implementation, testing, and repair. A work ledger and deadline clock preserve progress and evidence across handoffs.
 
 ```text
 de67 1   plan and discuss the idea
@@ -12,9 +8,9 @@ de67 2   inspect the code and freeze the specification
 de67 3   orchestrate implementation, testing, and repair
 ```
 
-[![de67 dashboard showing a synthetic campaign and its radar plot](docs/assets/dashboard-overview.png)](integrations/dashboard/README.md)
+[![de67 dashboard showing a synthetic campaign, partial accounting, and its radar plot](docs/assets/dashboard-overview.png)](integrations/dashboard/README.md)
 
-*Synthetic campaign rendered by the release candidate dashboard. The dashboard is optional.*
+*Disposable demonstration data rendered by the release candidate dashboard.*
 
 | Topic | Guide |
 | --- | --- |
@@ -26,7 +22,8 @@ de67 3   orchestrate implementation, testing, and repair
 | Experimental optional Jev retrieval | [Jev Telescope guide](integrations/jev_telescope/README.md) |
 | Experimental optional Jev evidence advisories | [Jev Pit Crew guide](integrations/jev_pit_crew/README.md) |
 | Problems and recovery | [Troubleshooting](docs/troubleshooting.md) |
-| Release contents and promotion | [3.3.1 release notes](docs/releases/3.3.1.md) and [release promotion](RELEASE_PROMOTION.md) |
+| Release details | [Terra release notes](docs/releases/3.4.0.md) and [release promotion](RELEASE_PROMOTION.md) |
+| Introduction | [Illustrated explainer](docs/assets/de67-explainer.mp4?raw=true) |
 
 The core skill works without optional integrations. Install matching add-on archives only for the capabilities you want; the Jev packages remain experimental and disabled by default.
 

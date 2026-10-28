@@ -5,9 +5,10 @@ description: Explicit third phase of de67. Use when the user says `de67 3` to de
 
 # de67 3 — delivery router
 
-Only GPT-6.1 Sol, GPT-6 Luna and GPT-6 Astra may run new work. Prefer Luna for workers;
-use Sol for coordination. GPT-5.6 and Terra are retired. Live C-AOL harness playtests
-are Luna-only; other workers delegate them to a GPT-6 Luna subagent.
+GPT-6.1 Terra, GPT-6.1 Sol, GPT-6 Luna and GPT-6 Astra are available for new work
+when supported by the runtime. Sol coordinates; Astra reviews mutations. Choose worker model
+and effort independently for the task, preserving useful context and ownership at handoff.
+Follow the project’s explicit rules for live playtest and native input ownership.
 
 This file routes Phase 3; it is not the coordinator procedure.
 

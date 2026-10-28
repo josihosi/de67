@@ -536,11 +536,17 @@ def worker_outcome_contract() -> str:
         "non-credit bootstrap and validate the fresh output independently. "
         "Before interpreting absent behavior, establish its actual opportunity to occur and compare "
         "the premises of any earlier success. Communicate missing premises or ambiguous results "
-        "so the coordinator can steer the same investigation. A gameplay bug requires both a "
-        "contradiction under valid conditions and its causal code path; unresolved reproduction "
+        "so the coordinator can steer the same investigation. Report observations and suspected issues "
+        "promptly, keeping setup uncertainty explicit; a player need not diagnose code to report what happened. "
+        "Declaring an engine/gameplay bug requires both a contradiction under valid conditions and "
+        "code-grounded causal evidence. Reporting, bug attribution, repair verification and acceptance "
+        "are separate judgments; unresolved reproduction "
         "remains ledger work, with gameplay repair promotion owned by the user. "
         "Return completion only when the assigned outcome is "
-        "settled. A disproved strategy is progress, not a task exit: preserve its evidence and "
+        "settled. Preserve the outcome and accepted proof, not an expensive tactic: choose continuation, "
+        "compatible checkpoint replay or a fresh start by expected remaining effort for valid evidence, "
+        "including setup, qualification and cleanup. A recoverable fixture need not be rescued "
+        "when a cheaper valid route exists. A disproved strategy is progress, not a task exit: preserve its evidence and "
         "continue while repository recovery "
         "remains. Return a formal finding only for a contradicted assigned outcome, materially "
         "different owner outcome, real external or human decision, unavailable capability, "
@@ -591,6 +597,7 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
     configured = json.loads(path.read_text(encoding="utf-8")).get("worker_capabilities") if path.is_file() else None
     efforts_by_model = {
         "gpt-6-luna": ("low", "medium", "high", "xhigh", "max"),
+        "gpt-6.1-terra": ("low", "medium", "high", "xhigh", "max", "ultra"),
         "gpt-6.1-sol": ("low", "medium", "high", "xhigh", "max", "ultra"),
         "gpt-6-astra": ("low", "medium", "high", "xhigh", "max", "ultra"),
     }

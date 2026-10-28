@@ -263,12 +263,13 @@ def worker_emblem(model: str) -> str:
     return emblem
 
 
-def render_worker_scale(counts: dict[str, dict[str, int]]) -> str:
-    models = ("astra", "sol", "luna")
-    levels = ("low", "medium", "high", "max")
+def render_worker_scale(counts: dict[str, dict[str, int]], versions: dict[str, list[str]] | None = None) -> str:
+    versions = versions or {}
+    models = ("astra", "sol", "terra", "luna")
+    levels = ("low", "medium", "high", "xhigh", "max", "ultra")
     marks = ['<line class="strength-axis" x1="48" y1="114" x2="348" y2="114"/>']
     for index, level in enumerate(levels):
-        x = 48 + index * 100
+        x = 48 + index * 60
         active = [model for model in models for _ in range(max(0, counts.get(model, {}).get(level, 0)))]
         marks.append(f'<circle class="strength-stop" cx="{x}" cy="114" r="2"/>')
         for model, (dx, dy) in zip(active, worker_dot_positions(len(active))):
@@ -282,6 +283,8 @@ def render_worker_scale(counts: dict[str, dict[str, int]]) -> str:
     descriptions = []
     for model in models:
         description = model + ": " + ", ".join(f"{level}: {counts.get(model, {}).get(level, 0)}" for level in levels)
+        if versions.get(model):
+            description += "; active models: " + ", ".join(sorted(set(versions[model])))
         descriptions.append(description)
         legend.append(f'<div role="img" aria-label="{_escape(description)}" title="{_escape(description)}"><span>{model}</span>'
                       f'<svg class="model-emblem" viewBox="0 0 36 36" aria-hidden="true">{worker_emblem(model)}</svg></div>')
@@ -1356,12 +1359,14 @@ def _worker_execution(workspace: Path, claims: dict[str, str]) -> tuple[dict[str
 
 def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     """Project active roster subagents from Codex's existing read-only session records."""
-    counts = {model: {effort: 0 for effort in ("low", "medium", "high", "xhigh", "max")}
-              for model in ("luna", "sol", "astra")}
+    counts = {model: {effort: 0 for effort in ("low", "medium", "high", "xhigh", "max", "ultra")}
+              for model in ("luna", "terra", "sol", "astra")}
+    versions: dict[str, list[str]] = {}
     mutator = _active_mutator(workspace, sessions_root)
     counted = {mutator["id"]} if mutator else set()
     if mutator:
         counts["astra"][mutator["effort"]] += 1
+        versions.setdefault("astra", []).append("gpt-6-astra")
     active_claims = _active_worker_claims(workspace)
     metadata = {}
     if active_claims:
@@ -1460,15 +1465,17 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
             if active_claims is not None and candidate_id not in active_claims and _session_complete(path):
                 continue
             context = metadata.get(candidate_id) or _trace_fuel(path)
-            model = str(context.get("model", "")).lower().rsplit("-", 1)[-1]
+            exact_model = str(context.get("model", ""))
+            model = exact_model.lower().rsplit("-", 1)[-1]
             effort = str(context.get("effort", "")).lower()
             if model in counts and effort in counts[model] and candidate_id not in counted:
                 counts[model][effort] += 1
+                versions.setdefault(model, []).append(exact_model)
                 counted.add(candidate_id)
         if not changed:
             break
         pending = next_pending
-    return {"counts": counts, "available": True, "error": None}
+    return {"counts": counts, "versions": versions, "available": True, "error": None}
 
 
 
@@ -1663,12 +1670,14 @@ def render_fuel(fuel: dict[str, Any]) -> str:
     total = sum(totals.values())
     totals["sol"] += totals.get("coordinator", 0)
     series = dict(fuel["series"])
+    totals.setdefault("terra", 0)
+    series.setdefault("terra", [0] * 24)
     series["sol"] = [a + b for a, b in zip(series["sol"], series["coordinator"])]
     title = ("Indexed campaign sessions and descendants; input − cached input + output. "
              "Includes completed workers and Astra reviews; excludes narrator and unrelated sessions. "
              + ("Some session accounting is unavailable; shown total is partial." if fuel["partial"] else "")
              + f" Exact observed total: {total:,}.")
-    bins = [sum(values) for values in zip(series["astra"], series["sol"], series["luna"])]
+    bins = [sum(values) for values in zip(series["astra"], series["sol"], series["terra"], series["luna"])]
     peak = max(bins) or 1
     # Round the scale upward to readable steps; keep zero honest during idle periods.
     magnitude = 10 ** math.floor(math.log10(peak))
@@ -1676,7 +1685,7 @@ def render_fuel(fuel: dict[str, Any]) -> str:
     def axis_label(value: float) -> str:
         return f"{value / 1000000:g}m" if value >= 1000000 else f"{value / 1000:g}k" if value >= 1000 else f"{value:g}"
     roles = [("astra", "astra", "#fff0d6"),
-             ("sol", "sol", "#f2bd63"), ("luna", "worker luna", "#82dfbd")]
+             ("sol", "sol", "#f2bd63"), ("terra", "worker terra", "#a8baff"), ("luna", "worker luna", "#82dfbd")]
     title += " Sol includes coordinator and Sol workers. Other model usage is included in the campaign total but omitted from the plots."
     cumulative = [0] * len(bins)
     layers = []
@@ -2081,7 +2090,8 @@ class Dashboard:
             except Exception as error:
                 workers = {"counts": {}, "available": False, "error": str(error)}
             try:
-                fuel = fuel_state(self.workspace, self.sessions_root)
+                from campaign_fuel import read_campaign_fuel
+                fuel = read_campaign_fuel(self.workspace, self.sessions_root)
             except Exception as error:
                 fuel = {"available": False, "error": str(error)}
             fratbro = self._fratbro_source(ledger, clock)
@@ -2183,7 +2193,7 @@ class Dashboard:
         else:
             worker_counts = workers.get("counts", {})
             worker_body = (
-                '<div class="roster-scales">' + render_worker_scale(worker_counts) + '</div>'
+                '<div class="roster-scales">' + render_worker_scale(worker_counts, workers.get("versions")) + '</div>'
                 if workers.get("available") else
                 f'<p class="subtle">Workers unavailable · {_escape(workers.get("error", "unknown source"))}</p>'
             )

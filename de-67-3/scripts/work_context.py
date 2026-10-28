@@ -99,6 +99,9 @@ def _record_run(workspace: Path, path: Path, environment: dict, *, session_id=No
 def record_run(workspace: Path, path: Path, environment: dict, *, session_id=None) -> None:
     try:
         _record_run(workspace,path,environment,session_id=session_id)
+        if session_id:
+            from usage_projection import checkpoint_thread_usage
+            checkpoint_thread_usage(workspace, session_id, force=True)
     except (sqlite3.Error,OSError) as error:
         print(f'DE67 context index unavailable for {path}: {error}; full run artifacts remain at that path',
               file=sys.stderr,flush=True)

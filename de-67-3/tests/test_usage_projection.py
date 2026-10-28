@@ -46,11 +46,17 @@ class UsageTests(unittest.TestCase):
         with self.path.open('a', encoding='utf-8', newline='') as f:f.write(tail[15:])
         v=self.view();self.assertTrue(v['complete']);self.assertEqual(v['new_source_bytes_read'],len(tail))
         self.assertEqual(v['by_model']['gpt-6-luna']['total_tokens'],34)
-    def test_replacement_resets_cached_records(self):
+    def test_replacement_preserves_accounted_responses(self):
         self.path.write_text(context()+response('root'));self.view()
-        replacement=self.root/'new';replacement.write_text(context('gpt-6-sol')+response('root',n=20))
+        replacement=self.root/'new'
+        replacement.write_text(context('gpt-6.1-terra','t2')+response('root',turn='t2',rid='r2',n=20))
         replacement.replace(self.path);v=self.view()
-        self.assertTrue(v['sources'][0]['reset']);self.assertNotIn('gpt-6-luna',v['by_model'])
+        self.assertTrue(v['sources'][0]['reset'])
+        self.assertEqual(v['by_model']['gpt-6-luna']['total_tokens'],12)
+        self.assertEqual(v['by_model']['gpt-6.1-terra']['total_tokens'],22)
+        self.path.unlink()
+        self.assertEqual(self.view()['by_model'], v['by_model'])
+
     def test_missing_malformed_conflicting_and_unknown_model_are_visible(self):
         self.path.write_text(response('root')+'[]\ninvalid\n'+response('root',n=20))
         v=self.view();self.assertFalse(v['complete']);self.assertIn('unattributed',v['by_model'])

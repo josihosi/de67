@@ -1047,6 +1047,10 @@ class DeadlineHarness:
                   AND task.task_id = accepted.task_id
             )
             WHERE accepted.closure_sequence IS NULL
+              AND EXISTS (SELECT 1 FROM tasks AS task
+                          WHERE task.lineage_id = accepted.lineage_id
+                            AND task.task_id = accepted.task_id
+                            AND task.phase_at_dispatch = 'closure')
             """
         )
         self.connection.executescript(
@@ -5514,6 +5518,72 @@ class DeadlineHarness:
             self.connection.rollback()
             raise
 
+    def accept_support_claim(
+        self, lineage_id: str, claim_id: str, task_id: str, evidence: str,
+        *, receipt_id: str, now: float | None = None,
+    ) -> dict[str, Any]:
+        """Accept completed nonproduct work from its sealed dispatch, without a fake gap."""
+        lineage_id = self._identity(lineage_id, "Lineage id")
+        claim_id = self._identity(claim_id, "Claim id")
+        task_id = self._identity(task_id, "Task id")
+        evidence = self._nonempty_text(evidence, "Acceptance evidence")
+        workspace = _workspace_for_state(self.state_path)
+        if workspace is None:
+            raise DeadlineError("Support acceptance requires a workspace-bound dispatch")
+        # Use the existing sealed dispatch index, not a caller's assertion or mutable label.
+        try:
+            db = sqlite3.connect((workspace / ".de67/state/work-context.sqlite3").as_uri() + "?mode=ro", uri=True)
+            try:
+                row = db.execute("SELECT path,digest,context_json FROM dispatches WHERE source=? AND lineage=? AND task=? ORDER BY recorded_at DESC,rowid DESC LIMIT 1",
+                                 (str(self.state_path), lineage_id, task_id)).fetchone()
+            finally:
+                db.close()
+            if row is None:
+                raise ValueError("missing dispatch")
+            packet = Path(row[0]).resolve()
+            packet.relative_to(workspace / ".de67/state/worker-dispatch")
+            raw = packet.read_bytes()
+            metadata = json.loads(row[2])
+            if hashlib.sha256(raw).hexdigest() != row[1] or metadata.get("claim_id") != claim_id:
+                raise ValueError("dispatch identity/digest mismatch")
+            text = raw.decode("utf-8")
+            prefix = f"Own assigned exploration work {task_id} for outcome {claim_id}. Scope: task-specific ledger assignment. Staged method candidate: "
+            if not text.startswith(prefix) or "No product FS slice or gameplay acceptance is implied by this assignment." not in text.split("<!-- worker-standing:", 1)[0]:
+                raise ValueError("not a nonproduct dispatch")
+            fs = (workspace / ".de67/FS.md").read_text(encoding="utf-8")
+            if re.search(r"<!-- DE67:DFS-SLICE:BEGIN[^>]*claim=" + re.escape(claim_id) + r"(?=\s|-->)", fs):
+                raise ValueError("claim has a product FS slice")
+        except (OSError, ValueError, TypeError, sqlite3.Error) as error:
+            raise DeadlineError("Support acceptance requires verified nonproduct dispatch: " + str(error)) from error
+        accepted_at = self._now(now)
+        self._begin()
+        try:
+            claim = self._claim(lineage_id, claim_id)
+            task = self._task(lineage_id, task_id)
+            if task["claim_id"] != claim_id or claim["phase"] != "exploration" or task["phase_at_dispatch"] != "exploration":
+                raise DeadlineError("Support acceptance requires the matching exploration outcome")
+            if task["attempt_terminal_kind"] != "completed" or task["integrity_breached_at"] is not None:
+                raise DeadlineError("Support acceptance requires intact completed work")
+            self._require_terminal_worker_receipt(lineage_id, task_id, receipt_id, "completed")
+            if self.connection.execute("SELECT 1 FROM tasks WHERE lineage_id=? AND claim_id=? AND attempt_terminal_at IS NULL", (lineage_id, claim_id)).fetchone():
+                raise DeadlineError("Support acceptance requires all sibling attempts terminal")
+            existing = self._latest_acceptance(lineage_id, claim_id)
+            if existing is not None:
+                if existing["invalidated_at"] is not None or existing["task_id"] != task_id or existing["evidence"] != evidence or existing["closure_sequence"] is not None:
+                    raise DeadlineError("Existing acceptance cannot be replaced through support acceptance")
+                result = dict(existing)
+                result["recorded"] = False
+            else:
+                self._record_miss_if_due(task, accepted_at)
+                self.connection.execute("INSERT INTO claim_acceptances (lineage_id,claim_id,acceptance_number,task_id,closure_sequence,accepted_at,evidence) VALUES (?,?,1,?,NULL,?,?)", (lineage_id, claim_id, task_id, accepted_at, evidence))
+                result = dict(self._latest_valid_acceptance(lineage_id, claim_id))
+                result["recorded"] = True
+            self.connection.commit()
+            return result
+        except Exception:
+            self.connection.rollback()
+            raise
+
     def accept_claim(
         self,
         lineage_id: str,
@@ -7362,6 +7432,14 @@ def build_parser() -> argparse.ArgumentParser:
     accept_claim.add_argument("--task", required=True)
     accept_claim.add_argument("--evidence", required=True)
 
+    support = commands.add_parser("accept-support-claim", help="Accept completed nonproduct work from its sealed dispatch")
+    support.add_argument("--state", dest="command_state")
+    support.add_argument("--lineage", required=True)
+    support.add_argument("--claim", required=True)
+    support.add_argument("--task", required=True)
+    support.add_argument("--evidence", required=True)
+    support.add_argument("--receipt", required=True)
+
     abandon = commands.add_parser(
         "abandon-attempt", help="Terminalize one replaced worker attempt"
     )
@@ -7671,6 +7749,11 @@ def main(argv: list[str] | None = None) -> int:
                         arguments.claim,
                         arguments.basis_task,
                         arguments.contradicted_premise,
+                    )
+                elif arguments.command == "accept-support-claim":
+                    result = harness.accept_support_claim(
+                        arguments.lineage, arguments.claim, arguments.task,
+                        arguments.evidence, receipt_id=arguments.receipt,
                     )
                 elif arguments.command == "accept-claim":
                     result = harness.accept_claim(

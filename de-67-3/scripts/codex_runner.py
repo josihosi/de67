@@ -302,8 +302,8 @@ def _command(codex: str, workspace: Path, environment: dict[str, str]) -> list[s
         # Migrate an already-running supervisor's old launch setting.
         if model == "gpt-6-sol":
             model = "gpt-6.1-sol"
-        if model not in {"gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"}:
-            raise RunnerError("Retired model: use GPT-6 Luna, Sol or Astra")
+        if model not in {"gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"}:
+            raise RunnerError("Retired model: use GPT-6 Luna, GPT-6.1 Terra/Sol or GPT-6 Astra")
         effort = environment.get(
             "DE67_COORDINATOR_REASONING_EFFORT", "low"
         ).strip()

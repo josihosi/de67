@@ -28,15 +28,19 @@ from deadline_harness import (  # noqa: E402
 
 
 class DeadlineHarnessTests(unittest.TestCase):
-    def test_legacy_sol_roster_snapshot_matches_migrated_dispatch(self):
+    def test_legacy_sol_roster_preserves_evidence_without_proving_a_current_probe(self):
         self.write_sol_ultra_capability()
         config = self.state_path.parent / "workspace.json"
-        original = config.read_text().replace("gpt-6.1-sol", "gpt-6-sol")
-        config.write_text(original)
-        proved, reason, digest = self.harness._sol_ultra_capability_snapshot()
-        self.assertTrue(proved)
-        self.assertEqual(digest, hashlib.sha256(original.encode()).hexdigest())
-        self.assertEqual(config.read_text(), original)
+        current = config.read_text()
+        for model in ("gpt-6-sol", "gpt-6.1-sol"):
+            with self.subTest(model=model):
+                original = current.replace("gpt-6.2-sol", model)
+                config.write_text(original)
+                proved, reason, digest = self.harness._sol_ultra_capability_snapshot()
+                self.assertFalse(proved)
+                self.assertIn("no persisted gpt-6.2-sol/ultra probe", reason)
+                self.assertEqual(digest, hashlib.sha256(original.encode()).hexdigest())
+                self.assertEqual(config.read_text(), original)
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -459,7 +463,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             "changed_paths": changed_paths,
             "interval_windows": 30,
             "selected_lane": "DFS.md",
-            "reviewer_model": "gpt-6.1-sol",
+            "reviewer_model": "gpt-6.2-sol",
             "reviewer_effort": "ultra",
             "capability_roster_digest": capability_roster_digest,
         }
@@ -476,7 +480,7 @@ class DeadlineHarnessTests(unittest.TestCase):
                 selected_lane, reviewer_model, reviewer_effort,
                 capability_roster_digest
             ) VALUES (?, 'project', ?, 31, ?, ?, 30, 'DFS.md',
-                      'gpt-6.1-sol', 'ultra', ?)
+                      'gpt-6.2-sol', 'ultra', ?)
             """,
             (
                 receipt_id,
@@ -496,7 +500,7 @@ class DeadlineHarnessTests(unittest.TestCase):
                     "version": 1,
                     "worker_capabilities": [
                         {
-                            "model": "gpt-6.1-sol",
+                            "model": "gpt-6.2-sol",
                             "reasoning_effort": "ultra",
                         }
                     ],

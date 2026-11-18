@@ -33,9 +33,9 @@ Windows free memory and Darwin page counters/load averages have different meanin
 cannot prove future capacity, writable isolation or GUI readiness. CPU contention during concurrent
 play must not masquerade as a controlled regression benchmark.
 
-## On-demand Sol chaperone
+## On-demand Terra chaperone
 
-A Luna playtest worker may create a native `gpt-6.1-sol` helper with `fork_turns="none"` and suitable
+A Luna playtest worker may create a native `gpt-6.1-terra` helper with `fork_turns="none"` and suitable
 effort for a concrete problem, then reuse the helper's conversation through `followup_task` when
 useful. Give it the scenario's intended outcome, exact host/task/run/build/save identities, the
 current symptom, relevant source handles, input ownership and changes since its previous finding.

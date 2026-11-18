@@ -942,7 +942,7 @@ def worker_handoff_contract() -> str:
 def nested_worker_contract() -> str:
     return ('Sol and primary workers may use native Luna helpers with fork_turns="none", '
             'an explicit model and suitable effort. A Luna playtest worker may call a '
-            'gpt-6.1-sol chaperone for bounded diagnosis, reusing its conversation through '
+            'gpt-6.1-terra chaperone for bounded diagnosis, reusing its conversation through '
             'followup_task with current host/run/build/save identity and a short delta. '
             'Luna retains game input; Sol returns findings and next-action advice, not project '
             'dispatch or lifecycle decisions. This is optional support, not another coordinator. '
@@ -1177,9 +1177,10 @@ def coordinator_continuation_prompt() -> str:
 
 def worker_selection_contract() -> str:
     return (
-        "Only GPT-6 Luna, GPT-6.1 Terra, GPT-6.1 Sol and GPT-6 Astra may execute new work, including native helpers and resumed workers. "
-        "Model choice: Terra and Luna may handle suitable execution; GPT-6.1 Sol for "
-        "coupled implementation or difficult diagnosis. Astra supplies exclusive mutation review judgment; "
+        "Only GPT-6 Luna, GPT-6.1 Terra, GPT-6.2 Sol and GPT-6.2 Astra may execute new work, including native helpers and resumed workers. "
+        "Prefer GPT-6.1 Terra for clear, testable coding. Choose GPT-6.2 Sol when ambiguity, "
+        "cross-system coupling, architecture, or demonstrated difficulty warrants it. "
+        "Astra supplies exclusive mutation review judgment; "
         "do not recommend Astra implementation workers unless the owner explicitly changes that direction. "
         "Sol also owns coordination in its separate coordinator role. After a "
         "hard repair, prefer Luna for substantial remaining playtesting when the handoff saves total "
@@ -1344,7 +1345,7 @@ def mutation_reviewer_prompt(
         [
             f"Act as the exclusive Phase-3 mutation reviewer in {workspace}.",
             common_guidance(workspace),
-            "You are the gpt-6-astra reviewer at medium reasoning effort. This invocation defines the current review; completed reviews remain history.",
+            "You are the gpt-6.2-astra reviewer at medium reasoning effort. This invocation defines the current review; completed reviews remain history.",
             "No coordinator or roster worker is active. Do not start a coordinator.",
             f"Resolve durable {gate.kind} gate {gate.identity} in {state_path} for lineage {lineage_id}.",
             queue,
@@ -1384,7 +1385,7 @@ def mutation_reviewer_environment(
     reviewer_env = dict(extra_env or {})
     reviewer_env.update(
         {
-            "DE67_COORDINATOR_MODEL": "gpt-6-astra",
+            "DE67_COORDINATOR_MODEL": "gpt-6.2-astra",
             "DE67_COORDINATOR_REASONING_EFFORT": "medium",
             "DE67_MUTATION_GATE_JSON": json.dumps({"kind": gate.kind, "identity": gate.identity,
                                                   "selected_lane": gate.selected_lane}),
@@ -2180,7 +2181,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lineage", required=True)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--run-root", required=True)
-    parser.add_argument("--coordinator-model", default="gpt-6.1-sol")
+    parser.add_argument("--coordinator-model", default="gpt-6.2-sol")
     parser.add_argument(
         "--coordinator-reasoning-effort",
         choices=("low", "medium", "high", "xhigh", "max", "ultra"),

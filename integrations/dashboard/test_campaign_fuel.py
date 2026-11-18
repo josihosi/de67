@@ -20,7 +20,7 @@ class FuelTests(unittest.TestCase):
   with sqlite3.connect(self.index) as d:
    d.row_factory=sqlite3.Row;_ingest(d,{'id':identity,'rollout_path':str(path)})
   return path
- def row(self,identity,rid,t,model='gpt-6.1-sol',n=10):
+ def row(self,identity,rid,t,model='gpt-6.2-sol',n=10):
   turn=rid+'turn';return [{'type':'turn_context','payload':{'turn_id':turn,'model':model}}, {'type':'token_usage_record','timestamp':datetime.fromtimestamp(t,timezone.utc).isoformat(),'payload':{'thread_id':identity,'response_id':rid,'turn_id':turn,'usage':{'input_tokens':n,'cached_input_tokens':2,'output_tokens':2,'total_tokens':n+2}}}]
  def test_cumulative_restart_cleanup_day_and_model_switch(self):
   self.ingest('root',self.row('root','r0',5,n=5))

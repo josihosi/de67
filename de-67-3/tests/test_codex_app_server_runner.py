@@ -166,7 +166,7 @@ class AppServerTransportTests(unittest.TestCase):
                 env = {'DE67_RUNNER_ACTIVE_DIR': str(run_dir), 'CODEX_HOME': str(workspace / 'codex'),
                        'DE67_PROCESS_ROLE': role, 'DE67_COORDINATOR_RUN_ID': 'run',
                        'DE67_COORDINATOR_RESUME_SESSION': resume,
-                       'DE67_COORDINATOR_MODEL': 'gpt-6-astra' if role == 'mutation-reviewer' else 'gpt-6.1-sol',
+                       'DE67_COORDINATOR_MODEL': 'gpt-6.2-astra' if role == 'mutation-reviewer' else 'gpt-6.2-sol',
                        'DE67_COORDINATOR_REASONING_EFFORT': 'ultra' if role == 'mutation-reviewer' else 'low'}
                 if resume == 'legacy-sol':
                     env['DE67_COORDINATOR_MODEL'] = 'gpt-6-sol'
@@ -185,13 +185,13 @@ class AppServerTransportTests(unittest.TestCase):
                 self.assertEqual(launch[0], 'thread/resume' if resume else 'thread/start')
                 self.assertEqual(launch[1]['approvalPolicy'], 'never')
                 self.assertEqual(launch[1]['sandbox'], 'danger-full-access')
-                self.assertEqual(launch[1]['model'], 'gpt-6.1-sol' if resume == 'legacy-sol' else env['DE67_COORDINATOR_MODEL'])
+                self.assertEqual(launch[1]['model'], 'gpt-6.2-sol' if resume == 'legacy-sol' else env['DE67_COORDINATOR_MODEL'])
                 self.assertTrue(servers[-1].stopped)
                 self.assertFalse(list((workspace / '.de67/state').glob('*-input.json')))
                 self.assertFalse(list((workspace / 'codex/state/de67-input').glob('*.sock')))
 
             transport.atomic_json(workspace / '.de67/state/workspace.json', {'persistent_mutator': True})
-            env.update(DE67_PROCESS_ROLE='mutation-reviewer', DE67_COORDINATOR_MODEL='gpt-6-astra',
+            env.update(DE67_PROCESS_ROLE='mutation-reviewer', DE67_COORDINATOR_MODEL='gpt-6.2-astra',
                        DE67_COORDINATOR_RESUME_SESSION='', DE67_LINEAGE='lineage',
                        DE67_MUTATION_GATE_JSON=json.dumps({'kind': 'random', 'identity': 'cycle 1',
                                                            'selected_lane': 'lane'}))
@@ -211,7 +211,7 @@ class AppServerTransportTests(unittest.TestCase):
                 self.assertEqual(persisted['state'], 'idle')
 
             # The persistent mutator must not turn coordinator resets into resumes.
-            env.update(DE67_PROCESS_ROLE='coordinator', DE67_COORDINATOR_MODEL='gpt-6.1-sol')
+            env.update(DE67_PROCESS_ROLE='coordinator', DE67_COORDINATOR_MODEL='gpt-6.2-sol')
 
             with patch.dict(os.environ, env, clear=True), patch.object(transport.sys, 'platform', 'darwin'), \
                  patch.object(transport.signal, 'signal'), patch.object(transport.subprocess, 'Popen', Server), \
@@ -255,7 +255,7 @@ class AppServerTransportTests(unittest.TestCase):
 
             env = {'DE67_RUNNER_ACTIVE_DIR': str(run_dir), 'CODEX_HOME': str(workspace / 'codex'),
                    'DE67_PROCESS_ROLE': 'mutation-reviewer', 'DE67_COORDINATOR_RUN_ID': 'retry-run',
-                   'DE67_COORDINATOR_MODEL': 'gpt-6-astra', 'DE67_COORDINATOR_REASONING_EFFORT': 'medium',
+                   'DE67_COORDINATOR_MODEL': 'gpt-6.2-astra', 'DE67_COORDINATOR_REASONING_EFFORT': 'medium',
                    'DE67_LINEAGE': 'lineage'}
             session = mutator_session.MutatorSession(workspace)
             # Migration must retain the owner, never select the separate review thread.
@@ -274,10 +274,12 @@ class AppServerTransportTests(unittest.TestCase):
                 launches = [(method, params) for method, params in calls if method.startswith('thread/')]
                 self.assertEqual(len(launches), 1)
                 self.assertEqual((launches[0][0], launches[0][1]['threadId']), ('thread/resume', 'owner-thread'))
+                self.assertEqual(launches[0][1]['model'], 'gpt-6.2-astra')
                 turn = next(params for method, params in calls if method == 'turn/start')
                 self.assertEqual(turn['input'], [{'type': 'text', 'text': 'Current review instructions'}])
                 saved = json.loads(session.path.read_text())
                 self.assertEqual(saved['thread_id'], 'owner-thread')
+                self.assertEqual(saved['model'], 'gpt-6.2-astra')
                 self.assertEqual(saved['result'], 'completed')
 
             calls.clear()
@@ -351,7 +353,7 @@ class AppServerTransportTests(unittest.TestCase):
                 def close(self): pass
             env = {"DE67_RUNNER_ACTIVE_DIR": str(run_dir), "CODEX_HOME": str(workspace / "codex"),
                    "DE67_PROCESS_ROLE": "mutation-reviewer", "DE67_COORDINATOR_RUN_ID": "mail-run",
-                   "DE67_INITIAL_MAIL_ID": mail["id"], "DE67_COORDINATOR_MODEL": "gpt-6-astra"}
+                   "DE67_INITIAL_MAIL_ID": mail["id"], "DE67_COORDINATOR_MODEL": "gpt-6.2-astra"}
             with patch.dict(os.environ, env, clear=True), patch.object(transport.signal, "signal"), \
                  patch.object(transport.subprocess, "Popen", Server), patch.object(transport, "Rpc", Client), \
                  redirect_stdout(io.StringIO()):
@@ -410,7 +412,7 @@ class AppServerTransportTests(unittest.TestCase):
                 def shutdown(self): observations.append("shutdown")
             env = {"DE67_RUNNER_ACTIVE_DIR": str(run_dir), "CODEX_HOME": str(workspace / "codex"),
                 "DE67_PROCESS_ROLE": "coordinator", "DE67_COORDINATOR_RUN_ID": "run",
-                "DE67_COORDINATOR_MODEL": "gpt-6.1-sol", "DE67_COORDINATOR_REASONING_EFFORT": "low",
+                "DE67_COORDINATOR_MODEL": "gpt-6.2-sol", "DE67_COORDINATOR_REASONING_EFFORT": "low",
                 "DE67_DEADLINE_STATE": "clock", "DE67_LINEAGE": "lineage", "DE67_SUPERVISOR_PID": "1"}
             with patch.dict(os.environ, env, clear=True), patch.object(transport.signal, "signal"), \
                  patch.object(transport.subprocess, "Popen", Server), patch.object(transport, "Rpc", Client), \
@@ -439,6 +441,7 @@ class AppServerTransportTests(unittest.TestCase):
                     contender.acquire(stopped)
                 saved = json.loads((workspace / '.de67/state/mutator-session.json').read_text())
                 self.assertEqual(saved['thread_id'], 'owner-thread')
+                self.assertEqual(saved['model'], 'gpt-6.2-astra')
                 self.assertEqual(saved['turn_id'], 'owner-turn')
             finally:
                 contender.close()
@@ -453,7 +456,7 @@ class AppServerTransportTests(unittest.TestCase):
             transport.atomic_json(workspace / '.de67/state/workspace.json', {'persistent_mutator': True})
             env = {'DE67_RUNNER_ACTIVE_DIR': str(run_dir), 'CODEX_HOME': str(workspace / 'codex'),
                    'DE67_PROCESS_ROLE': 'mutation-reviewer', 'DE67_COORDINATOR_RUN_ID': 'review-run',
-                   'DE67_COORDINATOR_MODEL': 'gpt-6-astra', 'DE67_COORDINATOR_REASONING_EFFORT': 'medium',
+                   'DE67_COORDINATOR_MODEL': 'gpt-6.2-astra', 'DE67_COORDINATOR_REASONING_EFFORT': 'medium',
                    'DE67_LINEAGE': 'lineage', 'DE67_MUTATION_GATE_JSON': json.dumps(
                        {'kind': 'random', 'identity': 'failure', 'selected_lane': None})}
             mutator_session.MutatorSession(workspace).record('owner-thread', state='idle')

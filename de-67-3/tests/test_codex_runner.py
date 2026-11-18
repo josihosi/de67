@@ -76,7 +76,7 @@ class CodexRunnerTests(unittest.TestCase):
             "DE67_CODEX": "codex-test",
             "DE67_RUNNER_ROOT": str(self.root / "runs"),
             "DE67_COORDINATOR_RUN_ID": "run-1",
-            "DE67_COORDINATOR_MODEL": "gpt-6.1-sol",
+            "DE67_COORDINATOR_MODEL": "gpt-6.2-sol",
             "DE67_COORDINATOR_REASONING_EFFORT": "low",
         }
 
@@ -149,7 +149,7 @@ class CodexRunnerTests(unittest.TestCase):
         command = captured["command"]
         self.assertEqual(command[0:2], ["/tools/codex", "exec"])
         self.assertIn("--json", command)
-        self.assertIn("gpt-6.1-sol", command)
+        self.assertIn("gpt-6.2-sol", command)
         self.assertIn("model_reasoning_effort=low", command)
         run_directory = next((self.root / "runs").iterdir())
         self.assertEqual(
@@ -159,15 +159,20 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertIn("turn.started", (run_directory / "events.jsonl").read_text())
         status = json.loads((run_directory / "status.json").read_text())
         self.assertEqual(status["status"], "done")
-        self.assertEqual(status["model"], "gpt-6.1-sol")
+        self.assertEqual(status["model"], "gpt-6.2-sol")
         self.assertEqual(status["session_id"], "session-1")
 
-    def test_old_supervisor_model_setting_uses_sol61(self):
+    def test_old_supervisor_model_settings_use_current_models(self):
         environment = self.environment()
-        environment["DE67_COORDINATOR_MODEL"] = "gpt-6-sol"
-        command = codex_runner._command("codex", self.workspace, environment)
-        self.assertIn("gpt-6.1-sol", command)
-        self.assertNotIn("gpt-6-sol", command)
+        for previous, current in (("gpt-6-sol", "gpt-6.2-sol"),
+                                  ("gpt-6.1-sol", "gpt-6.2-sol"),
+                                  ("gpt-6-astra", "gpt-6.2-astra"),
+                                  ("gpt-6.1-astra", "gpt-6.2-astra")):
+            with self.subTest(previous=previous):
+                environment["DE67_COORDINATOR_MODEL"] = previous
+                command = codex_runner._command("codex", self.workspace, environment)
+                self.assertIn(current, command)
+                self.assertNotIn(previous, command)
 
     def test_runner_ignores_json_primitives_in_merged_diagnostic_output(self) -> None:
         lines = [
@@ -392,7 +397,7 @@ class CodexRunnerTests(unittest.TestCase):
         connection.execute(
             "INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                "coordinator", "gpt-6.1-sol", str(self.workspace.resolve()),
+                "coordinator", "gpt-6.2-sol", str(self.workspace.resolve()),
                 str(rollout), "/root", int((created - 60) * 1000), int(created - 60),
                 int(created * 1000), int(created),
             ),
@@ -455,7 +460,7 @@ class CodexRunnerTests(unittest.TestCase):
     def test_runner_recovers_spawn_omitted_from_public_event_stream(self) -> None:
         environment = self.environment()
         environment["DE67_CODEX_STATE"] = str(
-            self.write_roster_state("gpt-6.1-sol")
+            self.write_roster_state("gpt-6.2-sol")
         )
         trace = [line for line in self.handoff_trace() if '"spawn_agent"' not in line]
         with patch("codex_runner.shutil.which", return_value="codex"), patch(
@@ -520,7 +525,7 @@ class CodexRunnerTests(unittest.TestCase):
         environment = self.environment()
         environment["DE67_CODEX_STATE"] = str(
             self.write_roster_state(
-                "gpt-6.1-sol", task_id="other-route", agent_path="/root/other_route"
+                "gpt-6.2-sol", task_id="other-route", agent_path="/root/other_route"
             )
         )
         resolver = codex_runner._roster_resolver(self.workspace, environment)
@@ -538,7 +543,7 @@ class CodexRunnerTests(unittest.TestCase):
         started_at = time.time()
         environment["DE67_CODEX_STATE"] = str(
             self.write_roster_state(
-                "gpt-6.1-sol", created_at=started_at - 60
+                "gpt-6.2-sol", created_at=started_at - 60
             )
         )
         resolver = codex_runner._roster_resolver(self.workspace, environment)
@@ -546,7 +551,7 @@ class CodexRunnerTests(unittest.TestCase):
 
     def test_runner_does_not_police_model_after_exact_worker_handoff(self) -> None:
         environment = self.environment()
-        environment["DE67_CODEX_STATE"] = str(self.write_roster_state("gpt-6.1-sol"))
+        environment["DE67_CODEX_STATE"] = str(self.write_roster_state("gpt-6.2-sol"))
         with patch("codex_runner.shutil.which", return_value="codex"), patch(
             "codex_runner.subprocess.Popen",
             return_value=FakeProcess(self.handoff_trace(), 0),

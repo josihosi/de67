@@ -80,7 +80,7 @@ class WorkerLibraryFastTests(WorkerFixture, unittest.TestCase):
         self.assertEqual(self.rpc.turn_count, 1)
 
     def test_non_luna_dispatch_retains_existing_configuration(self):
-        for model in ["gpt-6-astra"]:
+        for model in ["gpt-6.2-astra"]:
             with self.subTest(model=model):
                 self.worker(name=model, model=model, effort="medium")
                 self.assign(name=model, task_id=model)
@@ -95,7 +95,7 @@ class WorkerLibraryFastTests(WorkerFixture, unittest.TestCase):
                 self.assertNotIn("serviceTierForTurn", turn)
 
     def test_astra_resume_preserves_configuration_without_fast(self):
-        self.worker(model="gpt-6-astra", effort="medium")
+        self.worker(model="gpt-6.2-astra", effort="medium")
         self.assign()
         self.dispatcher.process_pending()
         original = self.returned()
@@ -103,7 +103,7 @@ class WorkerLibraryFastTests(WorkerFixture, unittest.TestCase):
         self.dispatcher.process_pending()
         loaded = [p for m, p in self.rpc.calls if m == "thread/resume"][-1]
         turn = [p for m, p in self.rpc.calls if m == "turn/start"][-1]
-        self.assertEqual(loaded["model"], "gpt-6-astra")
+        self.assertEqual(loaded["model"], "gpt-6.2-astra")
         self.assertEqual(loaded["config"], {"model_reasoning_effort": "medium"})
         self.assertNotIn("serviceTier", loaded)
         self.assertNotIn("serviceTierForTurn", turn)
@@ -199,7 +199,7 @@ class WorkerLibraryFastTests(WorkerFixture, unittest.TestCase):
 
 
 class SolWorkerLibraryFastTests(WorkerLibraryFastTests):
-    fast_model = "gpt-6.1-sol"
+    fast_model = "gpt-6.2-sol"
 
     def worker(self, *args, **kwargs):
         kwargs.setdefault("model", self.fast_model)

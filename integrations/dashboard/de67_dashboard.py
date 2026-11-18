@@ -1316,9 +1316,10 @@ def _active_mutator(workspace: Path, sessions_root: Path) -> dict[str, str] | No
         connection.close()
     if row is None or Path(row[1]).resolve() != workspace.resolve():
         raise ValueError("active mutator session metadata unavailable")
-    if row[2] != "gpt-6-astra" or row[3] not in ("low", "medium", "high", "max"):
+    if (row[2] not in ("gpt-6.2-astra", "gpt-6-astra", "gpt-6.1-astra")
+            or row[3] not in ("low", "medium", "high", "xhigh", "max", "ultra")):
         raise ValueError("active mutator model or reasoning effort unavailable")
-    return {"id": str(row[0]), "effort": str(row[3])}
+    return {"id": str(row[0]), "model": str(row[2]), "effort": str(row[3])}
 
 
 def _worker_execution(workspace: Path, claims: dict[str, str]) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
@@ -1366,7 +1367,7 @@ def worker_state(workspace: Path, sessions_root: Path) -> dict[str, Any]:
     counted = {mutator["id"]} if mutator else set()
     if mutator:
         counts["astra"][mutator["effort"]] += 1
-        versions.setdefault("astra", []).append("gpt-6-astra")
+        versions.setdefault("astra", []).append(mutator["model"])
     active_claims = _active_worker_claims(workspace)
     metadata = {}
     if active_claims:

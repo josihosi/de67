@@ -20,6 +20,8 @@ import time
 from typing import Any, Mapping
 import uuid
 
+from model_ids import MODEL_CHOICES, MODEL_EFFORTS, SOL, current_model
+
 
 class WorkerLibraryError(RuntimeError):
     pass
@@ -299,6 +301,28 @@ def catalog(workspace: Path, state: Path | None = None, lineage: str | None = No
     return result
 
 
+def _handoff_request_unsettled(db: sqlite3.Connection, assignment: Mapping[str, Any]) -> bool:
+    for request in db.execute("SELECT * FROM requests WHERE name=? AND status IN ('pending','submitting','uncertain')",
+                              (assignment["name"],)):
+        # A lost receipt remains uncertain history. It need not block a later
+        # returned assignment once its earlier owner returned and transport is gone.
+        # Queued/submitting work and uncertainty on the current assignment still block.
+        if request["assignment_id"] == assignment["id"] or request["status"] != "uncertain":
+            return True
+        old = db.execute("SELECT * FROM assignments WHERE id=?", (request["assignment_id"],)).fetchone()
+        if (old is None or old["name"] != assignment["name"] or old["status"] != "returned"
+                or old["created_at"] >= assignment["created_at"]
+                or old["updated_at"] > assignment["created_at"]
+                or request["created_at"] >= assignment["created_at"]):
+            return True
+        try:
+            if any(_old_server_present(json.loads(raw)) for raw in (old["binding"], request["binding"])):
+                return True
+        except (KeyError, TypeError, ValueError, OSError):
+            return True
+    return False
+
+
 def describe(workspace: Path, name: str, job: str | None = None, *, model: str | None = None,
              effort: str | None = None,
              environment: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -329,12 +353,10 @@ def describe(workspace: Path, name: str, job: str | None = None, *, model: str |
                     raise WorkerLibraryError("Model handoff requires the current coordinator's still-owned assignment")
                 if not _same_binding(previous, binding) and _old_server_present(previous):
                     raise WorkerLibraryError("Previous worker App Server is still present")
-                if db.execute("SELECT 1 FROM requests WHERE name=? AND status IN ('pending','submitting','uncertain')", (name,)).fetchone():
+                if _handoff_request_unsettled(db, assignment):
                     raise WorkerLibraryError("Settle pending worker requests before a model handoff")
             from policy_kernel import worker_model_choices
-            model, effort = model or worker["model"], effort or worker["effort"]
-            if model == "gpt-6-sol":
-                model = "gpt-6.1-sol"
+            model, effort = current_model(model or worker["model"]), effort or worker["effort"]
             if {"model": model, "reasoning_effort": effort} not in worker_model_choices(Path(workspace)):
                 raise WorkerLibraryError("Choose an available ordinary-worker model and effort")
             db.execute("UPDATE workers SET job=?,model=?,effort=? WHERE name=?",
@@ -730,10 +752,9 @@ class WorkerDispatcher:
                     assignment = dict(db.execute("SELECT * FROM assignments WHERE id=?", (request["assignment_id"],)).fetchone())
                     worker = _worker(db, request["name"])
                 # Upgrade the next turn, preserving the conversation and past receipts.
-                if worker["model"] == "gpt-6-sol":
-                    worker["model"] = "gpt-6.1-sol"
-                if worker["model"] not in {"gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"}:
-                    raise WorkerLibraryError("Worker model is retired; use GPT-6 Luna, GPT-6.1 Terra/Sol or GPT-6 Astra")
+                worker["model"] = current_model(worker["model"])
+                if worker["model"] not in MODEL_EFFORTS:
+                    raise WorkerLibraryError(f"Worker model is retired; use {MODEL_CHOICES}")
                 from policy_kernel import worker_model_choices
                 if {"model": worker["model"], "reasoning_effort": worker["effort"]} not in worker_model_choices(self.workspace):
                     raise WorkerLibraryError("Worker model/effort is no longer available in the current roster")
@@ -769,7 +790,7 @@ class WorkerDispatcher:
                 self._request_update(request["id"], "submitting")
                 params = {"cwd": str(self.workspace), "model": worker["model"], "approvalPolicy": "never",
                           "sandbox": "danger-full-access", "config": {"model_reasoning_effort": worker["effort"]}}
-                worker_fast = worker["model"] in {"gpt-6-luna", "gpt-6.1-sol"}
+                worker_fast = worker["model"] in {"gpt-6-luna", SOL}
                 if worker_fast:
                     params["serviceTier"] = "fast"
                     params["config"]["features.fast_mode"] = True

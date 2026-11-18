@@ -18,7 +18,7 @@ class ChaperoneDeliveryTests(unittest.TestCase):
         delivered, meta = delivery_text(current, previous)
         self.assertEqual(meta["changed_sections"], ["worker-ownership"])
         self.assertIn(context, delivered)
-        self.assertIn('model="gpt-6.1-sol"', delivered)
+        self.assertIn('model="gpt-6.1-terra"', delivered)
         self.assertIn("Luna retains game input", delivered)
         repeated, meta = delivery_text(current, current)
         self.assertEqual(meta["omitted_sections"], ["worker-ownership"])

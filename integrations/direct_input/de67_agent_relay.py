@@ -153,7 +153,7 @@ class Relay:
                                   "receipt_path": str(launch / "receipt.json")})
         environment = dict(os.environ, DE67_AGENT_TRANSPORT="app-server",
             DE67_AGENT_TRANSPORT_PYTHON=python, DE67_PROCESS_ROLE="mutation-reviewer",
-            DE67_COORDINATOR_MODEL="gpt-6-astra", DE67_COORDINATOR_REASONING_EFFORT="medium",
+            DE67_COORDINATOR_MODEL="gpt-6.2-astra", DE67_COORDINATOR_REASONING_EFFORT="medium",
             DE67_COORDINATOR_RUN_ID="owner-message-" + job["id"],
             DE67_CODEX=self.config.get("codex") or shutil.which("codex") or "codex",
             DE67_INITIAL_INPUT_PATH=str(initial_path))
@@ -262,7 +262,7 @@ class Relay:
         atomic_json(receipt, {"state": "starting"})
         environment = dict(os.environ, DE67_AGENT_TRANSPORT="app-server",
             DE67_AGENT_TRANSPORT_PYTHON=python, DE67_PROCESS_ROLE="mutation-reviewer",
-            DE67_COORDINATOR_MODEL="gpt-6-astra", DE67_COORDINATOR_REASONING_EFFORT="medium",
+            DE67_COORDINATOR_MODEL="gpt-6.2-astra", DE67_COORDINATOR_REASONING_EFFORT="medium",
             DE67_COORDINATOR_RUN_ID="agent-mail-" + message_id,
             DE67_CODEX=self.config.get("codex") or shutil.which("codex") or "codex",
             DE67_INITIAL_MAIL_ID=message_id, DE67_MAIL_LAUNCH_RECEIPT=str(receipt))

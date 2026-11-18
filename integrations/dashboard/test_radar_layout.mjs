@@ -23,6 +23,7 @@ sql("CREATE TABLE tasks(lineage_id TEXT, task_id TEXT, claim_id TEXT, started_at
     "INSERT INTO worker_claims VALUES('test', 'R-1-run', 'sol-worker', 'coordinator', 1, NULL); " +
     "INSERT INTO worker_claims VALUES('test', 'R-1-run', 'luna-worker', 'coordinator', 1, NULL); " +
     "INSERT INTO worker_claims VALUES('test', 'R-1-run', 'astra-worker', 'coordinator', 1, NULL); " +
+    "INSERT INTO worker_claims VALUES('test', 'R-1-run', 'terra-worker', 'coordinator', 1, NULL); " +
     "CREATE TABLE supervisor_attempts(lineage_id TEXT, role TEXT, run_id TEXT, finished_at REAL); " +
     "INSERT INTO supervisor_attempts VALUES('test', 'coordinator', 'run-1', NULL);");
 await writeFile(join(state, "workspace.json"), JSON.stringify({clock: {state: database, lineage: "test"}}));
@@ -35,10 +36,11 @@ await mkdir(join(state, "coordinator-runs/run-1"), {recursive: true});
 await writeFile(join(state, "coordinator-runs/run-1/session_id.txt"), "coordinator\n");
 const sessionPaths = [];
 for (const [id, parent, model, effort, fresh] of [
-  ["coordinator", null, "gpt-6-sol", "low", 240000],
-  ["sol-worker", "coordinator", "gpt-6-sol", "high", 180000],
+  ["coordinator", null, "gpt-6.2-sol", "low", 240000],
+  ["sol-worker", "coordinator", "gpt-6.2-sol", "high", 180000],
   ["luna-worker", "coordinator", "gpt-6-luna", "medium", 95000],
-  ["astra-worker", "coordinator", "gpt-6-astra", "max", 120000],
+  ["astra-worker", "coordinator", "gpt-6.2-astra", "medium", 120000],
+  ["terra-worker", "coordinator", "gpt-6.1-terra", "low", 72000],
 ]) {
   const path = join(root, "sessions", `rollout-${id}.jsonl`);
   const timestamp = new Date().toISOString();
@@ -53,7 +55,7 @@ for (const [id, parent, model, effort, fresh] of [
   sessionPaths.push([id, path]);
 }
 execFileSync(process.env.PYTHON || "python3", ["-c",
-  "import sqlite3,sys,json; c=sqlite3.connect(sys.argv[1]); c.executescript('CREATE TABLE threads(id TEXT,rollout_path TEXT); CREATE TABLE thread_spawn_edges(parent_thread_id TEXT,child_thread_id TEXT)'); c.executemany('INSERT INTO threads VALUES (?,?)',json.loads(sys.argv[2])); c.executemany('INSERT INTO thread_spawn_edges VALUES (?,?)',[('coordinator','sol-worker'),('coordinator','luna-worker'),('coordinator','astra-worker')]); c.commit(); c.close()",
+  "import sqlite3,sys,json; c=sqlite3.connect(sys.argv[1]); c.executescript('CREATE TABLE threads(id TEXT,rollout_path TEXT); CREATE TABLE thread_spawn_edges(parent_thread_id TEXT,child_thread_id TEXT)'); c.executemany('INSERT INTO threads VALUES (?,?)',json.loads(sys.argv[2])); c.executemany('INSERT INTO thread_spawn_edges VALUES (?,?)',[('coordinator','sol-worker'),('coordinator','luna-worker'),('coordinator','astra-worker'),('coordinator','terra-worker')]); c.commit(); c.close()",
   join(root, "state_5.sqlite"), JSON.stringify(sessionPaths)]);
 const cache = join(root, "briefing.json"), reportPath = join(root, "report.json"), sidecar = join(root, "sidecar.py");
 await writeFile(sidecar, "from pathlib import Path\nprint(Path(__file__).with_name('report.json').read_text())\n");
@@ -100,7 +102,7 @@ try {
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(url);
   await page.waitForSelector(".radar-links path");
-  assert.match(await page.locator(".worker-legend").textContent(), /astra.*sol.*luna/);
+  assert.match(await page.locator(".worker-legend").textContent(), /astra.*sol.*terra.*luna/);
   if (process.env.DE67_OVERVIEW_SCREENSHOT) {
     await page.emulateMedia({reducedMotion: "reduce"});
     await page.clock.pauseAt(new Date());

@@ -13,7 +13,7 @@ Consult the [writing guidance](../references/controlled-english.md) when prepari
 ## Phase owner
 
 The invocation agent delegates this whole phase once to a fresh owner using
-`fork_turns="none"`, `model="gpt-6-astra"`, and `reasoning_effort="high"`. Give it only the
+`fork_turns="none"`, `model="gpt-6.2-astra"`, and `reasoning_effort="high"`. Give it only the
 workspace, the WEC source or exact WEC text, and this phase's `SKILL.md` path. Mark it as the phase
 owner so it does not delegate ownership again. That owner inspects, specifies, freezes, prepares
 the workspace, and checkpoints the result; the invocation agent does not duplicate its work.
@@ -93,10 +93,11 @@ gate and create no coordination artifact unless it is named here.
    ```
 
    Start a fresh probe coordinator after that configuration exists. A Luna probe omits `model` and
-   supplies `reasoning_effort`; a Sol probe supplies both `model="gpt-6.1-sol"` and
+   supplies `reasoning_effort`; a Sol probe supplies both `model="gpt-6.2-sol"` and
    `reasoning_effort`. Every probe uses `fork_turns="none"` and a unique task-local nonce prompt;
    success means it returns that nonce without inherited conversation. Probe only useful pairs, but
-   prove both models and more than one effort level. Record only successful model/effort pairs. If
+   prove Luna and Sol at more than one effort level across the roster. Probe GPT-6.1 Terra at a useful
+   effort when clear, testable coding or Luna chaperoning is expected. Record only successful pairs. If
    the installed runner rejects the project agent default, update that runner to a compatible
    version and repeat the probes; do not invent an alias, a custom role taxonomy, or a model matrix.
 12. After freeze or refreeze, run the idempotent workspace setup. Ensure `.de67/state/` is ignored, keep the

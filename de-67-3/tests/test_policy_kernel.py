@@ -50,7 +50,7 @@ class MutationWindDownTests(unittest.TestCase):
 
 
 class WorkerCapabilityTests(unittest.TestCase):
-    def test_existing_sol6_roster_exposes_sol61_without_rewriting_history(self):
+    def test_existing_roster_exposes_current_models_without_rewriting_history(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             config = workspace / '.de67/state/workspace.json'
@@ -58,10 +58,15 @@ class WorkerCapabilityTests(unittest.TestCase):
             original = json.dumps({'worker_capabilities': [
                 {'model': 'gpt-6-sol', 'reasoning_effort': 'max'},
                 {'model': 'gpt-6.1-sol', 'reasoning_effort': 'max'},
+                {'model': 'gpt-6.2-sol', 'reasoning_effort': 'max'},
+                {'model': 'gpt-6.1-astra', 'reasoning_effort': 'medium'},
+                {'model': 'gpt-6-astra', 'reasoning_effort': 'medium'},
             ]})
             config.write_text(original)
             self.assertEqual(kernel.worker_model_choices(workspace), [
-                {'model': 'gpt-6.1-sol', 'reasoning_effort': 'max'}])
+                {'model': 'gpt-6.2-sol', 'reasoning_effort': 'max'},
+                {'model': 'gpt-6.2-astra', 'reasoning_effort': 'medium'},
+            ])
             self.assertEqual(config.read_text(), original)
 
     def test_dispatch_preserves_setup_recorded_efforts(self):
@@ -71,8 +76,8 @@ class WorkerCapabilityTests(unittest.TestCase):
             config.parent.mkdir(parents=True)
             choices = [
                 {'model': 'gpt-6-luna', 'reasoning_effort': 'low'},
-                {'model': 'gpt-6.1-sol', 'reasoning_effort': 'xhigh'},
-                {'model': 'gpt-6.1-sol', 'reasoning_effort': 'max'},
+                {'model': 'gpt-6.2-sol', 'reasoning_effort': 'xhigh'},
+                {'model': 'gpt-6.2-sol', 'reasoning_effort': 'max'},
             ]
             config.write_text(json.dumps({'worker_capabilities': choices}), encoding='utf-8')
             self.assertEqual(kernel.worker_model_choices(workspace), choices)
@@ -83,10 +88,10 @@ class WorkerCapabilityTests(unittest.TestCase):
             config = workspace / '.de67/state/workspace.json'
             config.parent.mkdir(parents=True)
             config.write_text(json.dumps({'worker_capabilities': [
-                {'model': 'gpt-6-astra', 'reasoning_effort': 'medium'},
+                {'model': 'gpt-6.2-astra', 'reasoning_effort': 'medium'},
             ]}), encoding='utf-8')
             self.assertEqual(kernel.worker_model_choices(workspace), [
-                {'model': 'gpt-6-astra', 'reasoning_effort': 'medium'},
+                {'model': 'gpt-6.2-astra', 'reasoning_effort': 'medium'},
             ])
 
 
@@ -1003,7 +1008,7 @@ class PolicyKernelTests(unittest.TestCase):
             arguments = calls[0]["example_call"]["arguments"]
             self.assertEqual(arguments["fork_turns"], "none")
             self.assertNotIn("model", arguments)
-            self.assertEqual({c['model'] for c in calls[0]['model_choices']}, {'gpt-6-luna','gpt-6.1-terra','gpt-6.1-sol','gpt-6-astra'})
+            self.assertEqual({c['model'] for c in calls[0]['model_choices']}, {'gpt-6-luna','gpt-6.1-terra','gpt-6.2-sol','gpt-6.2-astra'})
             for choice in calls[0]['model_choices']:
                 completed_call = {**arguments, **choice}
                 self.assertEqual(completed_call['task_name'], calls[0]['task_name'])

@@ -12,12 +12,12 @@ class FuelTests(unittest.TestCase):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.w=Path(self.tmp.name);(self.w/'.de67/state').mkdir(parents=True)
   self.state=self.w/'.de67/state/deadlines.sqlite3';self.index=self.w/'.de67/state/work-context.sqlite3';self.sessions=self.w/'sessions';self.sessions.mkdir()
   (self.w/'.de67/state/workspace.json').write_text(json.dumps({'clock':{'state':str(self.state),'lineage':'L'}}))
-  with sqlite3.connect(self.state) as d:d.executescript("CREATE TABLE supervisor_attempts(lineage_id,run_id,started_at,finished_at);CREATE TABLE worker_claims(lineage_id,worker_id,claimed_at,released_at);INSERT INTO supervisor_attempts VALUES('L','run',0,100);INSERT INTO worker_claims VALUES('L','worker',10,40);INSERT INTO worker_claims VALUES('L','worker',20,50);INSERT INTO worker_claims VALUES('other','foreign',0,NULL);")
-  with sqlite3.connect(self.w/'state_5.sqlite') as d:d.executescript('CREATE TABLE thread_spawn_edges(parent_thread_id,child_thread_id);CREATE TABLE threads(id,rollout_path);')
-  with sqlite3.connect(self.index) as d:_schema(d);d.executescript("CREATE TABLE runs(run_id,session_id,lineage);INSERT INTO runs VALUES('run','root','L');")
+  with closing(sqlite3.connect(self.state)) as d, d:d.executescript("CREATE TABLE supervisor_attempts(lineage_id,run_id,started_at,finished_at);CREATE TABLE worker_claims(lineage_id,worker_id,claimed_at,released_at);INSERT INTO supervisor_attempts VALUES('L','run',0,100);INSERT INTO worker_claims VALUES('L','worker',10,40);INSERT INTO worker_claims VALUES('L','worker',20,50);INSERT INTO worker_claims VALUES('other','foreign',0,NULL);")
+  with closing(sqlite3.connect(self.w/'state_5.sqlite')) as d, d:d.executescript('CREATE TABLE thread_spawn_edges(parent_thread_id,child_thread_id);CREATE TABLE threads(id,rollout_path);')
+  with closing(sqlite3.connect(self.index)) as d, d:_schema(d);d.executescript("CREATE TABLE runs(run_id,session_id,lineage);INSERT INTO runs VALUES('run','root','L');")
  def ingest(self,identity,records):
   path=self.w/(identity+'.jsonl');path.write_text(''.join(json.dumps(r)+'\n' for r in records))
-  with sqlite3.connect(self.index) as d:
+  with closing(sqlite3.connect(self.index)) as d, d:
    d.row_factory=sqlite3.Row;_ingest(d,{'id':identity,'rollout_path':str(path)})
   return path
  def row(self,identity,rid,t,model='gpt-6.2-sol',n=10):
@@ -32,7 +32,7 @@ class FuelTests(unittest.TestCase):
  def test_rotation_and_duplicate_identity_do_not_erase_or_duplicate(self):
   p=self.ingest('worker',self.row('worker','r1',12,n=10))
   replacement=self.w/'new';replacement.write_text(''.join(json.dumps(r)+'\n' for r in self.row('worker','r1',12,n=10)+self.row('worker','r2',25,'gpt-6.1-terra',20)));replacement.replace(p)
-  with sqlite3.connect(self.index) as d:d.row_factory=sqlite3.Row;_ingest(d,{'id':'worker','rollout_path':str(p)})
+  with closing(sqlite3.connect(self.index)) as d, d:d.row_factory=sqlite3.Row;_ingest(d,{'id':'worker','rollout_path':str(p)})
   self.assertEqual(sum(read_campaign_fuel(self.w,self.sessions,now=60)['totals'].values()),30)
  def test_checkpoint_existing_runner_boundary_is_durable(self):
   p=self.w/'live.jsonl';p.write_text(''.join(json.dumps(r)+'\n' for r in self.row('worker','r',12,'gpt-6.1-terra',12)))

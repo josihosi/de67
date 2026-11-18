@@ -10,7 +10,7 @@ import worker_library as library
 
 class HandoffHistoryTests(WorkerFixture, unittest.TestCase):
     def prepare_history(self):
-        self.worker(model="gpt-6.1-sol", effort="high")
+        self.worker(model="gpt-6.2-sol", effort="high")
         self.assign(); self.dispatcher.process_pending()
         old = self.returned(); self.settle()
         with closing(library._connect(self.workspace, write=True)) as db, db:

@@ -5,9 +5,11 @@ description: Explicit third phase of de67. Use when the user says `de67 3` to de
 
 # de67 3 — delivery router
 
-GPT-6.1 Terra, GPT-6.1 Sol, GPT-6 Luna and GPT-6 Astra are available for new work
-when supported by the runtime. Sol coordinates; Astra reviews mutations. Choose worker model
-and effort independently for the task, preserving useful context and ownership at handoff.
+GPT-6.1 Terra, GPT-6.2 Sol, GPT-6 Luna and GPT-6.2 Astra are available for new work
+when supported by the runtime. Sol coordinates at low effort; Astra reviews mutations at medium
+effort. Prefer Terra for clear, testable coding and for chaperoning direct Luna players. Choose Sol
+when ambiguity, cross-system coupling, architecture, or demonstrated difficulty warrants it.
+Choose worker model and effort independently, preserving useful context and ownership at handoff.
 Follow the project’s explicit rules for live playtest and native input ownership.
 
 This file routes Phase 3; it is not the coordinator procedure.
@@ -62,11 +64,11 @@ an explicit start instead of becoming an automatic restart loop. Direct
 foreground execution of `coordinator_supervisor.py` is reserved for tests and attended diagnosis,
 not an ordinary Phase-3 launch.
 
-The supervisor launches an ordinary `gpt-6.1-sol` coordinator at low against the compiled workspace
+The supervisor launches an ordinary `gpt-6.2-sol` coordinator at low against the compiled workspace
 policy. The coordinator asks the kernel for the next transition and supplies the relevant context
 and role-specific obligations for that route. A due mutation blocks new dispatch. Once all
 already-live worker turns have returned and are no longer editing, the coordinator exits without reviewing or changing guidance. The supervisor then runs one fresh
-`gpt-6-astra` reviewer at medium with no coordinator or worker active. Periodic/random review reads
+`gpt-6.2-astra` reviewer at medium with no coordinator or worker active. Periodic/random review reads
 and dispositions the complete pending queue and retains broader efficiency/evidence responsibility.
 Event-triggered review resolves its triggering batch and necessary related evidence; unrelated deferred
 requests stay queued. Each user-authored suggestion carries only outcome-scoped

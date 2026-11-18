@@ -119,7 +119,7 @@ class WorkerFixture:
 
 class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
     def test_returned_model_handoff_preserves_task_and_thread(self):
-        self.worker(model="gpt-6.1-sol", effort="high")
+        self.worker(model="gpt-6.2-sol", effort="high")
         self.assign(); self.dispatcher.process_pending(); original = self.returned()
         before = dict(self.harness.connection.execute("SELECT * FROM tasks WHERE task_id='task-a'").fetchone())
         library.describe(self.workspace, "pilot", model="gpt-6.1-terra", effort="medium", environment=self.env)
@@ -171,44 +171,44 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         self.assertEqual(changed["assignment"]["status"], "returned")
 
     def test_editing_idle_legacy_sol_worker_upgrades_model(self):
-        self.worker(model="gpt-6.1-sol", effort="max")
+        self.worker(model="gpt-6.2-sol", effort="max")
         with closing(library._connect(self.workspace, write=True)) as db, db:
             db.execute("UPDATE workers SET model='gpt-6-sol' WHERE name='pilot'")
         revised = library.describe(self.workspace, "pilot", "Revised job", environment=self.env)
-        self.assertEqual(revised["model"], "gpt-6.1-sol")
+        self.assertEqual(revised["model"], "gpt-6.2-sol")
         self.assertEqual(revised["effort"], "max")
         self.assertEqual(revised["job"], "Revised job")
 
     def test_existing_sol_worker_upgrades_next_turn_without_replacing_task(self):
-        self.worker(model="gpt-6.1-sol", effort="max")
+        self.worker(model="gpt-6.2-sol", effort="max")
         self.assign()
         self.dispatcher.process_pending()
         original = self.returned()
         with closing(library._connect(self.workspace, write=True)) as db, db:
-            db.execute("UPDATE workers SET model='gpt-6-sol' WHERE name='pilot'")
+            db.execute("UPDATE workers SET model='gpt-6.1-sol' WHERE name='pilot'")
         library.message(self.workspace, "pilot", "Continue the same task", environment=self.env)
         self.dispatcher.process_pending()
         resumes = [params for method, params in self.rpc.calls if method == "thread/resume"]
-        self.assertEqual(resumes[-1]["model"], "gpt-6.1-sol")
+        self.assertEqual(resumes[-1]["model"], "gpt-6.2-sol")
         current = library.describe(self.workspace, "pilot")
         self.assertEqual(current["thread_id"], original["worker_id"])
         self.assertEqual(current["assignment"]["task_id"], original["task_id"])
-        self.assertEqual(current["model"], "gpt-6.1-sol")
+        self.assertEqual(current["model"], "gpt-6.2-sol")
         self.assertIsNone(library._task(self.state, "project", "task-a")["attempt_terminal_at"])
 
     def test_astra_low_dispatches_exact_app_server_input(self):
-        worker = self.worker(model="gpt-6-astra", effort="low")
-        self.assertEqual(worker["model"], "gpt-6-astra")
+        worker = self.worker(model="gpt-6.2-astra", effort="low")
+        self.assertEqual(worker["model"], "gpt-6.2-astra")
         self.assign()
         self.dispatcher.process_pending()
         starts = [params for method, params in self.rpc.calls if method == "thread/start"]
-        self.assertEqual(starts[-1]["model"], "gpt-6-astra")
+        self.assertEqual(starts[-1]["model"], "gpt-6.2-astra")
         self.assertEqual(starts[-1]["config"]["model_reasoning_effort"], "low")
 
     def test_chosen_coding_effort_reaches_worker_runtime(self):
         for model, name, effort in (("gpt-6-luna", "luna-coder", "max"),
-                                    ("gpt-6.1-sol", "sol-coder", "medium"),
-                                    ("gpt-6.1-sol", "sol-hard", "max")):
+                                    ("gpt-6.2-sol", "sol-coder", "medium"),
+                                    ("gpt-6.2-sol", "sol-hard", "max")):
             self.worker(name=name, model=model, effort=effort)
             self.assign(name=name, task_id=name)
             self.dispatcher.process_pending()
@@ -348,7 +348,7 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         Path(self.binding["socket"]).unlink()
         self.binding = self.bind("sol-b", "run-b", "supervisor-b")
         self.dispatcher = library.WorkerDispatcher(self.workspace, self.rpc, self.binding)
-        library.describe(self.workspace, "pilot", "Observe the corrected route", model="gpt-6.1-sol",
+        library.describe(self.workspace, "pilot", "Observe the corrected route", model="gpt-6.2-sol",
                          effort="medium", environment=self.env)
         self.assign(task_id="task-b")
         self.dispatcher.process_pending()
@@ -356,7 +356,7 @@ class WorkerLibraryTests(WorkerFixture, unittest.TestCase):
         self.assertEqual(current["thread_id"], original["worker_id"])
         self.assertEqual(current["assignment"]["task_id"], "task-b")
         resumed = [params for method, params in self.rpc.calls if method == "thread/resume"]
-        self.assertEqual(resumed[-1]["model"], "gpt-6.1-sol")
+        self.assertEqual(resumed[-1]["model"], "gpt-6.2-sol")
         self.assertEqual(library.worker_owners(self.workspace, self.state, "project"), {original["worker_id"]: "sol-b"})
 
     def test_parallel_dispatch_binds_exact_tasks_not_queue_order(self):

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agent_mailbox import write_json
+from model_ids import ASTRA, current_model
 
 
 class MutatorSession:
@@ -36,14 +37,16 @@ class MutatorSession:
         if not self.path.exists():
             return None
         value = json.loads(self.path.read_text(encoding="utf-8"))
-        if value.get("workspace") != str(self.workspace) or value.get("model") != "gpt-6-astra":
+        model = value.get("model")
+        if (value.get("workspace") != str(self.workspace) or not isinstance(model, str)
+                or current_model(model) != ASTRA):
             raise ValueError("Persistent mutator context belongs to another workspace or model")
         # Preserve the owner thread when reading state written by the split-context version.
         owner = value.get("owner")
         return owner.get("thread_id") if isinstance(owner, dict) else value.get("thread_id")
 
     def record(self, thread_id: str, **status: Any) -> None:
-        write_json(self.path, {"workspace": str(self.workspace), "model": "gpt-6-astra",
+        write_json(self.path, {"workspace": str(self.workspace), "model": ASTRA,
                               "thread_id": thread_id, "updated_at": time.time(), **status})
 
     def close(self) -> None:

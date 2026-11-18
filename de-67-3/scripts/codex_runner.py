@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from deadline_harness import DeadlineError, DeadlineHarness
+from model_ids import MODEL_CHOICES, MODEL_EFFORTS, SOL, current_model
 
 
 class RunnerError(RuntimeError):
@@ -298,12 +299,9 @@ def _command(codex: str, workspace: Path, environment: dict[str, str]) -> list[s
             ]
         )
     if environment.get("DE67_COORDINATOR_RUN_ID"):
-        model = environment.get("DE67_COORDINATOR_MODEL", "gpt-6.1-sol").strip()
-        # Migrate an already-running supervisor's old launch setting.
-        if model == "gpt-6-sol":
-            model = "gpt-6.1-sol"
-        if model not in {"gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"}:
-            raise RunnerError("Retired model: use GPT-6 Luna, GPT-6.1 Terra/Sol or GPT-6 Astra")
+        model = current_model(environment.get("DE67_COORDINATOR_MODEL", SOL).strip())
+        if model not in MODEL_EFFORTS:
+            raise RunnerError(f"Retired model: use {MODEL_CHOICES}")
         effort = environment.get(
             "DE67_COORDINATOR_REASONING_EFFORT", "low"
         ).strip()
@@ -755,8 +753,10 @@ def run(
         raise RunnerError("Provide non-empty prompt text on standard input")
 
     selected_environment = os.environ.copy() if environment is None else environment.copy()
-    if selected_environment.get("DE67_COORDINATOR_MODEL") == "gpt-6-sol":
-        selected_environment["DE67_COORDINATOR_MODEL"] = "gpt-6.1-sol"
+    if "DE67_COORDINATOR_MODEL" in selected_environment:
+        selected_environment["DE67_COORDINATOR_MODEL"] = current_model(
+            selected_environment["DE67_COORDINATOR_MODEL"].strip()
+        )
     resume_after_mutation(workspace, selected_environment)
     prompt = current_coordinator_prompt(workspace, prompt, selected_environment)
     codex = _codex_executable(selected_environment)

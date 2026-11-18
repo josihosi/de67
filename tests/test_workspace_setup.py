@@ -35,18 +35,20 @@ MODULE_PATH = Path(workspace_setup.__file__).resolve()
 
 VERIFIED_WORKERS = (
     ("gpt-6-luna", "high"),
-    ("gpt-6.1-sol", "low"),
+    ("gpt-6.2-sol", "low"),
 )
 
 
 class WorkspaceSetupTests(unittest.TestCase):
-    def test_old_sol_capability_migrates_to_sol61(self):
-        from workspace_setup import _worker_capabilities
-        self.assertEqual(_worker_capabilities(
-            (("gpt-6-luna", "high"), ("gpt-6-sol", "low")), required=True), [
-                {"model": "gpt-6-luna", "reasoning_effort": "high"},
-                {"model": "gpt-6.1-sol", "reasoning_effort": "low"},
-            ])
+    def test_legacy_model_capabilities_remain_historical_probe_evidence(self):
+        from workspace_setup import SetupError, _configured_worker_capabilities, _worker_capabilities
+        for model in ("gpt-6-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-astra"):
+            with self.subTest(model=model):
+                original = {"model": model, "reasoning_effort": "ultra"}
+                self.assertEqual(_configured_worker_capabilities(
+                    {"worker_capabilities": [original]}), [original])
+                with self.assertRaises(SetupError):
+                    _worker_capabilities((*VERIFIED_WORKERS, (model, "ultra")), required=True)
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -253,8 +255,8 @@ class WorkspaceSetupTests(unittest.TestCase):
 
     def test_partial_refreeze_probes_preserve_astra_and_higher_effort(self):
         self.freeze_dfs()
-        broad = (*VERIFIED_WORKERS, ("gpt-6-astra", "low"),
-                 ("gpt-6-astra", "high"), ("gpt-6.1-sol", "max"))
+        broad = (*VERIFIED_WORKERS, ("gpt-6.2-astra", "low"),
+                 ("gpt-6.2-astra", "high"), ("gpt-6.2-sol", "max"))
         configure(self.workspace, [("origin", "dev")], bind_clock=True,
                   lineage="stable-lineage", worker_capabilities=broad)
         configure(self.workspace, [("origin", "dev")], bind_clock=True,
@@ -640,7 +642,7 @@ class WorkspaceSetupTests(unittest.TestCase):
 
     def test_phase_two_records_only_successfully_probed_worker_pairs(self) -> None:
         self.freeze_dfs()
-        passed = (("gpt-6-luna", "high"), ("gpt-6.1-sol", "low"))
+        passed = (("gpt-6-luna", "high"), ("gpt-6.2-sol", "low"))
 
         configure(
             self.workspace,
@@ -656,7 +658,7 @@ class WorkspaceSetupTests(unittest.TestCase):
             config["worker_capabilities"],
             [
                 {"model": "gpt-6-luna", "reasoning_effort": "high"},
-                {"model": "gpt-6.1-sol", "reasoning_effort": "low"},
+                {"model": "gpt-6.2-sol", "reasoning_effort": "low"},
             ],
         )
 
@@ -666,11 +668,11 @@ class WorkspaceSetupTests(unittest.TestCase):
         invalid_rosters = (
             (),
             (("gpt-6-luna", "high"),),
-            (("gpt-6-luna", "high"), ("gpt-6.1-sol", "high")),
-            (("gpt-5.6-luna", "high"), ("gpt-6.1-sol", "low")),
+            (("gpt-6-luna", "high"), ("gpt-6.2-sol", "high")),
+            (("gpt-5.6-luna", "high"), ("gpt-6.2-sol", "low")),
             (("gpt-6-luna", "low"), ("gpt-6-luna", "medium")),
-            (("gpt-6-luna", "high"), ("gpt-6.1-sol", "low"), ("gpt-6-luna", "high")),
-            (("gpt-6-luna", "high"), ("gpt-6.1-sol", "invalid effort")),
+            (("gpt-6-luna", "high"), ("gpt-6.2-sol", "low"), ("gpt-6-luna", "high")),
+            (("gpt-6-luna", "high"), ("gpt-6.2-sol", "invalid effort")),
         )
         for roster in invalid_rosters:
             with self.subTest(roster=roster), self.assertRaises(SetupError):
@@ -694,7 +696,7 @@ class WorkspaceSetupTests(unittest.TestCase):
 
         replacement = (
             ("gpt-6-luna", "low"),
-            ("gpt-6.1-sol", "medium"),
+            ("gpt-6.2-sol", "medium"),
         )
         configure(
             self.workspace,
@@ -710,9 +712,9 @@ class WorkspaceSetupTests(unittest.TestCase):
             config["worker_capabilities"],
             [
                 {"model": "gpt-6-luna", "reasoning_effort": "low"},
-                {"model": "gpt-6.1-sol", "reasoning_effort": "medium"},
+                {"model": "gpt-6.2-sol", "reasoning_effort": "medium"},
                 {"model": "gpt-6-luna", "reasoning_effort": "high"},
-                {"model": "gpt-6.1-sol", "reasoning_effort": "low"},
+                {"model": "gpt-6.2-sol", "reasoning_effort": "low"},
             ],
         )
 

@@ -108,8 +108,8 @@ class PromptBoundaryTests(unittest.TestCase):
 class ScopedHandoffTests(WorkerFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
-        self.worker("affected", model="gpt-6.1-sol")
-        self.worker("independent", model="gpt-6.1-sol")
+        self.worker("affected", model="gpt-6.2-sol")
+        self.worker("independent", model="gpt-6.2-sol")
         self.spec = self.workspace / ".de67/FS.md"
         self.spec.write_text(fs())
         (self.workspace / ".de67/work-ledger.md").write_text(

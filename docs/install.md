@@ -16,11 +16,13 @@ LLM endpoint is not a substitute. See the [Codex App Server documentation](https
 | Bundled detached Phase 3 service | macOS and `tmux`; the current service launcher is macOS-only |
 | Native Windows | CLI transport and shared logic; the Unix App Server route is not implemented |
 
-Named Luna and Sol workers request the Fast service tier on start, resume and new turns; Astra is unchanged. Returned `fast`/`priority` values establish the requested route, not measured per-turn speed or native helper inheritance.
+Named Luna and Sol workers request the Fast service tier on start, resume, and new turns. A returned
+`fast` or `priority` value reports the configured route. Timing and native helper inheritance need separate proof.
 
-The configured roles are GPT-6 Astra high for specification, GPT-6.1 Sol low for coordination,
-GPT-6 Luna and GPT-6.1 Sol for workers, and GPT-6 Astra medium for mutation review. Phase 2 probes the
-needed model/effort combinations and records actual availability. Named workers run with full filesystem access; install and run
+The configured roles are GPT-6.2 Astra high for specification, GPT-6.2 Sol low for coordination,
+and GPT-6.2 Astra medium for mutation review. Phase 2 probes the GPT-6 Luna and GPT-6.2 Sol
+worker pairs and can record GPT-6.1 Terra or GPT-6.2 Astra pairs when useful. Prefer Terra for
+clear, testable coding and for chaperoning direct Luna playtests. Choose worker effort independently. Named workers run with full filesystem access; install and run
 this workflow only in the user's intended execution environment.
 
 ## Install the core
@@ -84,6 +86,10 @@ For an existing run, first inspect its exact workspace and follow the
 [supervisor lifecycle](../de-67-3/references/external-supervisor.md). Preserve its specification,
 ledgers, database, worker registry, and mutator conversation. An explicit service start normalizes
 old execution ownership; it is not a harmless reload. Do not delete state to make an upgrade pass.
+Existing Sol and Astra model settings resolve to the GPT-6.2 IDs for subsequent launches and
+worker turns. Existing conversations, receipts, and probe records keep their original identities.
+Run fresh probes when preparing a capability roster. The rare Sol/ultra review requires a GPT-6.2
+Sol ultra probe for new due-time snapshots.
 Legacy `DFS.md` is supported. A migrated `FS.md` requires its hash-bound `DFS.md` compatibility
 pointer; do not edit the pointer as a second specification.
 

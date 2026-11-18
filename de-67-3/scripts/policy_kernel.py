@@ -34,6 +34,8 @@ HEADER = struct.Struct(">4sB32sI")
 FORMAT = "de67.phase3.policy"
 VERSION = 2
 
+from model_ids import MODEL_EFFORTS, current_model
+
 
 class PolicyError(RuntimeError):
     """Raised when policy compilation or execution is not trustworthy."""
@@ -506,7 +508,7 @@ def _exploration_route(workspace: Path, claim_id: str, task_id: str) -> tuple[st
 def worker_helper_contract() -> str:
     return ('When native helpers and Luna are available, use model="gpt-6-luna", '
             'fork_turns="none" and suitable effort for bounded discovery or suitable execution. '
-            'A Luna playtest worker may instead call a Sol chaperone with model="gpt-6.1-sol" '
+            'A Luna playtest worker may instead call a Terra chaperone with model="gpt-6.1-terra" '
             'for bounded issue diagnosis or evidence interpretation. Reuse that helper conversation '
             'through followup_task when relevant, supplying current host/task/run/build/save/input owner '
             'and the changed facts; reuse does not establish freshness. Luna retains game input. '
@@ -595,27 +597,22 @@ def worker_model_choices(workspace: Path) -> list[dict[str, str]]:
     """Expose available worker capabilities without choosing for the coordinator."""
     path = workspace / ".de67/state/workspace.json"
     configured = json.loads(path.read_text(encoding="utf-8")).get("worker_capabilities") if path.is_file() else None
-    efforts_by_model = {
-        "gpt-6-luna": ("low", "medium", "high", "xhigh", "max"),
-        "gpt-6.1-terra": ("low", "medium", "high", "xhigh", "max", "ultra"),
-        "gpt-6.1-sol": ("low", "medium", "high", "xhigh", "max", "ultra"),
-        "gpt-6-astra": ("low", "medium", "high", "xhigh", "max", "ultra"),
-    }
     capabilities = configured if configured is not None else [
         {"model": model, "reasoning_effort": effort}
-        for model, efforts in efforts_by_model.items() for effort in efforts
+        for model, efforts in MODEL_EFFORTS.items() for effort in efforts
     ]
     if not isinstance(capabilities, list):
         raise PolicyError("worker_capabilities must be a list")
     result = []
     for value in capabilities:
-        if isinstance(value, dict) and value.get("model") == "gpt-6-sol":
-            value = {**value, "model": "gpt-6.1-sol"}
-        if not isinstance(value, dict) or value.get("model") not in efforts_by_model:
+        if not isinstance(value, dict) or not isinstance(value.get("model"), str):
             continue
-        choice = {"model": value["model"], "reasoning_effort": value.get("reasoning_effort", "medium")}
+        model = current_model(value["model"])
+        if model not in MODEL_EFFORTS:
+            continue
+        choice = {"model": model, "reasoning_effort": value.get("reasoning_effort", "medium")}
         # Setup records successfully probed pairs; defaults do not restrict that roster.
-        if choice["reasoning_effort"] not in efforts_by_model[choice["model"]]:
+        if choice["reasoning_effort"] not in MODEL_EFFORTS[model]:
             raise PolicyError("Unsupported worker reasoning effort")
         if choice not in result:
             result.append(choice)

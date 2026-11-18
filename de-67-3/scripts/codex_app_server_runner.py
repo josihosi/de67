@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from model_ids import ASTRA, MODEL_CHOICES, MODEL_EFFORTS, SOL, current_model
+
 
 class RpcError(RuntimeError):
     def __init__(self, message: str, code: int | None = None):
@@ -244,19 +246,16 @@ def run(codex: str, workspace: Path, prompt: str) -> int:
             rpc.call("initialize", {"clientInfo": {"name": "de67_runner", "version": "1.0"},
                                     "capabilities": {"experimentalApi": True}})
             rpc.send({"method": "initialized", "params": {}})
-            model = os.environ.get("DE67_COORDINATOR_MODEL", "gpt-6.1-sol")
-            # Migrate an already-running supervisor's old launch setting.
-            if model == "gpt-6-sol":
-                model = "gpt-6.1-sol"
-            if model not in {"gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"}:
-                raise RpcError("Retired model: use GPT-6 Luna, GPT-6.1 Terra/Sol or GPT-6 Astra")
+            model = current_model(os.environ.get("DE67_COORDINATOR_MODEL", SOL).strip())
+            if model not in MODEL_EFFORTS:
+                raise RpcError(f"Retired model: use {MODEL_CHOICES}")
             effort = os.environ.get("DE67_COORDINATOR_REASONING_EFFORT", "low")
             params: dict[str, Any] = {
                 "cwd": str(workspace), "model": model, "approvalPolicy": "never",
                 "sandbox": os.environ.get("DE67_COORDINATOR_SANDBOX", "danger-full-access"),
                 "config": {"model_reasoning_effort": effort},
             }
-            if model == "gpt-6-astra":
+            if model == ASTRA:
                 params["config"]["features.context_management.experimental_mode"] = True
             if role == "mutator" and "mutator_context_window" in workspace_config:
                 params["config"]["model_context_window"] = workspace_config["mutator_context_window"]

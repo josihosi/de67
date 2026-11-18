@@ -577,8 +577,8 @@ class ReviewerLaunchPromotionTests(unittest.TestCase):
             promoted = root / "coordinator_supervisor.py"
             source = Path(supervisor.__file__).read_text()
             promoted.write_text(source.replace(
-                '"DE67_COORDINATOR_MODEL": "gpt-6-astra",',
-                '"PROMOTED_BINDING": "revision-2", "DE67_COORDINATOR_MODEL": "gpt-6-astra",'
+                '"DE67_COORDINATOR_MODEL": "gpt-6.2-astra",',
+                '"PROMOTED_BINDING": "revision-2", "DE67_COORDINATOR_MODEL": "gpt-6.2-astra",'
             ))
             with patch.object(supervisor, "__file__", str(promoted)), \
                  patch.object(supervisor, "mutation_reviewer_environment", side_effect=AssertionError("stale producer used")), \
@@ -588,7 +588,7 @@ class ReviewerLaunchPromotionTests(unittest.TestCase):
             values = child.call_args.kwargs["extra_env"]
             self.assertEqual(values["PROMOTED_BINDING"], "revision-2")
             self.assertEqual(values["PRESERVED"], "yes")
-            self.assertEqual(values["DE67_COORDINATOR_MODEL"], "gpt-6-astra")
+            self.assertEqual(values["DE67_COORDINATOR_MODEL"], "gpt-6.2-astra")
             self.assertEqual(child.call_args.kwargs["role"], "mutation-reviewer")
             self.assertEqual(child.call_count, 1)
 
@@ -605,7 +605,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
                 CREATE TABLE thread_spawn_edges (child_thread_id TEXT, parent_thread_id TEXT);
             """)
             connection.execute("INSERT INTO threads VALUES (?,?,?)",
-                               ("astra-worker", str(workspace), "gpt-6-astra"))
+                               ("astra-worker", str(workspace), "gpt-6.2-astra"))
             connection.execute("INSERT INTO thread_spawn_edges VALUES (?,?)",
                                ("astra-worker", "sol-coordinator"))
             connection.commit()
@@ -1585,7 +1585,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(arguments.coordinator_model, "gpt-6.1-sol")
+        self.assertEqual(arguments.coordinator_model, "gpt-6.2-sol")
         self.assertEqual(arguments.coordinator_reasoning_effort, "low")
         self.assertEqual(arguments.runner, ["runner", "--runner-owned-option"])
 
@@ -1615,7 +1615,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.run_root,
             extra_env={
                 **self.environment("mutation-lifecycle"),
-                "DE67_COORDINATOR_MODEL": "gpt-6.1-sol",
+                "DE67_COORDINATOR_MODEL": "gpt-6.2-sol",
                 "DE67_COORDINATOR_REASONING_EFFORT": "low",
             },
             run_id_factory=lambda _generation: "fresh-low-coordinator",
@@ -1628,7 +1628,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
         ])
         self.assertEqual(
             [(event["model"], event["effort"]) for event in events],
-            [("gpt-6-astra", "medium"), ("gpt-6.1-sol", "low")],
+            [("gpt-6.2-astra", "medium"), ("gpt-6.2-sol", "low")],
         )
         reviewer_run = next(
             path for path in self.run_root.iterdir() if path.name.startswith("mutation-")
@@ -1669,7 +1669,7 @@ class CoordinatorSupervisorTests(unittest.TestCase):
             self.run_root,
             extra_env={
                 **self.environment("mutation-after-coordinator"),
-                "DE67_COORDINATOR_MODEL": "gpt-6.1-sol",
+                "DE67_COORDINATOR_MODEL": "gpt-6.2-sol",
                 "DE67_COORDINATOR_REASONING_EFFORT": "low",
             },
             run_id_factory=lambda _generation: next(run_ids),

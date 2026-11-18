@@ -444,7 +444,9 @@ class DeadlineHarnessTests(unittest.TestCase):
             "project", claim_id, closure, "closure evidence accepted", now=5
         )
 
-    def record_universal_receipt(self, cycle_number: int = 1) -> str:
+    def record_universal_receipt(
+        self, cycle_number: int = 1, *, reviewer_model: str = "gpt-6.2-sol"
+    ) -> str:
         candidate_digest = "a" * 64
         changed_paths = ["scripts/deadline_harness.py"]
         cycle = self.harness.connection.execute(
@@ -463,7 +465,7 @@ class DeadlineHarnessTests(unittest.TestCase):
             "changed_paths": changed_paths,
             "interval_windows": 30,
             "selected_lane": "DFS.md",
-            "reviewer_model": "gpt-6.2-sol",
+            "reviewer_model": reviewer_model,
             "reviewer_effort": "ultra",
             "capability_roster_digest": capability_roster_digest,
         }
@@ -480,13 +482,14 @@ class DeadlineHarnessTests(unittest.TestCase):
                 selected_lane, reviewer_model, reviewer_effort,
                 capability_roster_digest
             ) VALUES (?, 'project', ?, 31, ?, ?, 30, 'DFS.md',
-                      'gpt-6.2-sol', 'ultra', ?)
+                      ?, 'ultra', ?)
             """,
             (
                 receipt_id,
                 cycle_number,
                 candidate_digest,
                 json.dumps(changed_paths),
+                reviewer_model,
                 capability_roster_digest,
             ),
         )
@@ -2992,6 +2995,29 @@ class DeadlineHarnessTests(unittest.TestCase):
             ).fetchone()["total"],
             1,
         )
+
+    def test_upgrade_resolves_an_unconsumed_sol61_receipt(self) -> None:
+        with patch("deadline_harness.secrets.randbelow", side_effect=[10, 1]), patch.object(
+            self.harness, "_sol_ultra_capability_snapshot",
+            return_value=(True, "workspace roster proves gpt-6.1-sol/ultra", "a" * 64),
+        ):
+            for number in range(1, 31):
+                self.harness.start_task(
+                    "project", f"window-{number}", f"R-{number:03d}", 100, now=0
+                )
+                self.harness.complete_task(
+                    "project", f"window-{number}", "green", now=number
+                )
+            receipt_id = self.record_universal_receipt(reviewer_model="gpt-6.1-sol")
+
+        self.harness.close()
+        self.harness = DeadlineHarness(self.state_path)
+        result = self.harness.resolve_random_mutation(
+            "project", 1, "guarded legacy review", component="universal",
+            receipt_id=receipt_id, now=32,
+        )
+        self.assertEqual(result["universal_receipt_id"], receipt_id)
+        self.assertEqual(result["random_mutation"]["pending_components"], ["ordinary"])
 
     def test_rare_trigger_without_due_time_capability_is_visible_and_nonblocking(self) -> None:
         with patch(

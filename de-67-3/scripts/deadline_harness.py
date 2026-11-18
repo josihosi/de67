@@ -7050,7 +7050,9 @@ class DeadlineHarness:
                 if (
                     receipt["interval_windows"] != UNIVERSAL_RANDOM_INTERVAL
                     or receipt["selected_lane"] != "DFS.md"
-                    or receipt["reviewer_model"] not in ("gpt-5.6-sol", "gpt-6-sol", "gpt-6.2-sol")
+                    or receipt["reviewer_model"] not in (
+                        "gpt-5.6-sol", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.2-sol"
+                    )
                     or receipt["reviewer_effort"] != "ultra"
                     or receipt["capability_roster_digest"]
                         != cycle["universal_capability_roster_digest"]
